@@ -241,7 +241,8 @@ static Str rs_type_string(Alloc *a, const Type *t) {
     void *zero = mem_alloc(a, size, t->align > 0 ? t->align : 1);
     if (zero == NULL)
         return BURROW_STR_EMPTY;
-    Str s = fmt_sprintf_v(a, "%T", BURROW_ANY(t, zero));
+    Any v = BURROW_ANY(t, zero);
+    Str s = fmt_sprintf_v(a, "%T", v);
     mem_free(a, zero, size, t->align > 0 ? t->align : 1);
     return s;
 }

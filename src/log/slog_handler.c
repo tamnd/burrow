@@ -79,9 +79,43 @@ struct SlogJSONHandler {
     SlogCommon c;
 };
 
-static const SlogHandlerVT slogh_text_vt;
-static const SlogHandlerVT slogh_json_vt;
-static const SlogHandlerVT slogh_default_vt;
+/* The methods behind the handlers' vtables, which are defined before anything
+ * points at them because MSVC will not take a const object declared without an
+ * initializer. */
+static void slogh_free(void *self);
+static bool slogh_vt_enabled(void *self, Context ctx, SlogLevel level);
+static Error slogh_vt_handle(void *self, Context ctx, SlogRecord r);
+static SlogHandler slogh_vt_with_attrs(void *self, Slice attrs);
+static SlogHandler slogh_vt_with_group(void *self, Str name);
+static bool slogh_default_enabled(void *self, Context ctx, SlogLevel level);
+static Error slogh_default_handle(void *self, Context ctx, SlogRecord r);
+
+static const SlogHandlerVT slogh_text_vt = {
+    NULL,
+    slogh_vt_enabled,
+    slogh_vt_handle,
+    slogh_vt_with_attrs,
+    slogh_vt_with_group,
+    slogh_free,
+};
+
+static const SlogHandlerVT slogh_json_vt = {
+    NULL,
+    slogh_vt_enabled,
+    slogh_vt_handle,
+    slogh_vt_with_attrs,
+    slogh_vt_with_group,
+    slogh_free,
+};
+
+static const SlogHandlerVT slogh_default_vt = {
+    NULL,
+    slogh_default_enabled,
+    slogh_default_handle,
+    slogh_vt_with_attrs,
+    slogh_vt_with_group,
+    slogh_free,
+};
 
 static SlogHandler slogh_as_handler(SlogCommon *c) {
     SlogHandler h = {NULL, NULL};
@@ -779,24 +813,6 @@ static SlogHandler slogh_vt_with_group(void *self, Str name) {
     return slogh_as_handler(slogh_with_group(self, name));
 }
 
-static const SlogHandlerVT slogh_text_vt = {
-    NULL,
-    slogh_vt_enabled,
-    slogh_vt_handle,
-    slogh_vt_with_attrs,
-    slogh_vt_with_group,
-    slogh_free,
-};
-
-static const SlogHandlerVT slogh_json_vt = {
-    NULL,
-    slogh_vt_enabled,
-    slogh_vt_handle,
-    slogh_vt_with_attrs,
-    slogh_vt_with_group,
-    slogh_free,
-};
-
 void slog_handler_free(SlogHandler h) {
     if (h.vt != NULL && h.vt->free != NULL)
         h.vt->free(h.data);
@@ -892,15 +908,6 @@ static Error slogh_default_handle(void *self, Context ctx, SlogRecord r) {
     arena_free(&ar);
     return err;
 }
-
-static const SlogHandlerVT slogh_default_vt = {
-    NULL,
-    slogh_default_enabled,
-    slogh_default_handle,
-    slogh_vt_with_attrs,
-    slogh_vt_with_group,
-    slogh_free,
-};
 
 /* The handler slog_default starts with, writing through log's standard
  * logger. Static, so its vtable has no free. */

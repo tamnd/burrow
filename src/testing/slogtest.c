@@ -68,7 +68,8 @@ static void slogtest_f_attrs(SlogLogger *l) {
 }
 
 static void slogtest_f_empty_attr(SlogLogger *l) {
-    slog_logger_info_v(l, "msg", "a", "b", "", ((Any){NULL, NULL}), "c", "d");
+    Any nil = {NULL, NULL};
+    slog_logger_info_v(l, "msg", "a", "b", "", nil, "c", "d");
 }
 
 static void slogtest_f_zero_time(SlogLogger *l) {
@@ -82,19 +83,20 @@ static void slogtest_f_with_attrs(SlogLogger *l) {
 }
 
 static void slogtest_f_groups(SlogLogger *l) {
-    slog_logger_info_v(l, "msg", "a", "b", slog_group_v(BURROW_S("G"), STR("c", "d")),
-                       "e", "f");
+    SlogAttr c = STR("c", "d");
+    SlogAttr g = slog_group_v("G", c);
+    slog_logger_info_v(l, "msg", "a", "b", g, "e", "f");
 }
 
 static void slogtest_f_empty_group(SlogLogger *l) {
-    slog_logger_info_v(l, "msg", "a", "b",
-                       slog_group_attrs(BURROW_S("G"), slice_nil(TYPE_SLOG_ATTR)), "e",
-                       "f");
+    SlogAttr g = slog_group_attrs(BURROW_S("G"), slice_nil(TYPE_SLOG_ATTR));
+    slog_logger_info_v(l, "msg", "a", "b", g, "e", "f");
 }
 
 static void slogtest_f_inline_group(SlogLogger *l) {
-    slog_logger_info_v(l, "msg", "a", "b", slog_group_v(BURROW_S(""), STR("c", "d")),
-                       "e", "f");
+    SlogAttr c = STR("c", "d");
+    SlogAttr g = slog_group_v("", c);
+    slog_logger_info_v(l, "msg", "a", "b", g, "e", "f");
 }
 
 static void slogtest_f_with_group(SlogLogger *l) {
@@ -141,28 +143,32 @@ static void slogtest_f_nested_empty_group_record(SlogLogger *l) {
 
 static void slogtest_f_resolve(SlogLogger *l) {
     REPLACE(r, slogtest_replaced);
-    slog_logger_info_v(l, "msg", "k", VALUER(r));
+    Any v = VALUER(r);
+    slog_logger_info_v(l, "msg", "k", v);
 }
 
 static void slogtest_f_resolve_groups(SlogLogger *l) {
     REPLACE(r, slogtest_v2);
-    slog_logger_info_v(l, "msg",
-                       slog_group_v(BURROW_S("G"), STR("a", "v1"),
-                                    slog_any(BURROW_S("b"), VALUER(r))));
+    SlogAttr b = slog_any(BURROW_S("b"), VALUER(r));
+    SlogAttr a = STR("a", "v1");
+    SlogAttr g = slog_group_v("G", a, b);
+    slog_logger_info_v(l, "msg", g);
 }
 
 static void slogtest_f_resolve_with_attrs(SlogLogger *l) {
     REPLACE(r, slogtest_replaced);
-    SlogLogger *w = slog_logger_with_v(l, "k", VALUER(r));
+    Any v = VALUER(r);
+    SlogLogger *w = slog_logger_with_v(l, "k", v);
     slog_logger_info_v(w, "msg");
     slog_logger_free(w);
 }
 
 static void slogtest_f_resolve_with_attrs_groups(SlogLogger *l) {
     REPLACE(r, slogtest_v2);
-    SlogLogger *w =
-        slog_logger_with_v(l, slog_group_v(BURROW_S("G"), STR("a", "v1"),
-                                           slog_any(BURROW_S("b"), VALUER(r))));
+    SlogAttr b = slog_any(BURROW_S("b"), VALUER(r));
+    SlogAttr a = STR("a", "v1");
+    SlogAttr g = slog_group_v("G", a, b);
+    SlogLogger *w = slog_logger_with_v(l, g);
     slog_logger_info_v(w, "msg");
     slog_logger_free(w);
 }

@@ -370,9 +370,10 @@ Slice httputil_dump_request(Alloc *a, HttpRequest *req, bool body, Error *err) {
 
     const Str *te = (const Str *)req->transfer_encoding.p;
     bool chunked = req->transfer_encoding.len > 0 && str_eq(te[0], BURROW_S("chunked"));
-    if (req->transfer_encoding.len > 0)
-        fmt_fprintf_v(w, "Transfer-Encoding: %s\r\n",
-                      strings_join(sa, req->transfer_encoding, BURROW_S(",")));
+    if (req->transfer_encoding.len > 0) {
+        Str joined = strings_join(sa, req->transfer_encoding, BURROW_S(","));
+        fmt_fprintf_v(w, "Transfer-Encoding: %s\r\n", joined);
+    }
 
     e = burrow__http_header_write_except(
         req->header, w, ud_req_exclude,

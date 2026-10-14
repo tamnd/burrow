@@ -253,7 +253,17 @@ static void test_multipath_tcp(TestingT *t, bool env_var) {
 
 static void TestMultiPathTCP(TestingT *t) {
 #if defined(BURROW_OS_LINUX) && defined(HAVE_SOCKETS)
-    if (!can_create_mptcp_socket()) {
+    /* Not in Go: qemu's user mode answers EOPNOTSUPP to a getsockopt at a
+     * level it does not know, SOL_MPTCP among them, so no connection reads as
+     * MPTCP. CI sets this for the jobs that run under emulation. */
+    Str emulated = os_getenv(heap_allocator(), S("BURROW_TEST_EMULATED"));
+    bool skip = emulated.len > 0;
+    if (skip)
+        mem_free(heap_allocator(), (void *)(uintptr_t)emulated.p, (size_t)emulated.len,
+                 1);
+    if (skip) {
+        testing_t_skip_v(t, "qemu user mode does not pass SOL_MPTCP through");
+    } else if (!can_create_mptcp_socket()) {
         testing_t_skip_v(t, "Cannot create MPTCP sockets");
     } else {
         test_multipath_tcp(t, false);

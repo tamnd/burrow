@@ -620,7 +620,31 @@ static const IoWriterVT sv_check_conn_error_vt = {NULL, sv_check_conn_error_writ
 
 /* -------------------------------------------------------- the response */
 
-static const HttpResponseWriterVT sv_response_vt;
+/* The vtable's methods are declared here so that the vtable can be defined
+ * before its first use, since MSVC will not take a const object declared
+ * without an initializer. */
+static HttpHeader sv_response_header(void *self);
+static void sv_response_write_header(void *self, Int code);
+static Int sv_response_write(void *self, Slice data, Error *err);
+static Error sv_response_flush(void *self);
+static NetConn sv_response_hijack(void *self, BufioReadWriter *buf, Error *err);
+static Error sv_response_set_read_deadline(void *self, Time deadline);
+static Error sv_response_set_write_deadline(void *self, Time deadline);
+static Error sv_response_enable_full_duplex(void *self);
+static Chan *sv_response_close_notify(void *self);
+
+static const HttpResponseWriterVT sv_response_vt = {
+    {&sv_response_desc, sv_response_write},
+    sv_response_header,
+    sv_response_write_header,
+    sv_response_flush,
+    sv_response_hijack,
+    sv_response_set_read_deadline,
+    sv_response_set_write_deadline,
+    sv_response_enable_full_duplex,
+    sv_response_close_notify,
+    NULL,
+};
 
 static HttpResponseWriter sv_as_writer(sv_Response *w) {
     return (HttpResponseWriter){&sv_response_vt, w};
@@ -1294,19 +1318,6 @@ static void sv_cr_close_notify(sv_Response *w) {
     sync_mutex_unlock(&w->lazy_close_notify_mu);
 }
 
-static const HttpResponseWriterVT sv_response_vt = {
-    {&sv_response_desc, sv_response_write},
-    sv_response_header,
-    sv_response_write_header,
-    sv_response_flush,
-    sv_response_hijack,
-    sv_response_set_read_deadline,
-    sv_response_set_write_deadline,
-    sv_response_enable_full_duplex,
-    sv_response_close_notify,
-    NULL,
-};
-
 /* ------------------------------------------------- expectContinueReader */
 
 static Int sv_ecr_read(void *self, Slice p, Error *err) {
@@ -1750,7 +1761,7 @@ static void sv_reply_read_error(sv_Conn *c, const sv_ReadError *e) {
                             "HTTP/1.1 %d %s%sUnsupported transfer encoding",
                             (Int)HTTP_STATUS_NOT_IMPLEMENTED,
                             http_status_text(HTTP_STATUS_NOT_IMPLEMENTED),
-                            BURROW_S(SV_ERROR_HEADERS));
+                            SV_ERROR_HEADERS);
         return;
     }
     if (e->status == 0 && sv_is_common_net_read_error(e->err))
@@ -1759,7 +1770,7 @@ static void sv_reply_read_error(sv_Conn *c, const sv_ReadError *e) {
         Str st = http_status_text(e->status);
         (void)fmt_fprintf_v(net_conn_as_io_writer(c->rwc),
                             "HTTP/1.1 %d %s: %s%s%d %s: %s", e->status, st, e->text,
-                            BURROW_S(SV_ERROR_HEADERS), e->status, st, e->text);
+                            SV_ERROR_HEADERS, e->status, st, e->text);
         return;
     }
     sv_write_raw(

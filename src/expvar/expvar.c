@@ -745,7 +745,7 @@ static void ev_publish(Str name, ExpvarVar v) {
             runtime_panic(BURROW_S("expvar: out of memory publishing a variable"));
     }
     if (loaded)
-        log_panicln_v(BURROW_S("Reuse of exported var name:"), name);
+        log_panicln_v("Reuse of exported var name:", name);
 }
 
 void expvar_publish(Str name, ExpvarVar v) {
@@ -759,18 +759,20 @@ ExpvarVar expvar_get(Str name) {
 
 /* Publishes a new variable that new_var has made, size bytes of it. The list
  * of published variables owns it from then on, which is all Go's collector
- * would do with it, since a published variable is never unpublished. */
+ * would do with it, since a published variable is never unpublished. It takes
+ * ownership before publishing, so a name that is already taken, which panics,
+ * does not leak the variable. */
 static void *ev_new_var(Str name, size_t size, size_t align,
                         ExpvarVar (*as_var)(void *p)) {
     void *p = mem_alloc(heap_allocator(), size, align);
     if (p == NULL)
         return NULL;
     memset(p, 0, size);
-    expvar_publish(name, as_var(p));
-    ExpvarMap *m = &ev_vars;
+    ExpvarMap *m = ev_need_vars();
     sync_rw_mutex_lock(&m->keys_mu);
     ev_map_own(m, p, size, align);
     sync_rw_mutex_unlock(&m->keys_mu);
+    ev_publish(name, as_var(p));
     return p;
 }
 

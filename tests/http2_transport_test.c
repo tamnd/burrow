@@ -967,6 +967,18 @@ static bool h2ct_tt_has_conn(H2ctTT *tt) {
     return has;
 }
 
+/* Not in Go: hasConn for a conn that should be there. A dial can take longer
+ * than the quiet time on a loaded machine, so this keeps looking for up to
+ * the usual wait before it says no. */
+static bool h2ct_tt_has_conn_soon(H2ctTT *tt) {
+    Time deadline = time_add(time_now(), H2CT_WAIT);
+    while (!h2ct_tt_has_conn(tt)) {
+        if (!time_before(time_now(), deadline))
+            return false;
+    }
+    return true;
+}
+
 /* ------------------------------------------------------- reading frames */
 
 static Http2Frame *h2ct_read_frame_within(H2ctConn *tc, Duration d, Error *err) {
@@ -3937,7 +3949,7 @@ static void h2ct_idle_conn_timeout(H2ctTT *tt, const void *arg) {
          * there is no cached conn), or if the test timeout is long enough
          * that old conns are being closed. */
         bool want_conn = i == 0 || test->want_new_conn;
-        bool has = h2ct_tt_has_conn(tt);
+        bool has = want_conn ? h2ct_tt_has_conn_soon(tt) : h2ct_tt_has_conn(tt);
         if (has != want_conn)
             FATALF("request %d: hasConn=%v, want %v", i, has, want_conn);
         if (want_conn) {
@@ -3951,8 +3963,24 @@ static void h2ct_idle_conn_timeout(H2ctTT *tt, const void *arg) {
         if (h2ct_tt_has_conn(tt))
             FATALF("request %d: Transport has more than one conn", i);
 
-        /* Respond to the client's request. */
-        Http2Frame *hf = h2ct_read_type(tc, HTTP2_FRAME_HEADERS);
+        /* Respond to the client's request. Not in Go: without synctest the
+         * client's read loop can ACK our SETTINGS before the request writes
+         * its HEADERS, so on a new conn the ACK may come first. */
+        bool acked = false;
+        Http2Frame *hf = h2ct_read_frame(tc);
+        if (want_conn && hf != NULL && hf->header.type == HTTP2_FRAME_SETTINGS &&
+            (hf->header.flags & HTTP2_FLAG_SETTINGS_ACK) != 0) {
+            acked = true;
+            burrow__http2_frame_free(hf);
+            hf = h2ct_read_frame(tc);
+        }
+        if (hf != NULL && hf->header.type != HTTP2_FRAME_HEADERS) {
+            testing_t_errorf_v(tc->t, "got frame type %d on stream %d, want type %d",
+                               (int)hf->header.type, (int)hf->header.stream_id,
+                               (int)HTTP2_FRAME_HEADERS);
+            burrow__http2_frame_free(hf);
+            hf = NULL;
+        }
         H2CT_TRY(hf != NULL);
         uint32_t id = hf->header.stream_id;
         burrow__http2_frame_free(hf);
@@ -3960,7 +3988,7 @@ static void h2ct_idle_conn_timeout(H2ctTT *tt, const void *arg) {
         H2CT_TRY(h2ct_rt_want_status(rt, 200));
 
         /* If this was a newly-accepted conn, read the SETTINGS ACK. */
-        if (want_conn)
+        if (want_conn && !acked)
             H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_SETTINGS)); /* ACK */
 
         time_sleep(test->wait);
@@ -6239,9 +6267,13 @@ static void h2ct_ok_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
     http_response_writer_write_header(w, HTTP_STATUS_OK);
 }
 
-/* infiniteReader */
+/* infiniteReader. Not in Go: it zeroes what it says it read. The transport's
+ * scratch buffer is not zeroed, so leaving p alone sends uninitialized bytes,
+ * which MSan reports. */
 static Int h2ct_infinite_read(void *self, Slice p, Error *err) {
     (void)self;
+    if (p.len > 0)
+        memset(p.p, 0, (size_t)p.len);
     *err = BURROW_NO_ERROR;
     return p.len;
 }

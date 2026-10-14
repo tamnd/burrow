@@ -574,7 +574,11 @@ int64_t pal_accept(int64_t fd, PalSockAddr *peer, PalErrno *err) {
     }
     burrow__pal_fork_runlock();
 #endif
-    if (!pnet_nosigpipe(nfd)) {
+    /* XNU refuses a socket option with EINVAL once both directions of the
+     * socket are shut down, which is where an accepted connection already is
+     * when its peer has come and gone. Go's accept sets no option there and
+     * hands that connection back, so this does too. */
+    if (!pnet_nosigpipe(nfd) && errno != EINVAL) {
         PalErrno e = burrow__pal_errno(errno);
         close(nfd);
         BURROW_OUT(err, e);

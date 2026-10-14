@@ -365,15 +365,14 @@ Str html_template_error_error(const HtmlTemplateError *e, Alloc *a) {
     if (e->node != NULL) {
         Str context;
         Str loc = parse_tree_error_context(NULL, a, e->node, &context);
-        return fmt_sprintf_v(a, BURROW_S("html/template:%s: %s"), loc, e->description);
+        return fmt_sprintf_v(a, "html/template:%s: %s", loc, e->description);
     }
     if (e->line != 0)
-        return fmt_sprintf_v(a, BURROW_S("html/template:%s:%d: %s"), e->name, e->line,
+        return fmt_sprintf_v(a, "html/template:%s:%d: %s", e->name, e->line,
                              e->description);
     if (e->name.len != 0)
-        return fmt_sprintf_v(a, BURROW_S("html/template:%s: %s"), e->name,
-                             e->description);
-    return fmt_sprintf_v(a, BURROW_S("html/template: %s"), e->description);
+        return fmt_sprintf_v(a, "html/template:%s: %s", e->name, e->description);
+    return fmt_sprintf_v(a, "html/template: %s", e->description);
 }
 
 static Str htc_copy_str(Alloc *a, Str s, bool *ok) {

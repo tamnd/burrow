@@ -147,15 +147,17 @@ void bufio_reader_free(BufioReader *b) {
     if (b == NULL)
         return;
     /* An own reader starts at one and goes at zero. A caller's starts at zero,
-     * so its last free takes it to minus one, and then it is put back. */
+     * so its last free takes it to minus one, and then it is put back. Own is
+     * read first: once the count drops, another holder may free b. */
+    bool own = b->own;
     Int left = bufio_refs_add(&b->refs, -1);
-    if (left > (b->own ? 0 : -1))
+    if (left > (own ? 0 : -1))
         return;
-    if (!b->own)
+    if (!own)
         b->refs = 0;
     if (b->buf != NULL)
         mem_free(b->a, b->buf, (size_t)b->size, 1);
-    if (b->own) {
+    if (own) {
         mem_free(b->a, b, sizeof *b, _Alignof(BufioReader));
         return;
     }
@@ -748,15 +750,17 @@ void bufio_writer_free(BufioWriter *b) {
     if (b == NULL)
         return;
     /* An own reader starts at one and goes at zero. A caller's starts at zero,
-     * so its last free takes it to minus one, and then it is put back. */
+     * so its last free takes it to minus one, and then it is put back. Own is
+     * read first: once the count drops, another holder may free b. */
+    bool own = b->own;
     Int left = bufio_refs_add(&b->refs, -1);
-    if (left > (b->own ? 0 : -1))
+    if (left > (own ? 0 : -1))
         return;
-    if (!b->own)
+    if (!own)
         b->refs = 0;
     if (b->buf != NULL)
         mem_free(b->a, b->buf, (size_t)b->size, 1);
-    if (b->own) {
+    if (own) {
         mem_free(b->a, b, sizeof *b, _Alignof(BufioWriter));
         return;
     }

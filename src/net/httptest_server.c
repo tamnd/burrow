@@ -265,10 +265,9 @@ static void ts_log_close_hang(void *env) {
         NetAddr ra = c.vt->remote_addr(c.data);
         Str tn = c.vt->reader.self_type != NULL ? type_name(c.vt->reader.self_type)
                                                 : BURROW_S("NetConn");
-        text =
-            fmt_sprintf_v(a, "%s  %s %p %s in state %s\n", text, tn, c.data,
-                          ra.vt != NULL ? ra.vt->string(ra.data, a) : BURROW_S("<nil>"),
-                          http_conn_state_string(s->conns[i].st));
+        Str ras = ra.vt != NULL ? ra.vt->string(ra.data, a) : BURROW_S("<nil>");
+        text = fmt_sprintf_v(a, "%s  %s %p %s in state %s\n", text, tn, c.data, ras,
+                             http_conn_state_string(s->conns[i].st));
     }
     sync_mutex_unlock(&s->mu);
     log_print_v("%s", text);

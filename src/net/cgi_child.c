@@ -180,8 +180,7 @@ HttpRequest *cgi_request_from_map(Alloc *a, Map *params, Error *err) {
         /* Fallback to SCRIPT_NAME, PATH_INFO and QUERY_STRING. */
         Str s = cc_get(params, "QUERY_STRING");
         uri_str = fmt_sprintf_v(ra, "%s%s%s%s", cc_get(params, "SCRIPT_NAME"),
-                                cc_get(params, "PATH_INFO"),
-                                s.len > 0 ? BURROW_S("?") : BURROW_STR_EMPTY, s);
+                                cc_get(params, "PATH_INFO"), s.len > 0 ? "?" : "", s);
     }
 
     /* There's apparently a de-facto standard for this.
@@ -193,9 +192,8 @@ HttpRequest *cgi_request_from_map(Alloc *a, Map *params, Error *err) {
 
     if (r->host.len > 0) {
         /* Hostname is provided, so we can reasonably construct a URL. */
-        Str rawurl = fmt_sprintf_v(ra, "%s%s%s",
-                                   tls ? BURROW_S("https://") : BURROW_S("http://"),
-                                   r->host, uri_str);
+        Str rawurl =
+            fmt_sprintf_v(ra, "%s%s%s", tls ? "https://" : "http://", r->host, uri_str);
         Error ue = BURROW_NO_ERROR;
         r->url = url_parse(ra, rawurl, &ue);
         if (r->url == NULL) {

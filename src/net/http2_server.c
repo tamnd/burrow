@@ -732,12 +732,24 @@ static Http2FrameWriteRequest h2s_wr_make(Http2WriteFramer w, h2s_Stream *st,
     return wr;
 }
 
-/* Lets go of what a request holds, once it is written or thrown away. */
-static void h2s_wr_release(h2s_Conn *sc, Http2FrameWriteRequest *wr) {
+/* Frees the copy of the res headers a request carries, if it has one. */
+static void h2s_wr_free_headers(h2s_Conn *sc, Http2FrameWriteRequest *wr) {
     if (wr->write.kind == HTTP2_WRITE_RES_HEADERS && wr->write.u.res_headers != NULL) {
         h2s_res_headers_free(sc->a, wr->write.u.res_headers);
         wr->write.u.res_headers = NULL;
     }
+}
+
+/* replyToWriter, which clears wr->write, so the headers go first. */
+static void h2s_wr_reply(h2s_Conn *sc, Http2FrameWriteRequest *wr, Error err) {
+    if (wr->done != NULL)
+        h2s_wr_free_headers(sc, wr);
+    burrow__http2_frame_write_request_reply_to_writer(wr, err);
+}
+
+/* Lets go of what a request holds, once it is written or thrown away. */
+static void h2s_wr_release(h2s_Conn *sc, Http2FrameWriteRequest *wr) {
+    h2s_wr_free_headers(sc, wr);
     if (wr->stream != NULL) {
         h2s_Stream *st = (h2s_Stream *)(void *)wr->stream;
         wr->stream = NULL;
@@ -1122,8 +1134,7 @@ static void h2s_write_frame(h2s_Conn *sc, Http2FrameWriteRequest wr) {
             /* Out of memory. The writer hears about it as a write error. */
             if (control)
                 sc->queued_control_frames--;
-            burrow__http2_frame_write_request_reply_to_writer(&wr,
-                                                              burrow_err_out_of_memory);
+            h2s_wr_reply(sc, &wr, burrow_err_out_of_memory);
             h2s_wr_release(sc, &wr);
         }
     } else {
@@ -1281,7 +1292,7 @@ static void h2s_wrote_frame(h2s_Conn *sc, h2s_FrameWriteResult res) {
 
     /* Reply to the writer before the table size change below, which needs
      * nothing from it. */
-    burrow__http2_frame_write_request_reply_to_writer(&wr, res.err);
+    h2s_wr_reply(sc, &wr, res.err);
     h2s_wr_release(sc, &wr);
 
     if (sc->pending_table_size && !sc->writing_frame) {

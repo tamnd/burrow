@@ -44,6 +44,7 @@
 #include "burrow/net/url.h"
 #include "burrow/own.h"
 #include "burrow/slice.h"
+#include "burrow/sync.h"
 #include "burrow/time.h"
 
 #include <stdbool.h>
@@ -347,6 +348,11 @@ typedef struct HttpRequest {
     Alloc *a;
     Arena arena;
     void *wire; /* the body that reads from the wire, freed with the request */
+
+    /* What a ServeMux matched, for http_request_path_value. */
+    const struct burrow__HttpPattern *pat;
+    Slice matches;     /* of Str, one for each named wildcard */
+    Map *other_values; /* of Str to Str, set by http_request_set_path_value */
 } HttpRequest;
 
 /* http.ReadRequest. Reads a request from b, its first line and header, and
@@ -443,6 +449,17 @@ BURROW_BORROWS(ret) Error http_request_write(HttpRequest *r, IoWriter w);
  * whole URL in the request line. */
 BURROW_BORROWS(ret) Error http_request_write_proxy(HttpRequest *r, IoWriter w);
 
+/* Request.PathValue. The value of the wildcard called name in the ServeMux
+ * pattern that matched r, or one set with http_request_set_path_value, and ""
+ * when there is neither. */
+BURROW_BORROWS(ret, r) Str http_request_path_value(const HttpRequest *r, Str name);
+
+/* Request.SetPathValue. Sets what http_request_path_value gives for name to
+ * value. Neither is copied, and neither is unescaped. a is where the map for a
+ * name that is not one of the pattern's goes, and has to last as long as r.
+ * False when a says no. */
+bool http_request_set_path_value(HttpRequest *r, Alloc *a, Str name, Str value);
+
 /* http.ParseHTTPVersion. The numbers of an HTTP version such as "HTTP/1.0",
  * which gives 1 and 0. A version without a minor number, such as "HTTP/2", is
  * not one. False for anything that is not a version. */
@@ -511,6 +528,225 @@ bool http_response_proto_at_least(const HttpResponse *r, Int major, Int minor);
  * there is no Location field. */
 BURROW_OWNS(ret) Url *http_response_location(const HttpResponse *r, Alloc *a,
                                              Error *err);
+
+/* ------------------------------------------------------------------ Handler */
+
+/* http.ResponseWriter, what a handler writes its response with.
+ *
+ * header is the header the response will have. Changing it after write_header,
+ * or after the first write, changes nothing unless the keys were named in a
+ * Trailer field first. write writes body bytes, and calls write_header with
+ * HTTP_STATUS_OK first when nobody has. write_header sends the status line and
+ * the header, and is called at most once, with a code from 100 to 999.
+ *
+ * The writer embeds an IoWriter, so http_response_writer_as_io_writer is what
+ * the fmt and io functions take. */
+typedef struct HttpResponseWriterVT {
+    IoWriterVT writer;
+    HttpHeader (*header)(void *self);
+    void (*write_header)(void *self, Int status_code);
+} HttpResponseWriterVT;
+
+typedef struct HttpResponseWriter {
+    const HttpResponseWriterVT *vt;
+    void *data;
+} HttpResponseWriter;
+
+/* The writer as the IoWriter it embeds. */
+IoWriter http_response_writer_as_io_writer(HttpResponseWriter w);
+
+/* ResponseWriter.Header, Write and WriteHeader. */
+BURROW_BORROWS(ret, w) static inline HttpHeader
+http_response_writer_header(HttpResponseWriter w) {
+    return w.vt->header(w.data);
+}
+static inline Int http_response_writer_write(HttpResponseWriter w, Slice p,
+                                             Error *err) {
+    return w.vt->writer.write(w.data, p, err);
+}
+static inline void http_response_writer_write_header(HttpResponseWriter w,
+                                                     Int status_code) {
+    w.vt->write_header(w.data, status_code);
+}
+
+/* http.Handler, which answers a request. serve_http writes the response to w
+ * and returns when it is done, and neither w nor r is to be used after that. A
+ * handler that wants the body has to read it before it writes, since a server
+ * may not be able to read it once the response has begun. */
+typedef struct HttpHandlerVT {
+    const Type *self_type;
+    void (*serve_http)(void *self, HttpResponseWriter w, HttpRequest *r);
+} HttpHandlerVT;
+
+typedef struct HttpHandler {
+    const HttpHandlerVT *vt;
+    void *data;
+} HttpHandler;
+
+/* Handler.ServeHTTP. */
+static inline void http_handler_serve_http(HttpHandler h, HttpResponseWriter w,
+                                           HttpRequest *r) {
+    h.vt->serve_http(h.data, w, r);
+}
+
+/* http.HandlerFunc, a function used as a handler. */
+BURROW_FUNC(HttpHandlerFunc, void, HttpResponseWriter w, HttpRequest *r);
+
+/* HandlerFunc.ServeHTTP, which calls f. */
+static inline void http_handler_func_serve_http(HttpHandlerFunc f, HttpResponseWriter w,
+                                                HttpRequest *r) {
+    f.f(f.env, w, r);
+}
+
+extern const Type *const TYPE_HTTP_HANDLER_FUNC;
+
+/* HandlerFunc(f) as a Handler, which calls f. The handler points at f, so f has
+ * to outlive it. */
+BURROW_BORROWS(ret, f) HttpHandler http_handler_func_as_handler(HttpHandlerFunc *f);
+
+/* http.Error. Replies to the request with error, a plain text message, and
+ * code, after taking Content-Length out of w's header, which may be for some
+ * other body, and setting Content-Type to "text/plain; charset=utf-8" and
+ * X-Content-Type-Options to "nosniff". The caller should not write more to w
+ * after this. */
+void http_error(HttpResponseWriter w, Str error, Int code);
+
+/* http.NotFound, http_error with "404 page not found" and 404. */
+void http_not_found(HttpResponseWriter w, HttpRequest *r);
+
+/* http.NotFoundHandler, a handler that calls http_not_found. */
+HttpHandler http_not_found_handler(void);
+
+/* http.Redirect. Replies to r with a redirect to url, which may be relative to
+ * the request's path, and code, which should be a 3xx such as
+ * HTTP_STATUS_FOUND. Characters in url that are not ASCII are percent-encoded,
+ * and any encoding it already has is kept.
+ *
+ * When w's header has no Content-Type, a GET or HEAD gets
+ * "text/html; charset=utf-8", and a GET a short HTML body with the link. A
+ * Content-Type, even one with no values, leaves both out. The Location value
+ * is made with the header's allocator. */
+void http_redirect(HttpResponseWriter w, HttpRequest *r, Str url, Int code);
+
+/* http.RedirectHandler, a handler that redirects every request to url with
+ * code. It is made in a, and keeps url as it is, so url has to outlive it. NULL
+ * data, which is no handler, when a says no. */
+BURROW_OWNS(ret) HttpHandler http_redirect_handler(Alloc *a, Str url, Int code);
+
+/* http.StripPrefix. A handler that takes prefix off the request URL's path,
+ * and its raw path when it has one, and passes the request to h. A path that
+ * does not start with prefix, or a raw path that does not, gets a 404. The
+ * request h sees is a copy, with a copy of the URL, so the request is left as
+ * it was. An empty prefix gives h itself. Made in a, and NULL data when a says
+ * no. */
+BURROW_OWNS(ret) HttpHandler http_strip_prefix(Alloc *a, Str prefix, HttpHandler h);
+
+/* ----------------------------------------------------------------- ServeMux */
+
+/* http.ServeMux, which sends each request to the handler for the pattern that
+ * matches it best.
+ *
+ * A pattern is [METHOD ][HOST]/[PATH], such as "/index.html", "GET /static/",
+ * "example.com/" or "/b/{bucket}/o/{objectname...}". A method matches only
+ * that method, except that GET matches HEAD too, and a host matches only that
+ * host. Each segment of the path is a literal, which matches itself
+ * unescaped, or a wildcard: "{name}" matches one segment, "{name...}" the rest
+ * of the path and has to be last, and "{$}" only the end of a path that ends
+ * in a slash. A pattern ending in a slash matches every path that starts with
+ * it, so "/" matches anything. http_request_path_value gives the segment a
+ * wildcard matched.
+ *
+ * When two patterns match a request the more specific one wins, the one that
+ * matches a strict subset of the other's requests, and a pattern with a host
+ * wins over one without. Two patterns that match some request each and
+ * neither is more specific conflict, and registering the second panics.
+ *
+ * A request for a path such as "/tree" when only "/tree/" is registered is
+ * redirected there, and so is one whose path is not clean, such as "/a/../b"
+ * or "//b", to the clean one. A request that matches no pattern gets a 404, or
+ * a 405 with an Allow field when a pattern matches it with another method.
+ *
+ * The zero value is ready to use, and http_new_serve_mux makes one. The
+ * patterns and the tree they go into come from the mux's own arena, which
+ * http_serve_mux_free gives back. Registering and serving can go on at once
+ * from any number of goroutines. GODEBUG=httpmuxgo121=1, read once, gives the
+ * mux of Go 1.21 instead, with no methods, hosts only as a prefix, no
+ * wildcards and no conflicts. */
+typedef struct HttpServeMux {
+    SyncRWMutex mu;
+    struct burrow__HttpRoutingNode *tree;
+    struct burrow__HttpRoutingIndex *index;
+    struct burrow__HttpMux121 *mux121;
+    Alloc *a; /* what made the mux, or NULL for one that was not made */
+    Arena arena;
+    bool ready;
+} HttpServeMux;
+
+/* http.NewServeMux. A new mux made in a, NULL when a says no. Give it back
+ * with http_serve_mux_free. */
+BURROW_OWNS(ret) HttpServeMux *http_new_serve_mux(Alloc *a);
+
+/* Gives back what the mux holds, and the mux itself if http_new_serve_mux
+ * made it. Not while it is being used. NULL is fine. */
+void http_serve_mux_free(HttpServeMux *mux);
+
+/* http.DefaultServeMux, the mux the server uses when it is given no handler,
+ * and that http_handle and http_handle_func register with. */
+extern HttpServeMux *const http_default_serve_mux;
+
+/* ServeMux.Handle. Registers h for pattern, and panics when the pattern is not
+ * valid, h is nil, or the pattern conflicts with one already registered. The
+ * message for a conflict says where both were registered, which is why this is
+ * a macro: it passes the caller's file and line. */
+#define http_serve_mux_handle(mux, pattern, h)                                         \
+    burrow__http_serve_mux_handle_at((mux), (pattern), (h), __FILE__, __LINE__)
+
+/* ServeMux.HandleFunc. http_serve_mux_handle with a function, which is copied
+ * into the mux, so the copy lives as long as it does. Its env has to as
+ * well. */
+#define http_serve_mux_handle_func(mux, pattern, f)                                    \
+    burrow__http_serve_mux_handle_func_at((mux), (pattern), (f), __FILE__, __LINE__)
+
+/* http.Handle and http.HandleFunc, on http_default_serve_mux. */
+#define http_handle(pattern, h)                                                        \
+    burrow__http_serve_mux_handle_at(http_default_serve_mux, (pattern), (h), __FILE__, \
+                                     __LINE__)
+#define http_handle_func(pattern, f)                                                   \
+    burrow__http_serve_mux_handle_func_at(http_default_serve_mux, (pattern), (f),      \
+                                          __FILE__, __LINE__)
+
+void burrow__http_serve_mux_handle_at(HttpServeMux *mux, Str pattern, HttpHandler h,
+                                      const char *file, Int line);
+void burrow__http_serve_mux_handle_func_at(HttpServeMux *mux, Str pattern,
+                                           HttpHandlerFunc f, const char *file,
+                                           Int line);
+
+/* ServeMux.Handler. The handler for r, by its method, host and URL path,
+ * which is never nil, and in *pattern the pattern it was registered with.
+ * pattern may be NULL. A host's port is left out when matching.
+ *
+ * A path that is not clean, or that needs a slash on the end, gets a handler
+ * that redirects, and the pattern that will match after the redirect. A
+ * request that nothing matches gets a 404 or 405 handler and "". CONNECT
+ * requests are matched with the path and host as they are.
+ *
+ * r is left as it is, so http_request_path_value does not see the wildcards.
+ * The handlers made here, and the strings they hold, come from a. */
+BURROW_BORROWS(ret, mux) HttpHandler http_serve_mux_handler(HttpServeMux *mux,
+                                                            const HttpRequest *r,
+                                                            Alloc *a, Str *pattern);
+
+/* ServeMux.ServeHTTP. Sends r to the handler for it, after setting r's pattern
+ * and what its wildcards matched. A request for "*" gets a 400, with
+ * Connection: close for HTTP/1.1 and later. What the match needs is made in
+ * r's arena, so for a request http_read_request or http_new_request made it
+ * lasts as long as r. A request with no allocator of its own gets a scratch
+ * arena that goes when the handler returns, and its pattern and wildcards are
+ * cleared again then. */
+void http_serve_mux_serve_http(HttpServeMux *mux, HttpResponseWriter w, HttpRequest *r);
+
+/* The mux as a Handler, which calls http_serve_mux_serve_http. */
+BURROW_BORROWS(ret, mux) HttpHandler http_serve_mux_as_handler(HttpServeMux *mux);
 
 /* ----------------------------------------------------------------- Sniffing */
 

@@ -124,6 +124,84 @@ static void wire(Alloc *a) {
     // doc: end
 }
 
+/* A ResponseWriter that prints the status a handler sends, with Location and
+ * Allow when it sets them, and the body of a 200. There is no server yet to
+ * send any of it to a client. */
+typedef struct Printer {
+    HttpHeader header;
+    Int code;
+} Printer;
+
+static void printer_write_header(void *self, Int code) {
+    Printer *p = self;
+    if (p->code != 0)
+        return;
+    p->code = code;
+    printf("%d", (int)code);
+    Str loc = http_header_get(p->header, BURROW_S("Location"));
+    Str allow = http_header_get(p->header, BURROW_S("Allow"));
+    if (loc.len > 0)
+        printf(" to %.*s", P(loc));
+    if (allow.len > 0)
+        printf(", allow %.*s", P(allow));
+    printf("\n");
+}
+
+static Int printer_write(void *self, Slice b, Error *err) {
+    Printer *p = self;
+    printer_write_header(self, 200);
+    if (p->code == 200)
+        printf("    %.*s", (int)b.len, (const char *)b.p);
+    *err = BURROW_NO_ERROR;
+    return b.len;
+}
+
+static HttpHeader printer_header(void *self) {
+    return ((Printer *)self)->header;
+}
+
+static const HttpResponseWriterVT printer_vt = {
+    {NULL, printer_write}, printer_header, printer_write_header};
+
+static void show_note(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    fmt_fprintf_v(http_response_writer_as_io_writer(w), "note %s\n",
+                  http_request_path_value(r, BURROW_S("id")));
+}
+
+static void show_file(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    fmt_fprintf_v(http_response_writer_as_io_writer(w), "file %s\n", r->url->path);
+}
+
+static void route(Alloc *a) {
+    // doc: mux
+    HttpServeMux *mux = http_new_serve_mux(a);
+    http_serve_mux_handle_func(mux, BURROW_S("GET /notes/{id}"),
+                               BURROW_FN(HttpHandlerFunc, show_note, NULL));
+    http_serve_mux_handle_func(mux, BURROW_S("/files/"),
+                               BURROW_FN(HttpHandlerFunc, show_file, NULL));
+
+    const char *reqs[][2] = {
+        {"GET", "/notes/42"}, {"DELETE", "/notes/42"},      {"GET", "/files/a.txt"},
+        {"GET", "/files"},    {"GET", "/files/x/../b.txt"}, {"GET", "/other"},
+    };
+    for (size_t i = 0; i < sizeof reqs / sizeof reqs[0]; i++) {
+        Error err;
+        HttpRequest *r =
+            http_new_request(a, str_from_cstr(reqs[i][0]), str_from_cstr(reqs[i][1]),
+                             (IoReader){0}, &err);
+        if (r == NULL)
+            continue;
+        printf("%s %s: ", reqs[i][0], reqs[i][1]);
+        Printer out = {http_header_make(a), 0};
+        http_serve_mux_serve_http(mux, (HttpResponseWriter){&printer_vt, &out}, r);
+        http_request_free(r);
+    }
+    http_serve_mux_free(mux);
+    // doc: end
+}
+
 int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -133,6 +211,7 @@ int main(void) {
     times(a);
     cookies(a);
     wire(a);
+    route(a);
     arena_free(&ar);
     return 0;
 }

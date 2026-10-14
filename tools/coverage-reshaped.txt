@@ -118,6 +118,10 @@ math/big: method (*Int) Divide: the remainder is the r passed in, so only z is r
 # give the io interfaces.
 mime/multipart: method (*FileHeader) Open: File is one opaque type rather than an interface
 
+# include/burrow/net/http.h: FormFile gives the same opaque file that
+# multipart_file_header_open does.
+net/http: method (*Request) FormFile: multipart.File is one opaque type rather than an interface
+
 # include/burrow/image/color.h: Go's RGBA and the conversion functions have
 # three or four results, and C has one. Each comes back as one struct instead of
 # the first result and pointers for the rest, since every caller wants all of

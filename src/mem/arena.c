@@ -109,6 +109,13 @@ static ArenaChunk *chunk_get(Arena *ar, size_t size, size_t align) {
         link = &(*link)->next;
     }
 
+    /* A zeroed Arena that never saw arena_init is the same as one given NULL
+     * and zero, the way a Go zero value is ready to use. */
+    if (ar->parent == NULL)
+        ar->parent = heap_allocator();
+    if (ar->chunk_size == 0)
+        ar->chunk_size = ARENA_DEFAULT_CHUNK;
+
     size_t want = ar->chunk_size;
     bool ordinary = want >= need;
     if (!ordinary)

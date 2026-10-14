@@ -293,6 +293,18 @@ BURROW_STATIC(ret) ReflectType reflect_chan_of(ReflectChanDir dir, ReflectType t
  * types in all, as Go does. */
 BURROW_STATIC(ret) ReflectType reflect_func_of(Slice in, Slice out, bool variadic);
 
+/* StructOf: the struct type with fields, a Slice of ReflectStructField, of
+ * which it reads the name, the package path, the type, the tag and anonymous.
+ * It panics where Go's does, and also where burrow cannot make what was asked
+ * for. A field here is embedded exactly when it is named for its type, and
+ * exported exactly when its name begins with an upper case letter, so an
+ * anonymous field with another name panics, and so does an exported name with
+ * a package path. A field named for its type reads as embedded even when it
+ * was not asked to be.
+ * Methods come from embedded fields as in Go, and an embedded interface's
+ * panic when called. */
+BURROW_STATIC(ret) ReflectType reflect_struct_of(Slice fields);
+
 /* ------------------------------------------------------------------ values */
 
 /* Value: a type and where a value of it is. The zero ReflectValue is Go's zero

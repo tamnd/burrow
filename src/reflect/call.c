@@ -84,13 +84,26 @@ static void rfn_invoke(const Type *ft, const void *fn, void **args, void **rets)
     ft->ops->call(fn, args, rets);
 }
 
+/* The pointer in the struct p points at, for a struct StructOf made around
+ * one embedded pointer, which is what the methods it has from that pointer
+ * take. Go's promoted method reads it too, and panics when it is nil, which a
+ * C method given NULL would not do. */
+static void *rfn_through(void *p) {
+    void *q = p == NULL ? NULL : rfn_word(p);
+    if (q == NULL)
+        runtime_panic(BURROW_S("invalid memory address or nil pointer dereference"));
+    return q;
+}
+
 /* A method value: the method and the receiver it was taken from. iface says
- * the receiver is an interface value, whose method goes through its vtable. */
+ * the receiver is an interface value, whose method goes through its vtable,
+ * and through says it is a struct whose methods need rfn_through. */
 typedef struct RfnMethodValue {
     RfnClosure c;
     const Method *m;
     void *recv;
     bool iface;
+    bool through;
     Func fn;
 } RfnMethodValue;
 
@@ -106,7 +119,7 @@ static void rfn_method_value_call(const RfnClosure *c, void **args, void **rets)
         if (i.vt == NULL)
             panic_str(BURROW_S("reflect: Call of method on nil interface value"));
     }
-    mv->m->thunk(mv->recv, args, rets);
+    mv->m->thunk(mv->through ? rfn_through(mv->recv) : mv->recv, args, rets);
 }
 
 /* A method's Func, which takes the receiver as its first argument. For a
@@ -116,13 +129,14 @@ typedef struct RfnMethodFunc {
     RfnClosure c;
     const Method *m;
     bool indirect;
+    bool through;
     Func fn;
 } RfnMethodFunc;
 
 static void rfn_method_func_call(const RfnClosure *c, void **args, void **rets) {
     const RfnMethodFunc *mf = (const RfnMethodFunc *)c;
     void *recv = mf->indirect ? rfn_word(args[0]) : args[0];
-    mf->m->thunk(recv, args + 1, rets);
+    mf->m->thunk(mf->through ? rfn_through(recv) : recv, args + 1, rets);
 }
 
 /* Parameter i and result i of ft, for an i known to be in range. They read the
@@ -206,6 +220,7 @@ static const Type *rfn_func_type(const Type *first, const Type *ft) {
 typedef struct RfnMethodKey {
     const Method *m;
     bool indirect;
+    bool through;
 } RfnMethodKey;
 
 static bool rfn_method_func_init(void *p, Alloc *a, const void *ctx) {
@@ -215,6 +230,7 @@ static bool rfn_method_func_init(void *p, Alloc *a, const void *ctx) {
     mf->c.call = rfn_method_func_call;
     mf->m = k->m;
     mf->indirect = k->indirect;
+    mf->through = k->through;
     mf->fn = (Func){rfn_marker, &mf->c};
     return true;
 }
@@ -241,8 +257,8 @@ ReflectMethod reflect_type_method(ReflectType t, Int i) {
         panic_str(BURROW_S("reflect: Method index out of range"));
     /* One Func per method and receiver type, kept, so that the Value can point
      * at it for as long as the program runs. */
-    bool indirect = t->nmethod == 0;
-    RfnMethodKey k = {m, indirect};
+    bool indirect = t->kind == KIND_POINTER && t->nmethod == 0;
+    RfnMethodKey k = {m, indirect, burrow__reflect_promoted(indirect ? t->elem : t)};
     const void *key[4] = {(const void *)BURROW__RF_KEEP_METHOD, m, t, NULL};
     RfnMethodFunc *mf = burrow__reflect_keep(
         key, sizeof(RfnMethodFunc), _Alignof(RfnMethodFunc), rfn_method_func_init, &k);
@@ -280,12 +296,13 @@ ReflectValue reflect_value_method(ReflectValue v, Alloc *a, Int i) {
     RfnMethodValue *mv = rfn_alloc(a, sizeof *mv, _Alignof(RfnMethodValue));
     mv->c.call = rfn_method_value_call;
     mv->m = m;
-    /* A method's own type answers the method set, and then the receiver is the
-     * value, which for an interface is the interface value the method's thunk
-     * calls through. Otherwise v is a pointer borrowing its element's
-     * methods. */
-    mv->recv = v.typ->nmethod > 0 ? v.ptr : rfn_word(v.ptr);
+    /* The receiver is the value, which for an interface is the interface value
+     * the method's thunk calls through, unless v is a pointer borrowing its
+     * element's methods. */
+    bool indirect = v.typ->kind == KIND_POINTER && v.typ->nmethod == 0;
+    mv->recv = indirect ? rfn_word(v.ptr) : v.ptr;
     mv->iface = iface;
+    mv->through = burrow__reflect_promoted(indirect ? v.typ->elem : v.typ);
     mv->fn = (Func){rfn_marker, &mv->c};
     return (ReflectValue){rfn_func_type(NULL, m->ftype), &mv->fn,
                           BURROW__RF_RO_OF(v) | BURROW__RF_METHOD};

@@ -257,4 +257,7 @@ int to *int: false, []byte to [4]byte: true
 func(int, int) int returned 42
 made func returned 23
 1 method, func() float64 = 212
+Temp: true, int: false
+asserted, 212
+Fahrenheiter holds Temp, method gives 212
 */

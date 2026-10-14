@@ -798,7 +798,11 @@ static bool rf_identical(const Type *t, const Type *u, bool under, bool tags) {
         return true;
     }
     case KIND_STRUCT:
-        if (t->nfield != u->nfield)
+        /* A descriptor that lists no fields and still has a size keeps its
+         * fields to itself, as bytes.Buffer's does, so it is only itself and
+         * not struct{}. */
+        if (t->nfield != u->nfield || t->size != u->size ||
+            (t->nfield == 0 && t->size > 0))
             return false;
         for (uint16_t i = 0; i < t->nfield; i++) {
             const Field *f = &t->fields[i];

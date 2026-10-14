@@ -254,7 +254,7 @@ static uint64_t clash_hash(const void *p, uint64_t seed) {
     return 0x5ec0ffeeU;
 }
 
-static const TypeOps clash_ops = {clash_equal, clash_hash, NULL, NULL};
+static const TypeOps clash_ops = {clash_equal, clash_hash, NULL, NULL, NULL};
 
 static const Type clash_desc = {
     {(const Byte *)"clash", 5},

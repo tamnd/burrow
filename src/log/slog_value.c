@@ -571,7 +571,7 @@ static uint64_t slogv_lv_hash(const void *p, uint64_t seed) {
     return h;
 }
 
-static const TypeOps slogv_lv_ops = {slogv_lv_equal, slogv_lv_hash, NULL, NULL};
+static const TypeOps slogv_lv_ops = {slogv_lv_equal, slogv_lv_hash, NULL, NULL, NULL};
 
 const Type burrow_type_SlogLogValuer = {
     BURROW_S_INIT("LogValuer"),

@@ -578,6 +578,64 @@ extern "C" {
         NULL,                                                                          \
     }
 
+/* ----------------------------------------------------------- function types
+ *
+ * A descriptor for a function type made with BURROW_FUNC from burrow/func.h,
+ * which is what lets reflect describe a value of it and call one:
+ *
+ *     BURROW_FUNC(IntOp, Int, Int a, Int b);
+ *     #define INT_OP_SIG(IN, OUT) IN(0, Int) IN(1, Int) OUT(Int)
+ *     BURROW_FUNC_TYPE_DEFINE(IntOp, INT_OP_SIG);
+ *
+ * The signature is spelled the way a method's is above, and it has to say what
+ * BURROW_FUNC was told, which nothing can check for you. The call thunk the
+ * descriptor carries passes the env and the arguments to the function and
+ * stores what it returns, the same as a method thunk does with a receiver.
+ *
+ * The type is unnamed, Go's func(int, int) int, like the slices and maps above.
+ *
+ * The VARIADIC form is Go's func(...E). Its last parameter is a slice of E,
+ * which in C is a Slice, and reflect's Call gathers the arguments after the
+ * fixed ones into it. */
+#define BURROW_FUNC_TYPE_DECL(Name) extern const Type burrow_type_##Name
+
+#define BURROW__FUNC_TYPE_DEFINE(Name, SIG, E)                                         \
+    static const Field burrow__fsig_##Name[] = {                                       \
+        SIG(BURROW__SIG_IN_FIELD, BURROW__SIG_OUT_FIELD){BURROW_S_INIT(""),            \
+                                                         BURROW_S_INIT(""), NULL, 0},  \
+    };                                                                                 \
+    enum { burrow__fnin_##Name = 0 SIG(BURROW__SIG_IN_PLUS, BURROW__SIG_SKIP1) };      \
+    static void burrow__fcall_##Name(const void *fn, void **args, void **rets) {       \
+        const Name *burrow__fn = (const Name *)fn;                                     \
+        (void)args;                                                                    \
+        (void)rets;                                                                    \
+        SIG(BURROW__SIG_SKIP2, BURROW__SIG_STORE)                                      \
+        burrow__fn->f(burrow__fn->env SIG(BURROW__SIG_PASS, BURROW__SIG_SKIP1));       \
+    }                                                                                  \
+    static const TypeOps burrow__fops_##Name = {NULL, NULL, NULL, NULL,                \
+                                                burrow__fcall_##Name};                 \
+    const Type burrow_type_##Name = {                                                  \
+        {NULL, 0},                                                                     \
+        {NULL, 0},                                                                     \
+        KIND_FUNC,                                                                     \
+        (uint32_t)sizeof(Name),                                                        \
+        (uint16_t)_Alignof(Name),                                                      \
+        (uint16_t)(sizeof burrow__fsig_##Name / sizeof burrow__fsig_##Name[0] - 1),    \
+        0,                                                                             \
+        burrow__fsig_##Name,                                                           \
+        NULL,                                                                          \
+        E,                                                                             \
+        NULL,                                                                          \
+        (uint32_t)burrow__fnin_##Name,                                                 \
+        0,                                                                             \
+        &burrow__fops_##Name,                                                          \
+    }
+
+#define BURROW_FUNC_TYPE_DEFINE(Name, SIG) BURROW__FUNC_TYPE_DEFINE(Name, SIG, NULL)
+
+#define BURROW_FUNC_TYPE_DEFINE_VARIADIC(Name, E, SIG)                                 \
+    BURROW__FUNC_TYPE_DEFINE(Name, SIG, TYPE_OF(E))
+
 #ifdef __cplusplus
 }
 #endif

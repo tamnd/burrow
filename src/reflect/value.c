@@ -758,12 +758,6 @@ ReflectValue reflect_value_field_by_name_func(ReflectValue v, ReflectNameMatch m
     return reflect_value_field_by_index(v, f.index);
 }
 
-Int reflect_value_num_method(ReflectValue v) {
-    if (v.typ == NULL)
-        burrow__reflect_panic_kind(BURROW_S("reflect.Value.NumMethod"), KIND_INVALID);
-    return reflect_type_num_method(v.typ);
-}
-
 /* --------------------------------------------------------------------- maps */
 
 /* Where the key for a map with key type kt is, for key, or a panic like Go's

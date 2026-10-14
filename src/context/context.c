@@ -150,10 +150,7 @@ static uint64_t context_ops_hash(const void *p, uint64_t seed) {
 }
 
 static const TypeOps context_ops = {
-    context_ops_equal,
-    context_ops_hash,
-    NULL,
-    NULL,
+    context_ops_equal, context_ops_hash, NULL, NULL, NULL,
 };
 
 static const Type context_type = {
@@ -211,10 +208,7 @@ static uint64_t cancel_key_hash(const void *p, uint64_t seed) {
 }
 
 static const TypeOps cancel_key_ops = {
-    cancel_key_equal,
-    cancel_key_hash,
-    NULL,
-    NULL,
+    cancel_key_equal, cancel_key_hash, NULL, NULL, NULL,
 };
 
 static const Type cancel_key_type = {

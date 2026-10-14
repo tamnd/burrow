@@ -238,7 +238,8 @@ BURROW_STATIC(ret) ReflectType reflect_type_in(ReflectType t, Int i);
 BURROW_STATIC(ret) ReflectType reflect_type_out(ReflectType t, Int i);
 bool reflect_type_is_variadic(ReflectType t);
 
-/* NumMethod counts exported methods, which is what Go counts. */
+/* NumMethod counts exported methods, which is what Go counts. Methods and
+ * the rest of what goes with them are with the values, below. */
 Int reflect_type_num_method(ReflectType t);
 
 /* Whether x fits in the type, which has to be a number type of that family. */
@@ -270,6 +271,12 @@ BURROW_STATIC(ret) ReflectType reflect_map_of(ReflectType key, ReflectType elem)
 BURROW_STATIC(ret) ReflectType reflect_array_of(Int length, ReflectType elem);
 BURROW_STATIC(ret) ReflectType reflect_chan_of(ReflectChanDir dir, ReflectType t);
 
+/* FuncOf: the function type taking in and returning out, both Slices of
+ * ReflectType, made once like the others. With variadic set, the last of in
+ * has to be a slice and is Go's ...T. Panics when there are more than 128
+ * types in all, as Go does. */
+BURROW_STATIC(ret) ReflectType reflect_func_of(Slice in, Slice out, bool variadic);
+
 /* ------------------------------------------------------------------ values */
 
 /* Value: a type and where a value of it is. The zero ReflectValue is Go's zero
@@ -279,6 +286,32 @@ typedef struct ReflectValue {
     void *ptr;
     uint32_t flag;
 } ReflectValue;
+
+/* Method: one method of a type. The type is the method's with the receiver as
+ * its first parameter, and func is a function of that type, which reflect can
+ * call and C cannot. index is the method's place among the type's exported
+ * methods. */
+typedef struct ReflectMethod {
+    Str name;
+    Str pkg_path;
+    ReflectType type;
+    ReflectValue func;
+    Int index;
+} ReflectMethod;
+
+/* Method.IsExported. */
+bool reflect_method_is_exported(ReflectMethod m);
+
+/* Method and MethodByName: a type's exported methods, in the order the type
+ * lists them, which declare.h asks to be name order.
+ *
+ * A receiver in burrow is always a pointer, so a type's methods are the ones
+ * Go would give both T and *T, and a pointer made by PointerTo has the
+ * methods of the type it points at. Method panics for an index out of range,
+ * and MethodByName returns false when there is no such exported method. The
+ * func of either is kept for as long as the program runs. */
+ReflectMethod reflect_type_method(ReflectType t, Int i);
+bool reflect_type_method_by_name(ReflectType t, Str name, ReflectMethod *m);
 
 /* ValueError, what a Value method panics with when it is called on a Value of
  * the wrong kind. method is the Go name of the method, as in
@@ -400,8 +433,31 @@ BURROW_BORROWS(ret, v) ReflectValue reflect_value_field_by_name(ReflectValue v,
 BURROW_BORROWS(ret, v) ReflectValue
 reflect_value_field_by_name_func(ReflectValue v, ReflectNameMatch match);
 
-/* NumMethod: exported methods, as for the type. */
+/* NumMethod: exported methods, as for the type, and none for a method value. */
 Int reflect_value_num_method(ReflectValue v);
+
+/* Method and MethodByName: v's method bound to v, as a function value made in
+ * a, which takes the method's own parameters. The receiver is v's pointer,
+ * not a copy, so v has to outlive the method value. MethodByName gives the
+ * zero Value when there is no such method. */
+BURROW_OWNS(ret) BURROW_BORROWS(ret, v) ReflectValue
+reflect_value_method(ReflectValue v, Alloc *a, Int i);
+BURROW_OWNS(ret) BURROW_BORROWS(ret, v) ReflectValue
+reflect_value_method_by_name(ReflectValue v, Alloc *a, Str name);
+
+/* Call and CallSlice: call the function v with the arguments in in, a Slice of
+ * ReflectValue, and give back its results as another, made in a. Each
+ * argument has to be assignable to its parameter. Call gathers the arguments
+ * past the fixed ones of a variadic function into a slice, made in a, and
+ * CallSlice passes the last one as that slice. The results cannot be set.
+ *
+ * v can be a function reflect made, with Method or MakeFunc, or one whose type
+ * was declared with BURROW_FUNC_TYPE, whose descriptor knows how to call it.
+ * A function of any other type cannot be called this way, and Call panics
+ * saying so. A C function returns at most one value, so one declared in C has
+ * at most one result, where Go's would have several. */
+BURROW_OWNS(ret) Slice reflect_value_call(ReflectValue v, Alloc *a, Slice in);
+BURROW_OWNS(ret) Slice reflect_value_call_slice(ReflectValue v, Alloc *a, Slice in);
 
 /* Maps. MapIndex gives the zero Value for a key that is not there, and MapKeys
  * a Slice of ReflectValue made in a, in no particular order. Both point into
@@ -553,6 +609,19 @@ BURROW_OWNS(ret) ReflectValue reflect_make_map(Alloc *a, ReflectType t);
 BURROW_OWNS(ret) ReflectValue reflect_make_map_with_size(Alloc *a, ReflectType t,
                                                          Int n);
 BURROW_OWNS(ret) ReflectValue reflect_make_chan(Alloc *a, ReflectType t, Int buffer);
+
+/* Go's func(args []Value) (results []Value), what MakeFunc wraps: args and
+ * results are Slices of ReflectValue. args, and what its Values point at, last
+ * only for the call. */
+BURROW_FUNC(ReflectMakeFuncImpl, Slice, Slice args);
+
+/* MakeFunc: a function of type t that calls fn, made in a. It can be called
+ * through reflect, with Call, and stored where a function of t goes, but not
+ * called from C directly, since there is no C function of t's signature behind
+ * it. The results fn gives back are assigned to t's results, and a wrong count
+ * of them, a zero Value or one that came out of an unexported field panics. */
+BURROW_OWNS(ret) ReflectValue reflect_make_func(Alloc *a, ReflectType t,
+                                                ReflectMakeFuncImpl fn);
 
 /* Append: append(s, x...), where x is a Slice of ReflectValue. AppendSlice:
  * append(s, t...). Both give a new slice made in a, which shares s's array

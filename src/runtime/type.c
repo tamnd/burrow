@@ -629,7 +629,7 @@ static uint64_t string_hash(const void *p, uint64_t seed) {
     return hash_bytes(s->p, (size_t)s->len, seed);
 }
 
-static const TypeOps string_ops = {string_equal, string_hash, NULL, NULL};
+static const TypeOps string_ops = {string_equal, string_hash, NULL, NULL, NULL};
 
 /* Floats do not compare by their bytes either, and the reasons are the two
  * corners of IEEE 754 that Go's map inherits from the hardware.
@@ -701,10 +701,12 @@ static uint64_t complex128_hash(const void *p, uint64_t seed) {
     return float64_hash_bits(c->im, float64_hash_bits(c->re, seed));
 }
 
-static const TypeOps float32_ops = {float32_equal, float32_hash, NULL, NULL};
-static const TypeOps float64_ops = {float64_equal, float64_hash, NULL, NULL};
-static const TypeOps complex64_ops = {complex64_equal, complex64_hash, NULL, NULL};
-static const TypeOps complex128_ops = {complex128_equal, complex128_hash, NULL, NULL};
+static const TypeOps float32_ops = {float32_equal, float32_hash, NULL, NULL, NULL};
+static const TypeOps float64_ops = {float64_equal, float64_hash, NULL, NULL, NULL};
+static const TypeOps complex64_ops = {complex64_equal, complex64_hash, NULL, NULL,
+                                      NULL};
+static const TypeOps complex128_ops = {complex128_equal, complex128_hash, NULL, NULL,
+                                       NULL};
 
 /* The hash field is a small distinct constant per builtin rather than anything
  * derived. It only has to differ between types within one build, and hand

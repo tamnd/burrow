@@ -90,6 +90,12 @@ typedef struct TypeOps {
     uint64_t (*hash)(const void *p, uint64_t seed);
     void (*copy)(void *dst, const void *src);
     void (*zero)(void *p);
+
+    /* For a function type only: calls the function value at fn, with args and
+     * rets laid out as for a method thunk. NULL means reflect has no way to
+     * call a C function of the type. BURROW_FUNC_TYPE in burrow/declare.h
+     * fills it in. */
+    void (*call)(const void *fn, void **args, void **rets);
 } TypeOps;
 
 /* One field of a struct.
@@ -141,10 +147,12 @@ struct Type {
     uint16_t nfield;
     uint16_t nmethod;
 
-    const Field *fields;   /* nfield of them, KIND_STRUCT only */
+    const Field *fields;   /* nfield: a struct's, or a function's ins then outs */
     const Method *methods; /* nmethod of them, sorted by name as Go sorts them */
 
-    /* Slice, array, pointer, channel, and the value type of a map. */
+    /* Slice, array, pointer, channel, and the value type of a map. For a
+     * function, the type of the ... in a variadic one, whose last parameter is
+     * a slice of it, and NULL for one that is not variadic. */
     const Type *elem;
 
     /* The key type of a map, NULL otherwise. */

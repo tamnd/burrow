@@ -338,8 +338,8 @@ extern "C" {
     } Name;                                                                            \
     extern const Type burrow_type_##Name
 
-#define BURROW_ARRAY_TYPE(Name, T, N)                                                  \
-    BURROW_ARRAY_TYPE_DECL(Name, T, N);                                                \
+/* The descriptor alone, for an array whose DECL is in a header. */
+#define BURROW_ARRAY_TYPE_DEFINE(Name, T, N)                                           \
     const Type burrow_type_##Name = {                                                  \
         {NULL, 0},                                                                     \
         {NULL, 0},                                                                     \
@@ -356,6 +356,10 @@ extern "C" {
         0,                                                                             \
         NULL,                                                                          \
     }
+
+#define BURROW_ARRAY_TYPE(Name, T, N)                                                  \
+    BURROW_ARRAY_TYPE_DECL(Name, T, N);                                                \
+    BURROW_ARRAY_TYPE_DEFINE(Name, T, N)
 
 /* A pointer to T. This is the one a struct needs most often, because a struct
  * that refers to itself or to another struct does it through one, and a star

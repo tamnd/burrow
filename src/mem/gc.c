@@ -134,6 +134,10 @@ bool burrow__gc_is(const Alloc *a) {
     return a != NULL && a->vt == &gc_vt;
 }
 
+bool burrow__gc_running(void) {
+    return gc_started;
+}
+
 /* Nothing can be the collector's before it has started, and GC_base before
  * GC_INIT is not something the collector promises to answer. */
 bool burrow__gc_owns(const void *p) {
@@ -181,6 +185,10 @@ void gc_collect(void) {}
 
 bool burrow__gc_is(const Alloc *a) {
     (void)a;
+    return false;
+}
+
+bool burrow__gc_running(void) {
     return false;
 }
 

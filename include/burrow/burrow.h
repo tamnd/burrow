@@ -189,6 +189,7 @@
 #include "burrow/path.h"
 #include "burrow/path/filepath.h"
 #include "burrow/proc.h"
+#include "burrow/reflect.h"
 #include "burrow/regexp.h"
 #include "burrow/regexp/syntax.h"
 #include "burrow/runtime.h"

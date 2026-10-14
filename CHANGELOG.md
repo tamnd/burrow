@@ -4,6 +4,24 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API, and none of it has been through a security review yet.
 
+## v0.2.4 (2026-10-19)
+
+net/http with HTTP/2, the rest of net, net/rpc and net/smtp, more of crypto up to x509, expvar and database/sql, and the first two pieces of the template packages.
+
+### Added
+
+- `crypto/dsa` (#401), `crypto/mlkem` and `mlkemtest` (#402), chacha20, poly1305 and chacha20poly1305 from golang.org/x/crypto (#403), `crypto/hpke` (#404), `crypto/mldsa` (#405), `crypto/rsa` (#406), and `crypto/x509`: key formats, OIDs and encrypted PEM blocks (#407), parsing (#408), creating certificates, CSRs and CRLs (#409), and chain verification with the system roots (#410).
+- `net`: `Dialer`, `ListenConfig` and the Resolve functions (#411), `PacketConn` and `ListenPacket` (#412), `IPConn` (#413), the system resolver path that Go's cgo resolver takes (#414), `Interfaces` and `ParseMAC` (#415), `ListenMulticastUDP` (#416), the ReadMsg and WriteMsg calls (#417), `Buffers` and the TCP `ReadFrom` and `WriteTo` (#418), the File functions (#419), and `Dialer.DialIP` with Multipath TCP (#420).
+- `net/http`: writing requests and responses (#456), `ServeMux` with the Go 1.22 patterns (#457), `httptest` (#458, #462), `FileServer` and `ServeContent` (#459), `cookiejar` (#460), the HTTP/1 server (#461), `Client` and `Transport` (#462), `httptrace` (#463), `httputil` and `ReverseProxy` (#464, #466), forms and `Request.Clone` (#465), the rest of the request tests (#467), `cgi` (#468) and `fcgi` (#469).
+- HTTP/2: flow control (#471), the frame writers and write schedulers (#472), the server (#473) and the transport (#474), with more tests in #475 and #476.
+- `net/rpc` and `net/rpc/jsonrpc` (#470), and `net/smtp` (#455), which refuses a server offering STARTTLS until crypto/tls is in.
+- `expvar` (#477), `database/sql/driver` (#478) and `database/sql` (#479).
+- `html` (#453) and `text/template/parse` (#454).
+
+### Changed
+
+- The boehm and sanitizer CI jobs get 35 minutes (#451), and `slog_internal.h` names its package (#452).
+
 ## v0.2.3 (2026-10-13)
 
 The rest of syscall, sockets and most of net, the first crypto packages, the start of net/http, the go/* packages up to go/build, the debug/* readers, and log with log/slog.

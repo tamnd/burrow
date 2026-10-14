@@ -258,6 +258,16 @@ bool reflect_type_is_variadic(ReflectType t);
  * what goes with them are with the values, below. */
 Int reflect_type_num_method(ReflectType t);
 
+/* Fields, Methods, Ins and Outs: iterators that yield what Field, Method, In
+ * and Out give for each index in turn, as a const ReflectStructField *, a
+ * const ReflectMethod * and a const ReflectType *. They keep nothing but t,
+ * so they take no Alloc. Fields panics when t is not a struct, and Ins and
+ * Outs when it is not a function. */
+IterSeq reflect_type_fields(ReflectType t);
+IterSeq reflect_type_methods(ReflectType t);
+IterSeq reflect_type_ins(ReflectType t);
+IterSeq reflect_type_outs(ReflectType t);
+
 /* Whether x fits in the type, which has to be a number type of that family. */
 bool reflect_type_overflow_int(ReflectType t, int64_t x);
 bool reflect_type_overflow_uint(ReflectType t, uint64_t x);
@@ -286,6 +296,14 @@ BURROW_STATIC(ret) ReflectType reflect_slice_of(ReflectType t);
 BURROW_STATIC(ret) ReflectType reflect_map_of(ReflectType key, ReflectType elem);
 BURROW_STATIC(ret) ReflectType reflect_array_of(Int length, ReflectType elem);
 BURROW_STATIC(ret) ReflectType reflect_chan_of(ReflectChanDir dir, ReflectType t);
+
+/* PtrTo: the old name for PointerTo, which Go keeps and has deprecated. */
+BURROW_STATIC(ret) ReflectType reflect_ptr_to(ReflectType t);
+
+/* TypeFor: the type T, written as it is for TYPE_OF, so reflect_type_for(Int)
+ * is TYPE_INT and reflect_type_for(Any) the empty interface. Go needs a type
+ * parameter for this. C has the descriptor already, so it is a macro. */
+#define reflect_type_for(T) ((ReflectType)TYPE_OF(T))
 
 /* FuncOf: the function type taking in and returning out, both Slices of
  * ReflectType, made once like the others. With variadic set, the last of in
@@ -552,6 +570,17 @@ void reflect_map_iter_reset(ReflectMapIter *it, ReflectValue v);
 BURROW_OWNS(ret) IterSeq reflect_value_seq(ReflectValue v, Alloc *a);
 BURROW_OWNS(ret) IterSeq2 reflect_value_seq2(ReflectValue v, Alloc *a);
 
+/* Fields and Methods: v's fields, as a const ReflectStructField * and a const
+ * ReflectValue * for each, which is Field on v's type and on v, and its
+ * methods, as a const ReflectMethod * and the method value Method gives,
+ * made in a. Fields panics when v is not a struct. Methods counts the methods
+ * when it is called and makes each value as it goes, so a nil interface
+ * panics when the first one is reached. The env is made in a. */
+BURROW_OWNS(ret) BURROW_BORROWS(ret, v) IterSeq2 reflect_value_fields(ReflectValue v,
+                                                                      Alloc *a);
+BURROW_OWNS(ret) BURROW_BORROWS(ret, v) IterSeq2 reflect_value_methods(ReflectValue v,
+                                                                       Alloc *a);
+
 /* Comparable: whether Equal would work, which for an interface depends on what
  * it holds. Equal: Go's ==, which panics when the values are not comparable. */
 bool reflect_value_comparable(ReflectValue v);
@@ -660,6 +689,13 @@ BURROW_OWNS(ret) ReflectValue reflect_make_map_with_size(Alloc *a, ReflectType t
                                                          Int n);
 BURROW_OWNS(ret) ReflectValue reflect_make_chan(Alloc *a, ReflectType t, Int buffer);
 
+/* SliceAt: a slice of t whose array starts at p, with length and capacity n,
+ * which is Go's unsafe.Slice. The header is made in a and the elements are
+ * p's. It panics the way unsafe.Slice does, for a negative n, for a nil p with
+ * n above zero, and for n elements that would run past the end of memory. A
+ * nil p with n zero is a nil slice. */
+BURROW_OWNS(ret) ReflectValue reflect_slice_at(Alloc *a, ReflectType t, void *p, Int n);
+
 /* Go's func(args []Value) (results []Value), what MakeFunc wraps: args and
  * results are Slices of ReflectValue. args, and what its Values point at, last
  * only for the call. */
@@ -695,6 +731,59 @@ BURROW_OWNS(ret) ReflectValue reflect_value_recv(ReflectValue v, Alloc *a, bool 
 BURROW_OWNS(ret) ReflectValue reflect_value_try_recv(ReflectValue v, Alloc *a,
                                                      bool *ok);
 void reflect_value_close(ReflectValue v);
+
+/* SelectDir, which kind of case a ReflectSelectCase is. The numbers are Go's.
+ * Zero is not a direction, and Select panics on it. */
+typedef Int ReflectSelectDir;
+
+#define REFLECT_SELECT_SEND ((ReflectSelectDir)1)
+#define REFLECT_SELECT_RECV ((ReflectSelectDir)2)
+#define REFLECT_SELECT_DEFAULT ((ReflectSelectDir)3)
+
+/* SelectCase, one case of a Select. A send case sends send on chan and a
+ * receive case receives from chan. A case whose chan is the zero Value is
+ * left out, as is one on a nil channel, which never fires. A default case
+ * has neither a chan nor a send, and a receive case has no send. */
+typedef struct ReflectSelectCase {
+    ReflectSelectDir dir;
+    ReflectValue chan;
+    ReflectValue send;
+} ReflectSelectCase;
+
+extern const Type burrow_type_ReflectSelectDir;
+#define TYPE_REFLECT_SELECT_DIR TYPE_OF(ReflectSelectDir)
+
+extern const Type burrow_type_ReflectSelectCase;
+#define TYPE_REFLECT_SELECT_CASE TYPE_OF(ReflectSelectCase)
+
+/* Select: Go's select statement over cases, a Slice of ReflectSelectCase,
+ * built on chan_select. It blocks until a case can run, picks one at random
+ * when more than one can, runs it and returns its index. For a receive *recv
+ * is what came, made in a, and *recv_ok is false when that is the zero value
+ * of a closed channel. For any other case *recv is the zero Value and
+ * *recv_ok is false. Either pointer can be NULL.
+ *
+ * It panics, as Go's does, for more than 65536 cases, a second default, a
+ * case with what its direction does not take, a send that is not assignable
+ * to its channel's element type, and a send on a closed channel. With more
+ * than sixteen cases it makes room for them in a and gives it back before it
+ * returns. */
+Int reflect_select(Alloc *a, Slice cases, ReflectValue *recv, bool *recv_ok);
+
+/* StringHeader and SliceHeader, which Go keeps and has deprecated in favour
+ * of unsafe.String and unsafe.Slice. They are the first words of a Str and a
+ * Slice, so a pointer to one of those can be read as one of these. A Slice
+ * also carries its element type after cap, which SliceHeader leaves out. */
+typedef struct ReflectStringHeader {
+    uintptr_t data;
+    Int len;
+} ReflectStringHeader;
+
+typedef struct ReflectSliceHeader {
+    uintptr_t data;
+    Int len;
+    Int cap;
+} ReflectSliceHeader;
 
 #ifdef __cplusplus
 }

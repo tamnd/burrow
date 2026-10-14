@@ -152,6 +152,55 @@ const Type burrow_type_ReflectStructField = {
     NULL,
 };
 
+const Type burrow_type_ReflectSelectDir = {
+    {(const Byte *)"SelectDir", 9},
+    {(const Byte *)"reflect", 7},
+    KIND_INT,
+    (uint32_t)sizeof(ReflectSelectDir),
+    (uint16_t)_Alignof(ReflectSelectDir),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0x72667364U, /* "rfsd" */
+    NULL,
+};
+
+static const Field rf_select_case_fields[] = {
+    {{(const Byte *)"Dir", 3},
+     {NULL, 0},
+     &burrow_type_ReflectSelectDir,
+     offsetof(ReflectSelectCase, dir)},
+    {{(const Byte *)"Chan", 4},
+     {NULL, 0},
+     &burrow_type_ReflectValue,
+     offsetof(ReflectSelectCase, chan)},
+    {{(const Byte *)"Send", 4},
+     {NULL, 0},
+     &burrow_type_ReflectValue,
+     offsetof(ReflectSelectCase, send)},
+};
+
+const Type burrow_type_ReflectSelectCase = {
+    {(const Byte *)"SelectCase", 10},
+    {(const Byte *)"reflect", 7},
+    KIND_STRUCT,
+    (uint32_t)sizeof(ReflectSelectCase),
+    (uint16_t)_Alignof(ReflectSelectCase),
+    3,
+    0,
+    rf_select_case_fields,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0x72667363U, /* "rfsc" */
+    NULL,
+};
+
 /* ------------------------------------------------------------------ helpers */
 
 #define RF_RO(v) BURROW__RF_RO_OF(v)
@@ -869,6 +918,8 @@ typedef struct RfSeqEnv {
     uint64_t n;
     /* Room for one element received from a channel. */
     void *buf;
+    /* Where Methods makes its method values. */
+    Alloc *a;
 } RfSeqEnv;
 
 /* The Int i as a Value, which is what Go's ValueOf(i) is for a range index. */
@@ -940,6 +991,7 @@ static RfSeqEnv *rf_seq_env(ReflectValue v, Alloc *a, size_t extra) {
     e->v = v;
     e->n = 0;
     e->buf = extra > 0 ? (Byte *)e + sizeof(RfSeqEnv) : NULL;
+    e->a = a;
     return e;
 }
 
@@ -1072,6 +1124,45 @@ IterSeq2 reflect_value_seq2(ReflectValue v, Alloc *a) {
                               reflect_type_string(reflect_value_type(v)),
                               BURROW_S(" cannot produce iter.Seq2[Value, Value]"));
     return (IterSeq2){f, rf_seq_env(v, a, 0)};
+}
+
+static void rf_seq2_fields(void *env, IterYield2 yield) {
+    const RfSeqEnv *e = env;
+    for (Int i = 0; i < (Int)e->n; i++) {
+        ReflectStructField f = reflect_type_field(e->v.typ, i);
+        ReflectValue x = reflect_value_field(e->v, i);
+        if (!yield.f(yield.env, &f, &x))
+            return;
+    }
+}
+
+IterSeq2 reflect_value_fields(ReflectValue v, Alloc *a) {
+    ReflectType t = reflect_value_type(v);
+    if (t->kind != KIND_STRUCT)
+        burrow__reflect_panic(BURROW_S("reflect: Fields of non-struct type "),
+                              reflect_type_string(t), BURROW_STR_EMPTY);
+    RfSeqEnv *e = rf_seq_env(v, a, 0);
+    e->n = t->nfield;
+    return (IterSeq2){rf_seq2_fields, e};
+}
+
+static void rf_seq2_methods(void *env, IterYield2 yield) {
+    const RfSeqEnv *e = env;
+    ReflectType t = reflect_value_type(e->v);
+    for (Int i = 0; i < (Int)e->n; i++) {
+        ReflectMethod m = reflect_type_method(t, i);
+        ReflectValue x = reflect_value_method(e->v, e->a, i);
+        if (!yield.f(yield.env, &m, &x))
+            return;
+    }
+}
+
+IterSeq2 reflect_value_methods(ReflectValue v, Alloc *a) {
+    (void)reflect_value_type(v);
+    Int n = reflect_value_num_method(v);
+    RfSeqEnv *e = rf_seq_env(v, a, 0);
+    e->n = (uint64_t)n;
+    return (IterSeq2){rf_seq2_methods, e};
 }
 
 /* ---------------------------------------------------------------- equality */

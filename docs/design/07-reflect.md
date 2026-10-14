@@ -453,6 +453,10 @@ Go's rules for which methods a made struct gets carry over: those of an embedded
 
 A field counts as embedded when it is named for its type, and as exported when its name starts with an ASCII upper case letter, since that is all a `Field` records. So StructOf panics for an anonymous field with another name, and for a package path on an exported name, where Go would make something burrow could not describe. The size of a descriptor is 32 bits, so a struct bigger than 4 GiB panics with Go's message for a struct that does not fit in the address space.
 
+### Select
+
+`reflect_select` turns each `ReflectSelectCase` into the `SelectCase` that `chan_select` takes and lets it pick. Every receive case is pointed at one buffer as big as the largest element among them, since only the chosen case writes to it, and the value that comes back is made over that buffer. Up to 16 cases fit in arrays on the stack. Past that the arrays come from the allocator and go back to it before Select returns, on the panic path too, so a send on a closed channel leaves nothing behind. Go's limit of 65536 cases and its messages carry over.
+
 ### What is still not covered
 
 `reflect.MakeFunc`, which synthesises a function pointer with an arbitrary

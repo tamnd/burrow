@@ -914,6 +914,10 @@ ReflectType reflect_pointer_to(ReflectType t) {
                         (uint16_t)_Alignof(void *));
 }
 
+ReflectType reflect_ptr_to(ReflectType t) {
+    return reflect_pointer_to(t);
+}
+
 ReflectType reflect_slice_of(ReflectType t) {
     if (t == NULL)
         runtime_panic(BURROW_S("invalid memory address or nil pointer dereference"));
@@ -1482,6 +1486,73 @@ ReflectStructField reflect_type_field(ReflectType t, Int i) {
     if (i < 0 || i >= (Int)t->nfield)
         panic_str(BURROW_S("reflect: Field index out of range"));
     return burrow__reflect_field(t, i);
+}
+
+/* The iterators over a type's fields, methods, parameters and results. Each
+ * keeps nothing but the type, which lasts the program, so none of them needs
+ * memory of its own. */
+
+static ReflectType rf_seq_type(void *env) {
+    return (ReflectType)env;
+}
+
+static void rf_fields(void *env, IterYield yield) {
+    ReflectType t = rf_seq_type(env);
+    for (Int i = 0; i < (Int)t->nfield; i++) {
+        ReflectStructField f = reflect_type_field(t, i);
+        if (!yield.f(yield.env, &f))
+            return;
+    }
+}
+
+static void rf_methods(void *env, IterYield yield) {
+    ReflectType t = rf_seq_type(env);
+    Int n = reflect_type_num_method(t);
+    for (Int i = 0; i < n; i++) {
+        ReflectMethod m = reflect_type_method(t, i);
+        if (!yield.f(yield.env, &m))
+            return;
+    }
+}
+
+static void rf_ins(void *env, IterYield yield) {
+    ReflectType t = rf_seq_type(env);
+    for (Int i = 0; i < type_num_in(t); i++) {
+        ReflectType in = type_in(t, i);
+        if (!yield.f(yield.env, &in))
+            return;
+    }
+}
+
+static void rf_outs(void *env, IterYield yield) {
+    ReflectType t = rf_seq_type(env);
+    for (Int i = 0; i < type_num_out(t); i++) {
+        ReflectType out = type_out(t, i);
+        if (!yield.f(yield.env, &out))
+            return;
+    }
+}
+
+IterSeq reflect_type_fields(ReflectType t) {
+    if (t->kind != KIND_STRUCT)
+        rf_panic_type("reflect: Fields of non-struct type ", t);
+    return (IterSeq){rf_fields, (void *)(uintptr_t)t};
+}
+
+IterSeq reflect_type_methods(ReflectType t) {
+    return (IterSeq){rf_methods, (void *)(uintptr_t)t};
+}
+
+IterSeq reflect_type_ins(ReflectType t) {
+    if (t->kind != KIND_FUNC)
+        rf_panic_type("reflect: Ins of non-func type ", t);
+    return (IterSeq){rf_ins, (void *)(uintptr_t)t};
+}
+
+IterSeq reflect_type_outs(ReflectType t) {
+    if (t->kind != KIND_FUNC)
+        rf_panic_type("reflect: Outs of non-func type ", t);
+    return (IterSeq){rf_outs, (void *)(uintptr_t)t};
 }
 
 ReflectStructField reflect_type_field_by_index(ReflectType t, Slice index) {

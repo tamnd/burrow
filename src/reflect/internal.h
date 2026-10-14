@@ -115,6 +115,11 @@ BURROW_STATIC(ret) const void *burrow__reflect_zero(size_t size);
  * pointer whichever way Go would have declared it. Unexported ones included. */
 const Method *burrow__reflect_method_set(const Type *t, uint16_t *n);
 
+/* Whether t is a struct StructOf made around one embedded pointer, whose
+ * methods are the ones the pointer's element has. They take the pointer, so a
+ * call reads it out of the struct first. */
+bool burrow__reflect_promoted(const Type *t);
+
 /* Whether a method called name is exported, which is Go's test: the first
  * letter is upper case, in any script. */
 bool burrow__reflect_exported(Str name);
@@ -122,7 +127,8 @@ bool burrow__reflect_exported(Str name);
 /* What rf_made holds under key, or a new block of size bytes put there first,
  * made by init with the package lock held. init may allocate from a, which
  * lasts as long as the program, and returns false when it runs out. key[0] is
- * one of the BURROW__RF_KEEP numbers, which no kind uses. */
+ * one of the BURROW__RF_KEEP numbers, which no kind uses, and none of the ones
+ * type.c keeps for itself, KIND_MAX + 1, + 3 and + 4. */
 #define BURROW__RF_KEEP_METHOD ((uintptr_t)KIND_MAX + 2)
 
 void *burrow__reflect_keep(const void *const key[4], size_t size, size_t align,

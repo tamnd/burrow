@@ -445,6 +445,14 @@ An interface with methods is a vtable pointer and a data pointer, and the vtable
 
 The first word of every vtable is the descriptor of the type it is for. That is how reflect finds what an interface value holds without a type word in the value. A sentinel error's table has `NULL` there, so a value holding one stays of its interface type. Since every receiver is a pointer, an interface holding a `*T` unwraps to the `T` it points at, and `Elem` gives the struct rather than the pointer.
 
+### StructOf
+
+`reflect_struct_of` makes a struct descriptor the way FuncOf makes a function's: each field, its interned name and tag and its type, is a node in the made-types map keyed by the node before it, so the same fields in the same order end at the same node and give back the same descriptor. The struct is kept under that last node and the package path of its unexported fields. Every check runs before anything is made, so a panic leaves nothing behind.
+
+Go's rules for which methods a made struct gets carry over: those of an embedded first field, and stubs that panic for an embedded interface's. Two things differ. Go lists the methods of an embedded `*T` on the struct twice over, once for the struct and once for a pointer to it, and burrow lists them once, since every receiver is a pointer here anyway. And those methods take the `*T` the field holds, not the struct, which a method list has no way to say, because fmt and the other callers of `type_method_by_name` pass the struct's address as the receiver. So a struct like that lists no methods of its own. It goes into a side table instead, and `burrow__reflect_method_set` and the calls in `call.c` load the pointer from the field before they call, panicking on a nil one the way Go does.
+
+A field counts as embedded when it is named for its type, and as exported when its name starts with an ASCII upper case letter, since that is all a `Field` records. So StructOf panics for an anonymous field with another name, and for a package path on an exported name, where Go would make something burrow could not describe. The size of a descriptor is 32 bits, so a struct bigger than 4 GiB panics with Go's message for a struct that does not fit in the address space.
+
 ### What is still not covered
 
 `reflect.MakeFunc`, which synthesises a function pointer with an arbitrary

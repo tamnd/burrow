@@ -494,7 +494,9 @@ Str reflect_type_name(ReflectType t) {
 }
 
 Str reflect_type_pkg_path(ReflectType t) {
-    return t->pkg_path;
+    /* An unnamed type is from no package in Go, even when its descriptor keeps
+     * one for its unexported fields, as a struct StructOf makes does. */
+    return t->name.len > 0 ? t->pkg_path : BURROW_STR_EMPTY;
 }
 
 Int reflect_type_bits(ReflectType t) {
@@ -585,6 +587,8 @@ const Method *burrow__reflect_method_set(const Type *t, uint16_t *n) {
         t->elem != NULL && t->elem->kind != KIND_POINTER &&
         t->elem->kind != KIND_INTERFACE)
         t = t->elem;
+    if (burrow__reflect_promoted(t))
+        t = t->fields[0].type->elem;
     *n = t->methods == NULL ? 0 : t->nmethod;
     return t->methods;
 }
@@ -1052,6 +1056,326 @@ ReflectType reflect_func_of(Slice in, Slice out, bool variadic) {
         rf_out_of_memory();
     burrow__unlock(&rf_lock);
     return made;
+}
+
+/* StructOf. A struct type is made from its fields, a name, a tag and a type
+ * each, which go into rf_made one at a time as a chain of nodes, the way
+ * FuncOf's lists do, with the name and the tag interned so that two equal
+ * strings are one pointer. The type is kept under the last node and the
+ * package its unexported fields are from.
+ *
+ * Go's checks come first, in Go's order and with Go's messages, and then two
+ * of burrow's own. A field is embedded here when it is named for its type, as
+ * field_is_embedded says, so Anonymous has to agree with the name. And whether
+ * a field is exported follows from its name, so a PkgPath goes with a name
+ * that is not.
+ *
+ * Methods come from embedded fields under Go's rules: the first field's, and
+ * an interface's wherever it is, which panic when called, as they do in Go.
+ * When the first field is a pointer, its methods take what it holds rather
+ * than the struct, which a method list cannot say. So such a struct lists no
+ * methods of its own, is kept under RF_MADE_PROMOTED, and
+ * burrow__reflect_method_set and the calls in call.c go through it. */
+
+#define RF_MADE_FIELD ((uintptr_t)KIND_MAX + 3)
+#define RF_MADE_PROMOTED ((uintptr_t)KIND_MAX + 4)
+
+static const Str rf_too_large =
+    BURROW_S_INIT("reflect.StructOf: struct size would exceed virtual address space");
+
+BURROW_NORETURN static void rf_panic_field(const char *a, Int i, const char *b) {
+    RfBuf buf = {0};
+    rfb_cstr(&buf, a);
+    rfb_int(&buf, (int64_t)i);
+    rfb_cstr(&buf, b);
+    panic_str(rfb_intern(&buf));
+}
+
+/* Go's isValidFieldName: a letter, then letters and digits, where _ counts as
+ * a letter. */
+static bool rf_valid_field_name(Str name) {
+    for (Int i = 0; i < name.len;) {
+        Int size;
+        Rune r =
+            utf8_decode_rune_in_string(str_from_bytes(name.p + i, name.len - i), &size);
+        bool letter = (r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') || r == '_' ||
+                      (r >= 0x80 && unicode_is_letter(r));
+        if (!letter && (i == 0 || !unicode_is_digit(r)))
+            return false;
+        i += size;
+    }
+    return name.len > 0;
+}
+
+/* Whether Go keeps a t in an interface word itself rather than pointing at
+ * it: a pointer, or an array or a struct holding one pointer and nothing else
+ * with a size. */
+static bool rf_direct_iface(const Type *t) {
+    switch ((int)t->kind) {
+    case KIND_POINTER:
+    case KIND_UNSAFE_POINTER:
+    case KIND_MAP:
+    case KIND_CHAN:
+    case KIND_FUNC:
+        return true;
+    case KIND_ARRAY:
+        return t->len == 1 && rf_direct_iface(t->elem);
+    case KIND_STRUCT:
+        /* A field with no size after the pointer pads the struct out. */
+        if (t->nfield == 0)
+            return false;
+        for (uint16_t i = 0; i + 1 < t->nfield; i++)
+            if (t->fields[i].type->size > 0)
+                return false;
+        return rf_direct_iface(t->fields[t->nfield - 1].type);
+    default:
+        return false;
+    }
+}
+
+static void rf_check_promoted(const Method *ms, Int n) {
+    for (Int i = 0; i < n; i++)
+        if (!burrow__reflect_exported(ms[i].name))
+            panic_str(BURROW_S("reflect: embedded interface with unexported method(s) "
+                               "not implemented"));
+}
+
+/* What a method of an embedded interface does, Go's embeddedIfaceMethStub. */
+static void rf_embedded_iface_method(void *recv, void **args, void **rets) {
+    (void)recv;
+    (void)args;
+    (void)rets;
+    panic_str(BURROW_S("reflect: StructOf does not support methods of embedded "
+                       "interfaces"));
+}
+
+/* runtimeStructField's checks, and burrow's two. */
+static void rf_check_struct_field(const ReflectStructField *f) {
+    if (f->anonymous && f->pkg_path.len > 0)
+        burrow__reflect_panic(BURROW_S("reflect.StructOf: field \""), f->name,
+                              BURROW_S("\" is anonymous but has PkgPath set"));
+    if (f->pkg_path.len == 0 &&
+        ((f->name.p[0] >= 'a' && f->name.p[0] <= 'z') || f->name.p[0] == '_'))
+        burrow__reflect_panic(BURROW_S("reflect.StructOf: field \""), f->name,
+                              BURROW_S("\" is unexported but missing PkgPath"));
+    Field probe = {f->name, BURROW_STR_EMPTY, f->type, 0};
+    if (f->anonymous && !burrow__reflect_embedded(&probe))
+        burrow__reflect_panic(BURROW_S("reflect.StructOf: field \""), f->name,
+                              BURROW_S("\" is anonymous but not named for its type, "
+                                       "which burrow needs"));
+    if (f->pkg_path.len > 0 && field_is_exported(&probe))
+        burrow__reflect_panic(BURROW_S("reflect.StructOf: field \""), f->name,
+                              BURROW_S("\" has PkgPath set but an exported name, which "
+                                       "burrow cannot tell apart"));
+}
+
+static uint64_t rf_align_up(uint64_t x, uint16_t align) {
+    uint64_t a = align > 0 ? align : 1;
+    return (x + a - 1) / a * a;
+}
+
+ReflectType reflect_struct_of(Slice fields) {
+    const ReflectStructField *fs = fields.p;
+    Int n = fields.len;
+    if (n > UINT16_MAX)
+        panic_str(BURROW_S("reflect.StructOf: too many fields"));
+
+    /* The checks, the layout and where the methods come from, before anything
+     * is made, since any of them can panic. */
+    uint64_t size = 0;
+    uint64_t lastzero = 0;
+    uint16_t align = 1;
+    Str pkg = BURROW_STR_EMPTY;
+    const Type *first = NULL; /* field 0's type, when the struct has its methods */
+    bool through = false;     /* and they come through the pointer it is */
+    Int nmethod = 0;
+    for (Int i = 0; i < n; i++) {
+        const ReflectStructField *f = &fs[i];
+        if (f->name.len == 0)
+            rf_panic_field("reflect.StructOf: field ", i, " has no name");
+        if (!rf_valid_field_name(f->name))
+            rf_panic_field("reflect.StructOf: field ", i, " has invalid name");
+        const Type *ft = f->type;
+        if (ft == NULL)
+            rf_panic_field("reflect.StructOf: field ", i, " has no type");
+        rf_check_struct_field(f);
+        if (f->pkg_path.len > 0) {
+            if (pkg.len == 0)
+                pkg = f->pkg_path;
+            else if (!str_eq(pkg, f->pkg_path))
+                burrow__reflect_panic(
+                    BURROW_S("reflect.StructOf: fields with different PkgPath "),
+                    burrow__reflect_concat(pkg, BURROW_S(" and "), f->pkg_path),
+                    BURROW_STR_EMPTY);
+        }
+
+        if (f->anonymous) {
+            if (ft->kind == KIND_POINTER && ft->elem != NULL &&
+                (ft->elem->kind == KIND_POINTER || ft->elem->kind == KIND_INTERFACE))
+                rf_panic_type("reflect.StructOf: illegal embedded field type ", ft);
+            if (ft->kind == KIND_INTERFACE) {
+                Int k = ft->methods != NULL ? ft->nmethod : 0;
+                rf_check_promoted(ft->methods, k);
+                nmethod += k;
+            } else if (ft->kind == KIND_POINTER && ft->name.len == 0) {
+                const Type *e = ft->elem;
+                if (e != NULL && e->methods != NULL && e->nmethod > 0) {
+                    if (i > 0)
+                        panic_str(BURROW_S("reflect: embedded type with methods not "
+                                           "implemented if type is not first field"));
+                    if (n > 1)
+                        panic_str(BURROW_S("reflect: embedded type with methods not "
+                                           "implemented if there is more than one "
+                                           "field"));
+                    rf_check_promoted(e->methods, e->nmethod);
+                    through = true;
+                }
+            } else {
+                Int k = ft->methods != NULL ? ft->nmethod : 0;
+                if (i > 0 && k > 0)
+                    panic_str(BURROW_S("reflect: embedded type with methods not "
+                                       "implemented if type is not first field"));
+                if ((ft->name.len > 0 || k > 0) && n > 1 && rf_direct_iface(ft))
+                    panic_str(BURROW_S("reflect: embedded type with methods not "
+                                       "implemented for non-pointer type"));
+                rf_check_promoted(ft->methods, k);
+                if (k > 0) {
+                    first = ft;
+                    nmethod += k;
+                }
+            }
+        }
+
+        if (!(f->name.len == 1 && f->name.p[0] == '_'))
+            for (Int j = 0; j < i; j++)
+                if (str_eq(fs[j].name, f->name))
+                    burrow__reflect_panic(
+                        BURROW_S("reflect.StructOf: duplicate field "), f->name,
+                        BURROW_STR_EMPTY);
+
+        /* The descriptor keeps the size in 32 bits, so that is the address
+         * space here, as it is on Go's 32 bit platforms. */
+        uint64_t offset = rf_align_up(size, ft->align);
+        if (offset > UINT32_MAX)
+            panic_str(rf_too_large);
+        if (ft->align > align)
+            align = ft->align;
+        size = offset + ft->size;
+        if (size > UINT32_MAX)
+            panic_str(rf_too_large);
+        if (ft->size == 0)
+            lastzero = size;
+    }
+    /* A struct ending in a field with no size gets a byte more, so that the
+     * address of that field is not the address of whatever comes next. */
+    if (size > 0 && lastzero == size)
+        size++;
+    size = rf_align_up(size, align);
+    if (size > UINT32_MAX)
+        panic_str(rf_too_large);
+    if (nmethod > UINT16_MAX)
+        panic_str(BURROW_S("reflect.StructOf: too many methods"));
+
+    rf_enter();
+    const void *node = NULL;
+    for (Int i = 0; i < n; i++) {
+        const void *ck[4] = {i == 0 ? (const void *)RF_MADE_FIELD : node,
+                             rf_intern_locked(fs[i].name).p,
+                             rf_intern_locked(fs[i].tag).p, fs[i].type};
+        const void *const *have = map_get(rf_made, ck);
+        if (have != NULL) {
+            node = *have;
+            continue;
+        }
+        const void *nn = mem_alloc(arena_allocator(&rf_arena), 1, 1);
+        if (nn == NULL || !map_set(rf_made, ck, &nn))
+            rf_out_of_memory();
+        node = nn;
+    }
+    Str pk = pkg.len > 0 ? rf_intern_locked(pkg) : BURROW_STR_EMPTY;
+    const void *ck[4] = {(const void *)(uintptr_t)KIND_STRUCT, node, pk.p, NULL};
+    const Type *const *have = map_get(rf_made, ck);
+    if (have != NULL) {
+        const Type *t = *have;
+        burrow__unlock(&rf_lock);
+        return t;
+    }
+
+    Alloc *a = arena_allocator(&rf_arena);
+    Type *t = BURROW_NEW(a, Type);
+    Field *fl = n > 0 ? mem_alloc(a, (size_t)n * sizeof(Field), _Alignof(Field)) : NULL;
+    if (t == NULL || (n > 0 && fl == NULL))
+        rf_out_of_memory();
+    uint64_t off = 0;
+    for (Int i = 0; i < n; i++) {
+        off = rf_align_up(off, fs[i].type->align);
+        fl[i] = (Field){rf_intern_locked(fs[i].name), rf_intern_locked(fs[i].tag),
+                        fs[i].type, (uint32_t)off};
+        off += fs[i].type->size;
+    }
+
+    /* The first field's own list when that is all there is, and otherwise a
+     * list of them all in field order. */
+    const Method *ms = NULL;
+    if (first != NULL && nmethod == first->nmethod) {
+        ms = first->methods;
+    } else if (nmethod > 0) {
+        Method *all = mem_alloc(a, (size_t)nmethod * sizeof(Method), _Alignof(Method));
+        if (all == NULL)
+            rf_out_of_memory();
+        Int k = 0;
+        for (Int i = 0; i < n; i++) {
+            const Type *ft = fs[i].type;
+            if (fs[i].anonymous && ft->kind == KIND_INTERFACE && ft->methods != NULL) {
+                for (uint16_t j = 0; j < ft->nmethod; j++)
+                    all[k++] = (Method){ft->methods[j].name, ft->methods[j].ftype,
+                                        rf_embedded_iface_method};
+            } else if (i == 0 && first != NULL) {
+                memcpy(all, first->methods, (size_t)first->nmethod * sizeof(Method));
+                k = first->nmethod;
+            }
+        }
+        ms = all;
+    }
+
+    *t = (Type){{NULL, 0},
+                pk,
+                KIND_STRUCT,
+                (uint32_t)size,
+                align,
+                (uint16_t)n,
+                (uint16_t)(through ? 0 : nmethod),
+                fl,
+                through ? NULL : ms,
+                NULL,
+                NULL,
+                0,
+                0,
+                NULL};
+    const Type *made = t;
+    if (!map_set(rf_made, ck, &made))
+        rf_out_of_memory();
+    if (through) {
+        const void *pck[4] = {(const void *)RF_MADE_PROMOTED, made, NULL, NULL};
+        if (!map_set(rf_made, pck, &made))
+            rf_out_of_memory();
+    }
+    burrow__unlock(&rf_lock);
+    return made;
+}
+
+bool burrow__reflect_promoted(const Type *t) {
+    if (t->kind != KIND_STRUCT || t->nmethod != 0 || t->nfield != 1)
+        return false;
+    const Type *ft = t->fields[0].type;
+    if (ft->kind != KIND_POINTER || ft->name.len != 0 || ft->elem == NULL ||
+        ft->elem->methods == NULL || ft->elem->nmethod == 0)
+        return false;
+    const void *ck[4] = {(const void *)RF_MADE_PROMOTED, t, NULL, NULL};
+    rf_enter();
+    bool yes = map_get(rf_made, ck) != NULL;
+    burrow__unlock(&rf_lock);
+    return yes;
 }
 
 void *burrow__reflect_keep(const void *const key[4], size_t size, size_t align,

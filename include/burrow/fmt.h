@@ -694,6 +694,18 @@ BURROW_BORROWS(ret, s) static inline Str burrow__fmt_str_id(Str s) {
 #define fmt_fscanf_v(a, err, r, ...)                                                   \
     fmt_fscanf((a), (r), BURROW__FMT_FARGS(BURROW_SCAN_OF, __VA_ARGS__), (err))
 
+/* Not API. Go's internal/fmtsort, which fmt uses to print a map in key order
+ * and text/template uses to range over one in the same order. Sorts n entries
+ * by key, stably, using tmp as scratch space for n more. The keys are of type
+ * kt and are compared the way Go's fmtsort compares them. */
+typedef struct burrow__FmtSortEntry {
+    const void *key;
+    void *value;
+} burrow__FmtSortEntry;
+
+void burrow__fmtsort(const Type *kt, burrow__FmtSortEntry *v, burrow__FmtSortEntry *tmp,
+                     Int n);
+
 #ifdef __cplusplus
 }
 #endif

@@ -458,13 +458,25 @@ extern "C" {
  * hold you to it, because the positions end up in the descriptor: burrow's own
  * does exactly that.
  *
- * ONE RESULT, WHICH IS NOT THE LIMIT IT LOOKS LIKE
+ * ONE RESULT, AND AN ERROR AFTER IT
  *
- * OUT appears once or not at all. A C function returns one value, and a burrow
- * function that returns several does what every other one in the library does
- * and returns a struct holding them, so the count of results a caller sees here
- * is the count C has rather than the count Go would have. A method returning a
- * value and an error is one OUT naming the struct of the two.
+ * OUT appears once or not at all, with one exception. A C function returns one
+ * value, and a burrow function that returns several does what every other one in
+ * the library does and returns a struct holding them, so the count of results a
+ * caller sees here is usually the count C has rather than the count Go would
+ * have.
+ *
+ * The exception is Go's (T, error), which is common enough in the methods and
+ * functions that text/template calls that it gets its own spelling. Write the
+ * error as a second OUT naming ErrorResult, and the C function takes it the way
+ * the rest of the library does, as a trailing Error *:
+ *
+ *     static bool point_inside(Point *p, Int r, Error *err);
+ *     #define POINT_SIG_Inside(IN, OUT) IN(0, Int) OUT(bool) OUT(ErrorResult)
+ *
+ * The descriptor then lists two results, the second of type error, and a caller
+ * passes two result pointers. ErrorResult only ever follows another OUT. A
+ * function whose one result is an error says OUT(Error) and returns it.
  *
  * THE RECEIVER IS A POINTER
  *
@@ -493,8 +505,32 @@ extern "C" {
  * wanted in one static initialiser and nowhere at runtime. */
 #define BURROW__SIG_IN_PLUS(i, ctype) +1
 
+/* ErrorResult is the error type under another name, so that TYPE_OF finds the
+ * error descriptor, and a name the macros below can tell apart from every other
+ * result type. The test is the usual preprocessor probe: pasting the type onto
+ * BURROW__SIG_ERR_ gives a macro with a comma in it only for ErrorResult, which
+ * moves the 1 into the place where every other type finds the 0. */
+#define burrow_type_ErrorResult burrow_type_Error
+
+#define BURROW__SIG_CAT(a, b) BURROW__SIG_CAT_(a, b)
+#define BURROW__SIG_CAT_(a, b) a##b
+#define BURROW__SIG_PROBE_N(x, n, ...) n
+#define BURROW__SIG_PROBE(...) BURROW__SIG_PROBE_N(__VA_ARGS__, 0, )
+#define BURROW__SIG_ERR_ErrorResult ~, 1,
+#define BURROW__SIG_IS_ERR(ctype) BURROW__SIG_PROBE(BURROW__SIG_ERR_##ctype)
+
+/* The arguments go in as values and the first result comes back as the return
+ * value. An ErrorResult is not returned: the function is handed the second
+ * result slot as its last argument instead. */
 #define BURROW__SIG_PASS(i, ctype) , *(ctype *)args[i]
-#define BURROW__SIG_STORE(ctype) *(ctype *)rets[0] =
+#define BURROW__SIG_STORE(ctype)                                                       \
+    BURROW__SIG_CAT(BURROW__SIG_STORE_, BURROW__SIG_IS_ERR(ctype))(ctype)
+#define BURROW__SIG_STORE_0(ctype) *(ctype *)rets[0] =
+#define BURROW__SIG_STORE_1(ctype)
+#define BURROW__SIG_PASS_OUT(ctype)                                                    \
+    BURROW__SIG_CAT(BURROW__SIG_PASS_OUT_, BURROW__SIG_IS_ERR(ctype))
+#define BURROW__SIG_PASS_OUT_0
+#define BURROW__SIG_PASS_OUT_1 , (Error *)rets[1]
 
 /* Everything one method needs, emitted next to it.
  *
@@ -535,7 +571,7 @@ extern "C" {
         (void)args;                                                                    \
         (void)rets;                                                                    \
         SIG(BURROW__SIG_SKIP2, BURROW__SIG_STORE)                                      \
-        fn((T *)recv SIG(BURROW__SIG_PASS, BURROW__SIG_SKIP1));                        \
+        fn((T *)recv SIG(BURROW__SIG_PASS, BURROW__SIG_PASS_OUT));                     \
     }
 
 #define BURROW__METHOD_ENTRY(T, mname, fn, SIG)                                        \
@@ -616,7 +652,7 @@ extern "C" {
         (void)rets;                                                                    \
         SIG(BURROW__SIG_SKIP2, BURROW__SIG_STORE)                                      \
         burrow__i->vt->member(                                                         \
-            burrow__i->data SIG(BURROW__SIG_PASS, BURROW__SIG_SKIP1));                 \
+            burrow__i->data SIG(BURROW__SIG_PASS, BURROW__SIG_PASS_OUT));              \
     }
 
 #define BURROW_IFACE_TYPE_DECL(I) extern const Type burrow_type_##I
@@ -673,7 +709,7 @@ extern "C" {
         (void)args;                                                                    \
         (void)rets;                                                                    \
         SIG(BURROW__SIG_SKIP2, BURROW__SIG_STORE)                                      \
-        burrow__fn->f(burrow__fn->env SIG(BURROW__SIG_PASS, BURROW__SIG_SKIP1));       \
+        burrow__fn->f(burrow__fn->env SIG(BURROW__SIG_PASS, BURROW__SIG_PASS_OUT));    \
     }                                                                                  \
     static const TypeOps burrow__fops_##Name = {NULL, NULL, NULL, NULL,                \
                                                 burrow__fcall_##Name};                 \

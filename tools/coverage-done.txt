@@ -136,3 +136,4 @@ database/sql/driver
 database/sql
 text/template/parse
 html
+text/template

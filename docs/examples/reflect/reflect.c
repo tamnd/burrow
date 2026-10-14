@@ -235,6 +235,20 @@ int main(void) {
                  reflect_value_float(((ReflectValue *)out.p)[0]));
     // doc: end
 
+    // doc: struct-of
+    ReflectStructField pf[] = {
+        {.name = BURROW_S("X"), .type = TYPE_INT, .tag = BURROW_S("json:\"x\"")},
+        {.name = BURROW_S("Y"), .type = TYPE_INT, .tag = BURROW_S("json:\"y\"")},
+    };
+    Slice pfs = slice_from(pf, 2, 2, TYPE_REFLECT_STRUCT_FIELD);
+    ReflectType st = reflect_struct_of(pfs);
+    ReflectValue sv = reflect_value_elem(reflect_new(a, st));
+    reflect_value_set_int(reflect_value_field_by_name(sv, BURROW_S("Y")), 7);
+    bool same = reflect_struct_of(pfs) == st;
+    fmt_printf_v("%s\n%v, same type again: %t\n", reflect_type_string(st),
+                 reflect_value_interface(sv), same);
+    // doc: end
+
     arena_free(&ar);
     return 0;
 }
@@ -260,4 +274,6 @@ made func returned 23
 Temp: true, int: false
 asserted, 212
 Fahrenheiter holds Temp, method gives 212
+struct { X int "json:\"x\""; Y int "json:\"y\"" }
+{0 7}, same type again: true
 */

@@ -361,3 +361,31 @@ Fahrenheiter holds Temp, method gives 212
 ```
 
 The first field of the vtable is the descriptor of the type it is for, which is how reflect tells what an interface value holds. A type that has every method an interface's descriptor lists implements it, as in Go, even with no vtable recorded, but putting a value of it into the interface panics and says which record is missing. io.Reader and io.Writer list their methods this way, and bytes.Buffer, bytes.Reader, strings.Reader, strings.Builder, bufio.Reader and bufio.Writer record their vtables for them. Every receiver is a pointer in burrow, so `T` implements whatever `*T` does, and an interface holding a pointer gives the value it points at to `reflect_value_elem`.
+
+## Making struct types
+
+`reflect_struct_of` makes a struct type from a Slice of `ReflectStructField`, reading each field's name, package path, type, tag and `anonymous`. It lays the fields out the way C would, and a struct made twice from the same fields is the same descriptor:
+
+<!-- example: ../examples/reflect/reflect.c#struct-of -->
+```c
+ReflectStructField pf[] = {
+    {.name = BURROW_S("X"), .type = TYPE_INT, .tag = BURROW_S("json:\"x\"")},
+    {.name = BURROW_S("Y"), .type = TYPE_INT, .tag = BURROW_S("json:\"y\"")},
+};
+Slice pfs = slice_from(pf, 2, 2, TYPE_REFLECT_STRUCT_FIELD);
+ReflectType st = reflect_struct_of(pfs);
+ReflectValue sv = reflect_value_elem(reflect_new(a, st));
+reflect_value_set_int(reflect_value_field_by_name(sv, BURROW_S("Y")), 7);
+bool same = reflect_struct_of(pfs) == st;
+fmt_printf_v("%s\n%v, same type again: %t\n", reflect_type_string(st),
+             reflect_value_interface(sv), same);
+```
+
+That prints:
+
+```text
+struct { X int "json:\"x\""; Y int "json:\"y\"" }
+{0 7}, same type again: true
+```
+
+It panics where Go's StructOf does, with Go's messages. A struct gets the methods of an embedded first field, and of an embedded interface wherever it is, though calling one of the interface's panics, as in Go. Two rules of burrow's own also apply. A field is embedded when it is named for its type, so an anonymous field with any other name panics. And a field is exported when its name starts with an ASCII upper case letter, so a package path on an exported name panics too. No vtable can be made at run time, so a made struct goes into an interface with methods only through reflect: `reflect_type_implements` answers for it, and `reflect_value_method_by_name` calls its methods.

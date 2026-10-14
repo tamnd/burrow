@@ -22,6 +22,7 @@
 #include "burrow/mem.h"
 #include "burrow/mem/heap.h"
 #include "burrow/net/http.h"
+#include "burrow/net/http/httptrace.h"
 #include "burrow/net/textproto.h"
 #include "burrow/proc.h"
 #include "burrow/slice.h"
@@ -392,15 +393,27 @@ bool burrow__http_transfer_writer_should_send_content_length(
     return false;
 }
 
+/* Tells trace that key went out with the one value v. */
+static void hw_trace_one(const HttptraceClientTrace *trace, Str key, Str v) {
+    if (trace == NULL)
+        return;
+    httptrace_client_trace_wrote_header_field(trace, key,
+                                              slice_from(&v, 1, 1, TYPE_STRING));
+}
+
 Error burrow__http_transfer_writer_write_header(burrow__HttpTransferWriter *t, Alloc *a,
-                                                IoWriter w) {
+                                                IoWriter w,
+                                                const HttptraceClientTrace *trace) {
     Error err = BURROW_NO_ERROR;
+    if (!BURROW__HTTPTRACE_HAS(trace, wrote_header_field))
+        trace = NULL;
     if (t->close && !burrow__http_has_token(
                         burrow__http_header_get(t->header, BURROW_S("Connection")),
                         BURROW_S("close"))) {
         (void)io_write_string(w, BURROW_S("Connection: close\r\n"), &err);
         if (BURROW_FAILED(err))
             return err;
+        hw_trace_one(trace, BURROW_S("Connection"), BURROW_S("close"));
     }
 
     /* Content-Length or Transfer-Encoding, from what the body, content_length
@@ -409,13 +422,18 @@ Error burrow__http_transfer_writer_write_header(burrow__HttpTransferWriter *t, A
         (void)io_write_string(w, BURROW_S("Content-Length: "), &err);
         if (BURROW_FAILED(err))
             return err;
-        (void)io_write_string(w, fmt_sprintf_v(a, "%d\r\n", t->content_length), &err);
+        Str cl = fmt_sprintf_v(a, "%d", t->content_length);
+        (void)io_write_string(w, cl, &err);
+        if (BURROW_OK(err))
+            (void)io_write_string(w, BURROW_S("\r\n"), &err);
         if (BURROW_FAILED(err))
             return err;
+        hw_trace_one(trace, BURROW_S("Content-Length"), cl);
     } else if (burrow__http_chunked(t->transfer_encoding)) {
         (void)io_write_string(w, BURROW_S("Transfer-Encoding: chunked\r\n"), &err);
         if (BURROW_FAILED(err))
             return err;
+        hw_trace_one(trace, BURROW_S("Transfer-Encoding"), BURROW_S("chunked"));
     }
 
     /* The Trailer line. */
@@ -446,6 +464,9 @@ Error burrow__http_transfer_writer_write_header(burrow__HttpTransferWriter *t, A
             (void)io_write_string(w, line, &err);
             if (BURROW_FAILED(err))
                 return err;
+            if (trace != NULL)
+                httptrace_client_trace_wrote_header_field(
+                    trace, BURROW_S("Trailer"), slice_from(keys, nk, nk, TYPE_STRING));
         }
     }
     return BURROW_NO_ERROR;

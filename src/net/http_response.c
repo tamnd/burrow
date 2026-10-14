@@ -229,14 +229,14 @@ static Error hr_write(const HttpResponse *r, IoWriter w, Alloc *sa,
     err = burrow__http_new_transfer_writer(tw, sa, NULL, &r1);
     if (BURROW_FAILED(err))
         return err;
-    err = burrow__http_transfer_writer_write_header(tw, sa, w);
+    err = burrow__http_transfer_writer_write_header(tw, sa, w, NULL);
     if (BURROW_FAILED(err))
         return err;
 
     /* The rest of the header. */
     err = burrow__http_header_write_except(
         r->header, w, hr_resp_write_exclude,
-        (Int)(sizeof hr_resp_write_exclude / sizeof hr_resp_write_exclude[0]));
+        (Int)(sizeof hr_resp_write_exclude / sizeof hr_resp_write_exclude[0]), NULL);
     if (BURROW_FAILED(err))
         return err;
 

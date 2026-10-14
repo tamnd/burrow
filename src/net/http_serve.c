@@ -1027,7 +1027,7 @@ static void sv_cw_write_header(sv_ChunkWriter *cw, Slice p) {
     sv_write_status_line(bw, http_request_proto_at_least(w->req, 1, 1), code);
     if (cw->header != NULL)
         (void)burrow__http_header_write_except(cw->header, sv_bufw(bw), exclude.keys,
-                                               exclude.n);
+                                               exclude.n, NULL);
     sv_extra_header_write(&set_header, bw);
     sv_write_str(bw, BURROW_S("\r\n"));
 }
@@ -1117,7 +1117,7 @@ static void sv_response_write_header(void *self, Int code) {
         BufioWriter *bw = w->conn->bufw;
         sv_write_status_line(bw, http_request_proto_at_least(w->req, 1, 1), code);
         (void)burrow__http_header_write_except(w->handler_header, sv_bufw(bw),
-                                               sv_excluded_headers_no_body, 2);
+                                               sv_excluded_headers_no_body, 2, NULL);
         sv_write_str(bw, BURROW_S("\r\n"));
         (void)bufio_writer_flush(bw);
         return;

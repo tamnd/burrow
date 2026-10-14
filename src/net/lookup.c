@@ -283,12 +283,14 @@ typedef struct LkCall {
     Arena ar;
     Context ctx;
     ContextCancelFunc cancel;
+    burrow__NetLookupIPFunc alt; /* the first caller's, which tests set */
     Chan *done;
     Slice addrs;
     Error err;
     int32_t refs;
     int32_t dups;
     bool listed;
+    bool shared; /* someone joined the lookup before it was done */
 } LkCall;
 
 /* r->lookupIP */
@@ -330,7 +332,10 @@ static void lk_call_go(void *env) {
     LkCall *c = (LkCall *)env;
     Alloc *a = arena_allocator(&c->ar);
     Error e = BURROW_NO_ERROR;
-    c->addrs = lk_lookup_ip(c->r, a, c->ctx, c->network, c->host, &e);
+    if (c->alt.f != NULL)
+        c->addrs = BURROW_CALLF(c->alt, a, c->ctx, c->network, c->host, &e);
+    else
+        c->addrs = lk_lookup_ip(c->r, a, c->ctx, c->network, c->host, &e);
     /* The error dies with the goroutine that made it, unless it is moved. */
     if (BURROW_FAILED(e))
         e = error_retain(a, e);
@@ -339,6 +344,7 @@ static void lk_call_go(void *env) {
     sync_mutex_lock(&c->r->burrow_mu);
     if (c->listed)
         lk_unlist(c);
+    c->shared = c->dups > 0;
     sync_mutex_unlock(&c->r->burrow_mu);
     /* c->r is not touched after this, so the resolver may go now. */
     sync_wait_group_done(&lk_wait);
@@ -348,7 +354,8 @@ static void lk_call_go(void *env) {
 
 /* A new call, with a reference for the goroutine and one for the caller, or
  * NULL when there is no memory for it. */
-static LkCall *lk_call_new(NetResolver *r, Str network, Str host) {
+static LkCall *lk_call_new(NetResolver *r, Str network, Str host,
+                           burrow__NetLookupIPFunc alt) {
     LkCall *c = (LkCall *)mem_alloc(heap_allocator(), sizeof(LkCall), _Alignof(LkCall));
     if (c == NULL)
         return NULL;
@@ -356,6 +363,7 @@ static LkCall *lk_call_new(NetResolver *r, Str network, Str host) {
     arena_init(&c->ar, NULL, 0);
     Alloc *a = arena_allocator(&c->ar);
     c->r = r;
+    c->alt = alt;
     c->network = str_clone(a, network);
     c->host = str_clone(a, host);
     c->ctx = context_with_cancel(a, context_background(), &c->cancel);
@@ -383,7 +391,8 @@ static LkCall *lk_call_new(NetResolver *r, Str network, Str host) {
 
 /* DoChan: the call in flight for network and host, or a new one that has
  * been started. NULL when there is no memory for one. */
-static LkCall *lk_join(NetResolver *r, Str network, Str host) {
+static LkCall *lk_join(NetResolver *r, Str network, Str host,
+                       burrow__NetLookupIPFunc alt) {
     sync_mutex_lock(&r->burrow_mu);
     for (LkCall *c = (LkCall *)r->burrow_calls; c != NULL; c = c->next) {
         if (str_eq(c->network, network) && str_eq(c->host, host)) {
@@ -393,7 +402,7 @@ static LkCall *lk_join(NetResolver *r, Str network, Str host) {
             return c;
         }
     }
-    LkCall *c = lk_call_new(r, network, host);
+    LkCall *c = lk_call_new(r, network, host, alt);
     if (c != NULL) {
         c->next = (LkCall *)r->burrow_calls;
         r->burrow_calls = c;
@@ -430,8 +439,14 @@ static Slice lk_lookup_ip_addr(NetResolver *r, Alloc *a, Context ctx, Str networ
         return out;
     }
 
-    LkCall *c = lk_join(r, network, host);
+    const void *tself = NULL;
+    const burrow__NetTraceVT *trace = burrow__nettrace(ctx, &tself);
+    if (trace != NULL && trace->dns_start != NULL)
+        trace->dns_start(tself, host);
+    LkCall *c = lk_join(r, network, host, burrow__net_lookup_ip_alt_resolver(ctx));
     if (c == NULL) {
+        if (trace != NULL && trace->dns_done != NULL)
+            trace->dns_done(tself, out, false, burrow_err_out_of_memory);
         BURROW_OUT(err, burrow_err_out_of_memory);
         return out;
     }
@@ -454,7 +469,10 @@ static Slice lk_lookup_ip_addr(NetResolver *r, Alloc *a, Context ctx, Str networ
         if (forget)
             BURROW_CALLF0(c->cancel);
         lk_call_put(c);
-        BURROW_OUT(err, lk_dns_error(burrow__net_map_err(context_err(ctx)), host));
+        Error e = lk_dns_error(burrow__net_map_err(context_err(ctx)), host);
+        if (trace != NULL && trace->dns_done != NULL)
+            trace->dns_done(tself, out, false, e);
+        BURROW_OUT(err, e);
         return out;
     }
 
@@ -467,6 +485,8 @@ static Slice lk_lookup_ip_addr(NetResolver *r, Alloc *a, Context ctx, Str networ
         e = burrow_err_out_of_memory;
         out = slice_nil(TYPE_NET_IP_ADDR);
     }
+    if (trace != NULL && trace->dns_done != NULL)
+        trace->dns_done(tself, out, c->shared, e);
     lk_call_put(c);
     BURROW_OUT(err, e);
     return out;

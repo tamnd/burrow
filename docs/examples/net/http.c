@@ -241,6 +241,57 @@ static void recorder(Alloc *a) {
     // doc: end
 }
 
+static void files(Alloc *a) {
+    // doc: files
+    FstestMapFS site = fstest_map_fs_make(a);
+    FstestMapFile page = {
+        .data = slice_from_str(a, BURROW_S("<h1>burrow</h1>\n")),
+        .mod_time = time_date(2026, TIME_JANUARY, 2, 15, 4, 5, 0, time_utc_loc),
+    };
+    FstestMapFile notes = {.data = slice_from_str(a, BURROW_S("0123456789\n"))};
+    fstest_map_fs_set(site, BURROW_S("index.html"), &page);
+    fstest_map_fs_set(site, BURROW_S("notes.txt"), &notes);
+    HttpHandler h = http_file_server_fs(a, fstest_map_fs_as_fs(site));
+
+    const struct {
+        const char *target, *key, *value;
+    } reqs[] = {
+        {"/", NULL, NULL},
+        {"/", "If-Modified-Since", "Fri, 02 Jan 2026 15:04:05 GMT"},
+        {"/notes.txt", "Range", "bytes=2-5"},
+        {"/index.html", NULL, NULL},
+        {"/missing.txt", NULL, NULL},
+    };
+    const char *show[] = {"Content-Type", "Content-Range", "Last-Modified", "Location"};
+    for (size_t i = 0; i < sizeof reqs / sizeof reqs[0]; i++) {
+        HttpRequest *r = httptest_new_request(
+            a, BURROW_S("GET"), str_from_cstr(reqs[i].target), (IoReader){0});
+        fmt_printf_v("GET %s", r->url->path);
+        if (reqs[i].key != NULL) {
+            Str key = str_from_cstr(reqs[i].key), value = str_from_cstr(reqs[i].value);
+            http_header_set(r->header, key, value);
+            fmt_printf_v(" with %s: %s", key, value);
+        }
+        HttptestResponseRecorder *rec = httptest_new_recorder(a);
+        http_handler_serve_http(h, httptest_response_recorder_as_response_writer(rec),
+                                r);
+
+        HttpResponse *res = httptest_response_recorder_result(rec);
+        fmt_printf_v("\n  %s\n", res->status);
+        for (size_t j = 0; j < sizeof show / sizeof show[0]; j++) {
+            Str v = http_header_get(res->header, str_from_cstr(show[j]));
+            if (v.len > 0)
+                fmt_printf_v("  %s: %s\n", str_from_cstr(show[j]), v);
+        }
+        Slice body = bytes_buffer_bytes(rec->body);
+        if (body.len > 0)
+            fmt_printf_v("  body: %q\n", str_from_bytes(body.p, body.len));
+        httptest_response_recorder_free(rec);
+        http_request_free(r);
+    }
+    // doc: end
+}
+
 int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -252,6 +303,7 @@ int main(void) {
     wire(a);
     route(a);
     recorder(a);
+    files(a);
     arena_free(&ar);
     return 0;
 }

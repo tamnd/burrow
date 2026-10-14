@@ -226,6 +226,10 @@ typedef struct OsFile OsFile;
 
 extern const Type *const TYPE_OS_FILE;
 
+/* The descriptor TYPE_OS_FILE points at, for a table in another file that
+ * needs it as a constant. Use TYPE_OS_FILE. */
+extern const Type burrow__os_file_desc;
+
 /* os.Open: name for reading. */
 BURROW_OWNS(ret) OsFile *os_open(Alloc *a, Str name, Error *err);
 
@@ -330,7 +334,7 @@ IoWriterAt os_file_as_io_writer_at(OsFile *f);
 IoStringWriter os_file_as_io_string_writer(OsFile *f);
 IoReadWriteSeeker os_file_as_io_read_write_seeker(OsFile *f);
 
-/* f as an fs.File, borrowing it. Its read_dir slot is NULL for now. */
+/* f as an fs.File, borrowing it, with os_file_read_dir as its read_dir. */
 FsFile os_file_as_fs_file(OsFile *f);
 
 /* File.ReadFrom: everything r has, written to f, and how many bytes that was.

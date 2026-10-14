@@ -241,7 +241,8 @@ Str reflect_kind_string(ReflectKind k) {
         return kind_name(k);
     RfBuf b = {0};
     rfb_cstr(&b, "kind");
-    rfb_int(&b, (int64_t)k);
+    /* Go prints int(k), so a Kind made from -1 says kind-1. */
+    rfb_int(&b, (int64_t)(int32_t)(uint32_t)k);
     return rfb_intern(&b);
 }
 

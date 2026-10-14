@@ -113,6 +113,7 @@ net/mail
 log
 net/http/cookiejar
 net/http/cgi
+net/http/fcgi
 go/token
 go/scanner
 go/version

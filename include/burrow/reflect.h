@@ -203,9 +203,9 @@ bool reflect_type_convertible_to(ReflectType t, ReflectType u);
  * and when u's descriptor lists its methods, as BURROW_IFACE_TYPE_DEFINE makes
  * it do, and t has all of them. Putting a value into an interface takes the
  * recorded vtable, so a type that has the methods and no vtable implements u
- * and still cannot go into one, and Set or Call panics saying so. A library
- * interface's descriptor does not list its methods, so only a recorded vtable
- * counts for those.
+ * and still cannot go into one, and Set or Call panics saying so. Of the
+ * library's interfaces only io.Reader and io.Writer list their methods so far,
+ * so for the rest only a recorded vtable counts.
  *
  * A receiver here is always a pointer, so T implements whatever *T does, where
  * in Go a method with a pointer receiver leaves T out. */

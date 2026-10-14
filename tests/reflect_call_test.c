@@ -13,9 +13,10 @@
  * Where Go calls one directly, or calls what Interface gives back, the test
  * calls it with Call instead.
  *
- * An interface with methods is a vtable here, and reflect cannot find the
- * vtable a type has for an interface yet, so the parts of these tests that put
- * a value in one are left out, and the test says where.
+ * An interface with methods is a vtable here. A type goes into one through the
+ * vtable BURROW_IMPLEMENTS records for it, so the types these tests put into
+ * interfaces record theirs, and the interfaces Go takes from io that burrow has
+ * no descriptor for are stand-ins with Go's names and methods.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -539,6 +540,74 @@ static const Type ty_U = DESC(S_("U"), TEST_PKG, KIND_STRUCT, sizeof(ABC),
 static const Type ty_abc = DESC(NONAME, TEST_PKG, KIND_STRUCT, sizeof(ABC),
                                 _Alignof(ABC), 3, abc_fields, 0, NULL, NULL, 0, NULL);
 
+/* type WC struct{}, with Write and Close, which implements io.WriteCloser.
+ * C has no empty struct, so it holds a byte nothing reads. */
+typedef struct WC {
+    char unused;
+} WC;
+
+static Int wc_write(void *w, Slice p, Error *err) {
+    (void)w;
+    (void)p;
+    *err = BURROW_NO_ERROR;
+    return 0;
+}
+
+static Error wc_close(void *w) {
+    (void)w;
+    return BURROW_NO_ERROR;
+}
+
+#define WC_SIG_Close(IN, OUT) OUT(Error)
+#define WC_METHODS(X, T)                                                               \
+    X(T, Close, wc_close, WC_SIG_Close)                                                \
+    X(T, Write, wc_write, IO_SIG_WRITE)
+WC_METHODS(BURROW__METHOD_DEFS, WC)
+static const Method wc_methods[] = {WC_METHODS(BURROW__METHOD_ENTRY, WC)};
+static const Type burrow_type_WC =
+    DESC(S_("WC"), TEST_PKG, KIND_STRUCT, sizeof(WC), _Alignof(WC), 0, NULL, 2,
+         wc_methods, NULL, 0, NULL);
+
+/* io.WriteCloser and io.ReadWriteCloser, which burrow has C types for and no
+ * descriptors. Interface methods go in name order. */
+#define WRITE_CLOSER_METHODS(X, T)                                                     \
+    X(T, Close, closer.close, WC_SIG_Close)                                            \
+    X(T, Write, writer.write, IO_SIG_WRITE)
+WRITE_CLOSER_METHODS(BURROW__IFACE_METHOD_DEFS, IoWriteCloser)
+static const Method write_closer_methods[] = {
+    WRITE_CLOSER_METHODS(BURROW__METHOD_ENTRY, IoWriteCloser)};
+static const Type ty_WriteCloser =
+    DESC(S_("WriteCloser"), S_("io"), KIND_INTERFACE, sizeof(IoWriteCloser),
+         _Alignof(IoWriteCloser), 0, NULL, 2, write_closer_methods, NULL, 0, NULL);
+
+#define READ_WRITE_CLOSER_METHODS(X, T)                                                \
+    X(T, Close, closer.close, WC_SIG_Close)                                            \
+    X(T, Read, reader.read, IO_SIG_READ)                                               \
+    X(T, Write, writer.write, IO_SIG_WRITE)
+READ_WRITE_CLOSER_METHODS(BURROW__IFACE_METHOD_DEFS, IoReadWriteCloser)
+static const Method read_write_closer_methods[] = {
+    READ_WRITE_CLOSER_METHODS(BURROW__METHOD_ENTRY, IoReadWriteCloser)};
+static const Type ty_ReadWriteCloser = DESC(
+    S_("ReadWriteCloser"), S_("io"), KIND_INTERFACE, sizeof(IoReadWriteCloser),
+    _Alignof(IoReadWriteCloser), 0, NULL, 3, read_write_closer_methods, NULL, 0, NULL);
+
+static const IoWriterVT wc_writer_vt = {&burrow_type_WC, wc_write};
+static const IoWriteCloserVT wc_write_closer_vt = {{&burrow_type_WC, wc_write},
+                                                   {&burrow_type_WC, wc_close}};
+BURROW_IMPLEMENTS_DESC(wc_as_writer, &burrow_type_WC, TYPE_OF(IoWriter), wc_writer_vt);
+BURROW_IMPLEMENTS_DESC(wc_as_write_closer, &burrow_type_WC, &ty_WriteCloser,
+                       wc_write_closer_vt);
+
+/* var w io.WriteCloser = &WC{}, and ValueOf(&w).Elem(). */
+static ReflectValue write_closer(Alloc *a) {
+    WC *wc = mem_alloc(a, sizeof *wc, _Alignof(WC));
+    IoWriteCloser *w = mem_alloc(a, sizeof *w, _Alignof(IoWriteCloser));
+    if (wc == NULL || w == NULL)
+        abort();
+    *w = (IoWriteCloser){&wc_write_closer_vt, wc};
+    return settable(&ty_WriteCloser, w);
+}
+
 /* An impl that returns e->out[0]. */
 static Slice const_impl(void *env, Slice in) {
     (void)in;
@@ -558,11 +627,15 @@ static void TestMakeFuncValidReturnAssignments(TestingT *t) {
     Alloc *a = arena_allocator(arena_new(&ar));
     ImplEnv e = {t, a, 0, 0, {{0}}};
     /* reflect.Values returned from the wrapped function should be
-     * assignment-converted to the types returned by the result of MakeFunc.
-     *
-     * Go's first two cases, a concrete type made into an error and an
-     * io.WriteCloser made into an io.Writer, need a value put into an
-     * interface with methods, and are left out. */
+     * assignment-converted to the types returned by the result of MakeFunc. */
+
+    /* Concrete types should be promotable to interfaces they implement. */
+    e.out[0] = val(TYPE_OF(Error), &io_eof);
+    call_returning(a, reflect_func_of(NOTYPES, TYPES(TYPE_OF(Error)), false), &e);
+
+    /* Super-interfaces should be promotable to simpler interfaces. */
+    e.out[0] = write_closer(a);
+    call_returning(a, reflect_func_of(NOTYPES, TYPES(TYPE_OF(IoWriter)), false), &e);
 
     /* Channels should be promotable to directional channels. */
     ReflectType chan_int = reflect_chan_of(REFLECT_BOTH_DIR, TYPE_INT);
@@ -598,8 +671,10 @@ static void TestMakeFuncInvalidReturnAssignments(TestingT *t) {
     BadReturn b = {a, reflect_func_of(NOTYPES, TYPES(TYPE_OF(Error)), false), &e};
     should_panic(t, "", bad_return, &b);
 
-    /* Go's second case assigns an io.WriteCloser to an io.ReadWriteCloser,
-     * which needs an interface with methods, and is left out. */
+    /* Assigning to an interface with additional methods. */
+    e.out[0] = write_closer(a);
+    b.ft = reflect_func_of(NOTYPES, TYPES(&ty_ReadWriteCloser), false);
+    should_panic(t, "", bad_return, &b);
 
     /* Directional channels can't be assigned to bidirectional ones. */
     ReflectType chan_int = reflect_chan_of(REFLECT_BOTH_DIR, TYPE_INT);
@@ -718,6 +793,32 @@ const Type burrow_type_Point =
     DESC(S_("Point"), TEST_PKG, KIND_STRUCT, sizeof(Point), _Alignof(Point), 2,
          point_fields, 7, point_methods, NULL, 0, NULL);
 
+/* interface{ Dist(int) int }, and Point's vtable for it. */
+typedef struct DisterVT {
+    const Type *self_type;
+    Int (*dist)(void *self, Int scale);
+} DisterVT;
+
+typedef struct Dister {
+    const DisterVT *vt;
+    void *data;
+} Dister;
+
+#define DISTER_METHODS(X, T) X(T, Dist, dist, POINT_SIG_Scale)
+DISTER_METHODS(BURROW__IFACE_METHOD_DEFS, Dister)
+static const Method dister_methods[] = {DISTER_METHODS(BURROW__METHOD_ENTRY, Dister)};
+static const Type ty_dister =
+    DESC(NONAME, NONAME, KIND_INTERFACE, sizeof(Dister), _Alignof(Dister), 0, NULL, 1,
+         dister_methods, NULL, 0, NULL);
+
+static Int point_dist_self(void *p, Int scale) {
+    return point_dist(p, scale);
+}
+
+static const DisterVT point_dister_vt = {&burrow_type_Point, point_dist_self};
+BURROW_IMPLEMENTS_DESC(point_as_dister, &burrow_type_Point, &ty_dister,
+                       point_dister_vt);
+
 /* ValueOf(p) and ValueOf(&p). */
 static ReflectValue vpoint(Point *p) {
     return val(TYPE_OF(Point), p);
@@ -826,12 +927,37 @@ static void TestMethod(TestingT *t) {
     v = reflect_value_method_by_name(vpoint_ptr(&pp), a, BURROW_S("NoArgs"));
     reflect_value_call(v, a, NOVALS);
 
-    /* Go's last part calls the method of a Point held in an interface with a
-     * Dist method, which needs an interface with methods, and is left out. */
+    /* Curried method of interface value. Have to wrap interface value in a
+     * struct to get at it. Passing it to ValueOf directly would access the
+     * underlying Point, not the interface. */
+    Dister x = {&point_dister_vt, &p};
+    ReflectValue pv = settable(&ty_dister, &x);
+    v = reflect_value_method(pv, a, 0);
+    if (reflect_value_type(v) != tfunc)
+        testing_t_errorf_v(t, "Interface Method Type is %s; want %s",
+                           reflect_type_string(reflect_value_type(v)),
+                           reflect_type_string(tfunc));
+    i = call_int(v, a, VALS(vint(a, 18)));
+    if (i != 450)
+        testing_t_errorf_v(t, "Interface Method returned %d; want 450", i);
+    v = reflect_value_method_by_name(pv, a, BURROW_S("Dist"));
+    if (reflect_value_type(v) != tfunc)
+        testing_t_errorf_v(t, "Interface MethodByName Type is %s; want %s",
+                           reflect_type_string(reflect_value_type(v)),
+                           reflect_type_string(tfunc));
+    i = call_int(v, a, VALS(vint(a, 19)));
+    if (i != 475)
+        testing_t_errorf_v(t, "Interface MethodByName returned %d; want 475", i);
     arena_free(&ar);
 }
 
 /* -------------------------------------------------------- TestMethodValue */
+
+/* struct{ X interface{ Dist(int) int } }. */
+static const Field s_dister_fields[] = {FIELD("X", &ty_dister, 0)};
+static const Type ty_s_dister =
+    DESC(NONAME, NONAME, KIND_STRUCT, sizeof(Dister), _Alignof(Dister), 1,
+         s_dister_fields, 0, NULL, NULL, 0, NULL);
 
 static void TestMethodValue(TestingT *t) {
     Arena ar;
@@ -910,8 +1036,29 @@ static void TestMethodValue(TestingT *t) {
         testing_t_errorf_v(
             t, "Pointer Pointer Value MethodByName returned %d; want 375", i);
 
-    /* Go's next part takes the method of a Point held in an interface, which
-     * needs an interface with methods, and is left out. */
+    /* Curried method of interface value. Have to wrap interface value in a
+     * struct to get at it. Passing it to ValueOf directly would access the
+     * underlying Point, not the interface. */
+    struct {
+        Dister X;
+    } s = {{&point_dister_vt, &p}};
+    pv = reflect_value_field(val(&ty_s_dister, &s), 0);
+    v = reflect_value_method(pv, a, 0);
+    if (reflect_value_type(v) != tfunc)
+        testing_t_errorf_v(t, "Interface Method Type is %s; want %s",
+                           reflect_type_string(reflect_value_type(v)),
+                           reflect_type_string(tfunc));
+    i = call_int(reflect_value_of(reflect_value_interface(v)), a, VALS(vint(a, 16)));
+    if (i != 400)
+        testing_t_errorf_v(t, "Interface Method returned %d; want 400", i);
+    v = reflect_value_method_by_name(pv, a, BURROW_S("Dist"));
+    if (reflect_value_type(v) != tfunc)
+        testing_t_errorf_v(t, "Interface MethodByName Type is %s; want %s",
+                           reflect_type_string(reflect_value_type(v)),
+                           reflect_type_string(tfunc));
+    i = call_int(reflect_value_of(reflect_value_interface(v)), a, VALS(vint(a, 17)));
+    if (i != 425)
+        testing_t_errorf_v(t, "Interface MethodByName returned %d; want 425", i);
 
     /* For issue #33628: method args are not stored at the right offset on
      * amd64p32. Go calls what Interface gives back; here Call does. */
@@ -1061,13 +1208,22 @@ static const Method unexp_methods[] = {
 static const Type ty_unexp = DESC(S_("unexp"), TEST_PKG, KIND_STRUCT, 0, 1, 0, NULL, 2,
                                   unexp_methods, NULL, 0, NULL);
 
+/* type unexpI interface { f() (int32, int8) }. */
+static const Method unexp_i_methods[] = {{S_("f"), NULL, noop_thunk}};
+static const Type ty_unexpI =
+    DESC(S_("unexpI"), TEST_PKG, KIND_INTERFACE, sizeof(Iface), _Alignof(Iface), 0,
+         NULL, 1, unexp_i_methods, NULL, 0, NULL);
+
 static void TestUnexportedMethods(TestingT *t) {
     ReflectType typ = reflect_pointer_to(&ty_unexp);
     Int got = reflect_type_num_method(typ);
     if (got != 0)
         testing_t_errorf_v(t, "NumMethod=%d, want 0 satisfied methods", got);
-    /* Go's second half counts the methods of an interface type with an
-     * unexported method, and is left out with the other interfaces. */
+
+    typ = reflect_pointer_to(&ty_unexpI);
+    got = reflect_type_num_method(reflect_type_elem(typ));
+    if (got != 1)
+        testing_t_errorf_v(t, "NumMethod=%d, want 1 satisfied methods", got);
 }
 
 /* ------------------------------------------------------ TestNumMethodOnDDD */
@@ -1122,16 +1278,13 @@ static void TestVariadic(TestingT *t) {
     Arena ar;
     Alloc *a = arena_allocator(arena_new(&ar));
     StringsBuilder b = STRINGS_BUILDER(a);
-    IoWriter w = strings_builder_as_io_writer(&b);
     FprintfFn fp = BURROW_FN(FprintfFn, fprintf_adapter, NULL);
     ReflectValue fv = val(&ty_fprintf, &fp);
     Str format = BURROW_S("%s, %d world");
     Str hello = BURROW_S("hello");
     Int n42 = 42;
-    /* Go passes &b, which needs the vtable a *strings.Builder has for io.Writer.
-     * The writer goes in already an io.Writer instead, as the Elem of a pointer
-     * to one, since ValueOf would look through it to the Builder. */
-    ReflectValue wv = settable(TYPE_OF(IoWriter), &w);
+    StringsBuilder *bp = &b;
+    ReflectValue wv = val(reflect_pointer_to(TYPE_STRINGS_BUILDER), &bp);
 
     strings_builder_reset(&b);
     reflect_value_call(fv, a,

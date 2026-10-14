@@ -24,6 +24,7 @@
 
 #include "http_internal.h"
 
+#include "../xnet/httpguts.h"
 #include "../xnet/httpproxy.h"
 #include "http_ascii.h"
 #include "internal.h"
@@ -420,10 +421,8 @@ static bool tp_is_protocol_switch_header(HttpHeader h) {
     if (burrow__http_header_get(h, BURROW_S("Upgrade")).len == 0)
         return false;
     Slice vs = http_header_values(h, BURROW_S("Connection"));
-    for (Int i = 0; i < vs.len; i++)
-        if (burrow__http_has_token(((const Str *)vs.p)[i], BURROW_S("Upgrade")))
-            return true;
-    return false;
+    return burrow__httpguts_header_values_contains_token((const Str *)vs.p, vs.len,
+                                                         BURROW_S("Upgrade"));
 }
 
 /* Request.expectsContinue and wantsClose. */
@@ -2084,14 +2083,26 @@ static Error tp_rwc_close(void *self) {
     return b->conn.vt->closer.close(b->conn.data);
 }
 
+/* CloseWrite, when the connection is one that has it. */
+static Error tp_rwc_close_write(void *self) {
+    tp_Rwc *b = (tp_Rwc *)self;
+    NetTCPConn *tc = net_conn_as_tcp_conn(b->conn);
+    if (tc != NULL)
+        return net_tcp_conn_close_write(tc);
+    NetUnixConn *uc = net_conn_as_unix_conn(b->conn);
+    if (uc != NULL)
+        return net_unix_conn_close_write(uc);
+    return errors_err_unsupported;
+}
+
 static const IoReadCloserVT tp_rwc_vt = {{NULL, tp_rwc_read}, {NULL, tp_rwc_close}};
 static const IoWriterVT tp_rwc_writer_vt = {NULL, tp_rwc_write};
 
 bool http_response_body_writer(const HttpResponse *r, IoWriter *w) {
-    if (r == NULL || r->body.vt != &tp_rwc_vt)
+    if (r == NULL || r->body_writer.vt == NULL)
         return false;
     if (w != NULL)
-        *w = (IoWriter){&tp_rwc_writer_vt, r->body.data};
+        *w = r->body_writer;
     return true;
 }
 
@@ -2278,6 +2289,10 @@ static HttpResponse *tp_read_response(tp_PConn *pc, tp_Trip *tr, Error *err) {
             b->br = pc->br;
         b->conn = pc->conn;
         resp->body = (IoReadCloser){&tp_rwc_vt, b};
+        resp->body_writer = (IoWriter){&tp_rwc_writer_vt, b};
+        if (net_conn_as_tcp_conn(b->conn) != NULL ||
+            net_conn_as_unix_conn(b->conn) != NULL)
+            resp->body_close_write = tp_rwc_close_write;
     }
     if (continue_ch != NULL) {
         /* The request said "Expect: 100-continue" and the response came

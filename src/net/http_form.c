@@ -80,24 +80,35 @@ static bool hf_protocol_error_is(const void *self, Error target) {
     return http_protocol_error_is((const HttpProtocolError *)self, target);
 }
 
-static const ErrorVT hf_protocol_error_vt = {
+/* Every protocol error the library makes is a static one, so a retained copy
+ * is the same error and errors_is still matches it. */
+static Error hf_protocol_error_clone(const void *self, Alloc *a) {
+    (void)a;
+    return (Error){&burrow__http_protocol_error_vt, self};
+}
+
+const ErrorVT burrow__http_protocol_error_vt = {
     &hf_protocol_error_desc,
     hf_protocol_error_message,
     NULL,
     NULL,
     hf_protocol_error_is,
     NULL,
-    NULL,
+    hf_protocol_error_clone,
 };
 
-const Error http_err_not_supported = {&hf_protocol_error_vt, &hf_not_supported};
-const Error http_err_unexpected_trailer = {&hf_protocol_error_vt,
+const Error http_err_not_supported = {&burrow__http_protocol_error_vt,
+                                      &hf_not_supported};
+const Error http_err_unexpected_trailer = {&burrow__http_protocol_error_vt,
                                            &hf_unexpected_trailer};
-const Error http_err_missing_boundary = {&hf_protocol_error_vt, &hf_missing_boundary};
-const Error http_err_not_multipart = {&hf_protocol_error_vt, &hf_not_multipart};
-const Error http_err_header_too_long = {&hf_protocol_error_vt, &hf_header_too_long};
-const Error http_err_short_body = {&hf_protocol_error_vt, &hf_short_body};
-const Error http_err_missing_content_length = {&hf_protocol_error_vt,
+const Error http_err_missing_boundary = {&burrow__http_protocol_error_vt,
+                                         &hf_missing_boundary};
+const Error http_err_not_multipart = {&burrow__http_protocol_error_vt,
+                                      &hf_not_multipart};
+const Error http_err_header_too_long = {&burrow__http_protocol_error_vt,
+                                        &hf_header_too_long};
+const Error http_err_short_body = {&burrow__http_protocol_error_vt, &hf_short_body};
+const Error http_err_missing_content_length = {&burrow__http_protocol_error_vt,
                                                &hf_missing_content_length};
 
 BURROW_SENTINEL_ERROR(http_err_missing_file, "http: no such file");

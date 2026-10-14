@@ -1797,3 +1797,55 @@ bufio_reader_free(br);
 ```
 
 With `body` true, a dump reads the whole body into memory, and the request or response gets a reader over those same bytes, so it can still be used after. With `body` false the body is left out, but the header keeps the length the body would have had. `httputil_new_chunked_reader` and `httputil_new_chunked_writer` are the chunked encoding the client and server use, for code that speaks HTTP/1 itself.
+
+## Reverse proxies
+
+`net/http/httputil` has a reverse proxy, a handler that sends each request it gets on to another server and copies the response back. An `HttputilReverseProxy` needs `rewrite` to say where a request goes. It gets an `HttputilProxyRequest` with `in`, the request the proxy got, and `out`, the copy it will send. `httputil_proxy_request_set_url` points `out` at a target, joining the paths, and `httputil_proxy_request_set_x_forwarded` adds the `X-Forwarded-For`, `X-Forwarded-Host` and `X-Forwarded-Proto` fields. `modify_response`, when set, can change the response before it is copied:
+
+<!-- example: ../examples/net/reverseproxy.c#hooks -->
+```c
+static void rewrite(void *env, HttputilProxyRequest *r) {
+    const Url *target = env;
+    httputil_proxy_request_set_url(r, target);
+    httputil_proxy_request_set_x_forwarded(r);
+    http_header_set(r->out->header, BURROW_S("X-Api-Key"), BURROW_S("secret"));
+}
+
+static Error modify_response(void *env, HttpResponse *res) {
+    (void)env;
+    http_header_set(res->header, BURROW_S("X-Proxied"), BURROW_S("yes"));
+    return BURROW_NO_ERROR;
+}
+```
+
+<!-- example: ../examples/net/reverseproxy.c#proxy -->
+```c
+Url *target = url_parse(a, fmt_sprintf_v(a, "%s/api", back->url), &err);
+HttputilReverseProxy proxy = {
+    .rewrite = BURROW_FN(HttputilRewriteFunc, rewrite, target),
+    .modify_response = BURROW_FN(HttputilModifyResponseFunc, modify_response, NULL),
+};
+HttptestServer *front = httptest_new_server(
+    heap_allocator(), httputil_reverse_proxy_as_handler(&proxy));
+
+HttpResponse *res = http_client_get(httptest_server_client(front),
+                                    fmt_sprintf_v(a, "%s/users", front->url), &err);
+if (res != NULL) {
+    Slice b = io_read_all(a, io_read_closer_as_io_reader(res->body), &err);
+    fmt_printf_v("%s, X-Proxied %s\n", res->status,
+                 http_header_get(res->header, BURROW_S("X-Proxied")));
+    fmt_printf_v("%s", str_from_bytes(b.p, b.len));
+    http_response_free(res);
+}
+```
+
+That prints:
+
+```
+200 OK, X-Proxied yes
+path /api/users, X-Forwarded-Proto http
+```
+
+Before `rewrite` runs, the proxy takes the hop-by-hop fields off `out`, the ones `Connection` names and the standard ones such as `Keep-Alive` and `Proxy-Authorization`, along with `Forwarded`, the `X-Forwarded` fields and any query parameters that don't parse. So a backend only sees forwarding fields the rewrite put there. `httputil_new_single_host_reverse_proxy` makes a proxy the older way, with a `director` that changes the request in place. That one leaves the `Host` field as the client sent it, and in that mode the proxy adds the client's address to `X-Forwarded-For` itself.
+
+When the backend can't be reached, or `modify_response` returns an error, `error_handler` gets the error, and without one the proxy logs it to `error_log` and answers 502 Bad Gateway. A 101 Switching Protocols from the backend, to an upgrade the client asked for, takes over the client's connection and copies bytes both ways, which is how WebSockets go through. `flush_interval` says how often the body is flushed to the client while it is copied, and a response of unknown length or of type `text/event-stream` is flushed after every write.

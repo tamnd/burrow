@@ -3009,6 +3009,30 @@ static void run_all(void *env, TestingT *t) {
 }
 
 /* One pass for one -test.cpu value: -test.count runs of every test. */
+/* Waits a little for goroutines that are on their way out. Go's process exits
+ * with whatever goroutines are still about, and so does this one, but here
+ * what they hold is memory a leak checker counts. A goroutine the last test
+ * told to stop, such as a connection's loop after its server closed, is
+ * usually a scheduling round or two from gone. One parked for good leaves the
+ * count where it is, which ends the wait after 20ms, and a second is the most
+ * this waits. */
+static void settle_goroutines(void) {
+    if (burrow__curg() == NULL)
+        return;
+    int ng = runtime_numgoroutine();
+    int same = 0;
+    for (int i = 0; i < 1000 && ng > 1 && same < 20; i++) {
+        time_sleep(TIME_MILLISECOND);
+        int nng = runtime_numgoroutine();
+        if (nng == ng) {
+            same++;
+        } else {
+            same = 0;
+            ng = nng;
+        }
+    }
+}
+
 static void run_pass(void *env) {
     RunState *rs = (RunState *)env;
     for (uint64_t i = 0; i < pkg.flags[F_COUNT].u; i++) {
@@ -3038,6 +3062,7 @@ static void run_pass(void *env) {
             mem_free(heap_allocator(), chatty, sizeof(Chatty), _Alignof(Chatty));
         }
     }
+    settle_goroutines();
 }
 
 static bool run_passes(RunState *rs) {

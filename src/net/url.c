@@ -414,6 +414,7 @@ enum {
     URL_DEBUG_KNOWN = 1 << 0,
     URL_DEBUG_LAX_COLONS = 1 << 1, /* urlstrictcolons=0 */
     URL_DEBUG_MAX_SET = 1 << 2,    /* urlmaxqueryparams is a number */
+    URL_DEBUG_MAX_NAMED = 1 << 3,  /* urlmaxqueryparams is not "" */
 };
 
 static uint32_t url_debug_flags;
@@ -447,6 +448,7 @@ static uint32_t url_debug_parse(const char *v) {
         s.p[0] == '0')
         f |= URL_DEBUG_LAX_COLONS;
     if (v != NULL && url_godebug(v, "urlmaxqueryparams", &s) && s.len > 0) {
+        f |= URL_DEBUG_MAX_NAMED;
         /* strconv.Atoi, and a value that is not a number leaves the
          * default in place. */
         Error err;
@@ -473,6 +475,10 @@ static uint32_t url_debug_load(void) {
         }
     }
     return url_debug_parse(v);
+}
+
+bool burrow__url_max_query_params_named(void) {
+    return (url_debug_load() & URL_DEBUG_MAX_NAMED) != 0;
 }
 
 void burrow__url_godebug_set(const char *value) {

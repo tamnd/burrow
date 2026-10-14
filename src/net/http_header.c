@@ -280,6 +280,23 @@ Error http_header_write(HttpHeader h, IoWriter w) {
     return ht_write_subset(h, w, NULL, NULL, 0, NULL);
 }
 
+/* ------------------------------------------------------ foreachHeaderElement */
+
+void burrow__http_foreach_header_element(Str v, void (*fn)(void *env, Str f),
+                                         void *env) {
+    v = textproto_trim_string(v);
+    while (v.len > 0) {
+        const Byte *comma = (const Byte *)memchr(v.p, ',', (size_t)v.len);
+        Int n = comma != NULL ? (Int)(comma - v.p) : v.len;
+        Str f = textproto_trim_string(str_from_bytes(v.p, n));
+        if (f.len > 0)
+            fn(env, f);
+        if (comma == NULL)
+            break;
+        v = str_from_bytes(comma + 1, v.len - n - 1);
+    }
+}
+
 /* ----------------------------------------------------------------- hasToken */
 
 static bool ht_is_token_boundary(Byte b) {

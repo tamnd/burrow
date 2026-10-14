@@ -331,19 +331,6 @@ static Str sv_sub(Str s, Int lo, Int hi) {
     return str_from_bytes(s.p + lo, hi - lo);
 }
 
-/* textproto.TrimString. */
-static Str sv_trim(Str s) {
-    while (s.len > 0 &&
-           (s.p[0] == ' ' || s.p[0] == '\t' || s.p[0] == '\r' || s.p[0] == '\n')) {
-        s.p++;
-        s.len--;
-    }
-    while (s.len > 0 && (s.p[s.len - 1] == ' ' || s.p[s.len - 1] == '\t' ||
-                         s.p[s.len - 1] == '\r' || s.p[s.len - 1] == '\n'))
-        s.len--;
-    return s;
-}
-
 /* The server's logf. */
 #define sv_logf(s, ...) log_logger_printf_v((s)->error_log, __VA_ARGS__)
 
@@ -699,19 +686,13 @@ static void sv_declare_trailer(sv_Response *w, Str k) {
     w->trailers = slice_append(sv_wa(w), w->trailers, &k, 1);
 }
 
+static void sv_declare_trailer_cb(void *env, Str k) {
+    sv_declare_trailer((sv_Response *)env, k);
+}
+
 /* foreachHeaderElement with declareTrailer. */
 static void sv_declare_trailers(sv_Response *w, Str v) {
-    v = sv_trim(v);
-    while (v.len > 0) {
-        Int i = strings_index_byte(v, ',');
-        Str f = i < 0 ? v : sv_sub(v, 0, i);
-        f = sv_trim(f);
-        if (f.len > 0)
-            sv_declare_trailer(w, f);
-        if (i < 0)
-            break;
-        v = sv_sub(v, i + 1, v.len);
-    }
+    burrow__http_foreach_header_element(v, sv_declare_trailer_cb, w);
 }
 
 /* writeStatusLine. */

@@ -2,9 +2,8 @@
  * request to the wire.
  * Go source: go1.27.1.
  *
- * TestRequestWriteTransport needs a Transport, which there is not yet, so it
- * waits for one. TestRequestWriteProbe stands in for the part of it that
- * looks at the body of a GET.
+ * TestRequestWriteProbe is burrow's own. It runs the GET cases of
+ * TestRequestWriteTransport through Request.Write, with no Transport.
  *
  * Copyright 2010 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -15,13 +14,17 @@
 
 #include "burrow/burrow.h"
 #include "burrow/bytes.h"
+#include "burrow/chan.h"
 #include "burrow/declare.h"
 #include "burrow/io.h"
 #include "burrow/map.h"
 #include "burrow/mem/arena.h"
+#include "burrow/mem/heap.h"
+#include "burrow/net.h"
 #include "burrow/net/http.h"
 #include "burrow/net/url.h"
 #include "burrow/strings.h"
+#include "burrow/sync.h"
 #include "burrow/testing/iotest.h"
 
 #include <stdint.h>
@@ -1030,11 +1033,260 @@ static void TestNewRequestContentLength(TestingT *t) {
     ARENA_END;
 }
 
+/* -------------------------------------------- TestRequestWriteTransport */
+
+/* dumpRequestOut, the test's own and not httputil's. A Transport sends req to
+ * a connection that records what it is given, and that answers with a dummy
+ * response once it has read the whole request. on_read_headers, when it is
+ * set, runs once the request's header has been read. It always dumps the
+ * whole body. */
+typedef struct RwDump {
+    BytesBuffer buf; /* records the output */
+    IoPipeReader *pr;
+    IoPipeWriter *pw;
+    IoWriter mw; /* to buf and pw */
+
+    /* delegateReader. c gets a value when the response is there to be read,
+     * and is closed instead when the round trip failed. */
+    Chan *c;
+    bool have;
+    StringsReader res;
+
+    Chan *quit;
+    Func on_read_headers;
+    SyncWaitGroup wg;
+} RwDump;
+
+static Int rw_conn_read(void *self, Slice p, Error *err) {
+    RwDump *d = (RwDump *)self;
+    if (!d->have) {
+        bool v;
+        if (!chan_recv(d->c, &v)) {
+            *err = io_eof;
+            return 0;
+        }
+        d->have = true;
+    }
+    return strings_reader_read(&d->res, p, err);
+}
+
+static Int rw_conn_write(void *self, Slice p, Error *err) {
+    RwDump *d = (RwDump *)self;
+    return d->mw.vt->write(d->mw.data, p, err);
+}
+
+static Error rw_conn_close(void *self) {
+    (void)self;
+    return BURROW_NO_ERROR;
+}
+
+static NetAddr rw_conn_addr(void *self) {
+    (void)self;
+    return (NetAddr){NULL, NULL};
+}
+
+static Error rw_conn_set_deadline(void *self, Time tm) {
+    (void)self;
+    (void)tm;
+    return BURROW_NO_ERROR;
+}
+
+static const NetConnVT rw_conn_vt = {
+    {NULL, rw_conn_read}, {NULL, rw_conn_write}, {NULL, rw_conn_close},
+    rw_conn_addr,         rw_conn_addr,          rw_conn_set_deadline,
+    rw_conn_set_deadline, rw_conn_set_deadline,
+};
+
+static NetConn rw_dial(void *env, Str network, Str addr, Error *err) {
+    (void)network;
+    (void)addr;
+    *err = BURROW_NO_ERROR;
+    return (NetConn){&rw_conn_vt, env};
+}
+
+/* The connection is the RwDump, which rw_dump_request_out frees itself. */
+static void rw_free_conn(void *env, NetConn c) {
+    (void)env;
+    (void)c;
+}
+
+/* Wait for the request before replying with a dummy response. */
+static void rw_read_request(void *env) {
+    RwDump *d = (RwDump *)env;
+    Alloc *h = heap_allocator();
+    BufioReader *br = bufio_new_reader(h, io_pipe_reader_as_io_reader(d->pr));
+    if (br != NULL) {
+        Error err;
+        HttpRequest *req = http_read_request(h, br, &err);
+        if (req != NULL) {
+            if (d->on_read_headers.f != NULL)
+                d->on_read_headers.f(d->on_read_headers.env);
+            /* Ensure all the body is read; otherwise we'll get a partial
+             * dump. */
+            (void)io_copy(h, io_discard, io_read_closer_as_io_reader(req->body), &err);
+            (void)req->body.vt->closer.close(req->body.data);
+            http_request_free(req);
+        }
+        bufio_reader_free(br);
+    }
+    bool v = true;
+    SelectCase cases[] = {BURROW_SEND(d->c, &v), BURROW_RECV(d->quit, NULL)};
+    if (chan_select(cases, 2) == 1)
+        chan_close(d->c);
+}
+
+static Str rw_dump_request_out(Alloc *a, HttpRequest *req, Func on_read_headers,
+                               Error *err) {
+    Alloc *h = heap_allocator();
+    RwDump *d = must(mem_alloc(h, sizeof *d, _Alignof(RwDump)));
+    memset(d, 0, sizeof *d);
+    d->buf = BYTES_BUFFER(h);
+    io_pipe(h, &d->pr, &d->pw);
+    must(d->pr);
+    IoWriter ws[2] = {bytes_buffer_as_io_writer(&d->buf),
+                      io_pipe_writer_as_io_writer(d->pw)};
+    d->mw = io_multi_writer(h, ws, 2);
+    must(d->mw.data);
+    d->c = must(chan_make(h, TYPE_BOOL, 0));
+    d->quit = must(chan_make(h, TYPE_BOOL, 0));
+    strings_reader_reset(&d->res,
+                         S("HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n"));
+    d->on_read_headers = on_read_headers;
+
+    HttpTransport tr;
+    memset(&tr, 0, sizeof tr);
+    tr.dial = BURROW_FN(HttpDialFunc, rw_dial, d);
+    tr.free_conn = BURROW_FN(HttpFreeConnFunc, rw_free_conn, NULL);
+
+    if (!sync_wait_group_go(&d->wg, BURROW_FN(Func, rw_read_request, d)))
+        panic_str(S("out of memory"));
+    HttpResponse *res = http_transport_round_trip(&tr, req, err);
+    if (BURROW_FAILED(*err))
+        chan_close(d->quit);
+    http_response_free(res);
+    /* Go leaves the goroutines to finish on their own. Here they have to be
+     * done before d goes, and closing the pipe lets any still on it go. */
+    (void)io_pipe_reader_close(d->pr);
+    (void)io_pipe_writer_close(d->pw);
+    sync_wait_group_wait(&d->wg);
+    http_transport_close_idle_connections(&tr);
+    http_transport_free(&tr);
+
+    Slice b = bytes_buffer_bytes(&d->buf);
+    Str out = str_clone(a, str_from_bytes((const Byte *)b.p, b.len));
+    chan_free(d->quit);
+    chan_free(d->c);
+    io_multi_writer_free(h, d->mw);
+    io_pipe_free(d->pr);
+    bytes_buffer_free(&d->buf);
+    mem_free(h, d, sizeof *d, _Alignof(RwDump));
+    return out;
+}
+
+typedef enum { WT_NO_BODY, WT_STRING, WT_PIPE } WtBody;
+
+typedef struct WtCase {
+    const char *method;
+    int64_t clen; /* ContentLength */
+    WtBody body;
+    const char *str;
+    const char *want[3];
+    bool want_no_length; /* noContentLengthOrTransferEncoding */
+} WtCase;
+
+static const WtCase wt_cases[] = {
+    {"GET", 0, WT_NO_BODY, NULL, {NULL}, true},
+    {"GET", 0, WT_STRING, "", {NULL}, true},
+    {"GET", -1, WT_STRING, "", {NULL}, true},
+    /* A GET with a body, with explicit content length: */
+    {"GET", 7, WT_STRING, "foobody", {"Content-Length: 7", "foobody"}, false},
+    /* A GET with a body, sniffing the leading "f" from "foobody". */
+    {"GET",
+     -1,
+     WT_STRING,
+     "foobody",
+     {"Transfer-Encoding: chunked", "\r\n1\r\nf\r\n", "oobody"},
+     false},
+    /* But a POST request is expected to have a body, so no sniffing
+     * happens: */
+    {"POST",
+     -1,
+     WT_STRING,
+     "foobody",
+     {"Transfer-Encoding: chunked", "foobody"},
+     false},
+    {"POST", -1, WT_STRING, "", {"Transfer-Encoding: chunked"}, false},
+    /* Verify that a blocking Request.Body doesn't block forever. */
+    {"GET", -1, WT_PIPE, NULL, {"Transfer-Encoding: chunked"}, false},
+};
+
+static void close_pipe_writer(void *env) {
+    (void)io_pipe_writer_close((IoPipeWriter *)env);
+}
+
+/* Go runs this in a synctest bubble, since it relies on the transport probing
+ * the request body within 200ms, and a fake clock keeps that from flaking on
+ * slow builders. There is no fake clock here, so the 200ms are real ones. */
+static void TestRequestWriteTransport(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    ARENA_BEGIN;
+    for (Int i = 0; i < (Int)(sizeof wt_cases / sizeof wt_cases[0]); i++) {
+        const WtCase *tt = &wt_cases[i];
+        Url u = {0};
+        u.scheme = S("http");
+        u.host = S("example.com");
+        HttpRequest *req = must(mem_alloc(a, sizeof *req, _Alignof(HttpRequest)));
+        req->method = cs(tt->method);
+        req->url = &u;
+        req->header = must(http_header_make(a));
+        req->content_length = tt->clen;
+        StringsReader sr;
+        IoNopCloser nc;
+        IoPipeReader *pr = NULL;
+        IoPipeWriter *pw = NULL;
+        Func after_req_read = {0};
+        if (tt->body == WT_STRING) {
+            strings_reader_reset(&sr, cs(tt->str));
+            nc = io_nop_closer(strings_reader_as_io_reader(&sr));
+            req->body = io_nop_closer_as_io_read_closer(&nc);
+        } else if (tt->body == WT_PIPE) {
+            io_pipe(heap_allocator(), &pr, &pw);
+            must(pr);
+            after_req_read = BURROW_FN(Func, close_pipe_writer, pw);
+            nc = io_nop_closer(io_pipe_reader_as_io_reader(pr));
+            req->body = io_nop_closer_as_io_read_closer(&nc);
+        }
+        Error err;
+        Str got = rw_dump_request_out(a, req, after_req_read, &err);
+        arena_free(&req->arena);
+        if (pr != NULL)
+            io_pipe_free(pr);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "test[%d]: %v", i, err);
+            continue;
+        }
+        if (tt->want_no_length) {
+            if (contains(got, "Content-Length: "))
+                testing_t_errorf_v(
+                    t, "test[%d]: unexpected Content-Length in request: %s", i, got);
+            if (contains(got, "Transfer-Encoding: "))
+                testing_t_errorf_v(
+                    t, "test[%d]: unexpected Transfer-Encoding in request: %s", i, got);
+        }
+        for (int j = 0; j < 3 && tt->want[j] != NULL; j++)
+            if (!contains(got, tt->want[j]))
+                testing_t_errorf_v(t, "test[%d]: expected substring %q in request: %s",
+                                   i, cs(tt->want[j]), got);
+    }
+    ARENA_END;
+}
+
 #define TESTS(X)                                                                       \
     X(TestRequestWrite)                                                                \
     X(TestRequestWriteClosesBody)                                                      \
     X(TestRequestWriteError)                                                           \
     X(TestRequestWriteProbe)                                                           \
-    X(TestNewRequestContentLength)
+    X(TestNewRequestContentLength)                                                     \
+    X(TestRequestWriteTransport)
 
 TESTING_MAIN(TESTS)

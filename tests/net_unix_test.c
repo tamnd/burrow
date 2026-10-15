@@ -877,6 +877,12 @@ static void scm_rights_close_on_exec(TestingT *t, StreamPair *p, Int scm_file) {
  * makes its pair with socketpair and FileConn, and a listener does as well. */
 static void TestUnixConnReadMsgUnixSCMRightsCloseOnExec(TestingT *t) {
     need_unix(t);
+#if defined(BURROW_OS_COSMO)
+    /* Not in Go: the descriptor is opened and closed with syscall's calls,
+     * which are raw system calls, and Cosmopolitan has no way to make one. */
+    testing_t_skip_v(t, "Cosmopolitan has no raw system calls");
+    return;
+#endif
     Error e = BURROW_NO_ERROR;
     Int scm_file = syscall_open(S("/dev/null"), SYSCALL_O_RDONLY, 0, &e);
     if (BURROW_FAILED(e)) {

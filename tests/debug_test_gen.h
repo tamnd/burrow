@@ -6291,6 +6291,11 @@ static const DebugDamage debug_damage_13[] = {
     {-1, 0, NULL},
 };
 
+static const DebugDamage debug_damage32_13[] = {
+    {1115, 155, "211e09535283a592"},
+    {-1, 0, NULL},
+};
+
 /* elf/go-relocation-test-gcc492-arm.obj, 2648 bytes. */
 static const char *const debug_file_14[] = {
     "f0VMRgEBAQAAAAAAAAAAAAEAKAABAAAAAAAAAAAAAADoBgAAAAAABTQAAAAAACgAFgATAABI",
@@ -6637,6 +6642,11 @@ static const DebugDamage debug_damage_14[] = {
     {2647, 0, "cd9bfc1493e43855"},
     {1986, 0, "cd9bfc1493e43855"},
     {100, 0, "cd9bfc1493e43855"},
+    {-1, 0, NULL},
+};
+
+static const DebugDamage debug_damage32_14[] = {
+    {172, 146, "d8329d85a64604a4"},
     {-1, 0, NULL},
 };
 
@@ -8426,6 +8436,11 @@ static const DebugDamage debug_damage_19[] = {
     {3863, 0, "cd9bfc1493e43855"},
     {2898, 0, "cd9bfc1493e43855"},
     {100, 0, "cd9bfc1493e43855"},
+    {-1, 0, NULL},
+};
+
+static const DebugDamage debug_damage32_19[] = {
+    {2918, 191, "3ac5e17c417e6c1a"},
     {-1, 0, NULL},
 };
 
@@ -20222,6 +20237,11 @@ static const DebugDamage debug_damage_37[] = {
     {-1, 0, NULL},
 };
 
+static const DebugDamage debug_damage32_37[] = {
+    {7253, 16, "c1b84d5d140761a3"},
+    {-1, 0, NULL},
+};
+
 /* dwarf/rnglistx.elf, 11024 bytes. */
 static const char *const debug_file_38[] = {
     "f0VMRgIBAQAAAAAAAAAAAAIAPgABAAAAABBAAAAAAABAAAAAAAAAANAmAAAAAAAAAAAAAEAA",
@@ -24743,72 +24763,82 @@ static const DebugDamage debug_damage_42[] = {
 };
 
 static const DebugFile debug_files[] = {
-    {"elf/compressed-32.obj", false, debug_file_0, debug_dump_0, debug_damage_0},
-    {"elf/compressed-64.obj", false, debug_file_1, debug_dump_1, debug_damage_1},
-    {"elf/gcc-386-freebsd-exec", false, debug_file_2, debug_dump_2, debug_damage_2},
-    {"elf/gcc-amd64-linux-exec", false, debug_file_3, debug_dump_3, debug_damage_3},
+    {"elf/compressed-32.obj", false, debug_file_0, debug_dump_0, debug_damage_0, NULL},
+    {"elf/compressed-64.obj", false, debug_file_1, debug_dump_1, debug_damage_1, NULL},
+    {"elf/gcc-386-freebsd-exec", false, debug_file_2, debug_dump_2, debug_damage_2,
+     NULL},
+    {"elf/gcc-amd64-linux-exec", false, debug_file_3, debug_dump_3, debug_damage_3,
+     NULL},
     {"elf/gcc-amd64-openbsd-debug-with-rela.obj", false, debug_file_4, debug_dump_4,
-     debug_damage_4},
-    {"elf/gcc-riscv64-linux-exec", false, debug_file_5, debug_dump_5, debug_damage_5},
+     debug_damage_4, NULL},
+    {"elf/gcc-riscv64-linux-exec", false, debug_file_5, debug_dump_5, debug_damage_5,
+     NULL},
     {"elf/go-relocation-test-clang-arm.obj", false, debug_file_6, debug_dump_6,
-     debug_damage_6},
+     debug_damage_6, NULL},
     {"elf/go-relocation-test-clang-x86.obj", false, debug_file_7, debug_dump_7,
-     debug_damage_7},
+     debug_damage_7, NULL},
     {"elf/go-relocation-test-gcc133-ppc.obj", false, debug_file_8, debug_dump_8,
-     debug_damage_8},
+     debug_damage_8, NULL},
     {"elf/go-relocation-test-gcc424-x86-64.obj", false, debug_file_9, debug_dump_9,
-     debug_damage_9},
+     debug_damage_9, NULL},
     {"elf/go-relocation-test-gcc441-x86-64.obj", false, debug_file_10, debug_dump_10,
-     debug_damage_10},
+     debug_damage_10, NULL},
     {"elf/go-relocation-test-gcc441-x86.obj", false, debug_file_11, debug_dump_11,
-     debug_damage_11},
+     debug_damage_11, NULL},
     {"elf/go-relocation-test-gcc482-aarch64.obj", false, debug_file_12, debug_dump_12,
-     debug_damage_12},
+     debug_damage_12, NULL},
     {"elf/go-relocation-test-gcc482-ppc64le.obj", false, debug_file_13, debug_dump_13,
-     debug_damage_13},
+     debug_damage_13, debug_damage32_13},
     {"elf/go-relocation-test-gcc492-arm.obj", false, debug_file_14, debug_dump_14,
-     debug_damage_14},
+     debug_damage_14, debug_damage32_14},
     {"elf/go-relocation-test-gcc492-mips64.obj", false, debug_file_15, debug_dump_15,
-     debug_damage_15},
+     debug_damage_15, NULL},
     {"elf/go-relocation-test-gcc492-mipsle.obj", false, debug_file_16, debug_dump_16,
-     debug_damage_16},
+     debug_damage_16, NULL},
     {"elf/go-relocation-test-gcc493-mips64le.obj", false, debug_file_17, debug_dump_17,
-     debug_damage_17},
+     debug_damage_17, NULL},
     {"elf/go-relocation-test-gcc5-ppc.obj", false, debug_file_18, debug_dump_18,
-     debug_damage_18},
+     debug_damage_18, NULL},
     {"elf/go-relocation-test-gcc531-s390x.obj", false, debug_file_19, debug_dump_19,
-     debug_damage_19},
+     debug_damage_19, debug_damage32_19},
     {"elf/go-relocation-test-gcc540-mips.obj", false, debug_file_20, debug_dump_20,
-     debug_damage_20},
+     debug_damage_20, NULL},
     {"elf/go-relocation-test-gcc620-sparc64.obj", false, debug_file_21, debug_dump_21,
-     debug_damage_21},
+     debug_damage_21, NULL},
     {"elf/go-relocation-test-gcc720-riscv64.obj", false, debug_file_22, debug_dump_22,
-     debug_damage_22},
+     debug_damage_22, NULL},
     {"elf/go-relocation-test-gcc930-ranges-no-rela-x86-64", false, debug_file_23,
-     debug_dump_23, debug_damage_23},
+     debug_dump_23, debug_damage_23, NULL},
     {"elf/go-relocation-test-gcc930-ranges-with-rela-x86-64", false, debug_file_24,
-     debug_dump_24, debug_damage_24},
-    {"elf/hello-world-core.gz", true, debug_file_25, debug_dump_25, debug_damage_25},
-    {"elf/libtiffxx.so_", false, debug_file_26, debug_dump_26, debug_damage_26},
+     debug_dump_24, debug_damage_24, NULL},
+    {"elf/hello-world-core.gz", true, debug_file_25, debug_dump_25, debug_damage_25,
+     NULL},
+    {"elf/libtiffxx.so_", false, debug_file_26, debug_dump_26, debug_damage_26, NULL},
     {"elf/zdebug-test-gcc484-x86-64.obj", false, debug_file_27, debug_dump_27,
-     debug_damage_27},
-    {"dwarf/bitfields.elf4", false, debug_file_28, debug_dump_28, debug_damage_28},
-    {"dwarf/cppunsuptypes.elf", false, debug_file_29, debug_dump_29, debug_damage_29},
-    {"dwarf/cycle.elf", false, debug_file_30, debug_dump_30, debug_damage_30},
+     debug_damage_27, NULL},
+    {"dwarf/bitfields.elf4", false, debug_file_28, debug_dump_28, debug_damage_28,
+     NULL},
+    {"dwarf/cppunsuptypes.elf", false, debug_file_29, debug_dump_29, debug_damage_29,
+     NULL},
+    {"dwarf/cycle.elf", false, debug_file_30, debug_dump_30, debug_damage_30, NULL},
     {"dwarf/issue57046-clang.elf5", false, debug_file_31, debug_dump_31,
-     debug_damage_31},
+     debug_damage_31, NULL},
     {"dwarf/line-clang-dwarf5.elf", false, debug_file_32, debug_dump_32,
-     debug_damage_32},
-    {"dwarf/line-clang.elf", false, debug_file_33, debug_dump_33, debug_damage_33},
-    {"dwarf/line-gcc-dwarf5.elf", false, debug_file_34, debug_dump_34, debug_damage_34},
-    {"dwarf/line-gcc-zstd.elf", false, debug_file_35, debug_dump_35, debug_damage_35},
-    {"dwarf/line-gcc.elf", false, debug_file_36, debug_dump_36, debug_damage_36},
-    {"dwarf/ranges.elf", false, debug_file_37, debug_dump_37, debug_damage_37},
-    {"dwarf/rnglistx.elf", false, debug_file_38, debug_dump_38, debug_damage_38},
-    {"dwarf/split.elf", false, debug_file_39, debug_dump_39, debug_damage_39},
-    {"dwarf/typedef.elf", false, debug_file_40, debug_dump_40, debug_damage_40},
-    {"dwarf/typedef.elf4", false, debug_file_41, debug_dump_41, debug_damage_41},
-    {"dwarf/typedef.elf5", false, debug_file_42, debug_dump_42, debug_damage_42},
+     debug_damage_32, NULL},
+    {"dwarf/line-clang.elf", false, debug_file_33, debug_dump_33, debug_damage_33,
+     NULL},
+    {"dwarf/line-gcc-dwarf5.elf", false, debug_file_34, debug_dump_34, debug_damage_34,
+     NULL},
+    {"dwarf/line-gcc-zstd.elf", false, debug_file_35, debug_dump_35, debug_damage_35,
+     NULL},
+    {"dwarf/line-gcc.elf", false, debug_file_36, debug_dump_36, debug_damage_36, NULL},
+    {"dwarf/ranges.elf", false, debug_file_37, debug_dump_37, debug_damage_37,
+     debug_damage32_37},
+    {"dwarf/rnglistx.elf", false, debug_file_38, debug_dump_38, debug_damage_38, NULL},
+    {"dwarf/split.elf", false, debug_file_39, debug_dump_39, debug_damage_39, NULL},
+    {"dwarf/typedef.elf", false, debug_file_40, debug_dump_40, debug_damage_40, NULL},
+    {"dwarf/typedef.elf4", false, debug_file_41, debug_dump_41, debug_damage_41, NULL},
+    {"dwarf/typedef.elf5", false, debug_file_42, debug_dump_42, debug_damage_42, NULL},
 };
 
 static const DebugName debug_names[] = {

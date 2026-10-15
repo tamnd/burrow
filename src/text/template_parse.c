@@ -226,8 +226,9 @@ enum { TPP_THREAD_CHECK_AFTER = 32 };
 
 #define TPP_STACK_MARGIN ((uintptr_t)64 << 10)
 
+#if !defined(BURROW_OS_WASI)
 static uintptr_t tpp_stack_here(void) {
-#if (defined(__GNUC__) || defined(__clang__)) && !defined(BURROW_OS_WASI)
+#if defined(__GNUC__) || defined(__clang__)
     return (uintptr_t)__builtin_frame_address(0);
 #elif defined(_MSC_VER)
     return (uintptr_t)_AddressOfReturnAddress();
@@ -237,6 +238,7 @@ static uintptr_t tpp_stack_here(void) {
     return here;
 #endif
 }
+#endif
 
 /* Whether the stack is too low to go deeper. stack_floor is 0 before the first
  * look, 1 when the bounds cannot be had, and 2 on a thread whose bounds are

@@ -398,8 +398,8 @@ Str burrow__http_connect_method_key(Alloc *a, const Url *proxy_url, Str target_s
             str_eq(target_scheme, BURROW_S("http")))
             addr = BURROW_STR_EMPTY;
     }
-    return fmt_sprintf_v(a, "%s|%s%s|%s", proxy, target_scheme,
-                         only_h1 ? BURROW_S(",h1") : BURROW_STR_EMPTY, addr);
+    return fmt_sprintf_v(a, "%s|%s%s|%s", proxy, target_scheme, only_h1 ? ",h1" : "",
+                         addr);
 }
 
 static Str tp_cm_key(Alloc *a, const tp_ConnectMethod *cm) {

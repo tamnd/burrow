@@ -84,7 +84,7 @@ typedef struct TteState {
 /* A node the walk only reads, as the ParseNode the parse API takes. */
 #define TTE_NODE(p) ((ParseNode)(uintptr_t)(p))
 
-static const ReflectValue tte_zero;
+static const ReflectValue tte_zero = {NULL, NULL, 0};
 
 /* ---------------------------------------------------------------- panics */
 
@@ -126,7 +126,7 @@ typedef struct TteMissing {
 
 static const Type tte_missing_desc = TTE_PRIVATE_DESC("missingValType", TteMissing);
 
-static const TteMissing tte_missing_val;
+static const TteMissing tte_missing_val = {0};
 
 static ReflectValue tte_missing(void) {
     return reflect_value_of(BURROW_ANY(&tte_missing_desc, (uintptr_t)&tte_missing_val));
@@ -266,8 +266,9 @@ enum { TTE_THREAD_CHECK_AFTER = 32 };
 
 #define TTE_STACK_MARGIN ((uintptr_t)64 << 10)
 
+#if !defined(BURROW_OS_WASI)
 static uintptr_t tte_stack_here(void) {
-#if (defined(__GNUC__) || defined(__clang__)) && !defined(BURROW_OS_WASI)
+#if defined(__GNUC__) || defined(__clang__)
     return (uintptr_t)__builtin_frame_address(0);
 #elif defined(_MSC_VER)
     return (uintptr_t)_AddressOfReturnAddress();
@@ -277,6 +278,7 @@ static uintptr_t tte_stack_here(void) {
     return here;
 #endif
 }
+#endif
 
 /* Whether the stack is too low to go deeper. stack_floor is 0 before the first
  * look, 1 when the bounds cannot be had, and 2 on a thread whose bounds are

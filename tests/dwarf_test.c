@@ -41,6 +41,7 @@ typedef struct DebugFile {
     const char *const *data;
     const char *const *dump;
     const DebugDamage *damage;
+    const DebugDamage *damage32; /* unused here, see debug_dump.h */
 } DebugFile;
 
 typedef struct DebugName {

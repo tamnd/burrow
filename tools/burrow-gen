@@ -1256,8 +1256,10 @@ def doc_run(root, cc, sanitize):
             with open(ex) as f:
                 m = DOC_OUTPUT.search(f.read())
             if m:
-                want = [l.rstrip() for l in m.group(1).rstrip().split("\n")]
-                got = [l.rstrip() for l in r.stdout.rstrip().split("\n")] if r.stdout.strip() else []
+                # Both sides are trimmed, as go test does with an example's
+                # output, so a program that starts with a blank line matches.
+                want = [l.rstrip() for l in m.group(1).strip().split("\n")]
+                got = [l.rstrip() for l in r.stdout.strip().split("\n")] if r.stdout.strip() else []
                 if want == [""]:
                     want = []
                 # A test's run time, as testing prints it, is whatever the

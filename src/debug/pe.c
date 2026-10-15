@@ -398,8 +398,8 @@ PeCOFFSymbolAuxFormat5 *pe_file_coff_symbol_read_section_def_aux(PeFile *f, Int 
         return NULL;
     }
     const PeCOFFSymbol *all = (const PeCOFFSymbol *)f->coff_symbols.p;
-    enum { IMAGE_SYM_CLASS_STATIC = 3 };
-    if (all[idx].storage_class != IMAGE_SYM_CLASS_STATIC) {
+    enum { PE_SYM_CLASS_STATIC = 3 };
+    if (all[idx].storage_class != PE_SYM_CLASS_STATIC) {
         BURROW_OUT(err, pe_err_storage_class);
         return NULL;
     }

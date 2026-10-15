@@ -316,7 +316,8 @@ static inline Byte *dw_buf_bytes(DwBuf *b, Int n) {
         return NULL;
     }
     Byte *data = b->data;
-    b->data += n;
+    if (n > 0)
+        b->data += n;
     b->len -= n;
     b->off += (DwarfOffset)n;
     return data;

@@ -853,8 +853,15 @@ BURROW_NOINLINE static Uintptr caller_pc(Int depth) {
 
 static void TestRecordSource(TestingT *t) {
     /* Zero call depth => no Source. Go also checks the function and file at
-     * depth 1 and 2. A C build has the function only when it has a symbol
-     * table and never the file, so the name is checked when there is one. */
+     * depth 1 and 2. Not in Go: a C build never has the file, and has the
+     * function only when its symbol table holds this test's own functions, so
+     * the name is checked only then. A build that cannot walk the stack, such
+     * as one under qemu, has no pc to give NewRecord, so it checks depth 0
+     * alone. */
+    RuntimeFunc self;
+    bool named = runtime_func_for_pc((Uintptr)TestRecordSource, &self) &&
+                 str_eq(self.name, S("TestRecordSource"));
+    bool walk = caller_pc(1) != 0;
     struct {
         Int depth;
         const char *want_function;
@@ -867,8 +874,11 @@ static void TestRecordSource(TestingT *t) {
     };
     for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
         Uintptr pc = 0;
-        if (tests[i].depth > 0)
+        if (tests[i].depth > 0) {
+            if (!walk)
+                continue;
             pc = caller_pc(tests[i].depth + 1);
+        }
         SlogRecord r = slog_new_record((Time){0}, 0, S(""), pc);
         SlogSource got;
         bool ok = slog_record_source(&r, &got);
@@ -883,7 +893,7 @@ static void TestRecordSource(TestingT *t) {
                                tests[i].depth);
             continue;
         }
-        if (tests[i].want_function != NULL && got.function.len > 0 &&
+        if (named && tests[i].want_function != NULL &&
             !str_eq(got.function, str_from_cstr(tests[i].want_function)))
             testing_t_errorf_v(t, "depth %d: got function %q, want %q", tests[i].depth,
                                got.function, tests[i].want_function);

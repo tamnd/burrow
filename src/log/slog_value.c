@@ -850,9 +850,10 @@ static Error slogv_level_parse(SlogLevel *l, Alloc *a, Str s) {
         *l = SLOG_LEVEL_WARN;
     else if (str_eq(up, BURROW_S("ERROR")))
         *l = SLOG_LEVEL_ERROR;
-    else
-        return fmt_errorf_v("slog: level string %q: %w", s,
-                            errors_new(error_allocator(), BURROW_S("unknown name")));
+    else {
+        Error unknown = errors_new(error_allocator(), BURROW_S("unknown name"));
+        return fmt_errorf_v("slog: level string %q: %w", s, unknown);
+    }
     *l += (SlogLevel)offset;
     return BURROW_NO_ERROR;
 }

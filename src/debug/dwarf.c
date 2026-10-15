@@ -760,7 +760,7 @@ Map *burrow__dwarf_parse_abbrev(DwarfData *d, uint64_t off, Int vers, Error *err
 
     Byte *data = NULL;
     Int len = 0;
-    if (off <= (uint64_t)d->abbrev.len) {
+    if (off <= (uint64_t)d->abbrev.len && d->abbrev.p != NULL) {
         data = (Byte *)d->abbrev.p + off;
         len = d->abbrev.len - (Int)off;
     }

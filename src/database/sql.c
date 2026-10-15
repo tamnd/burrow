@@ -2564,6 +2564,22 @@ static void sq_raw_call(SqlRawFunc f, DriverConn ci, Error *out) {
     *out = BURROW_CALLF(f, ci);
 }
 
+/* Runs f and catches a panic from it into *saved. Everything the catch writes
+ * goes through a pointer that does not change after the setjmp, which is what
+ * keeps gcc's -Wclobbered quiet on targets that keep small locals in
+ * registers. */
+static void sq_raw_try(SqlRawFunc f, DriverConn ci, Error *res, Any *saved,
+                       bool *panicked) {
+    BURROW_TRY {
+        sq_raw_call(f, ci, res);
+    }
+    BURROW_CATCH(p) {
+        *saved = p;
+        *panicked = true;
+    }
+    BURROW_TRY_END;
+}
+
 /* Conn.Raw. A panic in f leaves the connection marked bad and carries on up
  * once the connection is released. */
 Error sql_conn_raw(SqlConn *c, SqlRawFunc f) {
@@ -2572,25 +2588,18 @@ Error sql_conn_raw(SqlConn *c, SqlRawFunc f) {
     SqDC *dc = sq_conn_grab(c, &rel, &e);
     if (dc == NULL)
         return e;
-    Error res[1] = {BURROW_NO_ERROR};
-    Any saved[1] = {{NULL, NULL}};
-    volatile bool panicked = false;
+    Error res = BURROW_NO_ERROR;
+    Any saved = {NULL, NULL};
+    bool panicked = false;
     sync_mutex_lock(&dc->mu);
-    BURROW_TRY {
-        sq_raw_call(f, dc->ci, res);
-    }
-    BURROW_CATCH(p) {
-        saved[0] = p;
-        panicked = true;
-    }
-    BURROW_TRY_END;
+    sq_raw_try(f, dc->ci, &res, &saved, &panicked);
     sync_mutex_unlock(&dc->mu);
     if (panicked) {
         sq_release(rel, driver_err_bad_conn);
-        panic(saved[0]);
+        panic(saved);
     }
-    sq_release(rel, res[0]);
-    return res[0];
+    sq_release(rel, res);
+    return res;
 }
 
 /* --------------------------------------------------------------------- Tx */

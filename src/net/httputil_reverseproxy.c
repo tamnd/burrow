@@ -998,7 +998,8 @@ void httputil_reverse_proxy_serve_http(HttputilReverseProxy *p, HttpResponseWrit
     const void *kp;
     void *vp;
     while (map_next(&it, &kp, &vp)) {
-        Str k = fmt_sprintf_v(ha, "%s%s", HTTP_TRAILER_PREFIX, *(const Str *)kp);
+        Str prefix = HTTP_TRAILER_PREFIX;
+        Str k = fmt_sprintf_v(ha, "%s%s", prefix, *(const Str *)kp);
         const Slice *vv = (const Slice *)vp;
         for (Int i = 0; i < vv->len; i++)
             (void)http_header_add(h, k, str_clone(ha, ((const Str *)vv->p)[i]));

@@ -267,9 +267,9 @@ BURROW_FUNC_TYPE_DEFINE_VARIADIC(VariadicIntFn, Str, SIG_VARIADIC_INT);
 BURROW_FUNC(NilOkFn, bool, IntPtr s);
 BURROW_FUNC_TYPE_DEFINE(NilOkFn, SIG_NIL_OK);
 
-#define SIG_ERR(IN, OUT) OUT(Str) OUT(ErrorResult)
+#define SIG_ERR_RESULT(IN, OUT) OUT(Str) OUT(ErrorResult)
 BURROW_FUNC(ErrFn, Str, Error *err);
-BURROW_FUNC_TYPE_DEFINE(ErrFn, SIG_ERR);
+BURROW_FUNC_TYPE_DEFINE(ErrFn, SIG_ERR_RESULT);
 
 /* func() (string, error, int) and func() (string, bool), which the template
  * refuses to call, so the call op is never reached. */

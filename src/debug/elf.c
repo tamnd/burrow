@@ -417,10 +417,11 @@ static bool elf_same_error(Error x, Error y) {
 }
 
 /* saferio.ReadData: n bytes from r into a, read a chunk at a time when n is
- * large, so that a length that lies costs only the bytes that are there. */
+ * large, so that a length that lies costs only the bytes that are there. The
+ * limit is Go's int, which on wasm is wider than a pointer. */
 static Slice elf_read_data(Alloc *a, IoReader r, uint64_t n, Error *err) {
     Slice none = {NULL, 0, 0, TYPE_BYTE};
-    if (n > (uint64_t)INTPTR_MAX) {
+    if (n > (uint64_t)BURROW_INT_MAX) {
         BURROW_OUT(err, io_err_unexpected_eof);
         return none;
     }
@@ -479,7 +480,7 @@ static Slice elf_read_data(Alloc *a, IoReader r, uint64_t n, Error *err) {
 static Slice elf_read_data_at(Alloc *a, IoReaderAt r, uint64_t n, int64_t off,
                               Error *err) {
     Slice none = {NULL, 0, 0, TYPE_BYTE};
-    if (n > (uint64_t)INTPTR_MAX) {
+    if (n > (uint64_t)BURROW_INT_MAX) {
         BURROW_OUT(err, io_err_unexpected_eof);
         return none;
     }
@@ -535,7 +536,7 @@ static Slice elf_read_data_at(Alloc *a, IoReaderAt r, uint64_t n, int64_t off,
 
 /* saferio.SliceCapWithSize. */
 static Int elf_slice_cap(uint64_t size, uint64_t c) {
-    if (c > (uint64_t)INTPTR_MAX)
+    if (c > (uint64_t)BURROW_INT_MAX)
         return -1;
     if (size > 0 && c > UINT64_MAX / size)
         return -1;

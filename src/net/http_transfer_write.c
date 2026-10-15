@@ -458,9 +458,9 @@ Error burrow__http_transfer_writer_write_header(burrow__HttpTransferWriter *t, A
         }
         if (nk > 0) {
             slices_sort(slice_from(keys, nk, nk, TYPE_STRING));
-            Str line = fmt_sprintf_v(
-                a, "Trailer: %s\r\n",
-                strings_join(a, slice_from(keys, nk, nk, TYPE_STRING), BURROW_S(",")));
+            Str joined =
+                strings_join(a, slice_from(keys, nk, nk, TYPE_STRING), BURROW_S(","));
+            Str line = fmt_sprintf_v(a, "Trailer: %s\r\n", joined);
             (void)io_write_string(w, line, &err);
             if (BURROW_FAILED(err))
                 return err;

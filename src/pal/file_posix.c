@@ -1050,7 +1050,7 @@ bool pal_nonblock(int64_t fd, bool *on, PalErrno *err) {
     if (fl < 0)
         return file_fail(err);
     if (on != NULL)
-        *on = (fl & O_NONBLOCK) != 0;
+        *on = (fl & (int)O_NONBLOCK) != 0;
     return true;
 }
 
@@ -1061,7 +1061,7 @@ bool pal_set_nonblock(int64_t fd, bool on, PalErrno *err) {
     int fl = fcntl((int)fd, F_GETFL);
     if (fl < 0)
         return file_fail(err);
-    int want = on ? fl | O_NONBLOCK : fl & ~O_NONBLOCK;
+    int want = on ? fl | (int)O_NONBLOCK : fl & ~(int)O_NONBLOCK;
     if (want != fl && fcntl((int)fd, F_SETFL, want) != 0)
         return file_fail(err);
     return true;

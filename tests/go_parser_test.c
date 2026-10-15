@@ -13,6 +13,11 @@
  * nesting they test. Like Go, TestParseDepthLimit is skipped with
  * -test.short, since it needs a good deal of memory.
  *
+ * Not in Go: TestScopeDepthLimit is skipped on wasip1. The parser there stops
+ * at 1000 levels of nesting, since nothing in the module can see how much of
+ * the engine's stack is left, and every big case in the test goes deeper
+ * than that before it has made 1000 scopes, as do a few of the small ones.
+ *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -1067,6 +1072,9 @@ static void TestParseDepthLimit(TestingT *t) {
 }
 
 static void TestScopeDepthLimit(TestingT *t) {
+#if defined(BURROW_OS_WASI)
+    testing_t_skip_v(t, "the nesting limit on wasip1 is lower than this test needs");
+#endif
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);

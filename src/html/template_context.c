@@ -73,7 +73,7 @@ static const Str htx_attr_names[] = {
 static Str htx_enum_string(Alloc *a, const Str *names, Int n, Str type, uint8_t v) {
     if (v < n)
         return names[v];
-    return fmt_sprintf_v(a, BURROW_S("%s(%d)"), type, (Int)v);
+    return fmt_sprintf_v(a, "%s(%d)", type, (Int)v);
 }
 
 Str burrow__ht_state_string(Alloc *a, burrow__HtState s) {
@@ -321,10 +321,9 @@ static Int htx_eat_attr_name(Alloc *a, Str s, Int i, HtmlTemplateError **err) {
         case '<':
             /* These result in a parse warning in HTML5 and are indicative of
              * serious problems if seen in an attr name in a template. */
-            *err = burrow__ht_errorf(
-                a, HTML_TEMPLATE_ERR_BAD_HTML, NULL, 0,
-                fmt_sprintf_v(a, BURROW_S("%q in attribute name: %.32q"),
-                              burrow__ht_sub(s, j, j + 1), s));
+            *err = burrow__ht_errorf(a, HTML_TEMPLATE_ERR_BAD_HTML, NULL, 0,
+                                     fmt_sprintf_v(a, "%q in attribute name: %.32q",
+                                                   burrow__ht_sub(s, j, j + 1), s));
             return -1;
         default:
             /* No-op. */
@@ -471,9 +470,8 @@ static burrow__HtContext htx_t_tag(Alloc *a, burrow__HtContext c, Str s, Int *nr
         *nread = s.len;
         return htx_ctx_err(burrow__ht_errorf(
             a, HTML_TEMPLATE_ERR_BAD_HTML, NULL, 0,
-            fmt_sprintf_v(
-                a, BURROW_S("expected space, attr name, or end of tag, but got %q"),
-                burrow__ht_sub(s, i, s.len))));
+            fmt_sprintf_v(a, "expected space, attr name, or end of tag, but got %q",
+                          burrow__ht_sub(s, i, s.len))));
     }
 
     Str attr_name = strings_to_lower(a, burrow__ht_sub(s, i, j));
@@ -725,8 +723,7 @@ static burrow__HtContext htx_t_js(Alloc *a, burrow__HtContext c, Str s, Int *nre
             *nread = s.len;
             return htx_ctx_err(burrow__ht_errorf(
                 a, HTML_TEMPLATE_ERR_SLASH_AMBIG, NULL, 0,
-                fmt_sprintf_v(a,
-                              BURROW_S("'/' could start a division or regexp: %.32q"),
+                fmt_sprintf_v(a, "'/' could start a division or regexp: %.32q",
                               burrow__ht_sub(s, i, s.len))));
         }
         break;
@@ -793,7 +790,7 @@ static burrow__HtContext htx_t_js(Alloc *a, burrow__HtContext c, Str s, Int *nre
 }
 
 static Str htx_err_partial_escape(Alloc *a, Str what, Str s) {
-    return fmt_sprintf_v(a, BURROW_S("unfinished escape sequence in %s: %q"), what, s);
+    return fmt_sprintf_v(a, "unfinished escape sequence in %s: %q", what, s);
 }
 
 static burrow__HtContext htx_t_js_tmpl(Alloc *a, burrow__HtContext c, Str s,
@@ -908,9 +905,9 @@ static burrow__HtContext htx_t_js_delimited(Alloc *a, burrow__HtContext c, Str s
         /* This can be fixed by making context richer if interpolation into
          * charsets is desired. */
         *nread = s.len;
-        return htx_ctx_err(burrow__ht_errorf(
-            a, HTML_TEMPLATE_ERR_PARTIAL_CHARSET, NULL, 0,
-            fmt_sprintf_v(a, BURROW_S("unfinished JS regexp charset: %q"), s)));
+        return htx_ctx_err(
+            burrow__ht_errorf(a, HTML_TEMPLATE_ERR_PARTIAL_CHARSET, NULL, 0,
+                              fmt_sprintf_v(a, "unfinished JS regexp charset: %q", s)));
     }
 
     *nread = s.len;

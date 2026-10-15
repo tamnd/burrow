@@ -66,6 +66,11 @@ static bool list_failed(TestingT *t, Error err) {
         strings_contains(error_text(err), S("getadaptersaddresses")))
         testing_t_skip_v(t, "wine lists no adapters: ", err);
 #endif
+#if defined(BURROW_OS_COSMO)
+    /* Not in Go: burrow has no interface backend for Cosmopolitan yet. */
+    if (errors_is(err, errors_err_unsupported))
+        testing_t_skip_v(t, "no interface list in a Cosmopolitan build: ", err);
+#endif
     testing_t_fatal_v(t, err);
     return true;
 }
@@ -293,6 +298,15 @@ static void TestInterfaceUnicastAddrs(TestingT *t) {
 }
 
 static void TestInterfaceMulticastAddrs(TestingT *t) {
+    /* Not in Go: qemu's user mode rewrites /proc/net/route for a guest of the
+     * other byte order, but not /proc/net/igmp, so a big endian guest on a
+     * little endian host reads 224.0.0.1 as 1.0.0.224. CI sets this for the
+     * jobs that run under emulation. */
+    if (os_getenv(a, S("BURROW_TEST_EMULATED")).len > 0) {
+        testing_t_skip_v(
+            t, "qemu user mode gives /proc/net/igmp in the host's byte order");
+        return;
+    }
     Error err = BURROW_NO_ERROR;
     Slice ift = net_interfaces(a, &err);
     if (list_failed(t, err))

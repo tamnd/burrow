@@ -3129,10 +3129,10 @@ static const DebugDamage xcoff_damage_3[] = {
 };
 
 static const DebugFile xcoff_files[] = {
-    {"xcoff/bigar-empty", false, xcoff_file_0, xcoff_dump_0, xcoff_damage_0},
-    {"xcoff/bigar-ppc64", false, xcoff_file_1, xcoff_dump_1, xcoff_damage_1},
-    {"xcoff/gcc-ppc32-aix-dwarf2-exec", false, xcoff_file_2, xcoff_dump_2, xcoff_damage_2},
-    {"xcoff/gcc-ppc64-aix-dwarf2-exec", false, xcoff_file_3, xcoff_dump_3, xcoff_damage_3},
+    {"xcoff/bigar-empty", false, xcoff_file_0, xcoff_dump_0, xcoff_damage_0, NULL},
+    {"xcoff/bigar-ppc64", false, xcoff_file_1, xcoff_dump_1, xcoff_damage_1, NULL},
+    {"xcoff/gcc-ppc32-aix-dwarf2-exec", false, xcoff_file_2, xcoff_dump_2, xcoff_damage_2, NULL},
+    {"xcoff/gcc-ppc64-aix-dwarf2-exec", false, xcoff_file_3, xcoff_dump_3, xcoff_damage_3, NULL},
 };
 
 #endif

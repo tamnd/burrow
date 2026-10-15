@@ -46,7 +46,7 @@ BURROW_NORETURN void burrow__tt_oom(void) {
     panic(BURROW_ANY(TYPE_ERROR, (uintptr_t)&burrow_err_out_of_memory));
 }
 
-static const ReflectValue ttf_zero;
+static const ReflectValue ttf_zero = {NULL, NULL, 0};
 
 /* ------------------------------------------------------------ the helpers */
 

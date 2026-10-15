@@ -440,7 +440,7 @@ static Slice rfn_call(ReflectValue v, Alloc *a, Slice in, bool is_slice) {
     }
     size_t size;
     rfn_out_offset(ft, 0, &size);
-    Byte *block = rfn_alloc(a, size, _Alignof(max_align_t));
+    Byte *block = rfn_alloc(a, size, BURROW_ALIGN_MAX);
     ReflectValue *outs =
         rfn_alloc(a, (size_t)nout * sizeof(ReflectValue), _Alignof(ReflectValue));
     void *retv_small[16];

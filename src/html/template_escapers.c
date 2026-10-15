@@ -462,11 +462,10 @@ static bool hte_call_string(Any a, Str *out) {
         Int slash = strings_last_index_byte(pkg, '/');
         if (slash >= 0)
             pkg = burrow__ht_sub(pkg, slash + 1, pkg.len);
-        panic_str(
-            fmt_sprintf_v(heap_allocator(),
-                          BURROW_S("value method %s.%s.String called using nil *%s "
-                                   "pointer"),
-                          pkg, t->name, t->name));
+        panic_str(fmt_sprintf_v(heap_allocator(),
+                                "value method %s.%s.String called using nil *%s "
+                                "pointer",
+                                pkg, t->name, t->name));
     }
     void *rets[1] = {out};
     method_call(m, recv, NULL, rets);
@@ -512,7 +511,7 @@ static Str hte_js_val_error(Alloc *a, Str err_str) {
     err_str = strings_builder_string(&b);
     err_str = strings_replace_all(a, err_str, BURROW_S("*/"), BURROW_S("* /"));
     err_str = strings_replace_all(a, err_str, BURROW_S("<!--"), BURROW_S("\\x3C!--"));
-    return fmt_sprintf_v(a, BURROW_S(" /* %s */null "), err_str);
+    return fmt_sprintf_v(a, " /* %s */null ", err_str);
 }
 
 /* jsValEscaper escapes its inputs to a JS Expression (section 11.14) that has
@@ -992,8 +991,7 @@ Rune burrow__ht_hex_decode(Str s) {
         else if ('A' <= c && c <= 'F')
             n |= (Rune)(c - 'A') + 10;
         else
-            panic_str(
-                fmt_sprintf_v(heap_allocator(), BURROW_S("Bad hex digit in %q"), s));
+            panic_str(fmt_sprintf_v(heap_allocator(), "Bad hex digit in %q", s));
     }
     return n;
 }

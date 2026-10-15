@@ -720,6 +720,12 @@ static const DebugDamage macho_damage_2[] = {
     {30, 0, "23b370ca3d721f8e"},     {-1, 0, NULL},
 };
 
+static const DebugDamage macho_damage32_2[] = {
+    {319, 32, "c6bc00a66aaab67d"},
+    {461, 250, "80e01e2595f0d177"},
+    {-1, 0, NULL},
+};
+
 /* macho/clang-amd64-darwin-ld-r.obj, 840 bytes. */
 static const char *const macho_file_3[] = {
     "z/rt/gcAAAEDAAAAAQAAAAQAAADAAQAAACAAAAAAAAAZAAAAiAEAAAAAAAAAAAAAAAAAAAAA",
@@ -955,6 +961,12 @@ static const DebugDamage macho_damage_4[] = {
     {384, 0, "23b370ca3d721f8e"},   {767, 0, "23b370ca3d721f8e"},
     {576, 0, "23b370ca3d721f8e"},   {100, 0, "23b370ca3d721f8e"},
     {30, 0, "23b370ca3d721f8e"},    {-1, 0, NULL},
+};
+
+static const DebugDamage macho_damage32_4[] = {
+    {229, 2, "97c1e64bd7a49b00"},
+    {230, 196, "69299d20af3a1a39"},
+    {-1, 0, NULL},
 };
 
 /* macho/fat-gcc-386-amd64-darwin-exec, 28992 bytes. */
@@ -2417,6 +2429,11 @@ static const DebugDamage macho_damage_7[] = {
     {30, 0, "23b370ca3d721f8e"},     {-1, 0, NULL},
 };
 
+static const DebugDamage macho_damage32_7[] = {
+    {175, 8, "d6c1d8d255a344a6"},
+    {-1, 0, NULL},
+};
+
 /* macho/gcc-amd64-darwin-exec-with-bad-dysym, 8512 bytes. */
 static const char *const macho_file_8[] = {
     "z/rt/gcAAAEDAACAAgAAAAsAAABoBQAAhQAAAAAAAAAZAAAASAAAAF9fUEFHRVpFUk8AAAAA",
@@ -2930,6 +2947,11 @@ static const DebugDamage macho_damage_9[] = {
     {4256, 0, "23b370ca3d721f8e"},   {8511, 0, "23b370ca3d721f8e"},
     {6384, 0, "23b370ca3d721f8e"},   {100, 0, "23b370ca3d721f8e"},
     {30, 0, "23b370ca3d721f8e"},     {-1, 0, NULL},
+};
+
+static const DebugDamage macho_damage32_9[] = {
+    {221, 2, "8dbd19704978bb83"},
+    {-1, 0, NULL},
 };
 
 /* dwarf/typedef.macho, 5024 bytes. */
@@ -4811,25 +4833,36 @@ static const DebugDamage macho_damage_11[] = {
     {30, 0, "23b370ca3d721f8e"},     {-1, 0, NULL},
 };
 
+static const DebugDamage macho_damage32_11[] = {
+    {150, 4, "0c09f8380679bb10"},   {949, 8, "5dc2e4cd11a40b7b"},
+    {167, 64, "c6bc00a66aaab67d"},  {951, 32, "1d0ec0ff501e6feb"},
+    {628, 128, "86808a8465a480f7"}, {-1, 0, NULL},
+};
+
 static const DebugFile macho_files[] = {
     {"macho/clang-386-darwin-exec-with-rpath", false, macho_file_0, macho_dump_0,
-     macho_damage_0},
-    {"macho/clang-386-darwin.obj", false, macho_file_1, macho_dump_1, macho_damage_1},
+     macho_damage_0, NULL},
+    {"macho/clang-386-darwin.obj", false, macho_file_1, macho_dump_1, macho_damage_1,
+     NULL},
     {"macho/clang-amd64-darwin-exec-with-rpath", false, macho_file_2, macho_dump_2,
-     macho_damage_2},
+     macho_damage_2, macho_damage32_2},
     {"macho/clang-amd64-darwin-ld-r.obj", false, macho_file_3, macho_dump_3,
-     macho_damage_3},
-    {"macho/clang-amd64-darwin.obj", false, macho_file_4, macho_dump_4, macho_damage_4},
+     macho_damage_3, NULL},
+    {"macho/clang-amd64-darwin.obj", false, macho_file_4, macho_dump_4, macho_damage_4,
+     macho_damage32_4},
     {"macho/fat-gcc-386-amd64-darwin-exec", false, macho_file_5, macho_dump_5,
-     macho_damage_5},
-    {"macho/gcc-386-darwin-exec", false, macho_file_6, macho_dump_6, macho_damage_6},
+     macho_damage_5, NULL},
+    {"macho/gcc-386-darwin-exec", false, macho_file_6, macho_dump_6, macho_damage_6,
+     NULL},
     {"macho/gcc-amd64-darwin-exec-debug", false, macho_file_7, macho_dump_7,
-     macho_damage_7},
+     macho_damage_7, macho_damage32_7},
     {"macho/gcc-amd64-darwin-exec-with-bad-dysym", false, macho_file_8, macho_dump_8,
-     macho_damage_8},
-    {"macho/gcc-amd64-darwin-exec", false, macho_file_9, macho_dump_9, macho_damage_9},
-    {"dwarf/typedef.macho", false, macho_file_10, macho_dump_10, macho_damage_10},
-    {"dwarf/typedef.macho4", false, macho_file_11, macho_dump_11, macho_damage_11},
+     macho_damage_8, NULL},
+    {"macho/gcc-amd64-darwin-exec", false, macho_file_9, macho_dump_9, macho_damage_9,
+     macho_damage32_9},
+    {"dwarf/typedef.macho", false, macho_file_10, macho_dump_10, macho_damage_10, NULL},
+    {"dwarf/typedef.macho4", false, macho_file_11, macho_dump_11, macho_damage_11,
+     macho_damage32_11},
 };
 
 static const DebugName macho_names[] = {

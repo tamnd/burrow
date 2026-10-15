@@ -204,8 +204,12 @@ Slice text_template_templates(TextTemplate *t, Alloc *a) {
     MapIter it = map_iter(t->common->tmpl);
     const void *k;
     void *v;
-    while (map_next(&it, &k, &v) && m.cap > m.len)
-        BURROW_AT(TextTemplate *, m, m.len++) = *(TextTemplate **)v;
+    while (m.len < m.cap && map_next(&it, &k, &v)) {
+        /* m is passed by value, so it has to be grown before the index into it
+         * is taken, and not in the same call. */
+        m.len++;
+        BURROW_AT(TextTemplate *, m, m.len - 1) = *(TextTemplate **)v;
+    }
     sync_rw_mutex_r_unlock(&t->common->mu_tmpl);
     return m;
 }

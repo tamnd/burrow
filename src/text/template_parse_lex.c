@@ -461,7 +461,7 @@ static TplState tpl_lex_identifier(burrow__Lexer *l) {
                 return tpl_emit(l, BURROW__ITEM_IDENTIFIER);
             return tpl_emit(l, item);
         }
-        if (word.p[0] == '.')
+        if (word.len > 0 && word.p[0] == '.')
             return tpl_emit(l, BURROW__ITEM_FIELD);
         if (str_eq(word, BURROW_S("true")) || str_eq(word, BURROW_S("false")))
             return tpl_emit(l, BURROW__ITEM_BOOL);

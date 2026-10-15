@@ -119,6 +119,9 @@ jobs:
             os: windows-latest
             cc: gcc
             shell: msys2
+            # About 16 minutes in mid October, and a pull request that added
+            # two packages' tests went past 20.
+            timeout: 35
     steps:
       - uses: actions/checkout@v7
 
@@ -161,7 +164,9 @@ jobs:
   tidy:
     name: clang-tidy
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # 15 stopped being enough in October 2026, with the job cut off before it
+    # had been through every file.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - name: clang-tidy
@@ -186,8 +191,9 @@ jobs:
     name: linux-s390x-gcc (big endian)
     runs-on: ubuntu-latest
     # Under qemu the build alone took about an hour on one core and the tests twelve
-    # minutes more, so the build uses every core the runner has.
-    timeout-minutes: 75
+    # minutes more, so the build uses every core the runner has. By October 2026
+    # it was running into 75 minutes.
+    timeout-minutes: 110
     steps:
       - uses: actions/checkout@v7
       - uses: docker/setup-qemu-action@v3
@@ -229,13 +235,13 @@ jobs:
   musl:
     name: linux-musl-gcc (alpine)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - name: build and test
         run: |
           docker run --rm -v "$PWD":/src -w /src public.ecr.aws/docker/library/alpine:3.20 \
-            sh -c 'apk add --no-cache gcc make musl-dev >/dev/null; ldd --version 2>&1 | grep -qi musl || { echo "this is not a musl toolchain" >&2; exit 1; }; make test'
+            sh -c 'apk add --no-cache gcc make musl-dev >/dev/null; ldd --version 2>&1 | grep -qi musl || { echo "this is not a musl toolchain" >&2; exit 1; }; make -j"$(nproc)" test'
 
   # The portable context switch, which no machine in the matrix above would pick
   # on its own. amd64 and arm64 take the assembly and Windows takes Fibers, so
@@ -251,7 +257,8 @@ jobs:
   portable-context:
     name: portable context (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Cut off at 20 minutes on macOS in October 2026.
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -308,7 +315,9 @@ jobs:
   amalgamation:
     name: amalgamation (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Both were cut off at 20 minutes in October 2026, Linux while it was
+    # building for Windows.
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -451,7 +460,8 @@ jobs:
   sanitizers:
     name: ${{ matrix.san }}
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    # msan was cut off at 35 minutes in October 2026.
+    timeout-minutes: 50
     strategy:
       fail-fast: false
       matrix:

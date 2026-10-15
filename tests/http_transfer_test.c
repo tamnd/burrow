@@ -149,9 +149,6 @@ typedef struct WriteBodyCase {
     bool expected_write;
 } WriteBodyCase;
 
-static const Type *const *const file_type = &TYPE_OS_FILE;
-static const Type *const *const buffer_type = &TYPE_BYTES_BUFFER;
-
 static const WriteBodyCase write_body_cases[] = {
     {
         .name = "file, non-chunked, size set",
@@ -159,7 +156,7 @@ static const WriteBodyCase write_body_cases[] = {
         .method = "PUT",
         .content_length = N_BYTES,
         .limited_reader = true,
-        .expected_reader = file_type,
+        .expected_reader = &TYPE_OS_FILE,
     },
     {
         .name = "file, non-chunked, size set, nopCloser wrapped",
@@ -168,21 +165,21 @@ static const WriteBodyCase write_body_cases[] = {
         .nop_closer = true,
         .content_length = N_BYTES,
         .limited_reader = true,
-        .expected_reader = file_type,
+        .expected_reader = &TYPE_OS_FILE,
     },
     {
         .name = "file, non-chunked, negative size",
         .method = "PUT",
         .body = BODY_FILE,
         .content_length = -1,
-        .expected_reader = file_type,
+        .expected_reader = &TYPE_OS_FILE,
     },
     {
         .name = "file, non-chunked, CONNECT, negative size",
         .method = "CONNECT",
         .body = BODY_FILE,
         .content_length = -1,
-        .expected_reader = file_type,
+        .expected_reader = &TYPE_OS_FILE,
     },
     {
         .name = "file, chunked",
@@ -197,7 +194,7 @@ static const WriteBodyCase write_body_cases[] = {
         .method = "PUT",
         .content_length = N_BYTES,
         .limited_reader = true,
-        .expected_reader = buffer_type,
+        .expected_reader = &TYPE_BYTES_BUFFER,
     },
     {
         .name = "buffer, non-chunked, size set, nopCloser wrapped",
@@ -206,7 +203,7 @@ static const WriteBodyCase write_body_cases[] = {
         .nop_closer = true,
         .content_length = N_BYTES,
         .limited_reader = true,
-        .expected_reader = buffer_type,
+        .expected_reader = &TYPE_BYTES_BUFFER,
     },
     {
         .name = "buffer, non-chunked, negative size",

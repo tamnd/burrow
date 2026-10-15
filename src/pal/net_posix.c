@@ -574,7 +574,11 @@ int64_t pal_accept(int64_t fd, PalSockAddr *peer, PalErrno *err) {
     }
     burrow__pal_fork_runlock();
 #endif
-    if (!pnet_nosigpipe(nfd)) {
+    /* XNU refuses a socket option with EINVAL once both directions of the
+     * socket are shut down, which is where an accepted connection already is
+     * when its peer has come and gone. Go's accept sets no option there and
+     * hands that connection back, so this does too. */
+    if (!pnet_nosigpipe(nfd) && errno != EINVAL) {
         PalErrno e = burrow__pal_errno(errno);
         close(nfd);
         BURROW_OUT(err, e);
@@ -696,7 +700,11 @@ static void pnet_rights_cloexec(struct msghdr *msg) {
 static void pnet_rights_cloexec(struct msghdr *msg) {
     if (msg->msg_controllen == 0)
         return;
+    /* Cosmopolitan's CMSG_NXTHDR mixes signed and unsigned arithmetic. */
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wsign-conversion"
     for (struct cmsghdr *c = CMSG_FIRSTHDR(msg); c != NULL; c = CMSG_NXTHDR(msg, c)) {
+#pragma GCC diagnostic pop
         if (c->cmsg_level != SOL_SOCKET || c->cmsg_type != SCM_RIGHTS)
             continue;
         const unsigned char *d = CMSG_DATA(c);
@@ -776,8 +784,11 @@ int64_t pal_recvmsg(int64_t fd, void *buf, int64_t n, void *oob, int64_t oobcap,
     pnet_rights_cloexec(&msg);
     if (oobn != NULL)
         *oobn = (int64_t)msg.msg_controllen;
-    if (flags != NULL)
-        *flags = (int32_t)(msg.msg_flags & ~PNET_RECVMSG_FLAGS);
+    if (flags != NULL) {
+        /* msg_flags is unsigned on Cosmopolitan, which needs the cast.
+         * NOLINTNEXTLINE(readability-redundant-casting) */
+        *flags = (int32_t)((int)msg.msg_flags & ~PNET_RECVMSG_FLAGS);
+    }
     if (from != NULL && !pnet_from_native(&ss, msg.msg_namelen, from))
         from->family = PAL_AF_UNSPEC;
     return (int64_t)r;

@@ -30,7 +30,7 @@ void *burrow__parse_node_new(Alloc *a, size_t size, ParseNodeType typ, ParsePos 
     /* Every node starts with the same three members, and the end node is the
      * smallest struct that has just those. */
     burrow__ParseEndNode *n =
-        (burrow__ParseEndNode *)mem_alloc(a, size, _Alignof(max_align_t));
+        (burrow__ParseEndNode *)mem_alloc(a, size, BURROW_ALIGN_MAX);
     if (n == NULL)
         return NULL;
     n->node_type = typ;

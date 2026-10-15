@@ -2602,12 +2602,12 @@ static Error h2c_run(h2c_Conn *cc) {
         Http2Frame *f = burrow__http2_framer_read_frame(cc->fr, &err);
         if (read_idle_timeout != 0 && cc->read_idle_t != NULL)
             h2c_timer_reset(cc, cc->read_idle_t, read_idle_timeout);
-        if (BURROW_FAILED(err))
+        if (BURROW_FAILED(err)) {
+            Str tn = err.vt->self_type != NULL ? type_name(err.vt->self_type)
+                                               : BURROW_S("error");
             h2c_vlogf("http2: Transport readFrame error on conn %p: (%s) %v",
-                      (void *)cc,
-                      err.vt->self_type != NULL ? type_name(err.vt->self_type)
-                                                : BURROW_S("error"),
-                      err);
+                      (void *)cc, tn, err);
+        }
         Http2StreamError se;
         if (BURROW_FAILED(err) && burrow__http2_error_stream(err, &se)) {
             h2c_Stream *cs = h2c_stream_by_id(cc, se.stream_id, false);

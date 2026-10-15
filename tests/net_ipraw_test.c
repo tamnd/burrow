@@ -133,9 +133,12 @@ static void TestDialerDialIP(TestingT *t) {
     }
     if (!is_privileged())
         return;
+    /* The local address is given, as in Go's TestIPConnRemoteName. Without one,
+     * FreeBSD reports 0.0.0.0 for a connected raw socket where Linux has
+     * 127.0.0.1. */
     Error e = BURROW_NO_ERROR;
     NetIPConn *c = net_dialer_dial_ip(NULL, heap_allocator(), context_background(),
-                                      S("ip4:icmp"), none, lo, &e);
+                                      S("ip4:icmp"), lo, lo, &e);
     if (c == NULL) {
         testing_t_errorf_v(t, "DialIP: %v", e);
         return;

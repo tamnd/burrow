@@ -388,6 +388,7 @@ BURROW_OWNS(ret) TypesVar *burrow__types_clone_var(Alloc *a, TypesVar *v,
 BURROW_OWNS(ret) TypesFunc *burrow__types_clone_func(Alloc *a, TypesFunc *f,
                                                      TypesType typ);
 bool burrow__types_func_has_ptr_recv(TypesFunc *f);
+void burrow__types_scope_insert_raw(TypesScope *s, Str name, TypesObject obj);
 
 void burrow__types_write_object(BytesBuffer *buf, TypesObject obj, TypesQualifier qf);
 void burrow__types_write_func_name(BytesBuffer *buf, TypesFunc *f, TypesQualifier qf);

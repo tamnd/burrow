@@ -132,7 +132,7 @@ Str burrow__tc_sprintf(TypesChecker *check, Str format, Slice args) {
 
 /* markImports: every package name in the import graph of pkg, with the paths
  * it is used for. */
-static void tce_mark_imports(TypesChecker *check, TypesPackage *pkg) {
+void burrow__tc_mark_imports(TypesChecker *check, TypesPackage *pkg) {
     if (map_get(check->seen_pkg_map, &pkg) != NULL)
         return;
     bool yes = true;
@@ -152,7 +152,7 @@ static void tce_mark_imports(TypesChecker *check, TypesPackage *pkg) {
         burrow__types_oom();
 
     for (Int i = 0; i < pkg->imports.len; i++)
-        tce_mark_imports(check, GT_AT(pkg->imports, i, TypesPackage *));
+        burrow__tc_mark_imports(check, GT_AT(pkg->imports, i, TypesPackage *));
 }
 
 static Str tce_qualifier(void *env, TypesPackage *pkg) {
@@ -164,7 +164,7 @@ static Str tce_qualifier(void *env, TypesPackage *pkg) {
             check->seen_pkg_map = map_make(check->a, TYPE_UNSAFE_POINTER, TYPE_BOOL, 0);
             if (check->pkg_path_map == NULL || check->seen_pkg_map == NULL)
                 burrow__types_oom();
-            tce_mark_imports(check, check->pkg);
+            burrow__tc_mark_imports(check, check->pkg);
         }
         Map **paths = map_get(check->pkg_path_map, &pkg->name);
         if (paths != NULL && map_len(*paths) > 1)

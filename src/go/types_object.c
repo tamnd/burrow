@@ -718,6 +718,18 @@ TypesObject types_scope_insert(TypesScope *s, TypesObject obj) {
     return NULL;
 }
 
+/* Go's Scope.insert: it neither looks for a clash nor sets the parent, for
+ * dot-imported objects, which belong to another package's scope. */
+void burrow__types_scope_insert_raw(TypesScope *s, Str name, TypesObject obj) {
+    if (s->elems == NULL) {
+        s->elems = map_make(s->a, TYPE_STRING, TYPE_UNSAFE_POINTER, 0);
+        if (s->elems == NULL)
+            burrow__types_oom();
+    }
+    if (!map_set(s->elems, &name, &obj))
+        burrow__types_oom();
+}
+
 TypesObject types_scope_lookup_parent(TypesScope *s, Str name, TokenPos pos,
                                       TypesScope **scope) {
     for (; s != NULL; s = s->parent) {

@@ -241,7 +241,7 @@ TokenPos burrow__tc_op_pos(const GtOperand *x);
 BURROW_OWNS(ret) Str burrow__tc_operand_string(Alloc *a, const GtOperand *x,
                                                TypesQualifier qf);
 BURROW_STATIC(ret) Str burrow__tc_composite_kind(TypesType typ);
-void burrow__tc_op_set_const(GtOperand *x, Token k, Str lit);
+void burrow__tc_op_set_const(Alloc *a, GtOperand *x, Token k, Str lit);
 bool burrow__tc_op_is_nil(const GtOperand *x);
 
 /* ------------------------------------------------------------ declarations */
@@ -261,6 +261,59 @@ typedef struct GtDeclInfo {
 
 bool burrow__tc_decl_has_initializer(const GtDeclInfo *d);
 void burrow__tc_decl_add_dep(TypesChecker *check, GtDeclInfo *d, TypesObject obj);
+/* check.objMap[obj], or NULL. */
+BURROW_BORROWS(ret, check) GtDeclInfo *burrow__tc_obj_info(TypesChecker *check,
+                                                           TypesObject obj);
+
+/* Go's decl: one of the five things walkDecl finds. */
+typedef enum GtDeclKind {
+    GT_DECL_IMPORT,
+    GT_DECL_CONST,
+    GT_DECL_VAR,
+    GT_DECL_TYPE,
+    GT_DECL_FUNC
+} GtDeclKind;
+
+typedef struct GtDecl {
+    GtDeclKind kind;
+    AstImportSpec *import_spec; /* GT_DECL_IMPORT */
+    AstValueSpec *value_spec;   /* GT_DECL_CONST and GT_DECL_VAR */
+    AstTypeSpec *type_spec;     /* GT_DECL_TYPE */
+    AstFuncDecl *func_decl;     /* GT_DECL_FUNC */
+    /* GT_DECL_CONST only */
+    Int iota;
+    AstExpr typ;
+    Slice init; /* of AstExpr */
+    bool inherited;
+} GtDecl;
+
+typedef void (*GtDeclFn)(TypesChecker *check, void *env, const GtDecl *d);
+
+/* decl.go */
+void burrow__tc_declare(TypesChecker *check, TypesScope *scope, AstIdent *id,
+                        TypesObject obj, TokenPos pos);
+void burrow__tc_obj_decl(TypesChecker *check, TypesObject obj);
+void burrow__tc_walk_decls(TypesChecker *check, Slice decls, GtDeclFn f, void *env);
+void burrow__tc_walk_decl(TypesChecker *check, AstDecl d, GtDeclFn f, void *env);
+void burrow__tc_collect_methods(TypesChecker *check, TypesTypeName *obj);
+void burrow__tc_decl_stmt(TypesChecker *check, AstDecl d);
+
+/* resolver.go */
+void burrow__tc_arity_match(TypesChecker *check, AstValueSpec *s, AstValueSpec *init);
+bool burrow__tc_unpack_recv(TypesChecker *check, AstExpr rtyp, bool unpack_params,
+                            AstExpr *base, Slice *tparams);
+
+/* index.go's indexedExpr. */
+typedef struct GtIndexedExpr {
+    AstExpr orig; /* the wrapped expression */
+    AstExpr x;
+    TokenPos lbrack;
+    Slice indices; /* of AstExpr */
+    TokenPos rbrack;
+} GtIndexedExpr;
+
+/* unpackIndexedExpr: false for anything but an index or index list. */
+bool burrow__tc_unpack_indexed_expr(Alloc *a, AstNode n, GtIndexedExpr *ix);
 
 /* -------------------------------------------------------------- environment */
 
@@ -394,6 +447,8 @@ BURROW_OWNS(ret) Str burrow__tc_sprintf(TypesChecker *check, Str format, Slice a
 
 /* check.qualifier. */
 TypesQualifier burrow__tc_qualifier(TypesChecker *check);
+/* markImports: adds pkg and what it imports to check->pkg_path_map. */
+void burrow__tc_mark_imports(TypesChecker *check, TypesPackage *pkg);
 BURROW_OWNS(ret) Str burrow__tc_strip_annotations(Alloc *a, Str s);
 
 /* ------------------------------------------------------------------- errors */

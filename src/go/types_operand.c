@@ -16,8 +16,14 @@
 
 #include "burrow/go/types.h"
 
+#include "burrow/bytes.h"
 #include "burrow/core.h"
+#include "burrow/go/ast.h"
+#include "burrow/go/constant.h"
+#include "burrow/go/token.h"
+#include "burrow/panic.h"
 
+#include "types_check.h"
 #include "types_internal.h"
 
 #include <stdbool.h>
@@ -354,4 +360,260 @@ bool types_assignable_to(TypesType V, TypesType T) {
 
 bool types_convertible_to(TypesType V, TypesType T) {
     return gt_convertible_to(V, T);
+}
+
+/* ------------------------------------------------------------------ operands */
+
+static const Str gt_operand_mode_string[] = {
+    [GT_MODE_INVALID] = BURROW_S_INIT("invalid operand"),
+    [GT_MODE_NOVALUE] = BURROW_S_INIT("no value"),
+    [GT_MODE_BUILTIN] = BURROW_S_INIT("built-in"),
+    [GT_MODE_TYPEXPR] = BURROW_S_INIT("type"),
+    [GT_MODE_CONSTANT] = BURROW_S_INIT("constant"),
+    [GT_MODE_VARIABLE] = BURROW_S_INIT("variable"),
+    [GT_MODE_MAPINDEX] = BURROW_S_INIT("map index expression"),
+    [GT_MODE_VALUE] = BURROW_S_INIT("value"),
+    [GT_MODE_NILVALUE] = BURROW_S_INIT("nil"), /* only used by types2 */
+    [GT_MODE_COMMAOK] = BURROW_S_INIT("comma, ok expression"),
+    [GT_MODE_COMMAERR] = BURROW_S_INIT("comma, error expression"),
+    [GT_MODE_CGOFUNC] = BURROW_S_INIT("cgo function"),
+};
+
+bool burrow__tc_op_valid(const GtOperand *x) {
+    return x->mode != GT_MODE_INVALID;
+}
+
+void burrow__tc_op_invalidate(GtOperand *x) {
+    x->mode = GT_MODE_INVALID;
+}
+
+/* Pos returns the position of the expression corresponding to x. If x is
+ * invalid the position is nopos. */
+TokenPos burrow__tc_op_pos(const GtOperand *x) {
+    /* x.expr may not be set if x is invalid */
+    if (x->expr == NULL)
+        return TOKEN_NO_POS;
+    return ast_expr_pos(x->expr);
+}
+
+/* Operand string formats (not all "untyped" cases can appear due to the type
+ * system, but they fall out naturally here)
+ *
+ * mode       format
+ *
+ * invalid    <expr> (               <mode>                    )
+ * novalue    <expr> (               <mode>                    )
+ * builtin    <expr> (               <mode>                    )
+ * typexpr    <expr> (               <mode>                    )
+ *
+ * constant   <expr> (<untyped kind> <mode>                    )
+ * constant   <expr> (               <mode>       of type <typ>)
+ * constant   <expr> (<untyped kind> <mode> <val>              )
+ * constant   <expr> (               <mode> <val> of type <typ>)
+ *
+ * variable   <expr> (<untyped kind> <mode>                    )
+ * variable   <expr> (               <mode>       of type <typ>)
+ *
+ * mapindex   <expr> (<untyped kind> <mode>                    )
+ * mapindex   <expr> (               <mode>       of type <typ>)
+ *
+ * value      <expr> (<untyped kind> <mode>                    )
+ * value      <expr> (               <mode>       of type <typ>)
+ *
+ * commaok    <expr> (<untyped kind> <mode>                    )
+ * commaok    <expr> (               <mode>       of type <typ>)
+ *
+ * commaerr   <expr> (<untyped kind> <mode>                    )
+ * commaerr   <expr> (               <mode>       of type <typ>)
+ *
+ * cgofunc    <expr> (<untyped kind> <mode>                    )
+ * cgofunc    <expr> (               <mode>       of type <typ>) */
+Str burrow__tc_operand_string(Alloc *a, const GtOperand *x, TypesQualifier qf) {
+    /* special-case nil */
+    if (x->mode == GT_MODE_VALUE && x->typ == GT_TYP(TYPES_UNTYPED_NIL))
+        return BURROW_S("nil");
+
+    BytesBuffer buf = BYTES_BUFFER(a);
+
+    Str expr = BURROW_STR_EMPTY;
+    if (x->expr != NULL) {
+        expr = types_expr_string(a, x->expr);
+    } else {
+        switch ((Int)x->mode) {
+        case GT_MODE_BUILTIN:
+            expr = burrow__types_predeclared_funcs[x->id].name;
+            break;
+        case GT_MODE_TYPEXPR:
+            expr = types_type_string(a, x->typ, qf);
+            break;
+        case GT_MODE_CONSTANT:
+            expr = constant_value_string(x->val, a);
+            break;
+        default:
+            break;
+        }
+    }
+
+    /* <expr> ( */
+    if (expr.len > 0) {
+        burrow__types_buf_str(&buf, expr);
+        burrow__types_buf_str(&buf, BURROW_S(" ("));
+    }
+
+    /* <untyped kind> */
+    bool has_type = false;
+    switch ((Int)x->mode) {
+    case GT_MODE_INVALID:
+    case GT_MODE_NOVALUE:
+    case GT_MODE_BUILTIN:
+    case GT_MODE_TYPEXPR:
+        /* no type */
+        break;
+    default:
+        /* should have a type, but be cautious (don't crash during printing) */
+        if (x->typ != NULL) {
+            if (!burrow__types_is_typed(x->typ)) {
+                burrow__types_buf_str(&buf, types_as_basic(x->typ)->name);
+                burrow__types_buf_byte(&buf, ' ');
+                break;
+            }
+            has_type = true;
+        }
+    }
+
+    /* <mode> */
+    burrow__types_buf_str(&buf, gt_operand_mode_string[x->mode]);
+
+    /* <val> */
+    if (x->mode == GT_MODE_CONSTANT) {
+        Str s = constant_value_string(x->val, a);
+        if (!str_eq(s, expr)) {
+            burrow__types_buf_byte(&buf, ' ');
+            burrow__types_buf_str(&buf, s);
+        }
+    }
+
+    /* <typ> */
+    if (has_type) {
+        if (burrow__types_is_valid(x->typ)) {
+            Str desc = BURROW_STR_EMPTY;
+            if (burrow__types_is_generic(x->typ))
+                desc = BURROW_S("generic ");
+
+            /* Describe the type structure if it is an *Alias or *Named type.
+             * If the type is a renamed basic type, describe the basic type, as
+             * in "int32 type MyInt" for a *Named type MyInt. If it is a type
+             * parameter, describe the constraint instead. */
+            TypesTypeParam *tpar = types_as_type_param(types_unalias(x->typ));
+            Str what = BURROW_STR_EMPTY;
+            if (tpar == NULL && (x->typ->kind == TYPES_KIND_ALIAS ||
+                                 x->typ->kind == TYPES_KIND_NAMED)) {
+                what = burrow__tc_composite_kind(x->typ);
+                if (what.len == 0) {
+                    /* x.typ must be basic type */
+                    what = types_as_basic(types_type_underlying(x->typ))->name;
+                }
+            }
+            /* desc is "" or has a trailing space at the end */
+
+            burrow__types_buf_str(&buf, BURROW_S(" of "));
+            burrow__types_buf_str(&buf, desc);
+            if (what.len > 0) {
+                burrow__types_buf_str(&buf, what);
+                burrow__types_buf_byte(&buf, ' ');
+            }
+            burrow__types_buf_str(&buf, BURROW_S("type "));
+            types_write_type(&buf, x->typ, qf);
+
+            if (tpar != NULL) {
+                burrow__types_buf_str(&buf, BURROW_S(" constrained by "));
+                /* do not compute interface type sets here */
+                types_write_type(&buf, tpar->bound, qf);
+                /* If we have the type set and it's empty, say so for better
+                 * error messages. */
+                if (burrow__types_has_empty_typeset(types_type(tpar)))
+                    burrow__types_buf_str(&buf, BURROW_S(" with empty type set"));
+            }
+        } else {
+            burrow__types_buf_str(&buf, BURROW_S(" with invalid type"));
+        }
+    }
+
+    /* ) */
+    if (expr.len > 0)
+        burrow__types_buf_byte(&buf, ')');
+
+    return burrow__types_buf_done(&buf, a);
+}
+
+/* compositeKind returns the kind of the given composite type ("array",
+ * "slice", etc.) or the empty string if typ is not composite but a basic
+ * type. */
+Str burrow__tc_composite_kind(TypesType typ) {
+    TypesType u = types_type_underlying(typ);
+    switch (u->kind) {
+    case TYPES_KIND_BASIC:
+        return BURROW_STR_EMPTY;
+    case TYPES_KIND_ARRAY:
+        return BURROW_S("array");
+    case TYPES_KIND_SLICE:
+        return BURROW_S("slice");
+    case TYPES_KIND_STRUCT:
+        return BURROW_S("struct");
+    case TYPES_KIND_POINTER:
+        return BURROW_S("pointer");
+    case TYPES_KIND_SIGNATURE:
+        return BURROW_S("func");
+    case TYPES_KIND_INTERFACE:
+        return BURROW_S("interface");
+    case TYPES_KIND_MAP:
+        return BURROW_S("map");
+    case TYPES_KIND_CHAN:
+        return BURROW_S("chan");
+    case TYPES_KIND_TUPLE:
+        return BURROW_S("tuple");
+    case TYPES_KIND_UNION:
+        return BURROW_S("union");
+    default:
+        panic_str(BURROW_S("unreachable"));
+    }
+}
+
+/* setConst sets x to the untyped constant for literal lit. */
+void burrow__tc_op_set_const(Alloc *a, GtOperand *x, Token k, Str lit) {
+    TypesBasicKind kind;
+    switch ((Int)k) {
+    case TOKEN_INT:
+        kind = TYPES_UNTYPED_INT;
+        break;
+    case TOKEN_FLOAT:
+        kind = TYPES_UNTYPED_FLOAT;
+        break;
+    case TOKEN_IMAG:
+        kind = TYPES_UNTYPED_COMPLEX;
+        break;
+    case TOKEN_CHAR:
+        kind = TYPES_UNTYPED_RUNE;
+        break;
+    case TOKEN_STRING:
+        kind = TYPES_UNTYPED_STRING;
+        break;
+    default:
+        panic_str(BURROW_S("unreachable"));
+    }
+
+    ConstantValue val = constant_make_from_literal(a, lit, k, 0);
+    if (constant_value_kind(val) == CONSTANT_UNKNOWN) {
+        burrow__tc_op_invalidate(x);
+        x->typ = GT_TYP(TYPES_INVALID);
+        return;
+    }
+    x->mode = GT_MODE_CONSTANT;
+    x->typ = GT_TYP(kind);
+    x->val = val;
+}
+
+/* isNil reports whether x is the (untyped) nil value. */
+bool burrow__tc_op_is_nil(const GtOperand *x) {
+    return x->mode == GT_MODE_VALUE && x->typ == GT_TYP(TYPES_UNTYPED_NIL);
 }

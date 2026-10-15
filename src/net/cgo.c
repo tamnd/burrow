@@ -94,12 +94,12 @@ static Int cg_threads_limit(void) {
     memset(&rlim, 0, sizeof rlim);
     if (BURROW_FAILED(syscall_getrlimit(SYSCALL_RLIMIT_NOFILE, &rlim)))
         return 500;
-    uint64_t r = rlim.cur;
-    if (r > 500)
-        r = 500;
-    else if (r > 30)
-        r -= 30;
-    return (Int)r;
+    /* rlim.cur is signed on FreeBSD, so it is compared as it is. */
+    if (rlim.cur > 500)
+        return 500;
+    if (rlim.cur > 30)
+        return (Int)rlim.cur - 30;
+    return (Int)rlim.cur;
 #else
     return 500;
 #endif

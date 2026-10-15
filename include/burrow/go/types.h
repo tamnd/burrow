@@ -767,6 +767,51 @@ BURROW_BORROWS(ret, s) TypesSelection *
 types_method_set_lookup(TypesMethodSet *s, TypesPackage *pkg, Str name);
 BURROW_OWNS(ret) Str types_method_set_string(Alloc *a, TypesMethodSet *s);
 
+/* ------------------------------------------------------------------- sizes */
+
+/* Sizes: the sizing functions for package unsafe. alignof_ is at least 1.
+ * offsetsof gives the offsets of a []*Var's fields, as int64_t in a slice it
+ * makes in a, and a negative one means the struct is too large from there on.
+ * A negative sizeof_ means the type is too large. */
+typedef struct TypesSizesVT {
+    const Type *self_type;
+    int64_t (*alignof_)(void *self, TypesType T);
+    Slice (*offsetsof)(void *self, Alloc *a, Slice fields);
+    int64_t (*sizeof_)(void *self, TypesType T);
+} TypesSizesVT;
+
+typedef struct TypesSizes {
+    const TypesSizesVT *vt;
+    void *data;
+} TypesSizes;
+
+int64_t types_sizes_alignof(TypesSizes s, TypesType T);
+BURROW_OWNS(ret) Slice types_sizes_offsetsof(TypesSizes s, Alloc *a, Slice fields);
+int64_t types_sizes_sizeof(TypesSizes s, TypesType T);
+
+/* StdSizes: the Sizes most targets can use. A sized basic type such as int16
+ * is its size, a string or interface is two words, a slice is three, an array
+ * is laid out like a struct of its elements, a struct ends after its last
+ * field, and anything else is a word. Arrays and structs are aligned as the
+ * spec says, and everything else on its own size, up to max_align. */
+typedef struct TypesStdSizes {
+    int64_t word_size; /* in bytes, at least 4 */
+    int64_t max_align; /* in bytes, at least 1 */
+} TypesStdSizes;
+
+int64_t types_std_sizes_alignof(TypesStdSizes *s, TypesType T);
+BURROW_OWNS(ret) Slice types_std_sizes_offsetsof(TypesStdSizes *s, Alloc *a,
+                                                 Slice fields);
+int64_t types_std_sizes_sizeof(TypesStdSizes *s, TypesType T);
+TypesSizes types_std_sizes_as_sizes(TypesStdSizes *s);
+
+/* SizesFor: the Sizes compiler uses for arch, or a nil Sizes (vt NULL) if the
+ * pair is not one it knows. compiler is "gc" or "gccgo". For "gc" the
+ * architectures are 386, amd64, amd64p32, arm, arm64, loong64, mips, mipsle,
+ * mips64, mips64le, ppc64, ppc64le, riscv64, s390x, sparc64 and wasm. The
+ * result lives as long as the program and must not be changed. */
+TypesSizes types_sizes_for(Str compiler, Str arch);
+
 /* ---------------------------------------------------------------- contexts */
 
 typedef struct TypesContext TypesContext;

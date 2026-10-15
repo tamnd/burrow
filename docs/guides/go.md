@@ -1400,3 +1400,61 @@ Outer lacks Reset wrong type: true
 ```
 
 `Reset` has a pointer receiver, so it is in the method set of `*Outer` and not of `Outer`. That is also why `types_missing_method` reports it as the wrong type: `Outer` has the method, just not on a value.
+
+## Sizes
+
+`TypesSizes` is Go's `Sizes` interface, which says how big a type is, how it is aligned and where each field of a struct starts. `TypesStdSizes` is Go's `StdSizes`, a simple layout set by a word size and a largest alignment, and `types_std_sizes_as_sizes` turns one into a `TypesSizes`. `types_sizes_for` is `SizesFor`: give it a compiler and an architecture and it gives back the layout that compiler uses there. It knows gc and gccgo, and for anything else the result has a `NULL` vt, where Go returns nil.
+
+<!-- example: ../examples/go/types.c#sizes -->
+```c
+// struct{ a bool; b int64; c bool }, and the same fields with b first.
+TypesPackage *pkg =
+    types_new_package(a, BURROW_S("example.com/layout"), BURROW_S("layout"));
+TypesType bool_t = types_type(types_typ[TYPES_BOOL]);
+TypesType i64 = types_type(types_typ[TYPES_INT64]);
+TypesVar **loose = BURROW_NEW_N(a, TypesVar *, 3);
+loose[0] = types_new_field(a, TOKEN_NO_POS, pkg, BURROW_S("a"), bool_t, false);
+loose[1] = types_new_field(a, TOKEN_NO_POS, pkg, BURROW_S("b"), i64, false);
+loose[2] = types_new_field(a, TOKEN_NO_POS, pkg, BURROW_S("c"), bool_t, false);
+TypesVar **tight = BURROW_NEW_N(a, TypesVar *, 3);
+tight[0] = loose[1];
+tight[1] = loose[0];
+tight[2] = loose[2];
+Slice fields[2] = {slice_from(loose, 3, 3, TYPE_UNSAFE_POINTER),
+                   slice_from(tight, 3, 3, TYPE_UNSAFE_POINTER)};
+
+TypesQualifier full = TYPES_NO_QUALIFIER;
+const char *arches[] = {"amd64", "386"};
+for (int i = 0; i < 2; i++) {
+    TypesSizes sizes = types_sizes_for(BURROW_S("gc"), str_from_cstr(arches[i]));
+    for (int j = 0; j < 2; j++) {
+        TypesType st =
+            types_type(types_new_struct(a, fields[j], slice_nil(TYPE_STRING)));
+        fmt_println_v(arches[i], types_type_string(a, st, full));
+        fmt_println_v("  size", types_sizes_sizeof(sizes, st), "align",
+                      types_sizes_alignof(sizes, st), "offsets",
+                      types_sizes_offsetsof(sizes, a, fields[j]));
+    }
+}
+
+// SizesFor only knows the gc and gccgo compilers.
+TypesSizes none = types_sizes_for(BURROW_S("tinygo"), BURROW_S("amd64"));
+bool known = none.vt != NULL;
+fmt_println_v("tinygo known:", known);
+```
+
+That prints:
+
+```
+amd64 struct{a bool; b int64; c bool}
+  size 24 align 8 offsets [0 8 16]
+amd64 struct{b int64; a bool; c bool}
+  size 16 align 8 offsets [0 8 9]
+386 struct{a bool; b int64; c bool}
+  size 16 align 4 offsets [0 4 12]
+386 struct{b int64; a bool; c bool}
+  size 12 align 4 offsets [0 8 9]
+tinygo known: false
+```
+
+On amd64 an `int64` is aligned to 8 bytes, so a `bool` in front of it wastes 7, and putting the `int64` first saves 8 bytes. On 386 the largest alignment is 4, so the same struct is smaller. `types_sizes_offsetsof` allocates its result from the allocator you pass. A size that doesn't fit in an `int64` comes back negative, as it does in Go.

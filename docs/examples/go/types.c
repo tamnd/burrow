@@ -127,6 +127,45 @@ static void lookup(Alloc *a) {
     // doc: end
 }
 
+static void sizes(Alloc *a) {
+    // doc: sizes
+    // struct{ a bool; b int64; c bool }, and the same fields with b first.
+    TypesPackage *pkg =
+        types_new_package(a, BURROW_S("example.com/layout"), BURROW_S("layout"));
+    TypesType bool_t = types_type(types_typ[TYPES_BOOL]);
+    TypesType i64 = types_type(types_typ[TYPES_INT64]);
+    TypesVar **loose = BURROW_NEW_N(a, TypesVar *, 3);
+    loose[0] = types_new_field(a, TOKEN_NO_POS, pkg, BURROW_S("a"), bool_t, false);
+    loose[1] = types_new_field(a, TOKEN_NO_POS, pkg, BURROW_S("b"), i64, false);
+    loose[2] = types_new_field(a, TOKEN_NO_POS, pkg, BURROW_S("c"), bool_t, false);
+    TypesVar **tight = BURROW_NEW_N(a, TypesVar *, 3);
+    tight[0] = loose[1];
+    tight[1] = loose[0];
+    tight[2] = loose[2];
+    Slice fields[2] = {slice_from(loose, 3, 3, TYPE_UNSAFE_POINTER),
+                       slice_from(tight, 3, 3, TYPE_UNSAFE_POINTER)};
+
+    TypesQualifier full = TYPES_NO_QUALIFIER;
+    const char *arches[] = {"amd64", "386"};
+    for (int i = 0; i < 2; i++) {
+        TypesSizes sizes = types_sizes_for(BURROW_S("gc"), str_from_cstr(arches[i]));
+        for (int j = 0; j < 2; j++) {
+            TypesType st =
+                types_type(types_new_struct(a, fields[j], slice_nil(TYPE_STRING)));
+            fmt_println_v(arches[i], types_type_string(a, st, full));
+            fmt_println_v("  size", types_sizes_sizeof(sizes, st), "align",
+                          types_sizes_alignof(sizes, st), "offsets",
+                          types_sizes_offsetsof(sizes, a, fields[j]));
+        }
+    }
+
+    // SizesFor only knows the gc and gccgo compilers.
+    TypesSizes none = types_sizes_for(BURROW_S("tinygo"), BURROW_S("amd64"));
+    bool known = none.vt != NULL;
+    fmt_println_v("tinygo known:", known);
+    // doc: end
+}
+
 int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -134,6 +173,7 @@ int main(void) {
     model(a);
     universe(a);
     lookup(a);
+    sizes(a);
     arena_free(&ar);
     return 0;
 }
@@ -156,4 +196,13 @@ MethodSet {
 }
 Outer lacks Reset wrong type: true
 *Outer implements it: true
+amd64 struct{a bool; b int64; c bool}
+  size 24 align 8 offsets [0 8 16]
+amd64 struct{b int64; a bool; c bool}
+  size 16 align 8 offsets [0 8 9]
+386 struct{a bool; b int64; c bool}
+  size 16 align 4 offsets [0 4 12]
+386 struct{b int64; a bool; c bool}
+  size 12 align 4 offsets [0 8 9]
+tinygo known: false
 */

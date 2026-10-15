@@ -611,6 +611,12 @@ bool burrow__tc_validate_targ_len(TypesChecker *check, TokenPos pos, Str name, I
 /* The index of the failing type argument, with *err set, or -1. */
 Int burrow__tc_verify(TypesChecker *check, TokenPos pos, Slice tparams, Slice targs,
                       TypesContext *ctxt, Error *err);
+void burrow__tc_mono_record_canon(TypesChecker *check, TypesTypeParam *mpar,
+                                  TypesTypeParam *tpar);
+TypesType burrow__tc_subst(TypesChecker *check, TokenPos pos, TypesType typ, Map *smap,
+                           TypesNamed *expanding, TypesContext *ctxt);
+/* "%d unit", with an s on unit unless x is 1. */
+BURROW_OWNS(ret) Str burrow__tc_measure(TypesChecker *check, Int x, Str unit);
 void burrow__tc_mono_record_instance(TypesChecker *check, TypesPackage *pkg,
                                      TokenPos pos, Slice tparams, Slice targs,
                                      Slice xlist);

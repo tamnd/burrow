@@ -236,6 +236,63 @@ static void hashing(Alloc *a) {
     // doc: end
 }
 
+static void instantiate(Alloc *a) {
+    // doc: instantiate
+    // type Box[T comparable] struct{ v T }
+    TypesPackage *pkg =
+        types_new_package(a, BURROW_S("example.com/box"), BURROW_S("box"));
+    TypesType comparable =
+        types_object_type(types_scope_lookup(types_universe(), BURROW_S("comparable")));
+    TypesTypeParam **tps = BURROW_NEW_N(a, TypesTypeParam *, 1);
+    tps[0] = types_new_type_param(
+        a, types_new_type_name(a, TOKEN_NO_POS, pkg, BURROW_S("T"), NULL), comparable);
+    TypesNamed *box = types_new_named(
+        a, types_new_type_name(a, TOKEN_NO_POS, pkg, BURROW_S("Box"), NULL), NULL,
+        slice_nil(TYPE_UNSAFE_POINTER));
+    types_named_set_type_params(box, slice_from(tps, 1, 1, TYPE_UNSAFE_POINTER));
+    TypesVar **fields = BURROW_NEW_N(a, TypesVar *, 1);
+    fields[0] =
+        types_new_field(a, TOKEN_NO_POS, pkg, BURROW_S("v"), types_type(tps[0]), false);
+    types_named_set_underlying(
+        box,
+        types_type(types_new_struct(a, slice_from(fields, 1, 1, TYPE_UNSAFE_POINTER),
+                                    slice_nil(TYPE_STRING))));
+    TypesQualifier full = TYPES_NO_QUALIFIER;
+
+    // Box[string], made twice through the same context, is one type.
+    TypesContext *ctxt = types_new_context(a);
+    TypesType *args = BURROW_NEW_N(a, TypesType, 1);
+    args[0] = types_type(types_typ[TYPES_STRING]);
+    Slice targs = slice_from(args, 1, 1, TYPE_UNSAFE_POINTER);
+    TypesType b1 = types_instantiate(a, ctxt, types_type(box), targs, true, NULL);
+    TypesType b2 = types_instantiate(a, ctxt, types_type(box), targs, true, NULL);
+    bool same = b1 == b2;
+    fmt_println_v(types_type_string(a, b1, full), "same instance:", same);
+    fmt_println_v(types_type_string(a, types_type_underlying(b1), full));
+
+    // []int is not comparable, so Box[[]int] fails on argument 0.
+    TypesType *bad = BURROW_NEW_N(a, TypesType, 1);
+    bad[0] = types_type(types_new_slice(a, types_type(types_typ[TYPES_INT])));
+    Error err = BURROW_NO_ERROR;
+    TypesType b3 =
+        types_instantiate(a, ctxt, types_type(box),
+                          slice_from(bad, 1, 1, TYPE_UNSAFE_POINTER), true, &err);
+    const TypesArgumentError *ae = errors_as(err, TYPE_TYPES_ARGUMENT_ERROR);
+    if (ae != NULL) {
+        bool none = b3 == NULL;
+        fmt_println_v("argument", ae->index, error_text(ae->err), "no type:", none);
+    }
+
+    // An interface satisfies comparable but does not implement it.
+    TypesInterface *cmp = types_as_interface(types_type_underlying(comparable));
+    TypesType empty = types_type(types_new_interface_type(
+        a, slice_nil(TYPE_UNSAFE_POINTER), slice_nil(TYPE_UNSAFE_POINTER)));
+    bool impl = types_implements(empty, cmp);
+    bool sat = types_satisfies(empty, cmp);
+    fmt_println_v("any implements comparable:", impl, "satisfies it:", sat);
+    // doc: end
+}
+
 int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -246,6 +303,7 @@ int main(void) {
     sizes(a);
     exprs(a);
     hashing(a);
+    instantiate(a);
     arena_free(&ar);
     return 0;
 }
@@ -288,4 +346,8 @@ struct{F int "json:\"f\""}
 struct{F int "json:\"g\""}
 Hasher equal: false
 HasherIgnoreTags equal: true same hash: true
+example.com/box.Box[string] same instance: true
+struct{v string}
+argument 0 []int does not satisfy comparable no type: true
+any implements comparable: false satisfies it: true
 */

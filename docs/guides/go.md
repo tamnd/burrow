@@ -1544,3 +1544,78 @@ HasherIgnoreTags equal: true same hash: true
 ```
 
 Types that hash the same are not always identical. Two interfaces with the same number of methods but different type sets hash the same, as they do in Go, so a container still has to call the equality.
+
+## Instantiating generic types
+
+`types_instantiate` is Go's `Instantiate`. It takes a generic named type, alias or function signature and the type arguments, and returns the instance. Instances made through the same `TypesContext` with identical arguments are the same pointer, so a context lets you compare instances with `==`. A NULL context makes a new one for the call.
+
+With `validate` set it checks the number of type arguments and that each one satisfies its constraint. When one does not, the result is NULL and the error is a `TypesArgumentError` saying which argument failed, in Go's words. Without `validate` nothing is checked, as in Go, and a wrong count panics.
+
+`types_implements`, `types_satisfies` and `types_assertable_to` are the predicates from Go's api_predicates.go. `types_satisfies` is the test for a type argument and `types_implements` the one for an assignment, and they part ways on `comparable`: every interface satisfies it, but an interface only implements it when every type in its type set is strictly comparable.
+
+<!-- example: ../examples/go/types.c#instantiate -->
+```c
+// type Box[T comparable] struct{ v T }
+TypesPackage *pkg =
+    types_new_package(a, BURROW_S("example.com/box"), BURROW_S("box"));
+TypesType comparable =
+    types_object_type(types_scope_lookup(types_universe(), BURROW_S("comparable")));
+TypesTypeParam **tps = BURROW_NEW_N(a, TypesTypeParam *, 1);
+tps[0] = types_new_type_param(
+    a, types_new_type_name(a, TOKEN_NO_POS, pkg, BURROW_S("T"), NULL), comparable);
+TypesNamed *box = types_new_named(
+    a, types_new_type_name(a, TOKEN_NO_POS, pkg, BURROW_S("Box"), NULL), NULL,
+    slice_nil(TYPE_UNSAFE_POINTER));
+types_named_set_type_params(box, slice_from(tps, 1, 1, TYPE_UNSAFE_POINTER));
+TypesVar **fields = BURROW_NEW_N(a, TypesVar *, 1);
+fields[0] =
+    types_new_field(a, TOKEN_NO_POS, pkg, BURROW_S("v"), types_type(tps[0]), false);
+types_named_set_underlying(
+    box,
+    types_type(types_new_struct(a, slice_from(fields, 1, 1, TYPE_UNSAFE_POINTER),
+                                slice_nil(TYPE_STRING))));
+TypesQualifier full = TYPES_NO_QUALIFIER;
+
+// Box[string], made twice through the same context, is one type.
+TypesContext *ctxt = types_new_context(a);
+TypesType *args = BURROW_NEW_N(a, TypesType, 1);
+args[0] = types_type(types_typ[TYPES_STRING]);
+Slice targs = slice_from(args, 1, 1, TYPE_UNSAFE_POINTER);
+TypesType b1 = types_instantiate(a, ctxt, types_type(box), targs, true, NULL);
+TypesType b2 = types_instantiate(a, ctxt, types_type(box), targs, true, NULL);
+bool same = b1 == b2;
+fmt_println_v(types_type_string(a, b1, full), "same instance:", same);
+fmt_println_v(types_type_string(a, types_type_underlying(b1), full));
+
+// []int is not comparable, so Box[[]int] fails on argument 0.
+TypesType *bad = BURROW_NEW_N(a, TypesType, 1);
+bad[0] = types_type(types_new_slice(a, types_type(types_typ[TYPES_INT])));
+Error err = BURROW_NO_ERROR;
+TypesType b3 =
+    types_instantiate(a, ctxt, types_type(box),
+                      slice_from(bad, 1, 1, TYPE_UNSAFE_POINTER), true, &err);
+const TypesArgumentError *ae = errors_as(err, TYPE_TYPES_ARGUMENT_ERROR);
+if (ae != NULL) {
+    bool none = b3 == NULL;
+    fmt_println_v("argument", ae->index, error_text(ae->err), "no type:", none);
+}
+
+// An interface satisfies comparable but does not implement it.
+TypesInterface *cmp = types_as_interface(types_type_underlying(comparable));
+TypesType empty = types_type(types_new_interface_type(
+    a, slice_nil(TYPE_UNSAFE_POINTER), slice_nil(TYPE_UNSAFE_POINTER)));
+bool impl = types_implements(empty, cmp);
+bool sat = types_satisfies(empty, cmp);
+fmt_println_v("any implements comparable:", impl, "satisfies it:", sat);
+```
+
+That prints:
+
+```
+example.com/box.Box[string] same instance: true
+struct{v string}
+argument 0 []int does not satisfy comparable no type: true
+any implements comparable: false satisfies it: true
+```
+
+Errors that come with a position are `TypesError`, Go's `types.Error`, whose text is the position and the message. `types_error_as_error` turns one into an `Error`.

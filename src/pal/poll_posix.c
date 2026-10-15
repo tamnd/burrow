@@ -227,7 +227,18 @@ bool pal_poll_del(int64_t handle, int64_t fd, PalErrno *err) {
     e->armed = 0;
     while (table_hi > 0 && !table[table_hi - 1].used)
         table_hi--;
+#if defined(BURROW_OS_WASI)
     table_unlock();
+#else
+    /* A wait asleep in poll holds on to every descriptor in its set, so one
+     * closed under it stays open until the wait comes back, and the other end
+     * of a socket hears nothing. Waking it lets the close go through, which is
+     * why Go's netpollclose on AIX wakes its poller too. */
+    bool asleep = sleepers > 0;
+    table_unlock();
+    if (asleep && !wake(err))
+        return false;
+#endif
 
     BURROW_OUT(err, PAL_OK);
     return true;

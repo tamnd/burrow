@@ -28,6 +28,11 @@ typedef struct DebugFile {
     const char *const *data;
     const char *const *dump;
     const DebugDamage *damage;
+    /* Not in Go: the copies a 32-bit Go makes a different dump of, mostly
+     * because a length that fits in an int on amd64 does not on 386, with the
+     * hash of the GOARCH=386 dump. Int is 32 bits where Go's int is, so these
+     * are the ones to check there. NULL when there are none. */
+    const DebugDamage *damage32;
 } DebugFile;
 
 typedef struct DebugName {
@@ -492,6 +497,22 @@ static inline void debug_check_dumps(TestingT *t, const DebugFile *files, size_t
     }
 }
 
+/* The hash damage32 has for the copy dm, where Int is 32 bits and there is
+ * one, and otherwise dm's own. It is empty for a copy a 32-bit Go panics on,
+ * which has no dump to compare with. */
+static inline const char *debug_damage_hash(const DebugFile *df,
+                                            const DebugDamage *dm) {
+#if BURROW_INT_BITS == 32
+    if (df->damage32 != NULL)
+        for (const DebugDamage *d = df->damage32; d->hash != NULL; d++)
+            if (d->pos == dm->pos && d->xor_ == dm->xor_)
+                return d->hash;
+#else
+    (void)df;
+#endif
+    return dm->hash;
+}
+
 /* The dump of each damaged copy has to hash the same as Go's. Gives the number
  * of copies. */
 static inline int debug_check_damage(TestingT *t, const DebugFile *files, size_t nfiles,
@@ -504,6 +525,9 @@ static inline int debug_check_damage(TestingT *t, const DebugFile *files, size_t
         Alloc *a = arena_allocator(&ar);
         Slice data = file_bytes(a, df);
         for (const DebugDamage *dm = df->damage; dm->hash != NULL; dm++, n++) {
+            const char *want = debug_damage_hash(df, dm);
+            if (want[0] == '\0')
+                continue;
             Arena dar;
             arena_init(&dar, NULL, 0);
             Alloc *da = arena_allocator(&dar);
@@ -517,10 +541,10 @@ static inline int debug_check_damage(TestingT *t, const DebugFile *files, size_t
             dump(da, bytes_buffer_as_io_writer(&out), b);
             Sha256Sum256Ret h = sha256_sum256(bytes_buffer_bytes(&out));
             Str got = hex_encode_to_string(da, (Slice){h.a, 8, 8, TYPE_BYTE});
-            if (!str_eq(got, str_from_cstr(dm->hash))) {
+            if (!str_eq(got, str_from_cstr(want))) {
                 testing_t_errorf_v(t, "%s with %s at %d: dump hashes to %s, want %s",
                                    df->name, dm->xor_ == 0 ? "a cut" : "a change",
-                                   dm->pos, got, dm->hash);
+                                   dm->pos, got, want);
                 if (getenv("BURROW_DEBUG_DUMP") != NULL)
                     fwrite(bytes_buffer_bytes(&out).p, 1,
                            (size_t)bytes_buffer_bytes(&out).len, stderr);

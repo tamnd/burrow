@@ -263,6 +263,12 @@ static void TestNames(TestingT *t) {
     for (size_t i = 0; i < sizeof debug_names / sizeof debug_names[0]; i++) {
         const DebugName *n = &debug_names[i];
         const NameKind *k = &name_kinds[n->kind];
+#if BURROW_INT_BITS == 32
+        /* Not in Go: dwarf.Class is an int, so a value that needs more than 32
+         * bits is not one a 32-bit Go can have. */
+        if (k->str == dwarf_class_str && (Int)n->value != n->value)
+            continue;
+#endif
         Str s = k->str(n->value, a);
         if (!str_eq(s, str_from_cstr(n->str)))
             testing_t_errorf_v(t, "%s(%d).String() = %q, want %q", k->name,

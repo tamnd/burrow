@@ -22,6 +22,10 @@
 # binaries with. The damage goes at the section headers, symbols, loader
 # section and the decimal fields of the archive headers.
 #
+# Each mode runs twice, once with GOARCH=386 so that the damaged copies a
+# 32-bit Go reads differently get their 386 hashes in a damage32 table, so it
+# needs a machine that runs both, such as linux/amd64.
+#
 # The Go packages are copied out of GOSRC, a Go source tree that defaults to
 # the one the go command has, into a scratch module and built from there, so
 # the dump comes from the release named in the headers even when the go
@@ -564,6 +568,96 @@ type damage struct {
 	hash string
 }
 
+// hash32 holds what the GOARCH=386 run hashed each damaged copy to, by prefix
+// and file, and has32 says which files got a damage32 table.
+var (
+	hash32 map[string][]damage
+	has32  = map[string]bool{}
+)
+
+// writeDamage writes a file's damage table, and then a damage32 table of the
+// copies a 32-bit Go reads differently, if there are any. The GOARCH=386 run
+// writes its hashes to GEN_HASH32_OUT and the main run reads them back from
+// GEN_HASH32_IN.
+func writeDamage(w io.Writer, prefix string, i int, ds []damage) {
+	fmt.Fprintf(w, "static const DebugDamage %s_damage_%d[] = {\n", prefix, i)
+	for _, d := range ds {
+		fmt.Fprintf(w, "    {%d, %d, \"%s\"},\n", d.pos, d.xor, d.hash)
+	}
+	fmt.Fprintf(w, "    {-1, 0, NULL},\n};\n\n")
+	key := fmt.Sprintf("%s %d", prefix, i)
+	if p := os.Getenv("GEN_HASH32_OUT"); p != "" {
+		f, err := os.OpenFile(p, os.O_WRONLY|os.O_APPEND, 0)
+		if err != nil {
+			panic(err)
+		}
+		for _, d := range ds {
+			fmt.Fprintf(f, "%s %d %d %s\n", key, d.pos, d.xor, d.hash)
+		}
+		if err := f.Close(); err != nil {
+			panic(err)
+		}
+	}
+	p := os.Getenv("GEN_HASH32_IN")
+	if p == "" {
+		return
+	}
+	if hash32 == nil {
+		b, err := os.ReadFile(p)
+		if err != nil {
+			panic(err)
+		}
+		hash32 = map[string][]damage{}
+		for _, line := range strings.Split(strings.TrimSpace(string(b)), "\n") {
+			var pre string
+			var n int
+			var d damage
+			if _, err := fmt.Sscan(line, &pre, &n, &d.pos, &d.xor, &d.hash); err != nil {
+				panic(err)
+			}
+			k := fmt.Sprintf("%s %d", pre, n)
+			hash32[k] = append(hash32[k], d)
+		}
+	}
+	// A copy the 386 run has no hash for is one a 32-bit Go panics on, and
+	// gets an empty hash, which the tests skip.
+	type at struct {
+		pos int
+		xor byte
+	}
+	h := map[at]string{}
+	for _, d := range hash32[key] {
+		h[at{d.pos, d.xor}] = d.hash
+	}
+	var ds32 []damage
+	for _, d := range ds {
+		h32, ok := h[at{d.pos, d.xor}]
+		if !ok {
+			fmt.Fprintf(os.Stderr, "%s: a 32-bit Go panics with %d at %d\n", key, d.xor, d.pos)
+		}
+		if h32 != d.hash {
+			ds32 = append(ds32, damage{d.pos, d.xor, h32})
+		}
+	}
+	if len(ds32) == 0 {
+		return
+	}
+	has32[key] = true
+	fmt.Fprintf(w, "static const DebugDamage %s_damage32_%d[] = {\n", prefix, i)
+	for _, d := range ds32 {
+		fmt.Fprintf(w, "    {%d, %d, \"%s\"},\n", d.pos, d.xor, d.hash)
+	}
+	fmt.Fprintf(w, "    {-1, 0, NULL},\n};\n\n")
+}
+
+// damage32Name is what a files table has for a file's damage32 table.
+func damage32Name(prefix string, i int) string {
+	if !has32[fmt.Sprintf("%s %d", prefix, i)] {
+		return "NULL"
+	}
+	return fmt.Sprintf("%s_damage32_%d", prefix, i)
+}
+
 func damages(data []byte, seed uint64) []damage {
 	var ds []damage
 	x := seed
@@ -893,15 +987,11 @@ func main() {
 			fmt.Fprintf(w, "    %s,\n", cstr(strings.TrimSuffix(line, "\n")))
 		}
 		fmt.Fprintf(w, "    NULL,\n};\n\n")
-		fmt.Fprintf(w, "static const DebugDamage debug_damage_%d[] = {\n", i)
-		for _, d := range f.damage {
-			fmt.Fprintf(w, "    {%d, %d, \"%s\"},\n", d.pos, d.xor, d.hash)
-		}
-		fmt.Fprintf(w, "    {-1, 0, NULL},\n};\n\n")
+		writeDamage(w, "debug", i, f.damage)
 	}
 	fmt.Fprintf(w, "static const DebugFile debug_files[] = {\n")
 	for i, f := range fs {
-		fmt.Fprintf(w, "    {%s, %t, debug_file_%d, debug_dump_%d, debug_damage_%d},\n", cstr(f.name), f.gz, i, i, i)
+		fmt.Fprintf(w, "    {%s, %t, debug_file_%d, debug_dump_%d, debug_damage_%d, %s},\n", cstr(f.name), f.gz, i, i, i, damage32Name("debug", i))
 	}
 	fmt.Fprintf(w, "};\n\n")
 
@@ -1200,15 +1290,11 @@ func machoMain() {
 			fmt.Fprintf(w, "    %s,\n", cstr(strings.TrimSuffix(line, "\n")))
 		}
 		fmt.Fprintf(w, "    NULL,\n};\n\n")
-		fmt.Fprintf(w, "static const DebugDamage macho_damage_%d[] = {\n", i)
-		for _, d := range f.damage {
-			fmt.Fprintf(w, "    {%d, %d, \"%s\"},\n", d.pos, d.xor, d.hash)
-		}
-		fmt.Fprintf(w, "    {-1, 0, NULL},\n};\n\n")
+		writeDamage(w, "macho", i, f.damage)
 	}
 	fmt.Fprintf(w, "static const DebugFile macho_files[] = {\n")
 	for i, f := range fs {
-		fmt.Fprintf(w, "    {%s, false, macho_file_%d, macho_dump_%d, macho_damage_%d},\n", cstr(f.name), i, i, i)
+		fmt.Fprintf(w, "    {%s, false, macho_file_%d, macho_dump_%d, macho_damage_%d, %s},\n", cstr(f.name), i, i, i, damage32Name("macho", i))
 	}
 	fmt.Fprintf(w, "};\n\n")
 
@@ -1468,15 +1554,11 @@ func peMain() {
 			fmt.Fprintf(w, "    %s,\n", cstr(strings.TrimSuffix(line, "\n")))
 		}
 		fmt.Fprintf(w, "    NULL,\n};\n\n")
-		fmt.Fprintf(w, "static const DebugDamage pe_damage_%d[] = {\n", i)
-		for _, d := range f.damage {
-			fmt.Fprintf(w, "    {%d, %d, \"%s\"},\n", d.pos, d.xor, d.hash)
-		}
-		fmt.Fprintf(w, "    {-1, 0, NULL},\n};\n\n")
+		writeDamage(w, "pe", i, f.damage)
 	}
 	fmt.Fprintf(w, "static const DebugFile pe_files[] = {\n")
 	for i, f := range fs {
-		fmt.Fprintf(w, "    {%s, false, pe_file_%d, pe_dump_%d, pe_damage_%d},\n", cstr(f.name), i, i, i)
+		fmt.Fprintf(w, "    {%s, false, pe_file_%d, pe_dump_%d, pe_damage_%d, %s},\n", cstr(f.name), i, i, i, damage32Name("pe", i))
 	}
 	fmt.Fprintf(w, "};\n\n#endif\n")
 }
@@ -1641,7 +1723,7 @@ func plan9Damages(data []byte, seed uint64) []damage {
 		for i := 0; i < 16; i++ {
 			x = lcg(x)
 			e := es[int(x>>33)%len(es)]
-			add(e.name+int(x>>20)%3, byte(x>>40)|1)
+			add(e.name+int((x>>20)%3), byte(x>>40)|1)
 		}
 	}
 	for i := 0; i < 6 && len(files) > 0; i++ {
@@ -1653,7 +1735,7 @@ func plan9Damages(data []byte, seed uint64) []damage {
 	for i := 0; i < 6 && len(paths) > 0; i++ {
 		x = lcg(x)
 		e := paths[int(x>>33)%len(paths)]
-		add(e.name+1+int(x>>20)%4, byte(1<<((x>>24)%8)))
+		add(e.name+1+int((x>>20)%4), byte(1<<((x>>24)%8)))
 	}
 	for i := 0; i < 12; i++ {
 		x = lcg(x)
@@ -1704,15 +1786,11 @@ func plan9Main() {
 			fmt.Fprintf(w, "    %s,\n", cstr(strings.TrimSuffix(line, "\n")))
 		}
 		fmt.Fprintf(w, "    NULL,\n};\n\n")
-		fmt.Fprintf(w, "static const DebugDamage plan9obj_damage_%d[] = {\n", i)
-		for _, d := range f.damage {
-			fmt.Fprintf(w, "    {%d, %d, \"%s\"},\n", d.pos, d.xor, d.hash)
-		}
-		fmt.Fprintf(w, "    {-1, 0, NULL},\n};\n\n")
+		writeDamage(w, "plan9obj", i, f.damage)
 	}
 	fmt.Fprintf(w, "static const DebugFile plan9obj_files[] = {\n")
 	for i, f := range fs {
-		fmt.Fprintf(w, "    {%s, false, plan9obj_file_%d, plan9obj_dump_%d, plan9obj_damage_%d},\n", cstr(f.name), i, i, i)
+		fmt.Fprintf(w, "    {%s, false, plan9obj_file_%d, plan9obj_dump_%d, plan9obj_damage_%d, %s},\n", cstr(f.name), i, i, i, damage32Name("plan9obj", i))
 	}
 	fmt.Fprintf(w, "};\n\n#endif\n")
 }
@@ -2324,15 +2402,11 @@ func gosymMain() {
 			fmt.Fprintf(w, "    %s,\n", cstr(strings.TrimSuffix(line, "\n")))
 		}
 		fmt.Fprintf(w, "    NULL,\n};\n\n")
-		fmt.Fprintf(w, "static const DebugDamage gosym_damage_%d[] = {\n", i)
-		for _, d := range f.damage {
-			fmt.Fprintf(w, "    {%d, %d, \"%s\"},\n", d.pos, d.xor, d.hash)
-		}
-		fmt.Fprintf(w, "    {-1, 0, NULL},\n};\n\n")
+		writeDamage(w, "gosym", i, f.damage)
 	}
 	fmt.Fprintf(w, "static const DebugFile gosym_files[] = {\n")
 	for i, f := range fs {
-		fmt.Fprintf(w, "    {%s, true, gosym_file_%d, gosym_dump_%d, gosym_damage_%d},\n", cstr(f.name), i, i, i)
+		fmt.Fprintf(w, "    {%s, true, gosym_file_%d, gosym_dump_%d, gosym_damage_%d, %s},\n", cstr(f.name), i, i, i, damage32Name("gosym", i))
 	}
 	fmt.Fprintf(w, "};\n\n")
 	fmt.Fprintf(w, "/* The text of main.linefrompc and main.pcfromline in pclinetest. */\n")
@@ -2817,15 +2891,11 @@ func xcoffMain() {
 			fmt.Fprintf(w, "    %s,\n", cstr(strings.TrimSuffix(line, "\n")))
 		}
 		fmt.Fprintf(w, "    NULL,\n};\n\n")
-		fmt.Fprintf(w, "static const DebugDamage xcoff_damage_%d[] = {\n", i)
-		for _, d := range f.damage {
-			fmt.Fprintf(w, "    {%d, %d, \"%s\"},\n", d.pos, d.xor, d.hash)
-		}
-		fmt.Fprintf(w, "    {-1, 0, NULL},\n};\n\n")
+		writeDamage(w, "xcoff", i, f.damage)
 	}
 	fmt.Fprintf(w, "static const DebugFile xcoff_files[] = {\n")
 	for i, f := range fs {
-		fmt.Fprintf(w, "    {%s, false, xcoff_file_%d, xcoff_dump_%d, xcoff_damage_%d},\n", cstr(f.name), i, i, i)
+		fmt.Fprintf(w, "    {%s, false, xcoff_file_%d, xcoff_dump_%d, xcoff_damage_%d, %s},\n", cstr(f.name), i, i, i, damage32Name("xcoff", i))
 	}
 	fmt.Fprintf(w, "};\n\n#endif\n")
 }
@@ -3214,16 +3284,12 @@ func biMain() {
 			fmt.Fprintf(w, "    %s,\n", cstr(strings.TrimSuffix(line, "\n")))
 		}
 		fmt.Fprintf(w, "    NULL,\n};\n\n")
-		fmt.Fprintf(w, "static const DebugDamage buildinfo_damage_%d[] = {\n", i)
-		for _, d := range f.damage {
-			fmt.Fprintf(w, "    {%d, %d, \"%s\"},\n", d.pos, d.xor, d.hash)
-		}
-		fmt.Fprintf(w, "    {-1, 0, NULL},\n};\n\n")
+		writeDamage(w, "buildinfo", i, f.damage)
 	}
 	fmt.Fprintf(w, "static const DebugFile buildinfo_files[] = {\n")
 	for i, f := range fs {
-		fmt.Fprintf(w, "    {%s, %t, buildinfo_file_%d, buildinfo_dump_%d, buildinfo_damage_%d},\n",
-			cstr(f.name), f.gz, i, i, i)
+		fmt.Fprintf(w, "    {%s, %t, buildinfo_file_%d, buildinfo_dump_%d, buildinfo_damage_%d, %s},\n",
+			cstr(f.name), f.gz, i, i, i, damage32Name("buildinfo", i))
 	}
 	fmt.Fprintf(w, "};\n\n")
 	fmt.Fprintf(w, "/* What runtime/debug's ParseBuildInfo makes of each input: \"ok\" and then\n * BuildInfo.String, or the error. */\n")
@@ -3241,7 +3307,13 @@ module gen
 
 go 1.22
 MOD
-go run . "$mode" > "$out"
+# A 32-bit Go reads some damaged copies differently, mostly where a length
+# fits in an int on amd64 and not on 386. The generator runs for 386 first and
+# the hashes that differ go in damage32 tables, which the tests use when Int is
+# 32 bits.
+: > "$tmp/hash32"
+GOARCH=386 GEN_HASH32_OUT="$tmp/hash32" go run . "$mode" > /dev/null
+GEN_HASH32_IN="$tmp/hash32" go run . "$mode" > "$out"
 if command -v clang-format >/dev/null 2>&1; then
 	clang-format -i "$out"
 fi

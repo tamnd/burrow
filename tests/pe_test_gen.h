@@ -3048,6 +3048,11 @@ static const DebugDamage pe_damage_2[] = {
     {30, 0, "cd9bfc1493e43855"},     {-1, 0, NULL},
 };
 
+static const DebugDamage pe_damage32_2[] = {
+    {239, 128, "e48d214e86ad72f1"},
+    {-1, 0, NULL},
+};
+
 /* pe/gcc-amd64-mingw-exec, 273083 bytes. */
 static const char *const pe_file_3[] = {
     "TVqQAAMAAAAEAAAA//8AALgAAAAAAAAAQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -13446,6 +13451,11 @@ static const DebugDamage pe_damage_4[] = {
     {30, 0, "cd9bfc1493e43855"},    {-1, 0, NULL},
 };
 
+static const DebugDamage pe_damage32_4[] = {
+    {159, 128, "92d5c1a5c3b1c948"},
+    {-1, 0, NULL},
+};
+
 /* pe/llvm-mingw-20211002-msvcrt-x86_64-crt2, 24046 bytes. */
 static const char *const pe_file_5[] = {
     "ZIYhAAAAAAABTgAAnQAAAAAAAAAudGV4dAAAAAAAAAAAAAAAYQQAADwFAACdCQAAAAAAAEoA",
@@ -22032,16 +22042,22 @@ static const DebugDamage pe_damage_7[] = {
     {30, 0, "cd9bfc1493e43855"},       {-1, 0, NULL},
 };
 
+static const DebugDamage pe_damage32_7[] = {
+    {147, 128, "1b12a3a601f9037f"},
+    {-1, 0, NULL},
+};
+
 static const DebugFile pe_files[] = {
-    {"pe/gcc-386-mingw-exec", false, pe_file_0, pe_dump_0, pe_damage_0},
-    {"pe/gcc-386-mingw-no-symbols-exec", false, pe_file_1, pe_dump_1, pe_damage_1},
-    {"pe/gcc-386-mingw-obj", false, pe_file_2, pe_dump_2, pe_damage_2},
-    {"pe/gcc-amd64-mingw-exec", false, pe_file_3, pe_dump_3, pe_damage_3},
-    {"pe/gcc-amd64-mingw-obj", false, pe_file_4, pe_dump_4, pe_damage_4},
+    {"pe/gcc-386-mingw-exec", false, pe_file_0, pe_dump_0, pe_damage_0, NULL},
+    {"pe/gcc-386-mingw-no-symbols-exec", false, pe_file_1, pe_dump_1, pe_damage_1,
+     NULL},
+    {"pe/gcc-386-mingw-obj", false, pe_file_2, pe_dump_2, pe_damage_2, pe_damage32_2},
+    {"pe/gcc-amd64-mingw-exec", false, pe_file_3, pe_dump_3, pe_damage_3, NULL},
+    {"pe/gcc-amd64-mingw-obj", false, pe_file_4, pe_dump_4, pe_damage_4, pe_damage32_4},
     {"pe/llvm-mingw-20211002-msvcrt-x86_64-crt2", false, pe_file_5, pe_dump_5,
-     pe_damage_5},
-    {"pe/vmlinuz-4.15.0-47-generic", false, pe_file_6, pe_dump_6, pe_damage_6},
-    {"dwarf/line-gcc-win.bin", false, pe_file_7, pe_dump_7, pe_damage_7},
+     pe_damage_5, NULL},
+    {"pe/vmlinuz-4.15.0-47-generic", false, pe_file_6, pe_dump_6, pe_damage_6, NULL},
+    {"dwarf/line-gcc-win.bin", false, pe_file_7, pe_dump_7, pe_damage_7, pe_damage32_7},
 };
 
 #endif

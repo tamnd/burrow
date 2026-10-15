@@ -53,9 +53,12 @@ static bool obj_grow(Alloc *a, Byte **buf, uint64_t len, uint64_t *cap, uint64_t
     return true;
 }
 
+/* Go gives up on a length that does not fit in an int. On wasm that is 64 bits,
+ * wider than a pointer, and a larger length is read a chunk at a time until the
+ * data runs out, as it is in Go. */
 Slice burrow__saferio_read_data(Alloc *a, IoReader r, uint64_t n, Error *err) {
     Slice none = {NULL, 0, 0, TYPE_BYTE};
-    if (n > (uint64_t)INTPTR_MAX) {
+    if (n > (uint64_t)BURROW_INT_MAX) {
         BURROW_OUT(err, io_err_unexpected_eof);
         return none;
     }
@@ -103,7 +106,7 @@ Slice burrow__saferio_read_data(Alloc *a, IoReader r, uint64_t n, Error *err) {
 Slice burrow__saferio_read_data_at(Alloc *a, IoReaderAt r, uint64_t n, int64_t off,
                                    Error *err) {
     Slice none = {NULL, 0, 0, TYPE_BYTE};
-    if (n > (uint64_t)INTPTR_MAX) {
+    if (n > (uint64_t)BURROW_INT_MAX) {
         BURROW_OUT(err, io_err_unexpected_eof);
         return none;
     }
@@ -150,7 +153,7 @@ Slice burrow__saferio_read_data_at(Alloc *a, IoReaderAt r, uint64_t n, int64_t o
 }
 
 Int burrow__saferio_slice_cap(uint64_t size, uint64_t c) {
-    if (c > (uint64_t)INTPTR_MAX)
+    if (c > (uint64_t)BURROW_INT_MAX)
         return -1;
     if (size > 0 && c > UINT64_MAX / size)
         return -1;

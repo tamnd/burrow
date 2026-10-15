@@ -3395,11 +3395,16 @@ static const DebugDamage plan9obj_damage_1[] = {
     {-1, 0, NULL},
 };
 
+static const DebugDamage plan9obj_damage32_1[] = {
+    {4, 128, "e7e051ce7ec0792b"},
+    {-1, 0, NULL},
+};
+
 static const DebugFile plan9obj_files[] = {
     {"plan9obj/386-plan9-exec", false, plan9obj_file_0, plan9obj_dump_0,
-     plan9obj_damage_0},
+     plan9obj_damage_0, NULL},
     {"plan9obj/amd64-plan9-exec", false, plan9obj_file_1, plan9obj_dump_1,
-     plan9obj_damage_1},
+     plan9obj_damage_1, plan9obj_damage32_1},
 };
 
 #endif

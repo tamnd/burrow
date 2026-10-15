@@ -582,6 +582,37 @@ void burrow__tc_func_body(TypesChecker *check, GtDeclInfo *decl, Str name,
 void burrow__tc_open_scope(TypesChecker *check, AstNode node, Str comment);
 void burrow__tc_close_scope(TypesChecker *check);
 void burrow__tc_valid_type(TypesChecker *check, TypesNamed *typ);
+void burrow__tc_ident(TypesChecker *check, GtOperand *x, AstIdent *e, bool want_type);
+void burrow__tc_valid_var_type(TypesChecker *check, AstExpr e, TypesType typ);
+/* cause may be NULL. */
+TypesType burrow__tc_generic_type(TypesChecker *check, AstExpr e, Str *cause);
+/* false where Go returns a nil list; *res is nil then. */
+bool burrow__tc_type_list(TypesChecker *check, Slice list, Slice *res);
+void burrow__tc_selector(TypesChecker *check, GtOperand *x, AstSelectorExpr *e,
+                         bool want_type);
+bool burrow__tc_use(TypesChecker *check, Slice args);
+bool burrow__tc_use_lhs(TypesChecker *check, Slice args);
+bool burrow__tc_use1(TypesChecker *check, AstExpr e, bool lhs);
+void burrow__tc_struct_type(TypesChecker *check, TypesStruct *styp, AstStructType *e);
+BURROW_OWNS(ret) TypesInterface *burrow__tc_new_interface(TypesChecker *check);
+void burrow__tc_interface_type(TypesChecker *check, TypesInterface *ityp,
+                               AstInterfaceType *iface, TypesTypeName *def);
+/* rounded may be NULL. */
+bool burrow__tc_representable_const(ConstantValue x, TypesChecker *check,
+                                    TypesBasic *typ, ConstantValue *rounded);
+
+/* ------------------------------------------------------------ instantiation */
+
+TypesType burrow__tc_instance(TypesChecker *check, TokenPos pos, TypesType orig,
+                              Slice targs, TypesNamed *expanding, TypesContext *ctxt);
+bool burrow__tc_validate_targ_len(TypesChecker *check, TokenPos pos, Str name, Int want,
+                                  Int got);
+/* The index of the failing type argument, with *err set, or -1. */
+Int burrow__tc_verify(TypesChecker *check, TokenPos pos, Slice tparams, Slice targs,
+                      TypesContext *ctxt, Error *err);
+void burrow__tc_mono_record_instance(TypesChecker *check, TypesPackage *pkg,
+                                     TokenPos pos, Slice tparams, Slice targs,
+                                     Slice xlist);
 
 /* ---------------------------------------------------------------- recording */
 

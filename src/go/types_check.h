@@ -593,6 +593,7 @@ void burrow__tc_selector(TypesChecker *check, GtOperand *x, AstSelectorExpr *e,
 bool burrow__tc_use(TypesChecker *check, Slice args);
 bool burrow__tc_use_lhs(TypesChecker *check, Slice args);
 bool burrow__tc_use1(TypesChecker *check, AstExpr e, bool lhs);
+TypesType burrow__tc_parse_union(TypesChecker *check, AstExpr uexpr);
 void burrow__tc_struct_type(TypesChecker *check, TypesStruct *styp, AstStructType *e);
 BURROW_OWNS(ret) TypesInterface *burrow__tc_new_interface(TypesChecker *check);
 void burrow__tc_interface_type(TypesChecker *check, TypesInterface *ityp,

@@ -24,6 +24,9 @@
 #include <stdbool.h>
 #include <stdint.h>
 
+/* A nil constant.Value. */
+static const ConstantValue tte_nil = {0};
+
 static void tte_set_used(Map *m, const void *key) {
     bool yes = true;
     if (!map_set(m, key, &yes))
@@ -253,8 +256,7 @@ TypesType burrow__tc_declared_type(TypesChecker *check, AstExpr e, TypesTypeName
                   burrow__tc_ts(check, typ));
         typ = GT_TYP(TYPES_INVALID);
     }
-    burrow__tc_record_type_and_value(check, e, GT_MODE_TYPEXPR, typ,
-                                     constant_make_unknown());
+    burrow__tc_record_type_and_value(check, e, GT_MODE_TYPEXPR, typ, tte_nil);
     return typ;
 }
 
@@ -275,8 +277,7 @@ TypesType burrow__tc_generic_type(TypesChecker *check, AstExpr e, Str *cause) {
         typ = GT_TYP(TYPES_INVALID);
     }
     /* TODO(gri) what is the correct call below? */
-    burrow__tc_record_type_and_value(check, e, GT_MODE_TYPEXPR, typ,
-                                     constant_make_unknown());
+    burrow__tc_record_type_and_value(check, e, GT_MODE_TYPEXPR, typ, tte_nil);
     return typ;
 }
 

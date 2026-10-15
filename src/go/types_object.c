@@ -138,6 +138,31 @@ bool burrow__types_id_eq(TypesPackage *pkg1, Str name1, TypesPackage *pkg2, Str 
     }
 }
 
+int burrow__types_id_cmp(TypesPackage *pkg1, Str name1, TypesPackage *pkg2, Str name2) {
+    Str x[3], y[3];
+    gt_id_parts(pkg1, name1, x);
+    gt_id_parts(pkg2, name2, y);
+    /* Compare both concatenations a byte at a time, as strings.Compare would
+     * compare the two Ids. */
+    Int xi = 0, xo = 0, yi = 0, yo = 0;
+    for (;;) {
+        while (xi < 3 && xo == x[xi].len) {
+            xi++;
+            xo = 0;
+        }
+        while (yi < 3 && yo == y[yi].len) {
+            yi++;
+            yo = 0;
+        }
+        if (xi == 3 || yi == 3)
+            return (yi == 3) - (xi == 3);
+        if (x[xi].p[xo] != y[yi].p[yo])
+            return x[xi].p[xo] < y[yi].p[yo] ? -1 : +1;
+        xo++;
+        yo++;
+    }
+}
+
 TypesScope *types_object_parent(TypesObject obj) {
     return GT_OBJ(obj)->parent;
 }

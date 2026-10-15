@@ -1619,3 +1619,50 @@ any implements comparable: false satisfies it: true
 ```
 
 Errors that come with a position are `TypesError`, Go's `types.Error`, whose text is the position and the message. `types_error_as_error` turns one into an `Error`.
+
+## Assignability and conversion
+
+`types_assignable_to` and `types_convertible_to` are Go's `AssignableTo` and `ConvertibleTo`. They ask whether a value of type `V` can be assigned or converted to `T`, using the rules from the spec. The value is never a constant, so nothing is range checked: `untyped int` is assignable to `float32`, and `untyped nil` to any type that has a nil. As in Go, the answer means nothing when either type is invalid or a generic type that has not been instantiated.
+
+<!-- example: ../examples/go/types.c#assign -->
+```c
+// type MyInt int
+TypesPackage *pkg =
+    types_new_package(a, BURROW_S("example.com/num"), BURROW_S("num"));
+TypesType int_t = types_type(types_typ[TYPES_INT]);
+TypesTypeName *name =
+    types_new_type_name(a, TOKEN_NO_POS, pkg, BURROW_S("MyInt"), NULL);
+TypesType my_int =
+    types_type(types_new_named(a, name, int_t, slice_nil(TYPE_UNSAFE_POINTER)));
+bool asg = types_assignable_to(my_int, int_t);
+bool conv = types_convertible_to(my_int, int_t);
+fmt_println_v("MyInt to int: assign", asg, "convert", conv);
+
+TypesType str = types_type(types_typ[TYPES_STRING]);
+TypesType bytes = types_type(types_new_slice(a, types_type(types_typ[TYPES_BYTE])));
+asg = types_assignable_to(bytes, str);
+conv = types_convertible_to(bytes, str);
+fmt_println_v("[]byte to string: assign", asg, "convert", conv);
+
+// A channel can lose a direction when assigned, but not gain one.
+TypesType ch = types_type(types_new_chan(a, TYPES_SEND_RECV, int_t));
+TypesType recv = types_type(types_new_chan(a, TYPES_RECV_ONLY, int_t));
+bool lose = types_assignable_to(ch, recv);
+bool gain = types_assignable_to(recv, ch);
+fmt_println_v("chan int to <-chan int:", lose, "and back:", gain);
+
+// Untyped nil goes to pointers, but not to int.
+TypesType nil_t = types_type(types_typ[TYPES_UNTYPED_NIL]);
+bool to_ptr = types_assignable_to(nil_t, types_type(types_new_pointer(a, int_t)));
+bool to_int = types_assignable_to(nil_t, int_t);
+fmt_println_v("nil to *int:", to_ptr, "to int:", to_int);
+```
+
+That prints:
+
+```
+MyInt to int: assign false convert true
+[]byte to string: assign false convert true
+chan int to <-chan int: true and back: false
+nil to *int: true to int: false
+```

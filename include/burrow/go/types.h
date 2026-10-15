@@ -895,6 +895,15 @@ BURROW_OWNS(ret) TypesType types_instantiate(Alloc *a, TypesContext *ctxt,
  * constraint. */
 bool types_assertable_to(TypesInterface *V, TypesType T);
 
+/* AssignableTo: whether a value of type V can be assigned to a variable of
+ * type T. As in Go, the answer means nothing when V or T is invalid or an
+ * uninstantiated generic type. */
+bool types_assignable_to(TypesType V, TypesType T);
+
+/* ConvertibleTo: whether a value of type V can be converted to type T, with
+ * the same caveat as AssignableTo. */
+bool types_convertible_to(TypesType V, TypesType T);
+
 /* Implements: whether V implements T. As in Go, the answer means nothing when
  * V is invalid or an uninstantiated generic type. */
 bool types_implements(TypesType V, TypesInterface *T);

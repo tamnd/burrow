@@ -3609,18 +3609,26 @@ AstFile *parser_parse_file(Alloc *a, TokenFileSet *fset, Str filename, Any src,
 }
 
 /* The part of ParseExprFrom that can bail out. */
+/* The part of ParseExprFrom before the check for EOF. It is a function of its
+ * own so that nothing it makes, the "\n" literal included, is a local of the
+ * frame that calls setjmp, which gcc warns may be clobbered. */
+static AstExpr gp_parse_expr_rhs(GpParser *p, TokenFile *file, Slice src,
+                                 ParserMode mode) {
+    gp_init(p, file, src, mode);
+    AstExpr x = gp_parse_rhs(p);
+
+    /* If a semicolon was inserted, consume it; report an error if there's
+     * more tokens. */
+    if (p->tok == TOKEN_SEMICOLON && str_eq(p->lit, BURROW_S("\n")))
+        gp_next(p);
+    return x;
+}
+
 static AstExpr gp_parse_expr_guarded(GpParser *p, TokenFile *file, Slice src,
                                      ParserMode mode) {
     AstExpr volatile expr = NULL;
     BURROW_TRY {
-        gp_init(p, file, src, mode);
-        AstExpr x = gp_parse_rhs(p);
-
-        /* If a semicolon was inserted, consume it; report an error if there's
-         * more tokens. */
-        if (p->tok == TOKEN_SEMICOLON && str_eq(p->lit, BURROW_S("\n")))
-            gp_next(p);
-        expr = x;
+        expr = gp_parse_expr_rhs(p, file, src, mode);
         gp_expect(p, TOKEN_EOF);
     }
     BURROW_CATCH(r) {

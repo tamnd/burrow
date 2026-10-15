@@ -591,6 +591,16 @@ static bool slogh_nil_pointer(const SlogValue *v) {
            (x.data == NULL || *(void *const *)x.data == NULL);
 }
 
+/* What appendValue writes for a recovered panic. It is apart from the recover
+ * so that the "<nil>" literal is not a local of the frame that calls setjmp,
+ * which gcc warns may be clobbered. */
+static void slogh_append_panic(SlogState *s, const SlogValue *v, Any p) {
+    if (slogh_nil_pointer(v))
+        slogh_append_string(s, BURROW_S("<nil>"));
+    else
+        slogh_append_string(s, fmt_sprintf_v(s->a, "!PANIC: %v", p));
+}
+
 /* appendValue, with its recover. The work goes through s, which lives in the
  * caller's frame, so nothing the try block changes is a local of this one. */
 BURROW_NOINLINE static void slogh_append_value(SlogState *s, const SlogValue *v) {
@@ -601,10 +611,7 @@ BURROW_NOINLINE static void slogh_append_value(SlogState *s, const SlogValue *v)
             slogh_append_error(s, err);
     }
     BURROW_CATCH(p) {
-        if (slogh_nil_pointer(v))
-            slogh_append_string(s, BURROW_S("<nil>"));
-        else
-            slogh_append_string(s, fmt_sprintf_v(s->a, "!PANIC: %v", p));
+        slogh_append_panic(s, v, p);
     }
     BURROW_TRY_END;
 }

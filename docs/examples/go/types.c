@@ -187,6 +187,55 @@ static void exprs(Alloc *a) {
     // doc: end
 }
 
+static uint64_t hash_of(MaphashHasher hr, MaphashSeed seed, TypesType t) {
+    MaphashHash h = {0};
+    maphash_hash_set_seed(&h, seed);
+    maphash_hasher_hash(hr, &h, &t);
+    return maphash_hash_sum64(&h);
+}
+
+static TypesType tagged(Alloc *a, Str tag) {
+    TypesVar *f = types_new_field(a, TOKEN_NO_POS, NULL, BURROW_S("F"),
+                                  types_type(types_typ[TYPES_INT]), false);
+    Slice fields = slice_make(a, TYPE_UNSAFE_POINTER, 1, 1);
+    *(TypesVar **)slice_at(fields, 0) = f;
+    Slice tags = slice_make(a, TYPE_STRING, 1, 1);
+    *(Str *)slice_at(tags, 0) = tag;
+    return types_type(types_new_struct(a, fields, tags));
+}
+
+static void hashing(Alloc *a) {
+    // doc: hashing
+    MaphashSeed seed = maphash_make_seed();
+    MaphashHasher hr = types_hasher_as_hasher((TypesHasher){0});
+    MaphashHasher it = types_hasher_ignore_tags_as_hasher((TypesHasherIgnoreTags){0});
+    TypesQualifier full = TYPES_NO_QUALIFIER;
+
+    // The same type, made twice.
+    TypesType str = types_type(types_typ[TYPES_STRING]);
+    TypesType x =
+        types_type(types_new_map(a, str, types_type(types_new_slice(a, str))));
+    TypesType y =
+        types_type(types_new_map(a, str, types_type(types_new_slice(a, str))));
+    bool same = x == y;
+    bool same_hash = hash_of(hr, seed, x) == hash_of(hr, seed, y);
+    bool equal = maphash_hasher_equal(hr, &x, &y);
+    fmt_println_v(types_type_string(a, x, full), "same pointer:", same);
+    fmt_println_v("same hash:", same_hash, "equal:", equal);
+
+    // Two structs that differ only in a tag.
+    TypesType s1 = tagged(a, BURROW_S("json:\"f\""));
+    TypesType s2 = tagged(a, BURROW_S("json:\"g\""));
+    fmt_println_v(types_type_string(a, s1, full));
+    fmt_println_v(types_type_string(a, s2, full));
+    bool tags_equal = maphash_hasher_equal(hr, &s1, &s2);
+    bool it_equal = maphash_hasher_equal(it, &s1, &s2);
+    bool it_hash = hash_of(it, seed, s1) == hash_of(it, seed, s2);
+    fmt_println_v("Hasher equal:", tags_equal);
+    fmt_println_v("HasherIgnoreTags equal:", it_equal, "same hash:", it_hash);
+    // doc: end
+}
+
 int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -196,6 +245,7 @@ int main(void) {
     lookup(a);
     sizes(a);
     exprs(a);
+    hashing(a);
     arena_free(&ar);
     return 0;
 }
@@ -232,4 +282,10 @@ f(a, b...)[i:j]
 map[string]int{…}
 x.(interface{m() int})
 -x + y * <-ch
+map[string][]string same pointer: false
+same hash: true equal: true
+struct{F int "json:\"f\""}
+struct{F int "json:\"g\""}
+Hasher equal: false
+HasherIgnoreTags equal: true same hash: true
 */

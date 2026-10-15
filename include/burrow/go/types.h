@@ -44,6 +44,7 @@
 #include "burrow/go/ast.h"
 #include "burrow/go/constant.h"
 #include "burrow/go/token.h"
+#include "burrow/hash/maphash.h"
 #include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/own.h"
@@ -707,6 +708,35 @@ bool types_is_interface(TypesType t);
 /* Default: the type an untyped constant of type t gets by default, and t
  * itself for any other type. */
 TypesType types_default(TypesType t);
+
+/* ------------------------------------------------------------------ hashing */
+
+/* Hasher: a hash function for types that agrees with types_identical, for
+ * hash based containers keyed by type. Two identical types write the same
+ * bytes, which is not to say that two that write the same bytes are
+ * identical. Go's is an empty struct, and C's cannot be, so the byte in it
+ * means nothing. */
+typedef struct TypesHasher {
+    Byte unused_;
+} TypesHasher;
+
+/* HasherIgnoreTags: the same, agreeing with types_identical_ignore_tags. */
+typedef struct TypesHasherIgnoreTags {
+    Byte unused_;
+} TypesHasherIgnoreTags;
+
+/* Hasher.Hash: writes t to h. Panics if t is NULL. */
+void types_hasher_hash(TypesHasher hr, MaphashHash *h, TypesType t);
+/* Hasher.Equal: types_identical(x, y). */
+bool types_hasher_equal(TypesHasher hr, TypesType x, TypesType y);
+void types_hasher_ignore_tags_hash(TypesHasherIgnoreTags hr, MaphashHash *h,
+                                   TypesType t);
+bool types_hasher_ignore_tags_equal(TypesHasherIgnoreTags hr, TypesType x, TypesType y);
+
+/* Each as a maphash.Hasher[Type]: the values handed to it point at a
+ * TypesType. They keep no pointer to hr. */
+MaphashHasher types_hasher_as_hasher(TypesHasher hr);
+MaphashHasher types_hasher_ignore_tags_as_hasher(TypesHasherIgnoreTags hr);
 
 /* ------------------------------------------------------ lookup and methods */
 

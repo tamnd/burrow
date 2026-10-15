@@ -1494,3 +1494,53 @@ x.(interface{m() int})
 ```
 
 Parentheses are written only where the source has them, since the parser keeps them in the tree.
+
+## Hashing types
+
+Two types made separately can be the same type, so a pointer is no good as a key for them. `TypesHasher` is Go's `types.Hasher`: a hash that gives identical types the same value, and an equality that is `types_identical`. `TypesHasherIgnoreTags` is the same with struct tags left out, matching `types_identical_ignore_tags`. Each can be handed to anything that takes a `MaphashHasher` through `types_hasher_as_hasher` or `types_hasher_ignore_tags_as_hasher`, and the values it is given point at a `TypesType`.
+
+In the example, `hash_of` seeds a `MaphashHash`, runs the hasher on one type and returns `maphash_hash_sum64`, and `tagged` makes a `struct{F int}` with the tag it is given. Both are in the example file.
+
+<!-- example: ../examples/go/types.c#hashing -->
+```c
+MaphashSeed seed = maphash_make_seed();
+MaphashHasher hr = types_hasher_as_hasher((TypesHasher){0});
+MaphashHasher it = types_hasher_ignore_tags_as_hasher((TypesHasherIgnoreTags){0});
+TypesQualifier full = TYPES_NO_QUALIFIER;
+
+// The same type, made twice.
+TypesType str = types_type(types_typ[TYPES_STRING]);
+TypesType x =
+    types_type(types_new_map(a, str, types_type(types_new_slice(a, str))));
+TypesType y =
+    types_type(types_new_map(a, str, types_type(types_new_slice(a, str))));
+bool same = x == y;
+bool same_hash = hash_of(hr, seed, x) == hash_of(hr, seed, y);
+bool equal = maphash_hasher_equal(hr, &x, &y);
+fmt_println_v(types_type_string(a, x, full), "same pointer:", same);
+fmt_println_v("same hash:", same_hash, "equal:", equal);
+
+// Two structs that differ only in a tag.
+TypesType s1 = tagged(a, BURROW_S("json:\"f\""));
+TypesType s2 = tagged(a, BURROW_S("json:\"g\""));
+fmt_println_v(types_type_string(a, s1, full));
+fmt_println_v(types_type_string(a, s2, full));
+bool tags_equal = maphash_hasher_equal(hr, &s1, &s2);
+bool it_equal = maphash_hasher_equal(it, &s1, &s2);
+bool it_hash = hash_of(it, seed, s1) == hash_of(it, seed, s2);
+fmt_println_v("Hasher equal:", tags_equal);
+fmt_println_v("HasherIgnoreTags equal:", it_equal, "same hash:", it_hash);
+```
+
+That prints:
+
+```
+map[string][]string same pointer: false
+same hash: true equal: true
+struct{F int "json:\"f\""}
+struct{F int "json:\"g\""}
+Hasher equal: false
+HasherIgnoreTags equal: true same hash: true
+```
+
+Types that hash the same are not always identical. Two interfaces with the same number of methods but different type sets hash the same, as they do in Go, so a container still has to call the equality.

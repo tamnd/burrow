@@ -550,10 +550,28 @@ BURROW_OWNS(ret) Str burrow__types_buf_done(BytesBuffer *buf, Alloc *a);
 BURROW_OWNS(ret) TypesSelection *
 burrow__types_new_selection(Alloc *a, TypesSelectionKind kind, TypesType recv,
                             TypesObject obj, Slice index, bool indirect);
-/* missingMethod, with the identity check passed in and without the cause. */
-TypesFunc *burrow__types_missing_method(TypesType V, TypesType T, bool is_static,
+/* missingMethod with a nil checker and the identity check passed in. When
+ * cause is not NULL and a method is missing, *cause is set to why, made in a.
+ * a may be NULL when cause is. */
+TypesFunc *burrow__types_missing_method(Alloc *a, TypesType V, TypesType T,
+                                        bool is_static,
                                         bool (*equivalent)(TypesType x, TypesType y),
-                                        bool *wrong_type);
+                                        bool *wrong_type, Str *cause);
+/* hasAllMethods, the same way. */
+bool burrow__types_has_all_methods(Alloc *a, TypesType V, TypesType T, bool is_static,
+                                   bool (*equivalent)(TypesType x, TypesType y),
+                                   Str *cause);
+bool burrow__types_is_interface_ptr(TypesType T);
+/* interfacePtrError, made in a. T must be a pointer to an interface. */
+BURROW_OWNS(ret) Str burrow__types_interface_ptr_error(Alloc *a, TypesType T);
+/* funcString: f's name and signature, without parameter names, made in a. */
+BURROW_OWNS(ret) Str burrow__types_func_string(Alloc *a, TypesFunc *f, bool pkg_info);
+
+/* Go's Checker.implements with a nil checker: whether V implements T, or
+ * satisfies it when constraint is set. When cause is not NULL and the answer
+ * is no, *cause is set to why, made in a. a may be NULL when cause is. */
+bool burrow__types_implements(Alloc *a, TypesType V, TypesType T, bool constraint,
+                              Str *cause);
 
 /* ----------------------------------------------------- subst and contexts */
 

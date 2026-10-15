@@ -40,6 +40,7 @@
 
 #include "burrow/bytes.h"
 #include "burrow/core.h"
+#include "burrow/error.h"
 #include "burrow/func.h"
 #include "burrow/go/ast.h"
 #include "burrow/go/constant.h"
@@ -861,6 +862,93 @@ typedef struct TypesContext TypesContext;
  * instantiating the same type with the same arguments twice gives the same
  * type both times. */
 BURROW_OWNS(ret) TypesContext *types_new_context(Alloc *a);
+
+/* ---------------------------------------------------------- instantiation */
+
+/* Instantiate: orig, which must be a generic named type, alias or signature,
+ * with targs, a Slice of TypesType, for its type parameters. The instance is
+ * made in a and is the same kind of type as orig. Methods of a named type are
+ * instantiated too, lazily.
+ *
+ * With a ctxt, an instance made before in it with identical arguments is handed
+ * back again, except that two generic signatures only count as the same when
+ * they are the same pointer. A NULL ctxt gets a new one made in a.
+ *
+ * With validate set, orig must have type parameters, as many as targs has, and
+ * each type argument must satisfy its constraint. When one does not, the result
+ * is NULL and *err is a TypesArgumentError saying which one and why. err may be
+ * NULL.
+ *
+ * Without validate none of that is checked, and *err is always no error. A
+ * signature panics there and then if the count is wrong, and a named type may
+ * panic later. Anything that is not a named type, alias or signature panics,
+ * and so do empty targs, validated or not. */
+BURROW_OWNS(ret) TypesType types_instantiate(Alloc *a, TypesContext *ctxt,
+                                             TypesType orig, Slice targs, bool validate,
+                                             Error *err);
+
+/* ---------------------------------------------------------- api predicates */
+
+/* AssertableTo: whether a value of type V can be asserted to have type T. As
+ * in Go, the answer means nothing when T is invalid or an uninstantiated
+ * generic type, or when V is a generalized interface, one that can only be a
+ * constraint. */
+bool types_assertable_to(TypesInterface *V, TypesType T);
+
+/* Implements: whether V implements T. As in Go, the answer means nothing when
+ * V is invalid or an uninstantiated generic type. */
+bool types_implements(TypesType V, TypesInterface *T);
+
+/* Satisfies: whether V satisfies the constraint T, with the same caveat as
+ * Implements. Unlike Implements, any type the spec calls comparable satisfies
+ * comparable, ordinary interfaces included. */
+bool types_satisfies(TypesType V, TypesInterface *T);
+
+/* ------------------------------------------------------------------ errors */
+
+/* types.Error: a type checking error. The text is fset's position for pos,
+ * ": " and msg. The checker will make these; they have no constructor of their
+ * own. Go also keeps an error code and a span here, unexported, which come
+ * with the checker.
+ *
+ * Not in Go: a NULL fset writes the position as "-", which is what Go writes
+ * for TOKEN_NO_POS. Go dereferences the nil FileSet for any other pos. */
+typedef struct TypesError {
+    TokenFileSet *fset; /* for reading pos */
+    TokenPos pos;       /* where the error is */
+    Str msg;            /* the message */
+    bool soft;          /* if set, the error is "soft" */
+} TypesError;
+
+extern const Type *const TYPE_TYPES_ERROR;
+
+/* The text, built in a. */
+BURROW_OWNS(ret) Str types_error_error(const TypesError *e, Alloc *a);
+
+/* The Error for e, with msg copied into a. errors_as with TYPE_TYPES_ERROR
+ * gets the struct back. fset is not copied, so it must outlive the error. */
+BURROW_OWNS(ret) Error types_error_as_error(const TypesError *e, Alloc *a);
+
+/* types.ArgumentError: the error Instantiate gives when type argument index
+ * does not satisfy its constraint. Its text is the text of err, and it unwraps
+ * to err. */
+typedef struct TypesArgumentError {
+    Int index;
+    Error err;
+} TypesArgumentError;
+
+extern const Type *const TYPE_TYPES_ARGUMENT_ERROR;
+
+/* The text, made in a. */
+BURROW_OWNS(ret) Str types_argument_error_error(const TypesArgumentError *e, Alloc *a);
+
+/* e->err. */
+BURROW_BORROWS(ret, e) Error types_argument_error_unwrap(const TypesArgumentError *e);
+
+/* The Error for e, in a. err is not copied. errors_as with
+ * TYPE_TYPES_ARGUMENT_ERROR gets the struct back. */
+BURROW_OWNS(ret) Error types_argument_error_as_error(const TypesArgumentError *e,
+                                                     Alloc *a);
 
 #ifdef __cplusplus
 }

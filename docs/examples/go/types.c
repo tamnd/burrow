@@ -166,6 +166,27 @@ static void sizes(Alloc *a) {
     // doc: end
 }
 
+static void exprs(Alloc *a) {
+    // doc: exprstring
+    const char *srcs[] = {
+        "f(a, b...)[i:j]",
+        "func(x int) string { return \"\" }",
+        "map[string]int{\"a\": 1}",
+        "x.(interface{ m() int })",
+        "-x + y*<-ch",
+    };
+    for (int i = 0; i < 5; i++) {
+        Error err = BURROW_NO_ERROR;
+        AstExpr x = parser_parse_expr(a, str_from_cstr(srcs[i]), &err);
+        if (!BURROW_OK(err)) {
+            fmt_println_v(error_text(err));
+            continue;
+        }
+        fmt_println_v(types_expr_string(a, x));
+    }
+    // doc: end
+}
+
 int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -174,6 +195,7 @@ int main(void) {
     universe(a);
     lookup(a);
     sizes(a);
+    exprs(a);
     arena_free(&ar);
     return 0;
 }
@@ -205,4 +227,9 @@ amd64 struct{b int64; a bool; c bool}
 386 struct{b int64; a bool; c bool}
   size 12 align 4 offsets [0 8 9]
 tinygo known: false
+f(a, b...)[i:j]
+(func(x int) string literal)
+map[string]int{…}
+x.(interface{m() int})
+-x + y * <-ch
 */

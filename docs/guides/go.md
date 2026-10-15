@@ -1458,3 +1458,39 @@ tinygo known: false
 ```
 
 On amd64 an `int64` is aligned to 8 bytes, so a `bool` in front of it wastes 7, and putting the `int64` first saves 8 bytes. On 386 the largest alignment is 4, so the same struct is smaller. `types_sizes_offsetsof` allocates its result from the allocator you pass. A size that doesn't fit in an `int64` comes back negative, as it does in Go.
+
+## Expressions in messages
+
+`types_expr_string` is Go's `ExprString`, the form the checker uses to show an expression in an error message. It is Go syntax, made shorter: a function literal keeps only its type, a composite literal with elements gets an ellipsis, and every binary operator has a blank on each side. `types_write_expr` writes the same thing to a `BytesBuffer`.
+
+<!-- example: ../examples/go/types.c#exprstring -->
+```c
+const char *srcs[] = {
+    "f(a, b...)[i:j]",
+    "func(x int) string { return \"\" }",
+    "map[string]int{\"a\": 1}",
+    "x.(interface{ m() int })",
+    "-x + y*<-ch",
+};
+for (int i = 0; i < 5; i++) {
+    Error err = BURROW_NO_ERROR;
+    AstExpr x = parser_parse_expr(a, str_from_cstr(srcs[i]), &err);
+    if (!BURROW_OK(err)) {
+        fmt_println_v(error_text(err));
+        continue;
+    }
+    fmt_println_v(types_expr_string(a, x));
+}
+```
+
+That prints:
+
+```
+f(a, b...)[i:j]
+(func(x int) string literal)
+map[string]int{…}
+x.(interface{m() int})
+-x + y * <-ch
+```
+
+Parentheses are written only where the source has them, since the parser keeps them in the tree.

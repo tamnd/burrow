@@ -1,6 +1,6 @@
 # Go source
 
-`burrow/go/token.h` is Go's `go/token`, the bottom layer of Go's own tools for reading Go source. It has the tokens of the language and the positions that tie them back to a file, a line and a column. `burrow/go/scanner.h` is Go's `go/scanner`, which turns source into those tokens. `burrow/go/version.h`, Go's `go/version`, compares Go versions, and `burrow/go/constant.h`, Go's `go/constant`, does exact arithmetic on Go constants. `burrow/go/ast.h` and `burrow/go/parser.h`, Go's `go/ast` and `go/parser`, sit on top of the two and turn source into syntax trees, and `burrow/go/doc/comment.h`, Go's `go/doc/comment`, reads and prints doc comments.
+`burrow/go/token.h` is Go's `go/token`, the bottom layer of Go's own tools for reading Go source. It has the tokens of the language and the positions that tie them back to a file, a line and a column. `burrow/go/scanner.h` is Go's `go/scanner`, which turns source into those tokens. `burrow/go/version.h`, Go's `go/version`, compares Go versions, and `burrow/go/constant.h`, Go's `go/constant`, does exact arithmetic on Go constants. `burrow/go/ast.h` and `burrow/go/parser.h`, Go's `go/ast` and `go/parser`, sit on top of the two and turn source into syntax trees, and `burrow/go/doc/comment.h`, Go's `go/doc/comment`, reads and prints doc comments. `burrow/go/types.h` is the start of Go's `go/types`: the types, objects, scopes and packages the type checker works on.
 
 ## Positions
 
@@ -1228,3 +1228,94 @@ gen.go: false
 ```
 
 The file system is reached through the hooks of the context, `join_path`, `read_dir`, `open_file` and the rest. They are left empty for the real file system, and setting them makes go/build work on files kept anywhere else.
+
+## Types
+
+`burrow/go/types.h` is the model part of Go's `go/types`. It has the types of Go programs, the objects that name them, the scopes and packages that hold the objects, and the universe everything starts from. The checker that fills them in from syntax trees comes later. Go's `Type` and `Object` interfaces are `TypesType` and `TypesObject` here. `types_type` and `types_object` turn a pointer to a concrete type or object into one, and the `types_as_` functions turn one back, giving `NULL` when it is something else.
+
+Types and objects point at each other in cycles, since a named type's methods have the named type as their receiver. None of them can be freed on their own, so make them all in one arena and free the arena at the end. This builds `type Celsius float64` with a `String` method and prints a few types that use it:
+
+<!-- example: ../examples/go/types.c#model -->
+```c
+// type Celsius float64, with a method String() string.
+TypesPackage *pkg =
+    types_new_package(a, BURROW_S("example.com/temp"), BURROW_S("temp"));
+TypesTypeName *name =
+    types_new_type_name(a, TOKEN_NO_POS, pkg, BURROW_S("Celsius"), NULL);
+TypesNamed *celsius = types_new_named(a, name, types_type(types_typ[TYPES_FLOAT64]),
+                                      slice_nil(TYPE_UNSAFE_POINTER));
+TypesVar *recv =
+    types_new_param(a, TOKEN_NO_POS, pkg, BURROW_S("c"), types_type(celsius));
+// The tuple keeps the slice, so it goes in the arena too.
+TypesVar **res = BURROW_NEW_N(a, TypesVar *, 1);
+res[0] = types_new_param(a, TOKEN_NO_POS, pkg, BURROW_S(""),
+                         types_type(types_typ[TYPES_STRING]));
+TypesTuple *results =
+    types_new_tuple(a, slice_from(res, 1, 1, TYPE_UNSAFE_POINTER));
+TypesSignature *sig = types_new_signature(a, recv, NULL, results, false);
+types_named_add_method(
+    celsius, types_new_func(a, TOKEN_NO_POS, pkg, BURROW_S("String"), sig));
+
+// map[string][]temp.Celsius
+TypesType str = types_type(types_typ[TYPES_STRING]);
+TypesType m = types_type(
+    types_new_map(a, str, types_type(types_new_slice(a, types_type(celsius)))));
+
+// The qualifier says how to write a package: in full, or not at all
+// for the one you are in.
+TypesQualifier full = TYPES_NO_QUALIFIER;
+TypesQualifier here = types_relative_to(pkg);
+fmt_println_v(types_type_string(a, m, full));
+fmt_println_v(types_type_string(a, m, here));
+fmt_println_v(
+    types_object_string(a, types_object(types_named_method(celsius, 0)), full));
+fmt_println_v(
+    types_type_string(a, types_type_underlying(types_type(celsius)), full));
+fmt_println_v("comparable:", types_comparable(types_type(celsius)),
+              types_comparable(m));
+```
+
+That prints:
+
+```
+map[string][]example.com/temp.Celsius
+map[string][]Celsius
+func (example.com/temp.Celsius).String() string
+float64
+comparable: true false
+```
+
+The qualifier decides how a package shows up in a name. `TYPES_NO_QUALIFIER` writes the full path, and `types_relative_to` leaves out the package you are in, the same as Go's `RelativeTo`. A map is never comparable, so `types_comparable` is false for it, as it is in Go.
+
+The universe is the scope that holds `int`, `error`, `true`, `len` and the rest of Go's predeclared names. `types_universe` builds it the first time it is asked for, and it is shared by every thread after that:
+
+<!-- example: ../examples/go/types.c#universe -->
+```c
+TypesQualifier full = TYPES_NO_QUALIFIER;
+TypesScope *u = types_universe();
+TypesObject err = types_scope_lookup(u, BURROW_S("error"));
+fmt_println_v(types_object_string(a, err, full));
+fmt_println_v(
+    types_type_string(a, types_type_underlying(types_object_type(err)), full));
+
+// rune is an alias of int32, so the two are identical.
+TypesType rune = types_object_type(types_scope_lookup(u, BURROW_S("rune")));
+fmt_println_v("rune == int32:",
+              types_identical(rune, types_type(types_typ[TYPES_INT32])));
+
+// The type an untyped constant gets when nothing else says.
+TypesType untyped = types_type(types_typ[TYPES_UNTYPED_FLOAT]);
+fmt_println_v(types_type_string(a, untyped, full), "->",
+              types_type_string(a, types_default(untyped), full));
+```
+
+That prints:
+
+```
+type error interface{Error() string}
+interface{Error() string}
+rune == int32: true
+untyped float -> float64
+```
+
+`types_identical` is Go's `Identical`, and `types_default` gives the type an untyped constant takes when nothing else decides it.

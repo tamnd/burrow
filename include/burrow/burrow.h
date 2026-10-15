@@ -125,6 +125,7 @@
 #include "burrow/go/printer.h"
 #include "burrow/go/scanner.h"
 #include "burrow/go/token.h"
+#include "burrow/go/types.h"
 #include "burrow/go/version.h"
 #include "burrow/hash.h"
 #include "burrow/hash/adler32.h"

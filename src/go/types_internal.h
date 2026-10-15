@@ -506,6 +506,9 @@ bool burrow__types_type_set_is(GtTypeSet *s, GtTermFunc f);
 
 /* Go's all and underIs from under.go. */
 bool burrow__types_all(TypesType t, GtTypePairFunc f);
+/* Go's (*TypeParam).is: f called for each term of t's type set, or with NULL
+ * if there are no specific terms. */
+bool burrow__types_type_param_is(TypesTypeParam *t, GtTermFunc f);
 
 /* ----------------------------------------------------------- predicates */
 
@@ -561,28 +564,32 @@ BURROW_OWNS(ret) Str burrow__types_buf_done(BytesBuffer *buf, Alloc *a);
 BURROW_OWNS(ret) TypesSelection *
 burrow__types_new_selection(Alloc *a, TypesSelectionKind kind, TypesType recv,
                             TypesObject obj, Slice index, bool indirect);
-/* missingMethod with a nil checker and the identity check passed in. When
- * cause is not NULL and a method is missing, *cause is set to why, made in a.
- * a may be NULL when cause is. */
-TypesFunc *burrow__types_missing_method(Alloc *a, TypesType V, TypesType T,
-                                        bool is_static,
+/* missingMethod with the identity check passed in. check may be NULL, as in
+ * Go, for the exported API; then a cause is made in a and writes types with
+ * their package paths, and a may be NULL when cause is. With a checker, the
+ * methods found are type-checked first and the cause is made in check->a. */
+TypesFunc *burrow__types_missing_method(TypesChecker *check, Alloc *a, TypesType V,
+                                        TypesType T, bool is_static,
                                         bool (*equivalent)(TypesType x, TypesType y),
                                         bool *wrong_type, Str *cause);
 /* hasAllMethods, the same way. */
-bool burrow__types_has_all_methods(Alloc *a, TypesType V, TypesType T, bool is_static,
+bool burrow__types_has_all_methods(TypesChecker *check, Alloc *a, TypesType V,
+                                   TypesType T, bool is_static,
                                    bool (*equivalent)(TypesType x, TypesType y),
                                    Str *cause);
 bool burrow__types_is_interface_ptr(TypesType T);
 /* interfacePtrError, made in a. T must be a pointer to an interface. */
-BURROW_OWNS(ret) Str burrow__types_interface_ptr_error(Alloc *a, TypesType T);
+BURROW_OWNS(ret) Str burrow__types_interface_ptr_error(Alloc *a, TypesQualifier qf,
+                                                       TypesType T);
 /* funcString: f's name and signature, without parameter names, made in a. */
-BURROW_OWNS(ret) Str burrow__types_func_string(Alloc *a, TypesFunc *f, bool pkg_info);
+BURROW_OWNS(ret) Str burrow__types_func_string(Alloc *a, TypesQualifier qf,
+                                               TypesFunc *f, bool pkg_info);
 
-/* Go's Checker.implements with a nil checker: whether V implements T, or
- * satisfies it when constraint is set. When cause is not NULL and the answer
- * is no, *cause is set to why, made in a. a may be NULL when cause is. */
-bool burrow__types_implements(Alloc *a, TypesType V, TypesType T, bool constraint,
-                              Str *cause);
+/* Go's Checker.implements: whether V implements T, or satisfies it when
+ * constraint is set. When cause is not NULL and the answer is no, *cause is
+ * set to why. check may be NULL, the same way as for missingMethod. */
+bool burrow__types_implements(TypesChecker *check, Alloc *a, TypesType V, TypesType T,
+                              bool constraint, Str *cause);
 
 /* ----------------------------------------------------- subst and contexts */
 

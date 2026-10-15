@@ -175,6 +175,8 @@ static Str tce_qualifier(void *env, TypesPackage *pkg) {
 }
 
 TypesQualifier burrow__tc_qualifier(TypesChecker *check) {
+    if (check == NULL)
+        return TYPES_NO_QUALIFIER;
     return BURROW_FN(TypesQualifier, tce_qualifier, check);
 }
 

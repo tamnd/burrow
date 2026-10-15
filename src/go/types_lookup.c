@@ -25,6 +25,7 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "types_check.h"
 #include "types_internal.h"
 
 #include <stdbool.h>
@@ -542,55 +543,57 @@ bool burrow__types_is_interface_ptr(TypesType T) {
     return p != NULL && types_is_interface(p->base);
 }
 
-Str burrow__types_interface_ptr_error(Alloc *a, TypesType T) {
+Str burrow__types_interface_ptr_error(Alloc *a, TypesQualifier qf, TypesType T) {
     burrow__types_assert(burrow__types_is_interface_ptr(T));
     TypesPointer *p = types_as_pointer(types_type_underlying(T));
-    Str ts = types_type_string(a, T, TYPES_NO_QUALIFIER);
+    Str ts = types_type_string(a, T, qf);
     if (burrow__types_is_type_param(p->base))
         return fmt_sprintf_v(
             a, "type %s is pointer to type parameter, not type parameter", ts);
     return fmt_sprintf_v(a, "type %s is pointer to interface, not interface", ts);
 }
 
-Str burrow__types_func_string(Alloc *a, TypesFunc *f, bool pkg_info) {
+Str burrow__types_func_string(Alloc *a, TypesQualifier qf, TypesFunc *f,
+                              bool pkg_info) {
     BytesBuffer buf = BYTES_BUFFER(a);
     burrow__types_buf_str(&buf, GT_OBJ(f)->name);
-    GtTypeWriter w = burrow__types_new_type_writer(&buf, TYPES_NO_QUALIFIER);
+    GtTypeWriter w = burrow__types_new_type_writer(&buf, qf);
     w.pkg_info = pkg_info;
     w.param_names = false;
     burrow__types_tw_signature(&w, types_as_signature(GT_OBJ(f)->typ));
     return burrow__types_buf_done(&buf, a);
 }
 
-/* The cause missingMethod gives for state, with a nil checker, so types are
- * written with their package paths. m is the method of T, and f the method of
- * V it found, if any. */
-static Str gt_missing_method_cause(Alloc *a, int state, TypesType V, TypesType T,
-                                   TypesFunc *m, TypesFunc *f) {
+/* The cause missingMethod gives for state, with types written as qf says. m
+ * is the method of T, and f the method of V it found, if any. */
+static Str gt_missing_method_cause(Alloc *a, TypesQualifier qf, int state, TypesType V,
+                                   TypesType T, TypesFunc *m, TypesFunc *f) {
     Str name = GT_OBJ(m)->name;
     switch (state) {
     case GT_MM_NOT_FOUND:
         if (burrow__types_is_interface_ptr(V))
-            return fmt_sprintf_v(a, "(%s)", burrow__types_interface_ptr_error(a, V));
+            return fmt_sprintf_v(a, "(%s)",
+                                 burrow__types_interface_ptr_error(a, qf, V));
         if (burrow__types_is_interface_ptr(T))
-            return fmt_sprintf_v(a, "(%s)", burrow__types_interface_ptr_error(a, T));
+            return fmt_sprintf_v(a, "(%s)",
+                                 burrow__types_interface_ptr_error(a, qf, T));
         return fmt_sprintf_v(a, "(missing method %s)", name);
     case GT_MM_WRONG_NAME: {
-        Str fs = burrow__types_func_string(a, f, false);
-        Str ms = burrow__types_func_string(a, m, false);
+        Str fs = burrow__types_func_string(a, qf, f, false);
+        Str ms = burrow__types_func_string(a, qf, m, false);
         return fmt_sprintf_v(a, "(missing method %s)\n\t\thave %s\n\t\twant %s", name,
                              fs, ms);
     }
     case GT_MM_UNEXPORTED:
         return fmt_sprintf_v(a, "(unexported method %s)", name);
     case GT_MM_WRONG_SIG: {
-        Str fs = burrow__types_func_string(a, f, false);
-        Str ms = burrow__types_func_string(a, m, false);
+        Str fs = burrow__types_func_string(a, qf, f, false);
+        Str ms = burrow__types_func_string(a, qf, m, false);
         if (str_eq(fs, ms)) {
             /* Don't report "want Foo, have Foo". Add package information to
              * disambiguate (go.dev/issue/54258). */
-            fs = burrow__types_func_string(a, f, true);
-            ms = burrow__types_func_string(a, m, true);
+            fs = burrow__types_func_string(a, qf, f, true);
+            ms = burrow__types_func_string(a, qf, m, true);
         }
         if (str_eq(fs, ms)) {
             /* Still "want Foo, have Foo", most likely from different type
@@ -602,13 +605,13 @@ static Str gt_missing_method_cause(Alloc *a, int state, TypesType V, TypesType T
                              name, fs, ms);
     }
     case GT_MM_AMBIG_SEL: {
-        Str vs = types_type_string(a, V, TYPES_NO_QUALIFIER);
+        Str vs = types_type_string(a, V, qf);
         return fmt_sprintf_v(a, "(ambiguous selector %s.%s)", vs, name);
     }
     case GT_MM_PTR_RECV:
         return fmt_sprintf_v(a, "(method %s has pointer receiver)", name);
     case GT_MM_FIELD: {
-        Str vs = types_type_string(a, V, TYPES_NO_QUALIFIER);
+        Str vs = types_type_string(a, V, qf);
         return fmt_sprintf_v(a, "(%s.%s is a field, not a method)", vs, name);
     }
     case GT_MM_NOINTERFACE:
@@ -618,8 +621,8 @@ static Str gt_missing_method_cause(Alloc *a, int state, TypesType V, TypesType T
     }
 }
 
-TypesFunc *burrow__types_missing_method(Alloc *a, TypesType V, TypesType T,
-                                        bool is_static,
+TypesFunc *burrow__types_missing_method(TypesChecker *check, Alloc *a, TypesType V,
+                                        TypesType T, bool is_static,
                                         bool (*equivalent)(TypesType x, TypesType y),
                                         bool *wrong_type, Str *cause) {
     /* T must be an interface */
@@ -634,9 +637,11 @@ TypesFunc *burrow__types_missing_method(Alloc *a, TypesType V, TypesType T,
     TypesFunc *m = NULL; /* method on T we're trying to implement */
     TypesFunc *f = NULL; /* method on V, if found */
 
+    /* Not in Go: the lookups use an arena of their own, except with a checker,
+     * whose objDecl may bail out of this function and would leak it. */
     Arena ar;
     arena_init(&ar, NULL, 0);
-    Alloc *la = arena_allocator(&ar);
+    Alloc *la = check != NULL ? check->a : arena_allocator(&ar);
     TypesInterface *u = types_as_interface(types_type_underlying(V));
     if (u != NULL) {
         GtTypeSet *tset = burrow__types_iface_type_set(u);
@@ -691,6 +696,10 @@ TypesFunc *burrow__types_missing_method(Alloc *a, TypesType V, TypesType T,
                 state = GT_MM_FIELD;
                 break;
             }
+            /* methods may not have a fully set up signature yet */
+            if (check != NULL)
+                burrow__tc_obj_decl(check, types_object(f));
+
             if (f->nointerface) {
                 state = GT_MM_NOINTERFACE;
                 break;
@@ -705,8 +714,16 @@ TypesFunc *burrow__types_missing_method(Alloc *a, TypesType V, TypesType T,
 
     if (state == GT_MM_OK)
         return NULL;
-    if (cause != NULL)
-        *cause = gt_missing_method_cause(a, state, V, T, m, f);
+    if (cause != NULL) {
+        /* This method may be formatted in funcString below, so must have a
+         * fully set up signature. */
+        if (f != NULL && check != NULL)
+            burrow__tc_obj_decl(check, types_object(f));
+        if (check != NULL)
+            a = check->a;
+        *cause =
+            gt_missing_method_cause(a, burrow__tc_qualifier(check), state, V, T, m, f);
+    }
     *wrong_type = state == GT_MM_WRONG_SIG || state == GT_MM_PTR_RECV;
     return m;
 }
@@ -714,7 +731,7 @@ TypesFunc *burrow__types_missing_method(Alloc *a, TypesType V, TypesType T,
 TypesFunc *types_missing_method(TypesType V, TypesInterface *T, bool is_static,
                                 bool *wrong_type) {
     bool wt;
-    TypesFunc *m = burrow__types_missing_method(NULL, V, types_type(T), is_static,
+    TypesFunc *m = burrow__types_missing_method(NULL, NULL, V, types_type(T), is_static,
                                                 types_identical, &wt, NULL);
     if (wrong_type != NULL)
         *wrong_type = wt;
@@ -753,14 +770,15 @@ static bool gt_has_invalid_embedded_fields(Alloc *a, TypesType T, Map **seen) {
     return false;
 }
 
-bool burrow__types_has_all_methods(Alloc *a, TypesType V, TypesType T, bool is_static,
+bool burrow__types_has_all_methods(TypesChecker *check, Alloc *a, TypesType V,
+                                   TypesType T, bool is_static,
                                    bool (*equivalent)(TypesType x, TypesType y),
                                    Str *cause) {
     if (!burrow__types_is_valid(V))
         return true; /* we don't know anything about V, assume it implements T */
     bool wt;
     TypesFunc *m =
-        burrow__types_missing_method(a, V, T, is_static, equivalent, &wt, cause);
+        burrow__types_missing_method(check, a, V, T, is_static, equivalent, &wt, cause);
     if (m == NULL)
         return true;
     Arena ar;

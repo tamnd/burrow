@@ -244,6 +244,23 @@ BURROW_OWNS(ret) Str burrow__tc_operand_string(Alloc *a, const GtOperand *x,
 BURROW_STATIC(ret) Str burrow__tc_composite_kind(TypesType typ);
 void burrow__tc_op_set_const(Alloc *a, GtOperand *x, Token k, Str lit);
 bool burrow__tc_op_is_nil(const GtOperand *x);
+/* assignableTo reports whether x is assignable to a variable of type T. If
+ * the result is false and a non-NULL cause is given, *cause may be set to a
+ * more detailed explanation of the failure, and *code, if code is not NULL,
+ * to the error code. check may be NULL, as in Go, when x is not a constant,
+ * and then no cause is made. */
+bool burrow__tc_assignable_to(TypesChecker *check, const GtOperand *x, TypesType T,
+                              Str *cause, GtCode *code);
+/* convertibleTo reports whether T(x) is valid, the same way. */
+bool burrow__tc_convertible_to(TypesChecker *check, const GtOperand *x, TypesType T,
+                               Str *cause);
+/* The errorf of assignableTo and convertibleTo: *cause becomes msg, followed
+ * by what *cause held before, if anything, on the next line. */
+void burrow__tc_wrap_cause(TypesChecker *check, Str *cause, Str msg);
+/* conversion type-checks the conversion T(x). The result is in x. */
+void burrow__tc_conversion(TypesChecker *check, GtOperand *x, TypesType T);
+/* isPointer: whether typ's underlying type is a pointer. */
+bool burrow__tc_is_pointer(TypesType typ);
 
 /* ------------------------------------------------------------ declarations */
 
@@ -447,7 +464,8 @@ BURROW_OWNS(ret) Str burrow__tc_sprintf(TypesChecker *check, Str format, Slice a
 #define GT_SPRINTF(check, ...)                                                         \
     burrow__tc_sprintf((check), BURROW__FMT_FARGS(BURROW_ANY_OF, __VA_ARGS__))
 
-/* check.qualifier. */
+/* check.qualifier. A NULL checker has none, so types are written with their
+ * package paths, as Go's check.sprintf does with a nil checker. */
 TypesQualifier burrow__tc_qualifier(TypesChecker *check);
 /* markImports: adds pkg and what it imports to check->pkg_path_map. */
 void burrow__tc_mark_imports(TypesChecker *check, TypesPackage *pkg);
@@ -614,8 +632,9 @@ void burrow__tc_convert_untyped(TypesChecker *check, GtOperand *x, TypesType tar
 
 /* expr.go */
 BURROW_STATIC(ret) Str burrow__tc_op_name(AstExpr e);
-/* Sets *has_val where Go returns a non-nil value. */
-GtCode burrow__tc_implicit_type_and_value(TypesChecker *check, GtOperand *x,
+/* Sets *has_val where Go returns a non-nil value. check may be NULL, as in
+ * Go, when x is not a constant. */
+GtCode burrow__tc_implicit_type_and_value(TypesChecker *check, const GtOperand *x,
                                           TypesType target, TypesType *typ,
                                           ConstantValue *val, bool *has_val);
 void burrow__tc_update_expr_val(TypesChecker *check, AstExpr x, ConstantValue val);

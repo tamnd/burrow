@@ -573,6 +573,11 @@ bool burrow__types_all(TypesType t, GtTypePairFunc f) {
     return BURROW_CALLF(f, t, types_type_underlying(t));
 }
 
+bool burrow__types_type_param_is(TypesTypeParam *t, GtTermFunc f) {
+    return burrow__types_type_set_is(
+        burrow__types_iface_type_set(burrow__types_type_param_iface(t)), f);
+}
+
 /* ------------------------------------------------------------- predicates */
 
 bool burrow__types_is_valid(TypesType t) {

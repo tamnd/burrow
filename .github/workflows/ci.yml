@@ -257,7 +257,8 @@ jobs:
   portable-context:
     name: portable context (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Cut off at 20 minutes on macOS in October 2026.
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -314,7 +315,9 @@ jobs:
   amalgamation:
     name: amalgamation (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # Both were cut off at 20 minutes in October 2026, Linux while it was
+    # building for Windows.
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:

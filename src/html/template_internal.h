@@ -12,6 +12,7 @@
 
 #include "burrow/panic.h"
 #include "burrow/strings.h"
+#include "burrow/sync.h"
 
 #include <stdint.h>
 
@@ -119,7 +120,8 @@ enum {
     BURROW__HT_ATTR_STYLE,
     BURROW__HT_ATTR_URL,
     BURROW__HT_ATTR_SRCSET,
-    BURROW__HT_ATTR_META_CONTENT
+    BURROW__HT_ATTR_META_CONTENT,
+    BURROW__HT_ATTR_COUNT
 };
 
 /* context, the state of the HTML parser at one point in a template. Go passes
@@ -189,6 +191,17 @@ typedef burrow__HtContext (*burrow__HtTransition)(Alloc *a, burrow__HtContext c,
 /* transitionFunc, indexed by state. */
 extern const burrow__HtTransition burrow__ht_transition_func[BURROW__HT_STATE_COUNT];
 
+/* tSpecialTagEnd, the transition for raw text and RCDATA, which the escaper
+ * runs before the state's own. */
+burrow__HtContext burrow__ht_t_special_tag_end(Alloc *a, burrow__HtContext c, Str s,
+                                               Int *nread);
+
+/* attrStartStates: the state an attribute value of each kind starts in. */
+extern const burrow__HtState burrow__ht_attr_start_states[BURROW__HT_ATTR_COUNT];
+
+/* delimEnds: the bytes that end each delim. */
+extern const Str burrow__ht_delim_ends[BURROW__HT_DELIM_SPACE_OR_TAG_END + 1];
+
 /* indexTagEnd: where the end tag </tag in s starts, matching tag in any case,
  * or -1. */
 Int burrow__ht_index_tag_end(Str s, Str tag);
@@ -202,6 +215,10 @@ Int burrow__ht_eat_white_space(Str s, Int i);
 /* stringify: the one string, or what fmt_sprint makes of args, and the kind
  * of content it is. */
 Str burrow__ht_stringify(Alloc *a, Slice args, burrow__HtContentType *t);
+
+/* evalArgs: the one string, or what fmt_sprint makes of args with every
+ * pointer followed, as stringify does but keeping nil arguments. */
+Str burrow__ht_eval_args(Alloc *a, Slice args);
 
 /* attrType: the kind of content the attribute name, in lower case, holds. */
 burrow__HtContentType burrow__ht_attr_type(Str name);
@@ -250,5 +267,95 @@ Str burrow__ht_skip_css_space(Str c);
 /* isSafeURL and processURLOnto. */
 bool burrow__ht_is_safe_url(Str s);
 bool burrow__ht_process_url_onto(Str s, bool norm, StringsBuilder *b);
+
+/* ---------------------------------------------------------------- escaper */
+
+/* rangeContext, what the escaper knows about the range loop it is in. breaks
+ * and continues are Slices of burrow__HtContext *, the contexts at each break
+ * and continue. */
+typedef struct burrow__HtRangeContext burrow__HtRangeContext;
+
+struct burrow__HtRangeContext {
+    burrow__HtRangeContext *outer;
+    Slice breaks;
+    Slice continues;
+};
+
+/* escaper, what escaping has worked out about the templates in a name space
+ * and the edits it is going to make to them. Its maps are made in a:
+ *
+ *     output, Str to burrow__HtContext *, the output context of each template
+ *         name mangled with the context it starts in
+ *     derived, Str to TextTemplate *, the templates made for a start context
+ *     called, Str to bool, the mangled names that have been called
+ *     action_node_edits, ParseActionNode * to a Slice of Str, the escapers to
+ *         add to each action
+ *     template_node_edits, ParseTemplateNode * to Str, the template to call
+ *     text_node_edits, ParseTextNode * to Bytes, the text to put in
+ *
+ * The edits are kept until commit, rather than made as they are found, in case
+ * a template is run in different contexts. */
+typedef struct burrow__HtEscaper {
+    burrow__HtNameSpace *ns;
+    Alloc *a;
+    Map *output;
+    Map *derived;
+    Map *called;
+    Map *action_node_edits;
+    Map *template_node_edits;
+    Map *text_node_edits;
+    burrow__HtRangeContext *range_context;
+} burrow__HtEscaper;
+
+/* nameSpace, what the templates associated with each other share. set maps
+ * a Str to an HtmlTemplate *. a is where the templates, the escaper and what
+ * it makes are. */
+struct burrow__HtNameSpace {
+    SyncMutex mu;
+    Map *set;
+    bool escaped;
+    burrow__HtEscaper esc;
+    Alloc *a;
+};
+
+/* escapeOK, the escape_err of a template that escaped. */
+extern const Error burrow__ht_escape_ok;
+
+/* Whether err is burrow__ht_escape_ok. */
+static inline bool burrow__ht_is_escape_ok(Error err) {
+    return err.vt == burrow__ht_escape_ok.vt && err.data == burrow__ht_escape_ok.data;
+}
+
+/* redundantFuncs, for the tests: the i'th pair {a, b} in the table of
+ * escapers where b does nothing to what a gives back, so that a pipeline
+ * ending in a needs no b after it. False past the end. */
+bool burrow__ht_redundant_pair(Int i, Str *a, Str *b);
+
+/* funcMap, for the tests: calls the escaping function called name with args,
+ * a Slice of Any, making the result in a. The empty string for a name that is
+ * not there. */
+BURROW_OWNS(ret) Str burrow__ht_call_func(Alloc *a, Str name, Slice args);
+
+/* escapeText, for the tests: what escaping the text node n in context c gives,
+ * with an escaper made in a that has no templates, as makeEscaper(nil). */
+burrow__HtContext burrow__ht_escape_text_node(Alloc *a, burrow__HtContext c,
+                                              ParseTextNode *n);
+
+/* ensurePipelineContains: puts the escapers named in s, a Slice of Str, at the
+ * end of p, leaving out the ones p already ends with and using a predefined
+ * escaper p ends with where it does the same job. */
+void burrow__ht_ensure_pipeline_contains(Alloc *a, ParsePipeNode *p, Slice s);
+
+/* makeEscaper, in *e. */
+void burrow__ht_make_escaper(burrow__HtEscaper *e, burrow__HtNameSpace *ns);
+
+/* escapeTemplate: rewrites the template called name in tmpl's name space, whose
+ * root is node, so that its output is escaped. On an error the template is left
+ * so that it cannot run. */
+Error burrow__ht_escape_template(HtmlTemplate *tmpl, ParseNode node, Str name);
+
+/* For the tests: reads the GODEBUG settings from value as if it were the
+ * environment's, or from the environment again for NULL. */
+void burrow__ht_godebug_set(const char *value);
 
 #endif /* BURROW_HTML_TEMPLATE_INTERNAL_H */

@@ -442,3 +442,4 @@ global	src/expvar/expvar.c	ev_handler_func	package-vars	The HandlerFunc behind e
 global	src/expvar/expvar.c	ev_register_once	package-vars	Makes expvar_register put the handler on the default mux once. A SyncOnce.
 global	src/text/template_parse.c	burrow__parse_max_stack_depth	package-vars	Go's maxStackDepth, a variable there too, which only the tests change, before any parse starts.
 global	src/text/template_parse_node.c	burrow__parse_text_format_q	package-vars	Go's textFormat, which only the tests change, around parses and String calls on the same thread, as Go's do.
+global	src/html/template_escape.c	hte_debug_flags	godebug	The htmlmetacontenturlescape setting, read from GODEBUG on first use. Relaxed atomic loads and stores only, and two racing first loads store the same value. burrow__ht_godebug_set changes it for the tests, as t.Setenv does in Go.

@@ -48,6 +48,14 @@ struct burrow__TtExec {
     void *builtins;
 };
 
+/* The env that asks for the execution's allocator. A function in a FuncMap
+ * whose value has &burrow__tt_exec_env as its env is called with the Alloc *
+ * of the execution that calls it as its env instead, so that what it gives back
+ * goes in that execution's arena. html/template's escapers are made that way.
+ * The function value is a function pointer and then the env, as BURROW_FUNC
+ * lays it out. */
+extern const char burrow__tt_exec_env;
+
 /* errBadComparisonType and errNoComparison. */
 extern const Error burrow__tt_err_bad_comparison_type;
 extern const Error burrow__tt_err_no_comparison;

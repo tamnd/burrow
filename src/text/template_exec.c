@@ -758,6 +758,27 @@ static ReflectValue tte_eval_variable_node(TteState *s, ReflectValue dot,
                                 args, final);
 }
 
+const char burrow__tt_exec_env = 0;
+
+/* A function value with burrow__tt_exec_env as its env, as one with the
+ * execution's allocator instead, made in the arena. Any other comes back as it
+ * is. */
+static ReflectValue tte_bind_env(TteState *s, ReflectValue fn) {
+    typedef struct {
+        void (*f)(void);
+        void *env;
+    } TteFuncValue;
+    if (reflect_type_kind(fn.typ) != REFLECT_FUNC || fn.ptr == NULL ||
+        fn.typ->size != sizeof(TteFuncValue))
+        return fn;
+    TteFuncValue fv;
+    memcpy(&fv, fn.ptr, sizeof fv);
+    if (fv.env != (const void *)&burrow__tt_exec_env)
+        return fn;
+    fv.env = s->x->a;
+    return burrow__tt_value_of(s->x->a, fn.typ, &fv);
+}
+
 /* findFunction: the function called name, from the template's FuncMap first
  * and the builtins second. */
 static bool tte_find_function(TteState *s, Str name, ReflectValue *fn,
@@ -773,8 +794,10 @@ static bool tte_find_function(TteState *s, Str name, ReflectValue *fn,
             found = true;
         }
         sync_rw_mutex_r_unlock(&tmpl->common->mu_funcs);
-        if (found)
+        if (found) {
+            *fn = tte_bind_env(s, *fn);
             return true;
+        }
     }
     if (burrow__tt_find_builtin(s->x, name, fn)) {
         *is_builtin = true;

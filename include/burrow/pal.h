@@ -136,6 +136,7 @@ enum {
     PAL_EINPROGRESS,     /* in progress, not finished */
     PAL_EPROTONOSUPPORT, /* protocol not supported */
     PAL_EAFNOSUPPORT,    /* address family not supported */
+    PAL_ENOTSOCK,        /* not a socket */
     PAL_EHOSTNOTFOUND,   /* name resolution found nothing */
     PAL_ETRYAGAIN,       /* name resolution failed for now, retry */
     PAL_EOTHER           /* something outside the set above */

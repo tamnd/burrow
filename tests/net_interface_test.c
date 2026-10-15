@@ -66,6 +66,11 @@ static bool list_failed(TestingT *t, Error err) {
         strings_contains(error_text(err), S("getadaptersaddresses")))
         testing_t_skip_v(t, "wine lists no adapters: ", err);
 #endif
+#if defined(BURROW_OS_COSMO)
+    /* Not in Go: burrow has no interface backend for Cosmopolitan yet. */
+    if (errors_is(err, errors_err_unsupported))
+        testing_t_skip_v(t, "no interface list in a Cosmopolitan build: ", err);
+#endif
     testing_t_fatal_v(t, err);
     return true;
 }

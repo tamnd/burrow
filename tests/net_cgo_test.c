@@ -130,6 +130,13 @@ static void TestCgoLookupPTRWithCancel(TestingT *t) {
 static void TestCgoLookupCNAME(TestingT *t) {
     if (!cgo_only(t))
         return;
+#if defined(BURROW_OS_COSMO)
+    /* Not in Go: Cosmopolitan's C library has no res_search or res_nsearch.
+     * LookupCNAME falls back to the Go resolver there, as it does in Go when
+     * the cgo lookup fails. */
+    testing_t_skip_v(t, "no res_nsearch in a Cosmopolitan build");
+    return;
+#endif
     /* mustHaveExternalNetwork and testenv.SkipFlakyNet. */
     if (testing_short()) {
         testing_t_skip_v(t, "avoid external network");

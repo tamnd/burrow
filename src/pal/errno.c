@@ -74,6 +74,7 @@ static const char *const errno_names[] = {
     "operation now in progress",
     "protocol not supported",
     "address family not supported by protocol",
+    "socket operation on non-socket",
     "no such host",
     "temporary failure in name resolution",
     "unknown error",
@@ -247,6 +248,8 @@ static PalErrno errno_map(int native) {
         return PAL_EPROTONOSUPPORT;
     case EAFNOSUPPORT:
         return PAL_EAFNOSUPPORT;
+    case ENOTSOCK:
+        return PAL_ENOTSOCK;
     default:
         return PAL_EOTHER;
     }

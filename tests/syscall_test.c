@@ -313,6 +313,7 @@ static void TestFromPal(TestingT *t) {
     CHECK_INT_EQ(syscall_errno_from_pal(PAL_EACCES), SYSCALL_EACCES);
     CHECK_INT_EQ(syscall_errno_from_pal(PAL_ETIMEDOUT), SYSCALL_ETIMEDOUT);
     CHECK_INT_EQ(syscall_errno_from_pal(PAL_EAFNOSUPPORT), SYSCALL_EAFNOSUPPORT);
+    CHECK_INT_EQ(syscall_errno_from_pal(PAL_ENOTSOCK), SYSCALL_ENOTSOCK);
     CHECK_INT_EQ(syscall_errno_from_pal(PAL_OK), 0);
     CHECK_INT_EQ(syscall_errno_from_pal(PAL_EHOSTNOTFOUND), 0);
     CHECK_INT_EQ(syscall_errno_from_pal(PAL_EOTHER), 0);

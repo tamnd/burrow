@@ -626,8 +626,8 @@ static int64_t tte_array_length(TypesChecker *check, AstExpr e) {
         burrow__types_is_basic(x.typ, TYPES_IS_INTEGER)) {
         ConstantValue val = constant_to_int(check->a, x.val);
         if (constant_value_kind(val) == CONSTANT_INT) {
-            if (burrow__tc_representable_const(val, check, types_typ[TYPES_INT],
-                                               NULL)) {
+            if (burrow__tc_representable_const(check->a, val, check,
+                                               types_typ[TYPES_INT], NULL)) {
                 bool ok = false;
                 int64_t n = constant_int64_val(val, &ok);
                 if (ok && n >= 0)

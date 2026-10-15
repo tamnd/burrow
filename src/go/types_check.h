@@ -39,6 +39,7 @@
 /* Go's internal/types/errors.Code, with the same values. */
 typedef enum GtCode {
     GT_CODE_INVALID_SYNTAX_TREE = -1,
+    GT_CODE_NONE = 0, /* no error; Go leaves the zero Code unnamed */
     GT_CODE_TEST = 1,
     GT_CODE_BLANK_PKG_NAME = 2,
     GT_CODE_MISMATCHED_PKG_NAME = 3,
@@ -599,8 +600,27 @@ BURROW_OWNS(ret) TypesInterface *burrow__tc_new_interface(TypesChecker *check);
 void burrow__tc_interface_type(TypesChecker *check, TypesInterface *ityp,
                                AstInterfaceType *iface, TypesTypeName *def);
 /* rounded may be NULL. */
-bool burrow__tc_representable_const(ConstantValue x, TypesChecker *check,
+bool burrow__tc_representable_const(Alloc *a, ConstantValue x, TypesChecker *check,
                                     TypesBasic *typ, ConstantValue *rounded);
+
+/* const.go */
+void burrow__tc_overflow(TypesChecker *check, GtOperand *x, TokenPos op_pos);
+GtCode burrow__tc_representation(TypesChecker *check, const GtOperand *x,
+                                 TypesBasic *typ, ConstantValue *v);
+void burrow__tc_representable(TypesChecker *check, GtOperand *x, TypesBasic *typ);
+void burrow__tc_invalid_conversion(TypesChecker *check, GtCode code, const GtOperand *x,
+                                   TypesType target);
+void burrow__tc_convert_untyped(TypesChecker *check, GtOperand *x, TypesType target);
+
+/* expr.go */
+BURROW_STATIC(ret) Str burrow__tc_op_name(AstExpr e);
+/* Sets *has_val where Go returns a non-nil value. */
+GtCode burrow__tc_implicit_type_and_value(TypesChecker *check, GtOperand *x,
+                                          TypesType target, TypesType *typ,
+                                          ConstantValue *val, bool *has_val);
+void burrow__tc_update_expr_val(TypesChecker *check, AstExpr x, ConstantValue val);
+void burrow__tc_update_expr_type(TypesChecker *check, AstExpr x, TypesType typ,
+                                 bool final);
 
 /* ------------------------------------------------------------ instantiation */
 

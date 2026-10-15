@@ -59,6 +59,20 @@ category	zone-cache	The interface names and indexes IPv6 zones are read through.
 category	sql-drivers	database/sql's registered drivers. Go keeps them in a package level map behind a RWMutex, and they are process wide because a driver registered anywhere is one every Open can find.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
+global	src/go/types_object.c	gt_no_signature	tables	The empty signature of a function with no type yet. Initialised in place and never written.
+global	src/go/types_predicates.c	gt_invalid_type_set	tables	The type set of a union with too many terms. Zero and never written.
+global	src/go/types_type.c	gt_last_id	package-vars	Go's lastID, the counter that numbers type parameters. Only ever changed with an atomic add.
+global	src/go/types_universe.c	gt_all_term	tables	The term for all types. Initialised in place and never written.
+global	src/go/types_universe.c	gt_all_terms	tables	The termlist of all types, which holds gt_all_term. Initialised in place and never written.
+global	src/go/types_universe.c	gt_byte	tables	The byte alias of uint8. Initialised in place and never written.
+global	src/go/types_universe.c	gt_empty_interface	tables	interface{}, with its type set already worked out, so nothing fills it in later. Initialised in place and never written.
+global	src/go/types_universe.c	gt_rune	tables	The rune alias of int32. Initialised in place and never written.
+global	src/go/types_universe.c	gt_top_type_set	tables	The type set of all types. Initialised in place and never written.
+global	src/go/types_universe.c	gt_typ	tables	Go's Typ, the predeclared basic types. Initialised in place and never written.
+global	src/go/types_universe.c	gt_universe	tables	Go's Universe scope. Made inside gt_universe_once and only read after it.
+global	src/go/types_universe.c	gt_universe_arena	tables	The arena the universe and unsafe are made in, inside gt_universe_once. Never freed.
+global	src/go/types_universe.c	gt_universe_once	tables	A SyncOnce, which is the synchronisation for gt_universe, gt_unsafe and gt_universe_arena.
+global	src/go/types_universe.c	gt_unsafe	tables	Go's Unsafe package. Made inside gt_universe_once and only read after it.
 global	src/mem/track.c	tomb	marker	Never written. It is the deleted slot marker, and it is a real object because casting a small integer to a pointer is not defined and this is.
 global	src/mem/heap.c	heap_singleton	allocator	Immutable except through mem_set_oom, which is documented as a decision the host makes once, before there is a second thread.
 global	src/mem/heap.c	heap_counting	allocator	Relaxed atomic. testing turns it on before a benchmark run and off after, and an allocation that races the switch is counted or not, which moves allocs/op by at most one.

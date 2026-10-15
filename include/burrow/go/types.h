@@ -41,6 +41,7 @@
 #include "burrow/bytes.h"
 #include "burrow/core.h"
 #include "burrow/func.h"
+#include "burrow/go/ast.h"
 #include "burrow/go/constant.h"
 #include "burrow/go/token.h"
 #include "burrow/io.h"
@@ -181,6 +182,16 @@ BURROW_OWNS(ret) Str types_type_string(Alloc *a, TypesType t, TypesQualifier qf)
 
 /* WriteType: types_type_string written to buf. */
 void types_write_type(BytesBuffer *buf, TypesType t, TypesQualifier qf);
+
+/* ExprString: x written the way go/types shows an expression in a message. It
+ * is Go syntax, shortened: a function literal is "(func() literal)" and a
+ * composite literal with elements is "T{…}". A NULL x, an AstBadExpr and an
+ * AstKeyValueExpr, which have no form here, come out as "(ast: <nil>)" and
+ * "(ast: *ast.BadExpr)" and so on. */
+BURROW_OWNS(ret) Str types_expr_string(Alloc *a, AstExpr x);
+
+/* WriteExpr: types_expr_string written to buf. */
+void types_write_expr(BytesBuffer *buf, AstExpr x);
 
 /* ------------------------------------------------------------ basic types */
 

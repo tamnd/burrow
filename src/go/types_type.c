@@ -27,6 +27,7 @@
 #include "burrow/sync/atomic.h"
 #include "burrow/type.h"
 
+#include "types_check.h"
 #include "types_internal.h"
 
 #include <stdbool.h>
@@ -570,6 +571,26 @@ TypesTypeParam *types_new_type_param(Alloc *a, TypesTypeName *obj,
     return t;
 }
 
+TypesTypeParam *burrow__tc_new_type_param(TypesChecker *check, TypesTypeName *obj,
+                                          TypesType constraint) {
+    /* Always increment lastID, even if it is not used. */
+    (void)sync_atomic_uint32_add(&gt_last_id, 1);
+    TypesTypeParam *t = GT_NEW(check->a, TypesTypeParam);
+    t->hdr.kind = TYPES_KIND_TYPE_PARAM;
+    t->a = check->a;
+    t->check = check;
+    t->id = ++check->next_id;
+    t->obj = obj;
+    t->index = -1;
+    t->bound = constraint;
+    if (GT_OBJ(obj)->typ == NULL)
+        GT_OBJ(obj)->typ = types_type(t);
+    /* iface may mutate typ.bound, so we must ensure that iface() is called at
+     * least once before the resulting TypeParam escapes. */
+    burrow__tc_needs_cleanup(check, types_type(t));
+    return t;
+}
+
 TypesTypeName *types_type_param_obj(TypesTypeParam *t) {
     return t->obj;
 }
@@ -715,6 +736,14 @@ TypesAlias *burrow__types_new_alias(Alloc *a, TypesTypeName *obj, TypesType rhs)
     t->from_rhs = rhs;
     if (GT_OBJ(obj)->typ == NULL)
         GT_OBJ(obj)->typ = types_type(t);
+    return t;
+}
+
+TypesAlias *burrow__tc_new_alias(TypesChecker *check, TypesTypeName *obj,
+                                 TypesType rhs) {
+    TypesAlias *t = burrow__types_new_alias(check->a, obj, rhs);
+    /* Ensure that a.actual is set at the end of type checking. */
+    burrow__tc_needs_cleanup(check, types_type(t));
     return t;
 }
 

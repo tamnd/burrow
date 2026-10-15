@@ -29,6 +29,7 @@
 #include "burrow/sync/atomic.h"
 #include "burrow/type.h"
 
+#include "types_check.h"
 #include "types_internal.h"
 
 #include <stdbool.h>
@@ -58,6 +59,15 @@ static TypesNamed *gt_new_named(Alloc *a, TypesTypeName *obj, TypesType from_rhs
     typ->methods = methods;
     if (GT_OBJ(obj)->typ == NULL)
         GT_OBJ(obj)->typ = types_type(typ);
+    return typ;
+}
+
+TypesNamed *burrow__tc_new_named(TypesChecker *check, TypesTypeName *obj,
+                                 TypesType from_rhs, Slice methods) {
+    TypesNamed *typ = gt_new_named(check->a, obj, from_rhs, methods);
+    typ->check = check;
+    /* Ensure that typ is always sanity-checked. */
+    burrow__tc_needs_cleanup(check, types_type(typ));
     return typ;
 }
 

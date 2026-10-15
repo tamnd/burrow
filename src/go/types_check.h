@@ -419,7 +419,8 @@ struct TypesChecker {
     /* where the object being checked is */
     GtEnv env;
 
-    bool bailing; /* the panic unwinding is a bailout */
+    bool bailing;       /* the panic unwinding is a bailout */
+    Slice bail_aliases; /* of TypesAlias *, the alias declarations being checked */
 
     /* what conf and info point at when the caller gave none */
     TypesConfig conf0;
@@ -532,6 +533,55 @@ void burrow__tc_package_objects(TypesChecker *check);
 void burrow__tc_init_order(TypesChecker *check);
 void burrow__tc_unused_imports(TypesChecker *check);
 void burrow__tc_monomorph(TypesChecker *check);
+
+/* The rest of decl.go that other files use. */
+void burrow__tc_cycle_error(TypesChecker *check, Slice cycle, Int start);
+Int burrow__tc_first_in_src(Slice path);
+bool burrow__tc_is_imported_constraint(TypesChecker *check, TypesType typ);
+void burrow__tc_collect_type_params(TypesChecker *check, TypesTypeParamList **dst,
+                                    AstFieldList *list);
+BURROW_BORROWS(ret, check) TypesTypeParam *
+burrow__tc_declare_type_param(TypesChecker *check, AstIdent *name, TokenPos scope_pos);
+
+/* Go's newNamed, newAlias and newTypeParam with a checker, which the cleanup
+ * phase finishes off. */
+BURROW_OWNS(ret) TypesNamed *burrow__tc_new_named(TypesChecker *check,
+                                                  TypesTypeName *obj,
+                                                  TypesType from_rhs, Slice methods);
+BURROW_OWNS(ret) TypesAlias *burrow__tc_new_alias(TypesChecker *check,
+                                                  TypesTypeName *obj, TypesType rhs);
+BURROW_OWNS(ret) TypesTypeParam *burrow__tc_new_type_param(TypesChecker *check,
+                                                           TypesTypeName *obj,
+                                                           TypesType constraint);
+
+/* ---------------------------------------------------- types and expressions */
+
+/* Go's target: the signature a function literal is checked against, and what
+ * it is for. */
+typedef struct GtTarget {
+    TypesSignature *sig;
+    Str desc;
+} GtTarget;
+
+/* NULL when typ is not a function type. */
+BURROW_OWNS(ret) GtTarget *burrow__tc_new_target(Alloc *a, TypesType typ, Str desc);
+
+TypesType burrow__tc_typ(TypesChecker *check, AstExpr e);
+TypesType burrow__tc_var_type(TypesChecker *check, AstExpr e);
+TypesType burrow__tc_declared_type(TypesChecker *check, AstExpr e, TypesTypeName *def);
+void burrow__tc_expr(TypesChecker *check, GtTarget *T, GtOperand *x, AstExpr e);
+void burrow__tc_init_const(TypesChecker *check, TypesConst *lhs, GtOperand *x);
+void burrow__tc_init_var(TypesChecker *check, TypesVar *lhs, GtOperand *x, Str context);
+void burrow__tc_init_vars(TypesChecker *check, Slice lhs, Slice orig_rhs,
+                          AstStmt return_stmt);
+void burrow__tc_func_type(TypesChecker *check, TypesSignature *sig,
+                          AstFieldList *recv_par, AstFuncType *ftyp);
+void burrow__tc_func_body(TypesChecker *check, GtDeclInfo *decl, Str name,
+                          TypesSignature *sig, AstBlockStmt *body,
+                          const ConstantValue *iota);
+void burrow__tc_open_scope(TypesChecker *check, AstNode node, Str comment);
+void burrow__tc_close_scope(TypesChecker *check);
+void burrow__tc_valid_type(TypesChecker *check, TypesNamed *typ);
 
 /* ---------------------------------------------------------------- recording */
 

@@ -363,6 +363,7 @@ static void tc_init_files(TypesChecker *check, Slice files) {
     check->obj_path = nil;
     check->obj_path_idx = NULL;
     check->cleaners = nil;
+    check->bail_aliases = nil;
 
     /* We must initialize usedVars and usedPkgNames both here and in
      * NewChecker, because initFiles is not called in the CheckExpr or Eval
@@ -489,14 +490,29 @@ static void tc_check_files(TypesChecker *check, Slice files) {
 
 /* The part of Files that can bail out, kept small so that nothing the catch
  * block reads is a local of the frame the jump lands in. */
+/* Not in Go: what the deferred function of typeDecl does for each alias
+ * declaration a bailout leaves half done. */
+static void tc_bail_aliases(TypesChecker *check) {
+    for (Int i = check->bail_aliases.len - 1; i >= 0; i--) {
+        TypesAlias *alias = GT_AT(check->bail_aliases, i, TypesAlias *);
+        if (alias->from_rhs == NULL) {
+            alias->from_rhs = GT_TYP(TYPES_INVALID);
+            (void)burrow__types_unalias(alias);
+        }
+    }
+    check->bail_aliases.len = 0;
+}
+
 static void tc_files_guarded(TypesChecker *check, Slice files) {
     check->bailing = false;
+    check->bail_aliases.len = 0;
     BURROW_TRY {
         tc_check_files(check, files);
     }
     BURROW_CATCH(r) {
         if (!check->bailing)
             panic(r);
+        tc_bail_aliases(check);
     }
     BURROW_TRY_END;
     check->bailing = false;

@@ -58,7 +58,7 @@ static Slice gt_index_out(Alloc *a, Slice index) {
 
 /* deref: the base of typ if it is a *Pointer, but not a named type whose
  * underlying type is one. */
-static TypesType gt_deref(TypesType typ, bool *is_ptr) {
+TypesType burrow__types_deref(TypesType typ, bool *is_ptr) {
     TypesPointer *p = types_as_pointer(types_unalias(typ));
     if (p != NULL) {
         *is_ptr = true;
@@ -193,7 +193,7 @@ static TypesObject gt_lookup_impl(Alloc *a, TypesType T, bool addressable,
      * in finding methods of the pointer base type when T is a (*Named) pointer
      * type. */
     bool is_ptr;
-    TypesType typ = gt_deref(T, &is_ptr);
+    TypesType typ = burrow__types_deref(T, &is_ptr);
 
     /* *typ where typ is an interface (incl. a type parameter) has no
      * methods. */
@@ -278,7 +278,7 @@ static TypesObject gt_lookup_impl(Alloc *a, TypesType T, bool addressable,
                      * appears multiple times at the next depth. */
                     if (obj == NULL && f->embedded) {
                         bool fptr;
-                        TypesType ft = gt_deref(GT_OBJ(f)->typ, &fptr);
+                        TypesType ft = burrow__types_deref(GT_OBJ(f)->typ, &fptr);
                         gt_emb_push(a, &next,
                                     (GtEmbedded){ft, gt_concat(a, e.index, i),
                                                  e.indirect || fptr, e.multiples});
@@ -858,7 +858,7 @@ TypesMethodSet *types_new_method_set(Alloc *a, TypesType T) {
         return &gt_empty_method_set;
 
     bool is_ptr;
-    TypesType typ = gt_deref(T, &is_ptr);
+    TypesType typ = burrow__types_deref(T, &is_ptr);
 
     /* *typ where typ is an interface has no methods. */
     if (is_ptr && types_is_interface(typ))
@@ -925,7 +925,7 @@ TypesMethodSet *types_new_method_set(Alloc *a, TypesType T) {
                      * depth. */
                     if (f->embedded) {
                         bool fptr;
-                        TypesType ft = gt_deref(GT_OBJ(f)->typ, &fptr);
+                        TypesType ft = burrow__types_deref(GT_OBJ(f)->typ, &fptr);
                         gt_emb_push(sa, &next,
                                     (GtEmbedded){ft, gt_concat(sa, e.index, i),
                                                  e.indirect || fptr, e.multiples});

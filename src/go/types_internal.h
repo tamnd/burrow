@@ -407,6 +407,10 @@ typedef struct GtObjset {
 BURROW_BORROWS(ret, s) TypesObject burrow__types_objset_insert(GtObjset *s,
                                                                TypesObject obj);
 
+/* Go's deref: the base of typ if it is a *Pointer, but not a named type whose
+ * underlying type is one. */
+TypesType burrow__types_deref(TypesType typ, bool *is_ptr);
+
 /* Go's objectKind. */
 BURROW_STATIC(ret) Str burrow__types_object_kind(TypesObject obj);
 

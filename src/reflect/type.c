@@ -1613,7 +1613,8 @@ static void rf_vec_free(RfVec *v, size_t size) {
 static void rf_scans_clear(RfVec *v) {
     RfScan *s = v->p;
     for (Int i = 0; i < v->len; i++)
-        mem_free(heap_allocator(), s[i].index, (size_t)s[i].depth * sizeof(Int), 16);
+        mem_free(heap_allocator(), s[i].index, (size_t)s[i].depth * sizeof(Int),
+                 _Alignof(Int));
     v->len = 0;
 }
 
@@ -1803,7 +1804,7 @@ static void rf_visible_free(RfVisible *w) {
     RfVisField *vf = w->fields.p;
     for (Int i = 0; i < w->fields.len; i++)
         mem_free(heap_allocator(), vf[i].f.index.p,
-                 (size_t)vf[i].f.index.len * sizeof(Int), 16);
+                 (size_t)vf[i].f.index.len * sizeof(Int), _Alignof(Int));
     rf_vec_free(&w->fields, sizeof(RfVisField));
     rf_vec_free(&w->by_name, sizeof(RfByName));
     rf_vec_free(&w->index, sizeof(Int));

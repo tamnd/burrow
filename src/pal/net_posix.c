@@ -784,8 +784,11 @@ int64_t pal_recvmsg(int64_t fd, void *buf, int64_t n, void *oob, int64_t oobcap,
     pnet_rights_cloexec(&msg);
     if (oobn != NULL)
         *oobn = (int64_t)msg.msg_controllen;
-    if (flags != NULL)
+    if (flags != NULL) {
+        /* msg_flags is unsigned on Cosmopolitan, which needs the cast.
+         * NOLINTNEXTLINE(readability-redundant-casting) */
         *flags = (int32_t)((int)msg.msg_flags & ~PNET_RECVMSG_FLAGS);
+    }
     if (from != NULL && !pnet_from_native(&ss, msg.msg_namelen, from))
         from->family = PAL_AF_UNSPEC;
     return (int64_t)r;

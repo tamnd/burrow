@@ -986,10 +986,10 @@ static void TestConvert(TestingT *t) {
                 t, "#%d: ValueOf(%s).Convert(%s) = %s, not the value wanted", i, ts(t1),
                 ts(t2), ts(reflect_value_type(vout2)));
         if (reflect_value_kind(vout2) != reflect_type_kind(reflect_value_type(vout2)))
-            testing_t_errorf_v(t,
-                               "ValueOf(%s).Convert(%s) has internal kind %v want %v",
-                               ts(t1), ts(t2), reflect_value_kind(vout2),
-                               reflect_type_kind(reflect_value_type(vout2)));
+            testing_t_errorf_v(
+                t, "ValueOf(%s).Convert(%s) has internal kind %s want %s", ts(t1),
+                ts(t2), reflect_kind_string(reflect_value_kind(vout2)),
+                reflect_kind_string(reflect_type_kind(reflect_value_type(vout2))));
 
         /* vout3 represents a new value of the out type, set to vout2. This
          * makes sure the converted value vout2 is really usable as a regular

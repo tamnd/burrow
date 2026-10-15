@@ -261,6 +261,14 @@ TypesType burrow__types_named_underlying(TypesNamed *n) {
     return n->underlying;
 }
 
+void burrow__types_named_cleanup(TypesNamed *n) {
+    /* Instances can have a nil underlying at the end of type checking; they
+     * will lazily expand it as needed. All other types must have one. */
+    if (n->inst == NULL)
+        (void)types_type_underlying(types_type(n));
+    n->check = NULL;
+}
+
 static void gt_resolve_underlying(TypesNamed *n) {
     burrow__types_assert(
         burrow__types_named_state_has(n, GT_LAZY_LOADED | GT_UNPACKED));

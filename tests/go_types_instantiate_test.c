@@ -412,7 +412,7 @@ static void TestArgumentErrorUnwrapping(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
-    TypesError te = {NULL, TOKEN_NO_POS, S("test"), false};
+    TypesError te = {.fset = NULL, .pos = TOKEN_NO_POS, .msg = S("test")};
     TypesArgumentError ae = {1, types_error_as_error(&te, a)};
     Error err = types_argument_error_as_error(&ae, a);
     const TypesError *e = errors_as(err, TYPE_TYPES_ERROR);

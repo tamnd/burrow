@@ -427,6 +427,13 @@ GtTypeSet *burrow__types_iface_type_set(TypesInterface *t) {
     return burrow__types_compute_interface_type_set(TOKEN_NO_POS, t);
 }
 
+void burrow__types_interface_cleanup(TypesInterface *t) {
+    /* any interface that escapes type checking must be safe for concurrent use */
+    (void)burrow__types_iface_type_set(t);
+    t->check = NULL;
+    t->embed_pos = slice_nil(TYPE_INT);
+}
+
 void types_interface_mark_implicit(TypesInterface *t) {
     t->implicit = true;
 }
@@ -612,6 +619,11 @@ TypesInterface *burrow__types_type_param_iface(TypesTypeParam *t) {
         (void)burrow__types_compute_interface_type_set(pos, ityp);
     }
     return ityp;
+}
+
+void burrow__types_type_param_cleanup(TypesTypeParam *t) {
+    (void)burrow__types_type_param_iface(t);
+    t->check = NULL;
 }
 
 /* ------------------------------------------------------------- type lists */

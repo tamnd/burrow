@@ -104,13 +104,14 @@ typedef struct GtTypeSet {
 
 struct TypesInterface {
     TypesTypeBase hdr;
-    Alloc *a;        /* for the type set */
-    Slice methods;   /* of TypesFunc *, explicitly declared */
-    Slice embeddeds; /* of TypesType, explicitly embedded */
-    Slice embed_pos; /* of TokenPos, for errors; empty if not known */
-    bool implicit;   /* the wrapper of a type set literal */
-    bool complete;   /* methods and embeddeds are set */
-    GtTypeSet *tset; /* worked out lazily */
+    Alloc *a;            /* for the type set */
+    TypesChecker *check; /* for error reporting; NULL once the type set is known */
+    Slice methods;       /* of TypesFunc *, explicitly declared */
+    Slice embeddeds;     /* of TypesType, explicitly embedded */
+    Slice embed_pos;     /* of TokenPos, for errors; empty if not known */
+    bool implicit;       /* the wrapper of a type set literal */
+    bool complete;       /* methods and embeddeds are set */
+    GtTypeSet *tset;     /* worked out lazily */
 };
 
 struct TypesMap {
@@ -143,6 +144,7 @@ typedef struct GtInstance {
 struct TypesNamed {
     TypesTypeBase hdr;
     Alloc *a;
+    TypesChecker *check; /* non-NULL during type checking; NULL otherwise */
     TypesTypeName *obj;
     bool allow_nil_rhs;
     GtInstance *inst;
@@ -158,7 +160,8 @@ struct TypesNamed {
 
 struct TypesTypeParam {
     TypesTypeBase hdr;
-    Alloc *a; /* for the implicit interface of the bound */
+    Alloc *a;            /* for the implicit interface of the bound */
+    TypesChecker *check; /* for lazy type bound completion */
     uint64_t id;
     TypesTypeName *obj;
     Int index;
@@ -420,6 +423,7 @@ bool burrow__types_named_state_has(TypesNamed *n, uint32_t m);
 BURROW_BORROWS(ret, n) TypesType burrow__types_named_rhs(TypesNamed *n);
 /* Go's Named.Underlying. */
 BURROW_BORROWS(ret, n) TypesType burrow__types_named_underlying(TypesNamed *n);
+void burrow__types_named_cleanup(TypesNamed *n);
 Int burrow__types_named_method_index(TypesNamed *t, Str name, bool fold_case);
 BURROW_BORROWS(ret, n) TypesFunc *
 burrow__types_named_lookup_method(TypesNamed *n, TypesPackage *pkg, Str name,
@@ -447,6 +451,8 @@ burrow__types_compute_interface_type_set(TokenPos pos, TypesInterface *ityp);
 BURROW_BORROWS(ret, t) TypesInterface *
 burrow__types_type_param_iface(TypesTypeParam *t);
 void burrow__types_sort_methods(Slice list);
+void burrow__types_interface_cleanup(TypesInterface *t);
+void burrow__types_type_param_cleanup(TypesTypeParam *t);
 
 /* --------------------------------------------------------- terms and sets */
 

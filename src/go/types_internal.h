@@ -368,8 +368,10 @@ TypesObject burrow__types_universe_iota(void);
 /* ----------------------------------------------------------------- objects */
 
 bool burrow__types_is_exported(Str name);
-/* Id(pkg1, name1) == Id(pkg2, name2), without making either. */
+/* Id(pkg1, name1) == Id(pkg2, name2) and strings.Compare of the two, without
+ * making either. */
 bool burrow__types_id_eq(TypesPackage *pkg1, Str name1, TypesPackage *pkg2, Str name2);
+int burrow__types_id_cmp(TypesPackage *pkg1, Str name1, TypesPackage *pkg2, Str name2);
 bool burrow__types_same_id(TypesObject obj, TypesPackage *pkg, Str name,
                            bool fold_case);
 int burrow__types_object_cmp(TypesObject x, TypesObject y);
@@ -542,6 +544,16 @@ void burrow__types_tw_string(GtTypeWriter *w, Str s);
 void burrow__types_buf_str(BytesBuffer *buf, Str s);
 void burrow__types_buf_byte(BytesBuffer *buf, Byte c);
 BURROW_OWNS(ret) Str burrow__types_buf_done(BytesBuffer *buf, Alloc *a);
+
+/* ------------------------------------------------------------------ lookup */
+
+BURROW_OWNS(ret) TypesSelection *
+burrow__types_new_selection(Alloc *a, TypesSelectionKind kind, TypesType recv,
+                            TypesObject obj, Slice index, bool indirect);
+/* missingMethod, with the identity check passed in and without the cause. */
+TypesFunc *burrow__types_missing_method(TypesType V, TypesType T, bool is_static,
+                                        bool (*equivalent)(TypesType x, TypesType y),
+                                        bool *wrong_type);
 
 /* ----------------------------------------------------- subst and contexts */
 

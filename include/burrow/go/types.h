@@ -697,6 +697,76 @@ bool types_is_interface(TypesType t);
  * itself for any other type. */
 TypesType types_default(TypesType t);
 
+/* ------------------------------------------------------ lookup and methods */
+
+/* SelectionKind: what x.f denotes. */
+typedef enum TypesSelectionKind {
+    TYPES_FIELD_VAL,   /* x.f is a struct field selector */
+    TYPES_METHOD_VAL,  /* x.f is a method selector */
+    TYPES_METHOD_EXPR, /* x.f is a method expression */
+} TypesSelectionKind;
+
+/* Selection: a selector expression x.f, which is the field or method f of the
+ * value or type x and the path of embedded fields to it. */
+typedef struct TypesSelection TypesSelection;
+
+/* LookupSelection: x.f where x has type T, or NULL if there is no field or
+ * method f, or more than one at the same depth, or f is a method with a
+ * pointer receiver and x is neither a pointer nor addressable. The selection
+ * is allocated in a. */
+BURROW_OWNS(ret) TypesSelection *types_lookup_selection(Alloc *a, TypesType T,
+                                                        bool addressable,
+                                                        TypesPackage *pkg, Str name);
+/* LookupFieldOrMethod: the field or method f of T, with pkg needed for an
+ * unexported name. index gets the path to it through embedded fields, made
+ * in a, and indirect is set if a pointer was followed on the way. When
+ * nothing is found, a non-nil index means the name was ambiguous, and
+ * indirect means a method has a pointer receiver that x can't supply. Either
+ * out pointer can be NULL. Panics if T is NULL. */
+BURROW_BORROWS(ret, T) TypesObject types_lookup_field_or_method(Alloc *a, TypesType T,
+                                                                bool addressable,
+                                                                TypesPackage *pkg,
+                                                                Str name, Slice *index,
+                                                                bool *indirect);
+/* MissingMethod: a method of T that V lacks, or NULL if V implements T. With
+ * is_static false, an interface V only has to agree on the methods it has.
+ * wrong_type, which can be NULL, is set when V has the method with the wrong
+ * signature or on a pointer receiver. */
+BURROW_BORROWS(ret, T) TypesFunc *
+types_missing_method(TypesType V, TypesInterface *T, bool is_static, bool *wrong_type);
+
+TypesSelectionKind types_selection_kind(TypesSelection *s);
+/* Recv: the type of x. */
+BURROW_BORROWS(ret, s) TypesType types_selection_recv(TypesSelection *s);
+/* Obj: the field or method f. */
+BURROW_BORROWS(ret, s) TypesObject types_selection_obj(TypesSelection *s);
+/* Type: the type of x.f. For a method value that is f's signature with x as
+ * the receiver, and for a method expression it is a function with x as the
+ * first parameter. Those signatures are new, and made in a. */
+TypesType types_selection_type(Alloc *a, TypesSelection *s);
+/* Index: the path from x to f, as indices of embedded fields and then of f
+ * itself. Don't change it. */
+BURROW_BORROWS(ret, s) Slice types_selection_index(TypesSelection *s);
+/* Indirect: a pointer was followed on the path from x to f. */
+bool types_selection_indirect(TypesSelection *s);
+/* WriteSelection and SelectionString: s as text, such as "field (T) f int". */
+void types_write_selection(BytesBuffer *buf, TypesSelection *s, TypesQualifier qf);
+BURROW_OWNS(ret) Str types_selection_string(Alloc *a, TypesSelection *s,
+                                            TypesQualifier qf);
+
+/* MethodSet: the methods of a type, sorted by Id. */
+typedef struct TypesMethodSet TypesMethodSet;
+
+/* NewMethodSet: the method set of T, made in a. It is never NULL. */
+BURROW_OWNS(ret) TypesMethodSet *types_new_method_set(Alloc *a, TypesType T);
+Int types_method_set_len(TypesMethodSet *s);
+/* At: the i'th method, which panics if i is out of range. */
+BURROW_BORROWS(ret, s) TypesSelection *types_method_set_at(TypesMethodSet *s, Int i);
+/* Lookup: the method with the given package and name, or NULL. */
+BURROW_BORROWS(ret, s) TypesSelection *
+types_method_set_lookup(TypesMethodSet *s, TypesPackage *pkg, Str name);
+BURROW_OWNS(ret) Str types_method_set_string(Alloc *a, TypesMethodSet *s);
+
 /* ---------------------------------------------------------------- contexts */
 
 typedef struct TypesContext TypesContext;

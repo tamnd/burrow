@@ -160,7 +160,9 @@ static void TestCommentMap(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
-    Slice m = comment_map(a, src, regexp_must_compile(a, S("^ ERROR ")));
+    Regexp *rx = regexp_must_compile(a, S("^ ERROR "));
+    Slice m = comment_map(a, src, rx);
+    regexp_free(rx);
     Int found = 0; /* number of errors found */
     for (Int i = 0; i < m.len; i++) {
         Comment *err = &BURROW_AT(Comment, m, i);
@@ -355,7 +357,8 @@ static void test_files(TestingT *t, Arena *ar, Slice filenames, Slice srcs,
                            &path)) {
             char buf[256];
             Int n = path.len < (Int)sizeof(buf) ? path.len : (Int)sizeof(buf);
-            memcpy(buf, path.p, (size_t)n);
+            if (n > 0)
+                memcpy(buf, path.p, (size_t)n);
             arena_free(ar);
             testing_t_skipf_v(t, "imports %q, and burrow has no importer yet",
                               str_from_bytes(buf, n));
@@ -378,6 +381,7 @@ static void test_files(TestingT *t, Arena *ar, Slice filenames, Slice srcs,
             BURROW_AT(Comment, m, k).filename = BURROW_AT(Str, filenames, i);
         errmap = slice_append(a, errmap, m.p, m.len);
     }
+    regexp_free(rx);
 
     /* match against found errors */
     Slice indices = slice_nil(TYPE_INT); /* list indices of matching errors, reused */

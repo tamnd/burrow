@@ -425,7 +425,7 @@ TypesInterface *types_new_interface(Alloc *a, Slice methods, Slice embeddeds) {
 }
 
 GtTypeSet *burrow__types_iface_type_set(TypesInterface *t) {
-    return burrow__types_compute_interface_type_set(TOKEN_NO_POS, t);
+    return burrow__types_compute_interface_type_set(t->check, TOKEN_NO_POS, t);
 }
 
 void burrow__types_interface_cleanup(TypesInterface *t) {
@@ -637,7 +637,7 @@ TypesInterface *burrow__types_type_param_iface(TypesTypeParam *t) {
         TypesNamed *n = burrow__types_as_named(bound);
         if (n != NULL)
             pos = GT_OBJ(n->obj)->pos;
-        (void)burrow__types_compute_interface_type_set(pos, ityp);
+        (void)burrow__types_compute_interface_type_set(t->check, pos, ityp);
     }
     return ityp;
 }

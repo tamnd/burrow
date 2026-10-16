@@ -217,7 +217,7 @@ static void gt_def_predeclared_types(void) {
         ityp->methods = burrow__types_ptrs_make(a, 1);
         GT_AT(ityp->methods, 0, TypesFunc *) = err;
         ityp->complete = true;
-        (void)burrow__types_compute_interface_type_set(TOKEN_NO_POS, ityp);
+        (void)burrow__types_compute_interface_type_set(NULL, TOKEN_NO_POS, ityp);
         typ->from_rhs = types_type(ityp);
         (void)burrow__types_named_underlying(typ);
         gt_def(types_object(obj));

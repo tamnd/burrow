@@ -47,9 +47,8 @@ typedef struct TifTypeSet {
  * of type sets will use this computed type set and won't need to pass in a
  * *Checker. */
 static void tif_type_set_later(TypesChecker *check, void *env) {
-    (void)check;
     TifTypeSet *c = env;
-    (void)burrow__types_compute_interface_type_set(c->pos, c->ityp);
+    (void)burrow__types_compute_interface_type_set(check, c->pos, c->ityp);
 }
 
 /* The method of iface field f, added to ityp unless it is in error. */

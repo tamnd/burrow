@@ -193,8 +193,8 @@ static void tte_valid_var_type_later(TypesChecker *check, void *env) {
     if (u->kind != TYPES_KIND_INTERFACE)
         return;
     /* TODO(gri) is this the correct position? */
-    GtTypeSet *tset = burrow__types_compute_interface_type_set(ast_node_pos(c->e),
-                                                               types_as_interface(u));
+    GtTypeSet *tset = burrow__types_compute_interface_type_set(
+        check, ast_node_pos(c->e), types_as_interface(u));
     if (!burrow__types_type_set_is_method_set(tset)) {
         if (tset->comparable)
             GT_SOFT_ERRORF(check, burrow__tc_at_node(c->e),

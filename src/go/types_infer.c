@@ -875,7 +875,10 @@ Slice burrow__tc_rename_tparams(TypesChecker *check, TokenPos pos, Slice tparams
                                 burrow__tc_context(check));
     }
 
-    *out = burrow__types_subst(check, check->a, pos, typ, rename_map, NULL,
-                               burrow__tc_context(check));
+    /* Not in Go: a NULL typ is Go's nil *Tuple, which subst gives back as it
+     * is. */
+    *out = typ == NULL ? NULL
+                       : burrow__types_subst(check, check->a, pos, typ, rename_map,
+                                             NULL, burrow__tc_context(check));
     return tparams2;
 }

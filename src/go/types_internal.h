@@ -459,8 +459,10 @@ burrow__types_new_alias_instance(TypesChecker *check, Alloc *a, TokenPos pos,
 
 BURROW_OWNS(ret) TypesInterface *burrow__types_new_interface(Alloc *a);
 BURROW_BORROWS(ret, t) GtTypeSet *burrow__types_iface_type_set(TypesInterface *t);
+/* computeInterfaceTypeSet; check may be NULL, and then nothing is reported. */
 BURROW_BORROWS(ret, ityp) GtTypeSet *
-burrow__types_compute_interface_type_set(TokenPos pos, TypesInterface *ityp);
+burrow__types_compute_interface_type_set(TypesChecker *check, TokenPos pos,
+                                         TypesInterface *ityp);
 BURROW_BORROWS(ret, t) TypesInterface *
 burrow__types_type_param_iface(TypesTypeParam *t);
 void burrow__types_sort_methods(Slice list);

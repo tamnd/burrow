@@ -133,6 +133,7 @@ static void tuf_set_handle(GtUnifier *u, const TypesTypeParam *x, TypesType *h) 
 static bool tuf_join(GtUnifier *u, const TypesTypeParam *x, const TypesTypeParam *y) {
     TypesType *hx = tuf_handle(u, x);
     TypesType *hy = tuf_handle(u, y);
+    burrow__types_assert(hx != NULL && hy != NULL);
     if (hx == hy)
         return true; /* Both type parameters already share the same handle. */
     if (*hx != NULL && *hy != NULL)
@@ -158,13 +159,17 @@ static TypesTypeParam *tuf_as_bound_type_param(const GtUnifier *u, TypesType x) 
 
 /* at returns the (possibly NULL) type for type parameter x. */
 TypesType burrow__tc_unifier_at(const GtUnifier *u, const TypesTypeParam *x) {
-    return *tuf_handle(u, x);
+    TypesType *h = tuf_handle(u, x);
+    burrow__types_assert(h != NULL);
+    return *h;
 }
 
 /* set sets the type t for type parameter x; t must not be NULL. */
 void burrow__tc_unifier_set(GtUnifier *u, const TypesTypeParam *x, TypesType t) {
     burrow__types_assert(t != NULL);
-    *tuf_handle(u, x) = t;
+    TypesType *h = tuf_handle(u, x);
+    burrow__types_assert(h != NULL);
+    *h = t;
 }
 
 /* unknowns returns the number of type parameters for which no type has been

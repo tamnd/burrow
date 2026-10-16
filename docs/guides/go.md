@@ -1,6 +1,6 @@
 # Go source
 
-`burrow/go/token.h` is Go's `go/token`, the bottom layer of Go's own tools for reading Go source. It has the tokens of the language and the positions that tie them back to a file, a line and a column. `burrow/go/scanner.h` is Go's `go/scanner`, which turns source into those tokens. `burrow/go/version.h`, Go's `go/version`, compares Go versions, and `burrow/go/constant.h`, Go's `go/constant`, does exact arithmetic on Go constants. `burrow/go/ast.h` and `burrow/go/parser.h`, Go's `go/ast` and `go/parser`, sit on top of the two and turn source into syntax trees, and `burrow/go/doc/comment.h`, Go's `go/doc/comment`, reads and prints doc comments. `burrow/go/types.h` is Go's `go/types`, the type checker, with the types, objects, scopes and packages it works on.
+`burrow/go/token.h` is Go's `go/token`, the bottom layer of Go's own tools for reading Go source. It has the tokens of the language and the positions that tie them back to a file, a line and a column. `burrow/go/scanner.h` is Go's `go/scanner`, which turns source into those tokens. `burrow/go/version.h`, Go's `go/version`, compares Go versions, and `burrow/go/constant.h`, Go's `go/constant`, does exact arithmetic on Go constants. `burrow/go/ast.h` and `burrow/go/parser.h`, Go's `go/ast` and `go/parser`, sit on top of the two and turn source into syntax trees, and `burrow/go/doc/comment.h`, Go's `go/doc/comment`, reads and prints doc comments. `burrow/go/types.h` is Go's `go/types`, the type checker, with the types, objects, scopes and packages it works on. `burrow/go/importer.h`, Go's `go/importer`, gives the type checker the packages a file imports.
 
 ## Positions
 
@@ -1778,4 +1778,66 @@ p.go:5:6: declared and not used: s
 first: p.go:5:17: cannot use 2 (untyped int constant) as string value in variable declaration
 ```
 
-The messages are the same as Go's. Imports go through `conf.importer`. burrow has no importer of its own yet, since it can neither read compiled Go packages nor find their source, so with no importer every import is an error, `unsafe` included. An importer that gives back `types_unsafe()` for `"unsafe"` is enough for a package that imports nothing else.
+The messages are the same as Go's. Imports go through `conf.importer`, and with no importer every import is an error, `unsafe` included. An importer that gives back `types_unsafe()` for `"unsafe"` is enough for a package that imports nothing else. For anything more, use the one in go/importer.
+
+## Importing packages
+
+`burrow/go/importer.h` is Go's `go/importer`. `importer_for_compiler` with `"source"` gives an importer that finds each imported package with go/build, parses its files and type checks them, importing whatever they import in turn. This program makes a GOPATH with one package in it and checks a file that uses it:
+
+<!-- example: ../examples/go/importer.c#source -->
+```c
+// Find packages in GOPATH, the way go/build did before modules.
+(void)os_setenv(BURROW_S("GOPATH"), gopath);
+(void)os_setenv(BURROW_S("GO111MODULE"), BURROW_S("off"));
+
+Str src = BURROW_S("package main\n"
+                   "\n"
+                   "import \"example/shapes\"\n"
+                   "\n"
+                   "var p = shapes.Point{1, 2}.Add(shapes.Point{3, 4})\n"
+                   "var n = len(shapes.Origin)\n");
+TokenFileSet *fset = token_new_file_set(a);
+Error err = BURROW_NO_ERROR;
+AstFile *f = parser_parse_file(a, fset, BURROW_S("main.go"),
+                               BURROW_ANY(TYPE_STRING, &src), 0, &err);
+if (BURROW_FAILED(err)) {
+    fmt_println_v(error_text(err));
+    return;
+}
+Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
+
+// The source importer type checks example/shapes from its source.
+TypesConfig conf = {0};
+conf.importer =
+    importer_for_compiler(a, fset, BURROW_S("source"), (ImporterLookup){0});
+TypesPackage *pkg =
+    types_config_check(&conf, a, BURROW_S("main"), fset, files, NULL, &err);
+if (BURROW_FAILED(err)) {
+    fmt_println_v(error_text(err));
+    return;
+}
+
+Slice imports = types_package_imports(pkg);
+for (Int i = 0; i < imports.len; i++) {
+    TypesPackage *imp = BURROW_AT(TypesPackage *, imports, i);
+    fmt_println_v("imports", types_package_path(imp));
+}
+TypesScope *scope = types_package_scope(pkg);
+const char *names[] = {"p", "n"};
+for (int i = 0; i < 2; i++) {
+    TypesObject obj = types_scope_lookup(scope, str_from_cstr(names[i]));
+    fmt_println_v(types_object_string(a, obj, types_relative_to(pkg)));
+}
+```
+
+That prints:
+
+```
+imports example/shapes
+var p example/shapes.Point
+var n int
+```
+
+The importer keeps every package it checks, so `example/shapes` is checked once however many files import it. For the standard library, set `GOROOT` and the packages are found under `$GOROOT/src`, as `build_default` explains. The first import of something like `fmt` takes a while, since everything `fmt` imports is checked too. A package that uses cgo is run through `go tool cgo` first, so that needs the `go` command, as it does in Go.
+
+Go also has the `"gc"` and `"gccgo"` importers, which read the export data the compilers write instead of the source. They are not here yet, and `importer_for_compiler` gives back the zero `TypesImporter` for them, which is Go's nil.

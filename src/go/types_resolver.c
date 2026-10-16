@@ -189,10 +189,16 @@ static TypesPackage *trs_import_package(TypesChecker *check, GtPosn at, Str path
 
     /* no package yet => import it */
     TypesPackage *imp = NULL;
-    if (str_eq(path, BURROW_S("C")) && check->conf->fake_import_c) {
+    if (str_eq(path, BURROW_S("C")) &&
+        (check->conf->fake_import_c || check->conf->go115_uses_cgo)) {
+        if (check->conf->fake_import_c && check->conf->go115_uses_cgo)
+            burrow__tc_error(
+                check, at, GT_CODE_BAD_IMPORT_PATH,
+                BURROW_S("cannot use FakeImportC and go115UsesCgo together"));
+        /* TODO(gri) shouldn't create a new one each time */
         imp = types_new_package(check->a, BURROW_S("C"), BURROW_S("C"));
         imp->fake = true; /* package scope is not populated */
-        imp->cgo = false;
+        imp->cgo = check->conf->go115_uses_cgo;
     } else {
         /* ordinary import */
         bool failed = false;

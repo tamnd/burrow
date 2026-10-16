@@ -1026,6 +1026,13 @@ typedef struct TypesConfig {
     TypesSizes sizes;
     /* Do not report imports that are not used. */
     bool disable_unused_import_check;
+    /* The checker expects the _cgo_gotypes.go file that cmd/cgo writes to be
+     * one of the package files, and resolves C.name to the declarations in it.
+     * It is an error to set both this and fake_import_c.
+     *
+     * Not in Go: Go's go115UsesCgo is unexported and only its source importer
+     * sets it. C has no way to hide a field, so it is here for the same use. */
+    bool go115_uses_cgo;
 } TypesConfig;
 
 /* TypeAndValue: the type of an expression, and its value when it is a

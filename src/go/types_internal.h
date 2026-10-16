@@ -371,6 +371,8 @@ TypesObject burrow__types_universe_iota(void);
 /* ----------------------------------------------------------------- objects */
 
 bool burrow__types_is_exported(Str name);
+/* isValidName, from predicates.go. */
+bool burrow__types_is_valid_name(Str s);
 /* Id(pkg1, name1) == Id(pkg2, name2) and strings.Compare of the two, without
  * making either. */
 bool burrow__types_id_eq(TypesPackage *pkg1, Str name1, TypesPackage *pkg2, Str name2);
@@ -389,6 +391,10 @@ BURROW_OWNS(ret) TypesFunc *burrow__types_clone_func(Alloc *a, TypesFunc *f,
                                                      TypesType typ);
 bool burrow__types_func_has_ptr_recv(TypesFunc *f);
 void burrow__types_scope_insert_raw(TypesScope *s, Str name, TypesObject obj);
+/* Scope.lookupIgnoringCase: a Slice of TypesObject, made in a. */
+BURROW_OWNS(ret) Slice burrow__types_scope_lookup_ignoring_case(Alloc *a, TypesScope *s,
+                                                                Str name,
+                                                                bool exported);
 
 void burrow__types_write_object(BytesBuffer *buf, TypesObject obj, TypesQualifier qf);
 void burrow__types_write_func_name(BytesBuffer *buf, TypesFunc *f, TypesQualifier qf);
@@ -606,6 +612,11 @@ bool burrow__types_has_all_methods(TypesChecker *check, Alloc *a, TypesType V,
                                    TypesType T, bool is_static,
                                    bool (*equivalent)(TypesType x, TypesType y),
                                    Str *cause);
+/* Go's lookupFieldOrMethod, for the checker: everything, the index too, is
+ * made in a. */
+BURROW_BORROWS(ret, T) TypesObject burrow__types_lookup_field_or_method(
+    Alloc *a, TypesType T, bool addressable, TypesPackage *pkg, Str name,
+    bool fold_case, Slice *index, bool *indirect);
 bool burrow__types_is_interface_ptr(TypesType T);
 /* interfacePtrError, made in a. T must be a pointer to an interface. */
 BURROW_OWNS(ret) Str burrow__types_interface_ptr_error(Alloc *a, TypesQualifier qf,

@@ -225,13 +225,13 @@ bool burrow__tc_error_empty(const GtError *err) {
     return err->desc.len == 0;
 }
 
-static GtPosn tce_error_posn(const GtError *err) {
+GtPosn burrow__tc_error_posn(const GtError *err) {
     if (burrow__tc_error_empty(err))
         return burrow__tc_at_pos(TOKEN_NO_POS);
     return GT_AT(err->desc, 0, GtErrorDesc *)->posn;
 }
 
-static Str tce_error_msg(const GtError *err) {
+Str burrow__tc_error_msg(const GtError *err) {
     if (burrow__tc_error_empty(err))
         return BURROW_S("no error");
     TypesChecker *check = err->check;
@@ -338,8 +338,8 @@ void burrow__tc_error_report(GtError *err) {
             tce_handle_error(check, i, p->posn, err->code, p->msg, err->soft);
         }
     } else {
-        tce_handle_error(check, 0, tce_error_posn(err), err->code, tce_error_msg(err),
-                         err->soft);
+        tce_handle_error(check, 0, burrow__tc_error_posn(err), err->code,
+                         burrow__tc_error_msg(err), err->soft);
     }
 
     /* make sure the error is not reported twice */

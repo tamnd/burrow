@@ -688,6 +688,21 @@ Slice types_scope_names(Alloc *a, TypesScope *s) {
     return names;
 }
 
+/* lookupIgnoringCase returns the objects in scope s whose names match the
+ * given name ignoring case. If exported is set, only exported names are
+ * returned. */
+Slice burrow__types_scope_lookup_ignoring_case(Alloc *a, TypesScope *s, Str name,
+                                               bool exported) {
+    Slice matches = slice_nil(TYPE_UNSAFE_POINTER);
+    Slice names = types_scope_names(a, s);
+    for (Int i = 0; i < names.len; i++) {
+        Str n = ((Str *)names.p)[i];
+        if ((!exported || burrow__types_is_exported(n)) && strings_equal_fold(n, name))
+            burrow__types_ptrs_append(a, &matches, types_scope_lookup(s, n));
+    }
+    return matches;
+}
+
 Int types_scope_num_children(TypesScope *s) {
     return s->children.len;
 }

@@ -490,6 +490,9 @@ BURROW_OWNS(ret) GtError *burrow__tc_new_error(TypesChecker *check, GtCode code)
 void burrow__tc_error_add(GtError *err, GtPosn at, Str msg);
 void burrow__tc_error_add_alt_decl(GtError *err, TypesObject obj);
 bool burrow__tc_error_empty(const GtError *err);
+/* err.posn() and err.msg(); the message is made in check->a. */
+GtPosn burrow__tc_error_posn(const GtError *err);
+BURROW_OWNS(ret) Str burrow__tc_error_msg(const GtError *err);
 void burrow__tc_error_report(GtError *err);
 #define GT_ADDF(err, at, ...)                                                          \
     burrow__tc_error_add((err), (at), GT_SPRINTF((err)->check, __VA_ARGS__))
@@ -696,6 +699,46 @@ void burrow__tc_slice_expr(TypesChecker *check, GtOperand *x, AstSliceExpr *e);
 Slice burrow__tc_func_inst(TypesChecker *check, GtTarget *T, TokenPos pos, GtOperand *x,
                            GtIndexedExpr *ix, bool infer);
 GtExprKind burrow__tc_call_expr(TypesChecker *check, GtOperand *x, AstCallExpr *call);
+BURROW_OWNS(ret) TypesSignature *
+burrow__tc_instantiate_signature(TypesChecker *check, TokenPos pos, AstExpr expr,
+                                 TypesSignature *typ, Slice targs, Slice xlist);
+/* Of GtOperand *. */
+Slice burrow__tc_expr_list(TypesChecker *check, Slice elist);
+/* Of GtOperand *. *targs_list is of Slice *, one for each operand, and a NULL
+ * entry, or a short or nil list, is Go's nil []Type. */
+Slice burrow__tc_generic_expr_list(TypesChecker *check, Slice elist, Slice *targs_list);
+/* args is of GtOperand * and atargs of Slice *, as from generic_expr_list. */
+BURROW_BORROWS(ret, sig) TypesSignature *
+burrow__tc_arguments(TypesChecker *check, AstCallExpr *call, TypesSignature *sig,
+                     Slice targs, Slice xlist, Slice args, Slice atargs);
+/* util.go's hasDots. */
+bool burrow__tc_has_dots(const AstCallExpr *call);
+
+/* builtins.go: id is the index into burrow__types_predeclared_funcs. */
+bool burrow__tc_builtin(TypesChecker *check, GtOperand *x, AstCallExpr *call, Int id);
+
+/* infer.go. Go's nil []Type result is a Slice with a NULL p. tparams is of
+ * TypesTypeParam *, targs of TypesType with NULL for the ones to infer, and
+ * args of GtOperand *. */
+Slice burrow__tc_infer(TypesChecker *check, GtPosn posn, Slice tparams, Slice targs,
+                       TypesTuple *params, Slice args, bool reverse, GtError *err);
+/* The renamed type parameters, with *out set to typ with them in. */
+Slice burrow__tc_rename_tparams(TypesChecker *check, TokenPos pos, Slice tparams,
+                                TypesType typ, TypesType *out);
+bool burrow__tc_is_parameterized(Alloc *a, Slice tparams, TypesType typ);
+
+/* assignments.go */
+void burrow__tc_assignment(TypesChecker *check, GtOperand *x, TypesType T, Str context);
+/* list is of TypesType, and a NULL entry is an invalid type. */
+BURROW_OWNS(ret) Str burrow__tc_types_summary(TypesChecker *check, Slice list,
+                                              bool variadic, bool has_dots);
+/* Of TypesType, from a Slice of GtOperand * and a Slice of TypesVar *. */
+BURROW_OWNS(ret) Slice burrow__tc_operand_types(Alloc *a, Slice list);
+BURROW_OWNS(ret) Slice burrow__tc_var_types(Alloc *a, Slice list);
+
+/* errsupport.go: obj may be NULL. */
+BURROW_OWNS(ret) Str burrow__tc_lookup_error(TypesChecker *check, TypesType typ,
+                                             Str sel, TypesObject obj, bool struct_lit);
 
 /* cycles.go */
 bool burrow__tc_is_complete(TypesChecker *check, TypesType t);

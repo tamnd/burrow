@@ -25,6 +25,7 @@
 #include "burrow/panic.h"
 #include "burrow/slice.h"
 #include "burrow/type.h"
+#include "burrow/unicode.h"
 
 #include "types_internal.h"
 
@@ -1119,4 +1120,16 @@ TypesType burrow__types_max_type(TypesType x, TypesType y) {
         return y;
     }
     return NULL;
+}
+
+/* isValidName reports whether s is a valid Go identifier. */
+bool burrow__types_is_valid_name(Str s) {
+    StrIter it = str_runes(s);
+    Int i;
+    Rune ch;
+    while (str_next_rune(&it, &i, &ch)) {
+        if (!(unicode_is_letter(ch) || ch == '_' || (i > 0 && unicode_is_digit(ch))))
+            return false;
+    }
+    return true;
 }

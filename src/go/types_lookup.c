@@ -361,6 +361,14 @@ static TypesObject gt_lookup_field_or_method(Alloc *a, TypesType T, bool address
     return gt_lookup_impl(a, T, addressable, pkg, name, fold_case, index, indirect);
 }
 
+TypesObject burrow__types_lookup_field_or_method(Alloc *a, TypesType T,
+                                                 bool addressable, TypesPackage *pkg,
+                                                 Str name, bool fold_case, Slice *index,
+                                                 bool *indirect) {
+    return gt_lookup_field_or_method(a, T, addressable, pkg, name, fold_case, index,
+                                     indirect);
+}
+
 TypesObject types_lookup_field_or_method(Alloc *a, TypesType T, bool addressable,
                                          TypesPackage *pkg, Str name, Slice *index,
                                          bool *indirect) {

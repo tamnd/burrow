@@ -16,7 +16,6 @@
 #include "burrow/map.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
-#include "burrow/unicode.h"
 
 #include "types_check.h"
 #include "types_internal.h"
@@ -33,18 +32,6 @@ static void tte_set_used(Map *m, const void *key) {
         burrow__types_oom();
 }
 
-/* isValidName reports whether s is a valid Go identifier. */
-static bool tte_is_valid_name(Str s) {
-    StrIter it = str_runes(s);
-    Int i;
-    Rune ch;
-    while (str_next_rune(&it, &i, &ch)) {
-        if (!(unicode_is_letter(ch) || ch == '_' || (i > 0 && unicode_is_digit(ch))))
-            return false;
-    }
-    return true;
-}
-
 /* ident type-checks identifier e and initializes x with the value or type of
  * e. If an error occurred, x.mode is set to invalid. If wantType is set, the
  * identifier e is expected to denote a type. */
@@ -58,7 +45,7 @@ void burrow__tc_ident(TypesChecker *check, GtOperand *x, AstIdent *e, bool want_
         if (str_eq(e->name, BURROW_S("_")))
             burrow__tc_error(check, GT_AT_NODE(e), GT_CODE_INVALID_BLANK,
                              BURROW_S("cannot use _ as value or type"));
-        else if (tte_is_valid_name(e->name))
+        else if (burrow__types_is_valid_name(e->name))
             GT_ERRORF(check, GT_AT_NODE(e), GT_CODE_UNDECLARED_NAME, "undefined: %s",
                       e->name);
         return;

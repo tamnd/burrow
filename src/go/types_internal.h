@@ -510,6 +510,18 @@ bool burrow__types_all(TypesType t, GtTypePairFunc f);
  * if there are no specific terms. */
 bool burrow__types_type_param_is(TypesTypeParam *t, GtTermFunc f);
 
+/* ---------------------------------------------------------------- sizes */
+
+/* Config.alignof, offsetsof, offsetof and sizeof from sizes.go. Not in Go:
+ * conf may be NULL, which uses stdSizes as a Config with no Sizes does. */
+int64_t burrow__types_conf_alignof(const TypesConfig *conf, TypesType T);
+BURROW_OWNS(ret) Slice burrow__types_conf_offsetsof(const TypesConfig *conf, Alloc *a,
+                                                    TypesStruct *T);
+/* index is of Int. -1 if T is too large. */
+int64_t burrow__types_conf_offsetof(const TypesConfig *conf, Alloc *a, TypesType T,
+                                    Slice index);
+int64_t burrow__types_conf_sizeof(const TypesConfig *conf, TypesType T);
+
 /* ----------------------------------------------------------- predicates */
 
 bool burrow__types_is_valid(TypesType t);
@@ -526,6 +538,21 @@ bool burrow__types_is_generic(TypesType t);
 /* Go's comparableType, reporting whether it found no reason T is not
  * comparable. seen may be NULL. */
 bool burrow__types_comparable_type(TypesType t, bool dynamic, Map *seen);
+/* The typeError comparableType returns, as which message and its argument. */
+typedef enum GtIncomparableKind {
+    GT_INCOMPARABLE_EMPTY,     /* the empty typeError */
+    GT_INCOMPARABLE_STRUCT,    /* "struct containing %s cannot be compared" */
+    GT_INCOMPARABLE_ARRAY,     /* "%s cannot be compared" */
+    GT_INCOMPARABLE_EMPTY_SET, /* "empty type set" */
+    GT_INCOMPARABLE_TYPE_SET   /* "incomparable types in type set" */
+} GtIncomparableKind;
+typedef struct GtIncomparable {
+    GtIncomparableKind kind;
+    TypesType typ; /* the %s, for a struct or an array */
+} GtIncomparable;
+/* comparableType with the reason when it is false. why may be NULL. */
+bool burrow__types_comparable_type_why(TypesType t, bool dynamic, Map *seen,
+                                       GtIncomparable *why);
 bool burrow__types_has_nil(TypesType t);
 bool burrow__types_identical_origin(TypesNamed *x, TypesNamed *y);
 bool burrow__types_identical_instance(TypesType xorig, Slice xargs, TypesType yorig,

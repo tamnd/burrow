@@ -402,3 +402,60 @@ TypesSizes types_sizes_for(Str compiler, Str arch) {
     }
     return none;
 }
+
+/* ----------------------------------------------------------- Config sizes */
+
+/* The Sizes a Config uses: its own, or stdSizes, which is SizesFor("gc",
+ * "amd64"), when it has none. Not in Go: conf may be NULL, which also gives
+ * stdSizes. */
+static TypesSizes sz_conf_sizes(const TypesConfig *conf) {
+    TypesSizes s = {NULL, NULL};
+    if (conf != NULL)
+        s = conf->sizes;
+    if (s.vt == NULL)
+        s = types_sizes_for(BURROW_S("gc"), BURROW_S("amd64"));
+    burrow__types_assert(s.vt != NULL);
+    return s;
+}
+
+int64_t burrow__types_conf_alignof(const TypesConfig *conf, TypesType T) {
+    int64_t a = types_sizes_alignof(sz_conf_sizes(conf), T);
+    if (a >= 1)
+        return a;
+    panic_str(BURROW_S("implementation of alignof returned an alignment < 1"));
+}
+
+Slice burrow__types_conf_offsetsof(const TypesConfig *conf, Alloc *a, TypesStruct *T) {
+    Slice offsets = slice_nil(TYPE_INT64);
+    if (T->fields.len > 0) {
+        /* compute offsets on demand */
+        offsets = types_sizes_offsetsof(sz_conf_sizes(conf), a, T->fields);
+        /* sanity checks */
+        if (offsets.len != T->fields.len)
+            panic_str(BURROW_S(
+                "implementation of offsetsof returned the wrong number of offsets"));
+    }
+    return offsets;
+}
+
+int64_t burrow__types_conf_offsetof(const TypesConfig *conf, Alloc *a, TypesType T,
+                                    Slice index) {
+    int64_t offs = 0;
+    for (Int k = 0; k < index.len; k++) {
+        Int i = GT_AT(index, k, Int);
+        TypesStruct *s = types_as_struct(types_type_underlying(T));
+        Slice offsets = burrow__types_conf_offsetsof(conf, a, s);
+        int64_t d = GT_AT(offsets, i, int64_t);
+        if (d < 0)
+            return -1;
+        offs += d;
+        if (offs < 0)
+            return -1;
+        T = GT_OBJ(GT_AT(s->fields, i, TypesVar *))->typ;
+    }
+    return offs;
+}
+
+int64_t burrow__types_conf_sizeof(const TypesConfig *conf, TypesType T) {
+    return types_sizes_sizeof(sz_conf_sizes(conf), T);
+}

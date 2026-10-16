@@ -789,6 +789,19 @@ bool burrow__types_has_all_methods(TypesChecker *check, Alloc *a, TypesType V,
     return bad;
 }
 
+/* assertableTo reports whether a value of type V can be asserted to have type
+ * T. The underlying type of V must be an interface. If the result is false and
+ * cause is not NULL, *cause describes the error. */
+bool burrow__tc_assertable_to(TypesChecker *check, Alloc *a, TypesType V, TypesType T,
+                              Str *cause) {
+    /* no static check is required if T is an interface
+     * spec: "If T is an interface type, x.(T) asserts that the
+     *        dynamic type of x implements the interface T." */
+    if (types_is_interface(T))
+        return true;
+    return burrow__types_has_all_methods(check, a, T, V, false, types_identical, cause);
+}
+
 /* ------------------------------------------------------------- method sets */
 
 struct TypesMethodSet {

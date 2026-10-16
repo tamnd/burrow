@@ -679,11 +679,17 @@ bool types_comparable(TypesType t) {
     return burrow__types_comparable_type(t, true, NULL);
 }
 
-static bool gt_comparable_type(TypesType t, bool dynamic, Map *seen) {
+static bool gt_comparable_type(TypesType t, bool dynamic, Map *seen,
+                               GtIncomparable *why) {
     if (gt_seen_has(seen, t))
         return true;
     gt_seen_set(seen, t);
 
+    GtIncomparable none;
+    if (why == NULL)
+        why = &none;
+    why->kind = GT_INCOMPARABLE_EMPTY;
+    why->typ = NULL;
     TypesType u = types_type_underlying(t);
     switch (u->kind) {
     case TYPES_KIND_BASIC:
@@ -691,33 +697,52 @@ static bool gt_comparable_type(TypesType t, bool dynamic, Map *seen) {
         return types_as_basic(u)->kind != TYPES_UNTYPED_NIL;
     case TYPES_KIND_POINTER:
     case TYPES_KIND_CHAN:
+        /* always comparable */
         return true;
     case TYPES_KIND_STRUCT: {
         TypesStruct *st = types_as_struct(u);
         for (Int i = 0; i < st->fields.len; i++) {
             TypesVar *f = GT_AT(st->fields, i, TypesVar *);
-            if (!gt_comparable_type(GT_OBJ(f)->typ, dynamic, seen))
-                return false; /* struct containing f.typ cannot be compared */
+            if (!gt_comparable_type(GT_OBJ(f)->typ, dynamic, seen, NULL)) {
+                why->kind = GT_INCOMPARABLE_STRUCT;
+                why->typ = GT_OBJ(f)->typ;
+                return false;
+            }
         }
         return true;
     }
     case TYPES_KIND_ARRAY:
-        return gt_comparable_type(types_as_array(u)->elem, dynamic, seen);
-    case TYPES_KIND_INTERFACE:
-        return (dynamic && !burrow__types_is_type_param(t)) ||
-               burrow__types_type_set_is_comparable(
-                   burrow__types_iface_type_set(types_as_interface(u)), seen);
+        if (!gt_comparable_type(types_as_array(u)->elem, dynamic, seen, NULL)) {
+            why->kind = GT_INCOMPARABLE_ARRAY;
+            why->typ = t;
+            return false;
+        }
+        return true;
+    case TYPES_KIND_INTERFACE: {
+        GtTypeSet *ts = burrow__types_iface_type_set(types_as_interface(u));
+        if ((dynamic && !burrow__types_is_type_param(t)) ||
+            burrow__types_type_set_is_comparable(ts, seen))
+            return true;
+        why->kind = burrow__types_type_set_is_empty(ts) ? GT_INCOMPARABLE_EMPTY_SET
+                                                        : GT_INCOMPARABLE_TYPE_SET;
+        return false;
+    }
     default:
         return false;
     }
 }
 
 bool burrow__types_comparable_type(TypesType t, bool dynamic, Map *seen) {
+    return burrow__types_comparable_type_why(t, dynamic, seen, NULL);
+}
+
+bool burrow__types_comparable_type_why(TypesType t, bool dynamic, Map *seen,
+                                       GtIncomparable *why) {
     if (seen != NULL)
-        return gt_comparable_type(t, dynamic, seen);
+        return gt_comparable_type(t, dynamic, seen, why);
     Arena ar;
     arena_init(&ar, NULL, 0);
-    bool ok = gt_comparable_type(t, dynamic, gt_seen_map(arena_allocator(&ar)));
+    bool ok = gt_comparable_type(t, dynamic, gt_seen_map(arena_allocator(&ar)), why);
     arena_free(&ar);
     return ok;
 }

@@ -630,8 +630,80 @@ void burrow__tc_invalid_conversion(TypesChecker *check, GtCode code, const GtOpe
                                    TypesType target);
 void burrow__tc_convert_untyped(TypesChecker *check, GtOperand *x, TypesType target);
 
+/* under.go: Go's func(t, u Type) *typeError. Returning false is a non-nil
+ * error, with *cause set to its text, which is empty for the empty error. */
+BURROW_FUNC(GtUnderCond, bool, TypesType t, TypesType u, Str *cause);
+/* NULL, with *cause set, where Go returns a nil Type. cond.f may be NULL, and
+ * cause may be NULL when the caller ignores the error. */
+TypesType burrow__tc_common_under(TypesChecker *check, TypesType t, GtUnderCond cond,
+                                  Str *cause);
+
 /* expr.go */
+
+/* exprKind describes the kind of an expression; the kind determines if an
+ * expression is valid in 'statement context'. */
+typedef enum GtExprKind {
+    GT_EXPR_CONVERSION,
+    GT_EXPR_EXPRESSION,
+    GT_EXPR_STATEMENT
+} GtExprKind;
+
 BURROW_STATIC(ret) Str burrow__tc_op_name(AstExpr e);
+/* NULL, after reporting an error, if the operation is not valid. */
+TypesType burrow__tc_chan_elem(TypesChecker *check, GtPosn pos, const GtOperand *x,
+                               bool recv);
+bool burrow__tc_is_comparison(Token op);
+void burrow__tc_comparison(TypesChecker *check, GtOperand *x, GtOperand *y, Token op,
+                           bool switch_case);
+void burrow__tc_match_types(TypesChecker *check, GtOperand *x, GtOperand *y);
+/* e may be NULL for an assignment operation. */
+void burrow__tc_binary(TypesChecker *check, GtOperand *x, AstExpr e, AstExpr lhs,
+                       AstExpr rhs, Token op, TokenPos op_pos);
+GtExprKind burrow__tc_raw_expr(TypesChecker *check, GtTarget *T, GtOperand *x,
+                               AstExpr e, TypesType hint, bool allow_generic);
+void burrow__tc_non_generic(TypesChecker *check, GtTarget *T, GtOperand *x);
+GtExprKind burrow__tc_expr_internal(TypesChecker *check, GtTarget *T, GtOperand *x,
+                                    AstExpr e, TypesType hint);
+/* keyVal, as a Str to key a map with, made in a. */
+BURROW_OWNS(ret) Str burrow__tc_key_val(Alloc *a, ConstantValue x);
+void burrow__tc_type_assertion(TypesChecker *check, AstExpr e, GtOperand *x,
+                               TypesType T, bool type_switch);
+void burrow__tc_generic_expr(TypesChecker *check, GtOperand *x, AstExpr e,
+                             TypesType hint);
+/* *list is of GtOperand *; the result is Go's commaOk. */
+bool burrow__tc_multi_expr(TypesChecker *check, AstExpr e, bool allow_comma_ok,
+                           Slice *list);
+BURROW_OWNS(ret) Str burrow__tc_nth(TypesChecker *check, Int n, Str what);
+void burrow__tc_expr_or_type(TypesChecker *check, GtOperand *x, AstExpr e,
+                             bool allow_generic);
+/* modeset is of 1 << GtMode bits. */
+void burrow__tc_exclude(TypesChecker *check, GtOperand *x, unsigned modeset);
+void burrow__tc_single_value(TypesChecker *check, GtOperand *x);
+
+/* literals.go */
+void burrow__tc_basic_lit(TypesChecker *check, GtOperand *x, AstBasicLit *e);
+void burrow__tc_func_lit(TypesChecker *check, GtOperand *x, AstFuncLit *e);
+void burrow__tc_composite_lit(TypesChecker *check, GtOperand *x, AstCompositeLit *e,
+                              TypesType hint);
+
+/* index.go */
+/* Go's isFuncInst. */
+bool burrow__tc_index_expr(TypesChecker *check, GtOperand *x, GtIndexedExpr *e);
+void burrow__tc_slice_expr(TypesChecker *check, GtOperand *x, AstSliceExpr *e);
+
+/* call.go */
+/* The type arguments, of TypesType; ix may be NULL. */
+Slice burrow__tc_func_inst(TypesChecker *check, GtTarget *T, TokenPos pos, GtOperand *x,
+                           GtIndexedExpr *ix, bool infer);
+GtExprKind burrow__tc_call_expr(TypesChecker *check, GtOperand *x, AstCallExpr *call);
+
+/* cycles.go */
+bool burrow__tc_is_complete(TypesChecker *check, TypesType t);
+
+/* lookup.go: assertableTo. check may be NULL, as for the API, and then the
+ * cause is made in a. */
+bool burrow__tc_assertable_to(TypesChecker *check, Alloc *a, TypesType V, TypesType T,
+                              Str *cause);
 /* Sets *has_val where Go returns a non-nil value. check may be NULL, as in
  * Go, when x is not a constant. */
 GtCode burrow__tc_implicit_type_and_value(TypesChecker *check, const GtOperand *x,

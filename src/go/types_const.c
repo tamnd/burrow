@@ -73,12 +73,7 @@ void burrow__tc_overflow(TypesChecker *check, GtOperand *x, TokenPos op_pos) {
 /* Config.sizeof. Not in Go: a NULL check uses the standard sizes, where Go
  * would dereference a nil Config. */
 static int64_t tco_sizeof(TypesChecker *check, TypesBasic *T) {
-    TypesSizes s = {0};
-    if (check != NULL)
-        s = check->conf->sizes;
-    if (s.vt == NULL)
-        s = types_sizes_for(BURROW_S("gc"), BURROW_S("amd64"));
-    return types_sizes_sizeof(s, types_type(T));
+    return burrow__types_conf_sizeof(check != NULL ? check->conf : NULL, types_type(T));
 }
 
 /* Whether the int64 value x fits in an integer of kind k. */

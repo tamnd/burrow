@@ -114,7 +114,9 @@ static Slice tio_dependency_graph(TypesChecker *check) {
         TioNode *n = GT_AT(nodes, i, TioNode *);
         /* for each dependency obj -> d (= deps[i]), create graph edges n->s and
          * s->n */
-        Map *deps = burrow__tc_obj_info(check, n->obj)->deps;
+        GtDeclInfo *info = burrow__tc_obj_info(check, n->obj);
+        burrow__types_assert(info != NULL);
+        Map *deps = info->deps;
         if (deps == NULL)
             continue;
         MapIter it = map_iter(deps);
@@ -307,7 +309,9 @@ static Slice tio_find_path(TypesChecker *check, TypesObject from, TypesObject to
 
     /* sort deps for deterministic result */
     Slice deps = {0};
-    Map *dmap = burrow__tc_obj_info(check, from)->deps;
+    GtDeclInfo *info = burrow__tc_obj_info(check, from);
+    burrow__types_assert(info != NULL);
+    Map *dmap = info->deps;
     if (dmap != NULL) {
         MapIter it = map_iter(dmap);
         const void *k;

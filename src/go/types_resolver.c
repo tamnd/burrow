@@ -601,7 +601,9 @@ static TypesTypeName *trs_resolve_base_type_name(TypesChecker *check, bool ptr,
             break;
 
         /* we're done if tdecl describes a defined type (not an alias) */
-        AstTypeSpec *tdecl = burrow__tc_obj_info(check, obj)->tdecl;
+        GtDeclInfo *d = burrow__tc_obj_info(check, obj);
+        burrow__types_assert(d != NULL && d->tdecl != NULL);
+        AstTypeSpec *tdecl = d->tdecl;
         if (tdecl->assign == TOKEN_NO_POS) {
             *ptr_out = ptr;
             return tname;
@@ -868,7 +870,9 @@ void burrow__tc_package_objects(TypesChecker *check) {
     for (Int i = 0; i < check->obj_list.len; i++) {
         TypesObject obj = GT_AT(check->obj_list, i, TypesObject);
         if (obj->kind == TYPES_OBJECT_TYPE_NAME) {
-            if (burrow__tc_obj_info(check, obj)->tdecl->assign != TOKEN_NO_POS)
+            GtDeclInfo *d = burrow__tc_obj_info(check, obj);
+            burrow__types_assert(d != NULL && d->tdecl != NULL);
+            if (d->tdecl->assign != TOKEN_NO_POS)
                 burrow__types_ptrs_append(check->a, &alias_list, obj);
             else
                 burrow__tc_obj_decl(check, obj);

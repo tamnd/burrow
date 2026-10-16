@@ -168,7 +168,7 @@ static TypesType generic2(World *w, TypesTypeParam *p1, TypesTypeParam *p2) {
 
 /* orig[targ], in the checker's context */
 static TypesType inst(World *w, TypesType orig, TypesType targ) {
-    return burrow__types_instance(w->a, TOKEN_NO_POS, orig, ptrs1(w, targ), NULL,
+    return burrow__types_instance(NULL, w->a, TOKEN_NO_POS, orig, ptrs1(w, targ), NULL,
                                   w->ctxt);
 }
 
@@ -1031,7 +1031,8 @@ static void TestErrorText(TestingT *t) {
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
 
-    TypesError e1 = {NULL, TOKEN_NO_POS, S("test"), false};
+    TypesError e1 = {NULL, TOKEN_NO_POS, S("test"),   false,
+                     0,    TOKEN_NO_POS, TOKEN_NO_POS};
     Str got = types_error_error(&e1, a);
     if (!str_eq(got, S("-: test")))
         testing_t_errorf_v(t, "Error{Msg: \"test\"}: got %q", got);
@@ -1043,7 +1044,8 @@ static void TestErrorText(TestingT *t) {
     if (!token_file_set_lines(f,
                               slice_from(lines, NELEM(lines), NELEM(lines), TYPE_INT)))
         testing_t_fatalf_v(t, "SetLines failed");
-    TypesError e2 = {fset, token_file_pos(f, 12), S("bad"), false};
+    TypesError e2 = {fset, token_file_pos(f, 12), S("bad"),    false,
+                     0,    TOKEN_NO_POS,          TOKEN_NO_POS};
     got = types_error_error(&e2, a);
     Error err = types_error_as_error(&e2, a);
     if (!str_eq(got, S("x.go:2:3: bad")) || !str_eq(error_text(err), got))

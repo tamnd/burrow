@@ -209,8 +209,7 @@ static void TestIssue65898(TestingT *t) {
         testing_t_fatalf_v(t, "%s", error_text(err));
 
     TypesConfig conf = {0};
-    Slice files = {0};
-    files = slice_append(a, files, &f, 1);
+    Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
     TypesPackage *pkg = types_config_check(&conf, a, S("p"), fset, files, NULL, &err);
     if (BURROW_FAILED(err))
         testing_t_fatalf_v(t, "%s", error_text(err));

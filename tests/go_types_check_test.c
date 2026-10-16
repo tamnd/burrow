@@ -262,6 +262,19 @@ static void collect_error(void *env, const TypesError *err) {
     }
 }
 
+/* Not in Go: the importer for the tests, which knows unsafe and nothing else.
+ * It stands in for Go's defaultImporter, which also gives unsafe this way;
+ * packages that import anything else are skipped before they get here. */
+static TypesPackage *unsafe_import(void *self, Str path, Error *err) {
+    if (str_eq(path, S("unsafe")))
+        return types_unsafe();
+    *err = errors_new((Alloc *)self,
+                      fmt_sprintf_v((Alloc *)self, "can't find import: %q", path));
+    return NULL;
+}
+
+static const TypesImporterVT unsafe_importer_vt = {NULL, unsafe_import, NULL};
+
 /* Not in Go: whether a file imports a package no importer can give it. Go's
  * test has the default importer; burrow has none yet. */
 static bool needs_importer(Alloc *a, AstFile *file, bool fake_import_c, Str *path) {
@@ -313,6 +326,7 @@ static void test_files(TestingT *t, Arena *ar, Slice filenames, Slice srcs,
     TypesConfig conf = {0};
     ErrEnv env = {a, &errlist};
     conf.error = (TypesErrorFunc){collect_error, &env};
+    conf.importer = (TypesImporter){&unsafe_importer_vt, a};
 
     /* apply custom configuration */
     TypesStdSizes sz;

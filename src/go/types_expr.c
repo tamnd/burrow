@@ -226,7 +226,7 @@ static bool tex_op(TypesChecker *check, bool unary, GtOperand *x, Token op) {
 
 /* opPos returns the position of the operator if x is an operation; otherwise
  * it returns the start position of x. */
-static TokenPos tex_op_pos(AstExpr x) {
+TokenPos burrow__tc_expr_op_pos(AstExpr x) {
     if (x == NULL)
         return TOKEN_NO_POS; /* don't crash */
     if (x->kind == AST_KIND_BINARY_EXPR)
@@ -341,7 +341,7 @@ static void tex_unary(TypesChecker *check, GtOperand *x, AstUnaryExpr *e) {
             prec = (Uint)(burrow__types_conf_sizeof(check->conf, x->typ) * 8);
         x->val = constant_unary_op(check->a, op, x->val, prec);
         x->expr = GT_NODE(e);
-        burrow__tc_overflow(check, x, tex_op_pos(x->expr));
+        burrow__tc_overflow(check, x, burrow__tc_expr_op_pos(x->expr));
         return;
     }
 
@@ -857,7 +857,7 @@ static void tex_shift(TypesChecker *check, GtOperand *x, GtOperand *y, AstExpr e
             /* x is a constant so xval != nil and it must be of Int kind. */
             x->val = constant_shift(check->a, xval, op, (Uint)s);
             x->expr = e;
-            burrow__tc_overflow(check, x, tex_op_pos(x->expr));
+            burrow__tc_overflow(check, x, burrow__tc_expr_op_pos(x->expr));
             return;
         }
 

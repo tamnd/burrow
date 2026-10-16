@@ -651,6 +651,8 @@ typedef enum GtExprKind {
     GT_EXPR_STATEMENT
 } GtExprKind;
 
+/* opPos: where the operator of x is, if x is an operation. */
+TokenPos burrow__tc_expr_op_pos(AstExpr x);
 BURROW_STATIC(ret) Str burrow__tc_op_name(AstExpr e);
 /* NULL, after reporting an error, if the operation is not valid. */
 TypesType burrow__tc_chan_elem(TypesChecker *check, GtPosn pos, const GtOperand *x,
@@ -693,6 +695,11 @@ void burrow__tc_composite_lit(TypesChecker *check, GtOperand *x, AstCompositeLit
 /* Go's isFuncInst. */
 bool burrow__tc_index_expr(TypesChecker *check, GtOperand *x, GtIndexedExpr *e);
 void burrow__tc_slice_expr(TypesChecker *check, GtOperand *x, AstSliceExpr *e);
+/* index checks an index expression for validity. If max >= 0, it is the upper
+ * bound for index. The result is the index type, invalid if the index is not
+ * valid, and *val is the index value if it is a constant, else -1. */
+TypesType burrow__tc_index(TypesChecker *check, AstExpr index, int64_t max,
+                           int64_t *val);
 
 /* call.go */
 /* The type arguments, of TypesType; ix may be NULL. */

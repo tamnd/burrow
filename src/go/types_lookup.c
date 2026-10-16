@@ -23,6 +23,7 @@
 #include "burrow/mem/arena.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
+#include "burrow/strings.h"
 #include "burrow/type.h"
 
 #include "types_check.h"
@@ -752,6 +753,26 @@ static TypesType gt_deref_struct_ptr(TypesType typ) {
     if (p != NULL && types_as_struct(types_type_underlying(p->base)) != NULL)
         return p->base;
     return typ;
+}
+
+/* fieldPath returns the path of the field at the given index sequence,
+ * starting at typ, as a string of the field names joined by ".". */
+Str burrow__types_field_path(Alloc *a, TypesType typ, Slice index) {
+    Slice names = slice_nil(TYPE_STRING);
+    for (Int k = 0; k < index.len; k++) {
+        TypesStruct *u =
+            types_as_struct(types_type_underlying(gt_deref_struct_ptr(typ)));
+        if (u == NULL) {
+            /* should not happen if index is valid for typ */
+            break;
+        }
+        TypesVar *fld = types_struct_field(u, GT_AT(index, k, Int));
+        names = slice_append(a, names, &GT_OBJ(fld)->name, 1);
+        if (names.p == NULL)
+            burrow__types_oom();
+        typ = GT_OBJ(fld)->typ;
+    }
+    return strings_join(a, names, BURROW_S("."));
 }
 
 /* hasInvalidEmbeddedFields: whether T is a struct, or a pointer to one, with

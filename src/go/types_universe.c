@@ -104,6 +104,7 @@ GtTypeSet *const burrow__types_top_type_set = &gt_top_type_set;
 static TypesInterface gt_empty_interface = {
     {TYPES_KIND_INTERFACE},
     NULL,
+    NULL,
     {NULL, 0, 0, TYPE_UNSAFE_POINTER},
     {NULL, 0, 0, TYPE_UNSAFE_POINTER},
     {NULL, 0, 0, TYPE_UNSAFE_POINTER},

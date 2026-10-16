@@ -632,8 +632,8 @@ static Str gt_missing_method_cause(Alloc *a, TypesQualifier qf, int state, Types
 
 TypesFunc *burrow__types_missing_method(TypesChecker *check, Alloc *a, TypesType V,
                                         TypesType T, bool is_static,
-                                        bool (*equivalent)(TypesType x, TypesType y),
-                                        bool *wrong_type, Str *cause) {
+                                        GtTypePairFunc equivalent, bool *wrong_type,
+                                        Str *cause) {
     /* T must be an interface */
     TypesInterface *ti = types_as_interface(types_type_underlying(T));
     burrow__types_assert(ti != NULL);
@@ -664,7 +664,7 @@ TypesFunc *burrow__types_missing_method(TypesChecker *check, Alloc *a, TypesType
                 state = GT_MM_NOT_FOUND;
                 break;
             }
-            if (!equivalent(GT_OBJ(f)->typ, GT_OBJ(m)->typ)) {
+            if (!BURROW_CALLF(equivalent, GT_OBJ(f)->typ, GT_OBJ(m)->typ)) {
                 state = GT_MM_WRONG_SIG;
                 break;
             }
@@ -713,7 +713,7 @@ TypesFunc *burrow__types_missing_method(TypesChecker *check, Alloc *a, TypesType
                 state = GT_MM_NOINTERFACE;
                 break;
             }
-            if (!equivalent(GT_OBJ(f)->typ, GT_OBJ(m)->typ)) {
+            if (!BURROW_CALLF(equivalent, GT_OBJ(f)->typ, GT_OBJ(m)->typ)) {
                 state = GT_MM_WRONG_SIG;
                 break;
             }
@@ -741,7 +741,7 @@ TypesFunc *types_missing_method(TypesType V, TypesInterface *T, bool is_static,
                                 bool *wrong_type) {
     bool wt;
     TypesFunc *m = burrow__types_missing_method(NULL, NULL, V, types_type(T), is_static,
-                                                types_identical, &wt, NULL);
+                                                GT_IDENTICAL_FN, &wt, NULL);
     if (wrong_type != NULL)
         *wrong_type = wt;
     return m;
@@ -802,8 +802,7 @@ static bool gt_has_invalid_embedded_fields(Alloc *a, TypesType T, Map **seen) {
 
 bool burrow__types_has_all_methods(TypesChecker *check, Alloc *a, TypesType V,
                                    TypesType T, bool is_static,
-                                   bool (*equivalent)(TypesType x, TypesType y),
-                                   Str *cause) {
+                                   GtTypePairFunc equivalent, Str *cause) {
     if (!burrow__types_is_valid(V))
         return true; /* we don't know anything about V, assume it implements T */
     bool wt;
@@ -829,7 +828,7 @@ bool burrow__tc_assertable_to(TypesChecker *check, Alloc *a, TypesType V, TypesT
      *        dynamic type of x implements the interface T." */
     if (types_is_interface(T))
         return true;
-    return burrow__types_has_all_methods(check, a, T, V, false, types_identical, cause);
+    return burrow__types_has_all_methods(check, a, T, V, false, GT_IDENTICAL_FN, cause);
 }
 
 /* ------------------------------------------------------------- method sets */

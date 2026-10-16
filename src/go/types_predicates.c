@@ -1071,6 +1071,11 @@ bool types_identical_ignore_tags(TypesType x, TypesType y) {
     return gt_identical(&c, x, y, NULL);
 }
 
+bool burrow__types_identical_fn(void *env, TypesType x, TypesType y) {
+    (void)env;
+    return types_identical(x, y);
+}
+
 bool burrow__types_identical_origin(TypesNamed *x, TypesNamed *y) {
     /* TODO(gri) is this correct? */
     return types_named_origin(x)->obj == types_named_origin(y)->obj;

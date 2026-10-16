@@ -563,6 +563,9 @@ bool burrow__types_comparable_type_why(TypesType t, bool dynamic, Map *seen,
                                        GtIncomparable *why);
 bool burrow__types_has_nil(TypesType t);
 bool burrow__types_identical_origin(TypesNamed *x, TypesNamed *y);
+/* Identical as a GtTypePairFunc, for missingMethod's equivalent. */
+bool burrow__types_identical_fn(void *env, TypesType x, TypesType y);
+#define GT_IDENTICAL_FN BURROW_FN(GtTypePairFunc, burrow__types_identical_fn, NULL)
 bool burrow__types_identical_instance(TypesType xorig, Slice xargs, TypesType yorig,
                                       Slice yargs);
 BURROW_BORROWS(ret, x, y) TypesType burrow__types_max_type(TypesType x, TypesType y);
@@ -605,13 +608,12 @@ burrow__types_new_selection(Alloc *a, TypesSelectionKind kind, TypesType recv,
  * methods found are type-checked first and the cause is made in check->a. */
 TypesFunc *burrow__types_missing_method(TypesChecker *check, Alloc *a, TypesType V,
                                         TypesType T, bool is_static,
-                                        bool (*equivalent)(TypesType x, TypesType y),
-                                        bool *wrong_type, Str *cause);
+                                        GtTypePairFunc equivalent, bool *wrong_type,
+                                        Str *cause);
 /* hasAllMethods, the same way. */
 bool burrow__types_has_all_methods(TypesChecker *check, Alloc *a, TypesType V,
                                    TypesType T, bool is_static,
-                                   bool (*equivalent)(TypesType x, TypesType y),
-                                   Str *cause);
+                                   GtTypePairFunc equivalent, Str *cause);
 /* Go's lookupFieldOrMethod, for the checker: everything, the index too, is
  * made in a. */
 BURROW_BORROWS(ret, T) TypesObject burrow__types_lookup_field_or_method(

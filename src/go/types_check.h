@@ -729,6 +729,24 @@ bool burrow__tc_builtin(TypesChecker *check, GtOperand *x, AstCallExpr *call, In
  * otherwise it returns typ. */
 TypesType burrow__tc_array_ptr_deref(TypesType typ);
 
+/* unify.go. A unifier maintains a list of type parameters and the types
+ * inferred for them. targs may be shorter than tparams, and may hold NULLs. */
+typedef struct GtUnifier GtUnifier;
+/* unifyMode: with assign, the types may match inexactly at the top but
+ * element types must match exactly; with exact, the types must be identical
+ * once type parameters are set. Neither is inexact unification. */
+#define GT_UNIFY_ASSIGN 1u
+#define GT_UNIFY_EXACT 2u
+BURROW_OWNS(ret) GtUnifier *burrow__tc_new_unifier(TypesChecker *check, Slice tparams,
+                                                   Slice targs,
+                                                   bool enable_interface_inference);
+bool burrow__tc_unify(GtUnifier *u, TypesType x, TypesType y, unsigned mode);
+TypesType burrow__tc_unifier_at(const GtUnifier *u, const TypesTypeParam *x);
+void burrow__tc_unifier_set(GtUnifier *u, const TypesTypeParam *x, TypesType t);
+Int burrow__tc_unifier_unknowns(const GtUnifier *u);
+/* The types inferred for tparams, NULL where there is none yet. */
+BURROW_OWNS(ret) Slice burrow__tc_unifier_inferred(const GtUnifier *u, Slice tparams);
+
 /* infer.go. Go's nil []Type result is a Slice with a NULL p. tparams is of
  * TypesTypeParam *, targs of TypesType with NULL for the ones to infer, and
  * args of GtOperand *. */

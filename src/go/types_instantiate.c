@@ -307,7 +307,7 @@ bool burrow__types_implements(TypesChecker *check, Alloc *a, TypesType V, TypesT
     }
 
     /* V must implement T's methods, if any. */
-    if (!burrow__types_has_all_methods(check, a, V, T, true, types_identical, cause)) {
+    if (!burrow__types_has_all_methods(check, a, V, T, true, GT_IDENTICAL_FN, cause)) {
         if (cause != NULL) {
             Str vs = gt_tstr(a, qf, V), ts = gt_tstr(a, qf, T);
             *cause = fmt_sprintf_v(a, "%s does not %s %s %s", vs, verb, ts, *cause);

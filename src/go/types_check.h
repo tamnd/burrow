@@ -700,6 +700,8 @@ void burrow__tc_slice_expr(TypesChecker *check, GtOperand *x, AstSliceExpr *e);
  * valid, and *val is the index value if it is a constant, else -1. */
 TypesType burrow__tc_index(TypesChecker *check, AstExpr index, int64_t max,
                            int64_t *val);
+bool burrow__tc_is_valid_index(TypesChecker *check, GtOperand *x, GtCode code, Str what,
+                               bool allow_negative);
 
 /* call.go */
 /* The type arguments, of TypesType; ix may be NULL. */

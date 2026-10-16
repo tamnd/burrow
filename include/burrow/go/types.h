@@ -1143,6 +1143,29 @@ BURROW_OWNS(ret) TypesPackage *types_config_check(TypesConfig *conf, Alloc *a, S
                                                   TokenFileSet *fset, Slice files,
                                                   TypesInfo *info, Error *err);
 
+/* CheckExpr: type checks expr as if it had appeared at position pos of pkg,
+ * and puts what it finds in info, which may be NULL. expr may be an identifier
+ * for an uninstantiated generic function or type.
+ *
+ * With a NULL pkg the universe scope is used and pos is ignored. With pkg and
+ * an invalid pos the package scope is used. Otherwise pos must be in the
+ * package. Returns false and sets *err to the error if pos is not in the
+ * package or expr cannot be type checked. err may be NULL.
+ *
+ * Eval and CheckExpr are for use alongside a full check, not instead of one.
+ * They ignore the context an expression is used in, such as an assignment, so
+ * a top-level untyped constant keeps its untyped type. */
+bool types_check_expr(Alloc *a, TokenFileSet *fset, TypesPackage *pkg, TokenPos pos,
+                      AstExpr expr, TypesInfo *info, Error *err);
+
+/* Eval: the type and, if constant, the value of the expression in the string
+ * expr, evaluated at position pos of pkg. pkg must come from checking files
+ * with full position information in fset. fset, pkg and pos mean what they do
+ * for types_check_expr. Sets *err if expr does not parse or does not type
+ * check. err may be NULL. */
+TypesTypeAndValue types_eval(Alloc *a, TokenFileSet *fset, TypesPackage *pkg,
+                             TokenPos pos, Str expr, Error *err);
+
 #ifdef __cplusplus
 }
 #endif

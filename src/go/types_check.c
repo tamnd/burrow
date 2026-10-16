@@ -492,7 +492,7 @@ static void tc_check_files(TypesChecker *check, Slice files) {
  * block reads is a local of the frame the jump lands in. */
 /* Not in Go: what the deferred function of typeDecl does for each alias
  * declaration a bailout leaves half done. */
-static void tc_bail_aliases(TypesChecker *check) {
+void burrow__tc_bail_aliases(TypesChecker *check) {
     for (Int i = check->bail_aliases.len - 1; i >= 0; i--) {
         TypesAlias *alias = GT_AT(check->bail_aliases, i, TypesAlias *);
         if (alias->from_rhs == NULL) {
@@ -512,7 +512,7 @@ static void tc_files_guarded(TypesChecker *check, Slice files) {
     BURROW_CATCH(r) {
         if (!check->bailing)
             panic(r);
-        tc_bail_aliases(check);
+        burrow__tc_bail_aliases(check);
     }
     BURROW_TRY_END;
     check->bailing = false;

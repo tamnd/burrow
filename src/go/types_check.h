@@ -510,6 +510,9 @@ void burrow__tc_version_error(TypesChecker *check, GtPosn at, Str v, Str msg);
 
 /* The bailout panic, for when there is no Config.Error. */
 BURROW_NORETURN void burrow__tc_bailout(TypesChecker *check);
+/* Not in Go: what the deferred function of typeDecl does for each alias
+ * declaration a bailout leaves half done. Run after catching a bailout. */
+void burrow__tc_bail_aliases(TypesChecker *check);
 
 #define GT_INVALID_ARG "invalid argument: "
 #define GT_INVALID_OP "invalid operation: "

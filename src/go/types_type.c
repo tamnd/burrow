@@ -753,7 +753,8 @@ TypesAlias *types_new_alias(Alloc *a, TypesTypeName *obj, TypesType rhs) {
     return t;
 }
 
-TypesAlias *burrow__types_new_alias_instance(Alloc *a, TokenPos pos, TypesAlias *orig,
+TypesAlias *burrow__types_new_alias_instance(TypesChecker *check, Alloc *a,
+                                             TokenPos pos, TypesAlias *orig,
                                              Slice targs, TypesNamed *expanding,
                                              TypesContext *ctxt) {
     burrow__types_assert(targs.len > 0);
@@ -761,8 +762,10 @@ TypesAlias *burrow__types_new_alias_instance(Alloc *a, TokenPos pos, TypesAlias 
                                              GT_OBJ(orig->obj)->name, NULL);
     Map *smap = burrow__types_make_subst_map(
         a, burrow__types_tparam_list(types_alias_type_params(orig)), targs);
-    TypesType rhs = burrow__types_subst(a, pos, orig->from_rhs, smap, expanding, ctxt);
-    TypesAlias *res = burrow__types_new_alias(a, obj, rhs);
+    TypesType rhs =
+        burrow__types_subst(check, a, pos, orig->from_rhs, smap, expanding, ctxt);
+    TypesAlias *res = check != NULL ? burrow__tc_new_alias(check, obj, rhs)
+                                    : burrow__types_new_alias(a, obj, rhs);
     res->orig = orig;
     res->tparams = orig->tparams;
     res->targs = burrow__types_new_type_list(a, targs);

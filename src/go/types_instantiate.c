@@ -360,9 +360,10 @@ bool burrow__types_implements(TypesChecker *check, Alloc *a, TypesType V, TypesT
 /* ------------------------------------------------------------- instantiate */
 
 /* verify: the index of the first type argument that does not satisfy its
- * constraint, with *cause set to why, or -1. */
-static Int gt_verify(Alloc *a, Slice tparams, Slice targs, TypesContext *ctxt,
-                     Str *cause) {
+ * constraint, with *cause set to why, or -1. check may be NULL; pos is used
+ * only if check is not. */
+static Int gt_verify(TypesChecker *check, Alloc *a, TokenPos pos, Slice tparams,
+                     Slice targs, TypesContext *ctxt, Str *cause) {
     Map *smap = burrow__types_make_subst_map(a, tparams, targs);
     for (Int i = 0; i < tparams.len; i++) {
         TypesTypeParam *tpar = GT_AT(tparams, i, TypesTypeParam *);
@@ -373,12 +374,21 @@ static Int gt_verify(Alloc *a, Slice tparams, Slice targs, TypesContext *ctxt,
          * instantiated type, so it is instantiated with the same type
          * arguments before it is checked against. */
         TypesType bound =
-            burrow__types_subst(a, TOKEN_NO_POS, tpar->bound, smap, NULL, ctxt);
-        if (!burrow__types_implements(NULL, a, GT_AT(targs, i, TypesType), bound, true,
+            burrow__types_subst(check, a, pos, tpar->bound, smap, NULL, ctxt);
+        if (!burrow__types_implements(check, a, GT_AT(targs, i, TypesType), bound, true,
                                       cause))
             return i;
     }
     return -1;
+}
+
+Int burrow__tc_verify(TypesChecker *check, TokenPos pos, Slice tparams, Slice targs,
+                      TypesContext *ctxt, Error *err) {
+    Str cause = BURROW_STR_EMPTY;
+    Int i = gt_verify(check, check->a, pos, tparams, targs, ctxt, &cause);
+    if (i >= 0)
+        *err = errors_new(check->a, cause);
+    return i;
 }
 
 /* The type parameters of orig, which must be a named type, an alias or a
@@ -444,7 +454,7 @@ TypesType types_instantiate(Alloc *a, TypesContext *ctxt, TypesType orig, Slice 
             return NULL;
         }
         Str cause = BURROW_STR_EMPTY;
-        Int i = gt_verify(a, tparams, targs, ctxt, &cause);
+        Int i = gt_verify(NULL, a, TOKEN_NO_POS, tparams, targs, ctxt, &cause);
         if (i >= 0) {
             if (err != NULL) {
                 TypesArgumentError ae = {i, errors_new(a, cause)};
@@ -454,7 +464,7 @@ TypesType types_instantiate(Alloc *a, TypesContext *ctxt, TypesType orig, Slice 
         }
     }
 
-    return burrow__types_instance(a, TOKEN_NO_POS, orig, targs, NULL, ctxt);
+    return burrow__types_instance(NULL, a, TOKEN_NO_POS, orig, targs, NULL, ctxt);
 }
 
 /* ---------------------------------------------------------- api predicates */

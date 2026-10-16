@@ -433,19 +433,21 @@ Int burrow__types_named_method_index(TypesNamed *t, Str name, bool fold_case);
 BURROW_BORROWS(ret, n) TypesFunc *
 burrow__types_named_lookup_method(TypesNamed *n, TypesPackage *pkg, Str name,
                                   bool fold_case, Int *index);
-BURROW_OWNS(ret) TypesNamed *burrow__types_new_named_instance(Alloc *a, TokenPos pos,
-                                                              TypesNamed *orig,
-                                                              Slice targs,
-                                                              TypesNamed *expanding);
+/* Go's newNamedInstance; check may be NULL. */
+BURROW_OWNS(ret) TypesNamed *
+burrow__types_new_named_instance(TypesChecker *check, Alloc *a, TokenPos pos,
+                                 TypesNamed *orig, Slice targs, TypesNamed *expanding);
 BURROW_BORROWS(ret, t) TypesType burrow__types_safe_underlying(TypesType t);
 /* Go's asNamed: the named type t is once aliases are followed, or NULL. */
 BURROW_BORROWS(ret, t) TypesNamed *burrow__types_as_named(TypesType t);
 BURROW_BORROWS(ret, a0) TypesType burrow__types_unalias(TypesAlias *a0);
 BURROW_OWNS(ret) TypesAlias *burrow__types_new_alias(Alloc *a, TypesTypeName *obj,
                                                      TypesType rhs);
+/* Go's newAliasInstance; check may be NULL. */
 BURROW_OWNS(ret) TypesAlias *
-burrow__types_new_alias_instance(Alloc *a, TokenPos pos, TypesAlias *orig, Slice targs,
-                                 TypesNamed *expanding, TypesContext *ctxt);
+burrow__types_new_alias_instance(TypesChecker *check, Alloc *a, TokenPos pos,
+                                 TypesAlias *orig, Slice targs, TypesNamed *expanding,
+                                 TypesContext *ctxt);
 
 /* ---------------------------------------------------------- interfaces */
 
@@ -622,9 +624,10 @@ bool burrow__types_implements(TypesChecker *check, Alloc *a, TypesType V, TypesT
 
 /* A substitution map is a Map from TypesTypeParam * to TypesType. */
 BURROW_OWNS(ret) Map *burrow__types_make_subst_map(Alloc *a, Slice tpars, Slice targs);
-BURROW_BORROWS(ret, typ) TypesType burrow__types_subst(Alloc *a, TokenPos pos,
-                                                       TypesType typ, Map *smap,
-                                                       TypesNamed *expanding,
+/* Go's Checker.subst; check may be NULL, as for Instantiate. */
+BURROW_BORROWS(ret, typ) TypesType burrow__types_subst(TypesChecker *check, Alloc *a,
+                                                       TokenPos pos, TypesType typ,
+                                                       Map *smap, TypesNamed *expanding,
                                                        TypesContext *ctxt);
 /* Go's replaceRecvType. Sets *copied when out is a new slice. */
 BURROW_OWNS(ret) Slice burrow__types_replace_recv_type(Alloc *a, Slice in,
@@ -642,10 +645,11 @@ BURROW_BORROWS(ret, ctxt) TypesType burrow__types_context_update(TypesContext *c
                                                                  TypesType inst);
 Int burrow__types_context_get_id(TypesContext *ctxt, TypesType t);
 
-/* Go's Checker.instance with a nil checker. */
-BURROW_OWNS(ret) TypesType burrow__types_instance(Alloc *a, TokenPos pos,
-                                                  TypesType orig, Slice targs,
-                                                  TypesNamed *expanding,
+/* Go's Checker.instance; check may be NULL, and then a wrong number of type
+ * arguments panics. */
+BURROW_OWNS(ret) TypesType burrow__types_instance(TypesChecker *check, Alloc *a,
+                                                  TokenPos pos, TypesType orig,
+                                                  Slice targs, TypesNamed *expanding,
                                                   TypesContext *ctxt);
 
 #endif

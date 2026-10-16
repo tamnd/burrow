@@ -819,17 +819,17 @@ static bool gt_identical_signature(const GtComparer *c, TypesSignature *x,
             TypesTypeParam *xt = GT_AT(xtparams, i, TypesTypeParam *);
             TypesTypeParam *yt = GT_AT(ytparams, i, TypesTypeParam *);
             TypesType ybound =
-                burrow__types_subst(a, TOKEN_NO_POS, yt->bound, smap, NULL, ctxt);
+                burrow__types_subst(NULL, a, TOKEN_NO_POS, yt->bound, smap, NULL, ctxt);
             if (!gt_identical(c, xt->bound, ybound, p))
                 ok = false;
         }
         if (ok) {
             if (yparams != NULL)
-                yparams =
-                    burrow__types_subst(a, TOKEN_NO_POS, yparams, smap, NULL, ctxt);
+                yparams = burrow__types_subst(NULL, a, TOKEN_NO_POS, yparams, smap,
+                                              NULL, ctxt);
             if (yresults != NULL)
-                yresults =
-                    burrow__types_subst(a, TOKEN_NO_POS, yresults, smap, NULL, ctxt);
+                yresults = burrow__types_subst(NULL, a, TOKEN_NO_POS, yresults, smap,
+                                               NULL, ctxt);
         }
     }
     ok = ok && x->variadic == y->variadic &&

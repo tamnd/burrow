@@ -115,7 +115,8 @@ TypesNamed *burrow__types_named_unpack(TypesNamed *n) {
     return n;
 }
 
-TypesNamed *burrow__types_new_named_instance(Alloc *a, TokenPos pos, TypesNamed *orig,
+TypesNamed *burrow__types_new_named_instance(TypesChecker *check, Alloc *a,
+                                             TokenPos pos, TypesNamed *orig,
                                              Slice targs, TypesNamed *expanding) {
     burrow__types_assert(targs.len > 0);
     TypesTypeName *obj = types_new_type_name(a, pos, GT_OBJ(orig->obj)->pkg,
@@ -129,9 +130,13 @@ TypesNamed *burrow__types_new_named_instance(Alloc *a, TokenPos pos, TypesNamed 
     TypesNamed *typ = GT_NEW(a, TypesNamed);
     typ->hdr.kind = TYPES_KIND_NAMED;
     typ->a = a;
+    typ->check = check;
     typ->obj = obj;
     typ->inst = inst;
     GT_OBJ(obj)->typ = types_type(typ);
+    /* Ensure that typ is always sanity-checked. */
+    if (check != NULL)
+        burrow__tc_needs_cleanup(check, types_type(typ));
     return typ;
 }
 
@@ -196,14 +201,19 @@ TypesFunc *types_named_method(TypesNamed *t, Int i) {
 static TypesFunc *gt_expand_method(TypesNamed *t, Int i) {
     TypesFunc *orig = types_named_method(t->inst->orig, i);
     burrow__types_assert(orig != NULL);
+    TypesChecker *check = t->check;
+    /* Ensure that the original method is type-checked. */
+    if (check != NULL)
+        burrow__tc_obj_decl(check, types_object(orig));
     TypesSignature *old_sig = types_as_signature(GT_OBJ(orig)->typ);
     Slice rtpars = burrow__types_tparam_list(old_sig->rparams);
     Slice rtargs = burrow__types_type_list(t->inst->targs);
     TypesSignature *new_sig = old_sig;
     if (rtpars.len == rtargs.len) {
         Map *smap = burrow__types_make_subst_map(t->a, rtpars, rtargs);
+        TypesContext *ctxt = check != NULL ? burrow__tc_context(check) : NULL;
         new_sig = types_as_signature(burrow__types_subst(
-            t->a, GT_OBJ(orig)->pos, types_type(old_sig), smap, t, NULL));
+            check, t->a, GT_OBJ(orig)->pos, types_type(old_sig), smap, t, ctxt));
     }
     if (new_sig == old_sig) {
         TypesSignature *copy = GT_NEW(t->a, TypesSignature);
@@ -351,6 +361,7 @@ TypesFunc *burrow__types_named_lookup_method(TypesNamed *n, TypesPackage *pkg, S
 }
 
 static TypesType gt_expand_rhs(TypesNamed *n) {
+    TypesChecker *check = n->check;
     burrow__types_assert(!burrow__types_named_state_has(n, GT_UNPACKED));
     burrow__types_assert(
         burrow__types_named_state_has(n->inst->orig, GT_LAZY_LOADED | GT_UNPACKED));
@@ -367,9 +378,11 @@ static TypesType gt_expand_rhs(TypesNamed *n) {
         burrow__types_context_update(ctxt, h, types_type(orig), targs, types_type(n));
     burrow__types_assert(u == types_type(n));
     Map *m = burrow__types_make_subst_map(n->a, tpars, targs);
+    if (check != NULL)
+        ctxt = burrow__tc_context(check);
     TypesType orig_rhs = burrow__types_named_rhs(orig);
     TypesType rhs =
-        burrow__types_subst(n->a, GT_OBJ(n->obj)->pos, orig_rhs, m, n, NULL);
+        burrow__types_subst(check, n->a, GT_OBJ(n->obj)->pos, orig_rhs, m, n, ctxt);
     TypesInterface *iface = types_as_interface(rhs);
     if (iface != NULL) {
         bool copied = false;
@@ -378,15 +391,20 @@ static TypesType gt_expand_rhs(TypesNamed *n) {
         if (copied) {
             if (types_type(iface) == orig_rhs) {
                 burrow__types_assert(iface->complete);
-                TypesInterface *crafted = burrow__types_new_interface(n->a);
+                TypesInterface *crafted = check != NULL
+                                              ? burrow__tc_new_interface(check)
+                                              : burrow__types_new_interface(n->a);
                 crafted->complete = true;
                 crafted->implicit = false;
                 crafted->embeddeds = iface->embeddeds;
                 iface = crafted;
             }
             iface->methods = methods;
-            iface->tset = NULL;
-            (void)burrow__types_iface_type_set(iface);
+            iface->tset = NULL; /* recompute type set with new methods */
+            /* go.dev/issue/61561: We have to complete the interface even
+             * without a checker. */
+            if (check == NULL)
+                (void)burrow__types_iface_type_set(iface);
             return types_type(iface);
         }
     }
@@ -425,6 +443,7 @@ static TypesType gt_smap_lookup(Map *m, TypesTypeParam *tpar) {
 
 /* Go's subster. */
 typedef struct GtSubster {
+    TypesChecker *check; /* NULL if called via Instantiate */
     Alloc *a;
     TokenPos pos;
     Map *smap;
@@ -434,8 +453,9 @@ typedef struct GtSubster {
 
 static TypesType gt_subst_typ(GtSubster *subst, TypesType typ);
 
-TypesType burrow__types_subst(Alloc *a, TokenPos pos, TypesType typ, Map *smap,
-                              TypesNamed *expanding, TypesContext *ctxt) {
+TypesType burrow__types_subst(TypesChecker *check, Alloc *a, TokenPos pos,
+                              TypesType typ, Map *smap, TypesNamed *expanding,
+                              TypesContext *ctxt) {
     burrow__types_assert(expanding != NULL || ctxt != NULL);
     if (map_len(smap) == 0)
         return typ;
@@ -443,7 +463,7 @@ TypesType burrow__types_subst(Alloc *a, TokenPos pos, TypesType typ, Map *smap,
         return typ;
     if (typ != NULL && typ->kind == TYPES_KIND_TYPE_PARAM)
         return gt_smap_lookup(smap, types_as_type_param(typ));
-    GtSubster subst = {a, pos, smap, expanding, ctxt};
+    GtSubster subst = {check, a, pos, smap, expanding, ctxt};
     return gt_subst_typ(&subst, typ);
 }
 
@@ -545,22 +565,29 @@ static TypesType gt_subst_signature(GtSubster *subst, TypesSignature *t) {
                 GtObject *o = GT_OBJ(tp->obj);
                 TypesTypeName *tname =
                     types_new_type_name(subst->a, o->pos, o->pkg, o->name, NULL);
-                TypesTypeParam *ftp = types_new_type_param(subst->a, tname, NULL);
+                TypesTypeParam *ftp =
+                    subst->check != NULL
+                        ? burrow__tc_new_type_param(subst->check, tname, NULL)
+                        : types_new_type_param(subst->a, tname, NULL);
                 ftp->index = tp->index;
                 GT_AT(fresh, i, TypesTypeParam *) = ftp;
                 if (!map_set(smap, &tp, &ftp))
                     burrow__types_oom();
+                /* Record the canonical type parameter so that cycles
+                 * through fresh copies are still found. */
+                if (subst->check != NULL)
+                    burrow__tc_mono_record_canon(subst->check, ftp, tp);
             }
             for (Int i = 0; i < n; i++) {
                 TypesTypeParam *tp = gt_named_at(list, i);
                 GT_AT(fresh, i, TypesTypeParam *)->bound =
-                    burrow__types_subst(subst->a, subst->pos, tp->bound, smap,
-                                        subst->expanding, subst->ctxt);
+                    burrow__types_subst(subst->check, subst->a, subst->pos, tp->bound,
+                                        smap, subst->expanding, subst->ctxt);
             }
             tparams = GT_NEW(subst->a, TypesTypeParamList);
             tparams->tparams = fresh;
-            fresh_subst =
-                (GtSubster){subst->a, subst->pos, smap, subst->expanding, subst->ctxt};
+            fresh_subst = (GtSubster){subst->check, subst->a,         subst->pos,
+                                      smap,         subst->expanding, subst->ctxt};
             s = &fresh_subst;
         }
     }
@@ -590,7 +617,9 @@ static TypesType gt_subst_interface(GtSubster *subst, TypesInterface *t) {
         methods = t->methods;
     if (embeddeds.p == NULL)
         embeddeds = t->embeddeds;
-    TypesInterface *iface = burrow__types_new_interface(subst->a);
+    TypesInterface *iface = subst->check != NULL
+                                ? burrow__tc_new_interface(subst->check)
+                                : burrow__types_new_interface(subst->a);
     iface->embeddeds = embeddeds;
     iface->embed_pos = t->embed_pos;
     iface->implicit = t->implicit;
@@ -599,7 +628,8 @@ static TypesType gt_subst_interface(GtSubster *subst, TypesInterface *t) {
     bool copied = false;
     iface->methods = burrow__types_replace_recv_type(subst->a, methods, types_type(t),
                                                      types_type(iface), &copied);
-    (void)burrow__types_iface_type_set(iface);
+    if (subst->check == NULL)
+        (void)burrow__types_iface_type_set(iface);
     return types_type(iface);
 }
 
@@ -621,7 +651,8 @@ static TypesType gt_subst_typ(GtSubster *subst, TypesType typ) {
             gt_subst_list(subst, burrow__types_type_list(t->targs), gt_subst_typ_fn);
         if (targs.p != NULL)
             return types_type(burrow__types_new_alias_instance(
-                subst->a, subst->pos, t->orig, targs, subst->expanding, subst->ctxt));
+                subst->check, subst->a, subst->pos, t->orig, targs, subst->expanding,
+                subst->ctxt));
         break;
     }
     case TYPES_KIND_ARRAY: {
@@ -696,8 +727,9 @@ static TypesType gt_subst_typ(GtSubster *subst, TypesType typ) {
         Slice targs = gt_subst_list(
             subst, burrow__types_type_list(types_named_type_args(t)), gt_subst_typ_fn);
         if (targs.p != NULL)
-            return burrow__types_instance(subst->a, subst->pos, types_type(orig), targs,
-                                          subst->expanding, subst->ctxt);
+            return burrow__types_instance(subst->check, subst->a, subst->pos,
+                                          types_type(orig), targs, subst->expanding,
+                                          subst->ctxt);
         break;
     }
     case TYPES_KIND_TYPE_PARAM:
@@ -835,8 +867,18 @@ static void gt_validate_targ_len(Alloc *a, TokenPos pos, Str name, Int want, Int
                             pos, qual, name, got, want));
 }
 
-TypesType burrow__types_instance(Alloc *a, TokenPos pos, TypesType orig, Slice targs,
-                                 TypesNamed *expanding, TypesContext *ctxt) {
+/* validateTArgLen with a checker or without one. */
+static bool gt_targ_len_ok(TypesChecker *check, Alloc *a, TokenPos pos, Str name,
+                           Int want, Int got) {
+    if (check != NULL)
+        return burrow__tc_validate_targ_len(check, pos, name, want, got);
+    gt_validate_targ_len(a, pos, name, want, got);
+    return true;
+}
+
+TypesType burrow__types_instance(TypesChecker *check, Alloc *a, TokenPos pos,
+                                 TypesType orig, Slice targs, TypesNamed *expanding,
+                                 TypesContext *ctxt) {
     TypesContext *ctxts[2];
     Str hashes[2];
     Int n = 0;
@@ -855,17 +897,21 @@ TypesType burrow__types_instance(Alloc *a, TokenPos pos, TypesType orig, Slice t
     }
     switch ((TypesTypeKind)orig->kind) {
     case TYPES_KIND_NAMED:
-        res = types_type(burrow__types_new_named_instance(a, pos, types_as_named(orig),
-                                                          targs, expanding));
+        /* substituted lazily */
+        res = types_type(burrow__types_new_named_instance(
+            check, a, pos, types_as_named(orig), targs, expanding));
         break;
     case TYPES_KIND_ALIAS: {
         TypesAlias *al = types_as_alias(orig);
         Int ntp = types_type_param_list_len(types_alias_type_params(al));
-        gt_validate_targ_len(a, pos, GT_OBJ(al->obj)->name, ntp, targs.len);
+        /* verify type parameter count (see go.dev/issue/71198 for a test
+         * case) */
+        if (!gt_targ_len_ok(check, a, pos, GT_OBJ(al->obj)->name, ntp, targs.len))
+            return GT_TYP(TYPES_INVALID);
         if (ntp == 0)
             return orig;
-        res = types_type(
-            burrow__types_new_alias_instance(a, pos, al, targs, expanding, ctxt));
+        res = types_type(burrow__types_new_alias_instance(check, a, pos, al, targs,
+                                                          expanding, ctxt));
         break;
     }
     case TYPES_KIND_SIGNATURE: {
@@ -874,14 +920,16 @@ TypesType burrow__types_instance(Alloc *a, TokenPos pos, TypesType orig, Slice t
         burrow__types_assert(sig->rparams == NULL);
         burrow__types_assert(sig->tparams != NULL);
         Int ntp = types_type_param_list_len(sig->tparams);
-        gt_validate_targ_len(a, pos, types_type_string(a, orig, TYPES_NO_QUALIFIER),
-                             ntp, targs.len);
+        if (!gt_targ_len_ok(check, a, pos,
+                            types_type_string(a, orig, TYPES_NO_QUALIFIER), ntp,
+                            targs.len))
+            return GT_TYP(TYPES_INVALID);
         if (ntp == 0)
             return orig;
         Map *smap = burrow__types_make_subst_map(
             a, burrow__types_tparam_list(sig->tparams), targs);
-        TypesSignature *s =
-            types_as_signature(burrow__types_subst(a, pos, orig, smap, NULL, ctxt));
+        TypesSignature *s = types_as_signature(
+            burrow__types_subst(check, a, pos, orig, smap, NULL, ctxt));
         if (s == sig) {
             TypesSignature *copy = GT_NEW(a, TypesSignature);
             *copy = *s;
@@ -912,4 +960,31 @@ update:
     for (Int i = n - 1; i >= 0; i--)
         res = burrow__types_context_update(ctxts[i], hashes[i], orig, targs, res);
     return res;
+}
+
+TypesType burrow__tc_instance(TypesChecker *check, TokenPos pos, TypesType orig,
+                              Slice targs, TypesNamed *expanding, TypesContext *ctxt) {
+    return burrow__types_instance(check, check->a, pos, orig, targs, expanding, ctxt);
+}
+
+/* validateTArgLen checks that the number of type arguments (got) matches the
+ * number of type parameters (want); if they don't match an error is reported. */
+bool burrow__tc_validate_targ_len(TypesChecker *check, TokenPos pos, Str name, Int want,
+                                  Int got) {
+    const char *qual;
+    if (got < want)
+        qual = "not enough";
+    else if (got > want)
+        qual = "too many";
+    else
+        return true;
+    Str msg = GT_SPRINTF(check, "%s type arguments for type %s: have %d, want %d", qual,
+                         name, got, want);
+    burrow__tc_error(check, burrow__tc_at_pos(pos), GT_CODE_WRONG_TYPE_ARG_COUNT, msg);
+    return false;
+}
+
+TypesType burrow__tc_subst(TypesChecker *check, TokenPos pos, TypesType typ, Map *smap,
+                           TypesNamed *expanding, TypesContext *ctxt) {
+    return burrow__types_subst(check, check->a, pos, typ, smap, expanding, ctxt);
 }

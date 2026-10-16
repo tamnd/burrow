@@ -738,6 +738,13 @@ bool burrow__tc_is_parameterized(Alloc *a, Slice tparams, TypesType typ);
 
 /* assignments.go */
 void burrow__tc_assignment(TypesChecker *check, GtOperand *x, TypesType T, Str context);
+/* x may be NULL, and then rhs is evaluated; else rhs is ignored. */
+void burrow__tc_assign_var(TypesChecker *check, AstExpr lhs, AstExpr rhs, GtOperand *x,
+                           Str context);
+/* lhs and orig_rhs are of AstExpr. */
+void burrow__tc_assign_vars(TypesChecker *check, Slice lhs, Slice orig_rhs);
+void burrow__tc_short_var_decl(TypesChecker *check, GtPosn pos, Slice lhs,
+                               Slice orig_rhs);
 /* list is of TypesType, and a NULL entry is an invalid type. */
 BURROW_OWNS(ret) Str burrow__tc_types_summary(TypesChecker *check, Slice list,
                                               bool variadic, bool has_dots);

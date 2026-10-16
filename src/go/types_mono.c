@@ -2,7 +2,14 @@
  * instantiation, which compilers that instantiate statically (by
  * monomorphization) cannot handle.
  *
- * It is a sort of "type flow" analysis that finds which type parameters are
+ * Derived from Go's src/go/types/mono.go. Go source: go1.27.1.
+ *
+ * Copyright 2021 The Go Authors. All rights reserved.
+ * Copyright 2026 The burrow Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style licence that can be found
+ * in the LICENSE file. */
+
+/* It is a sort of "type flow" analysis that finds which type parameters are
  * instantiated with other type parameters, or types made from them. A package
  * cannot be statically instantiated if the graph has a cycle with at least
  * one derived type in it.
@@ -36,14 +43,7 @@
  *
  * Not in Go: Go walks the elements of a scope in map order, which is random.
  * Here they are walked by name, so the edges, and the cycle reported, are the
- * same from run to run.
- *
- * Derived from Go's src/go/types/mono.go. Go source: go1.27.1.
- *
- * Copyright 2021 The Go Authors. All rights reserved.
- * Copyright 2026 The burrow Authors. All rights reserved.
- * Use of this source code is governed by a BSD-style licence that can be found
- * in the LICENSE file. */
+ * same from run to run. */
 
 #include "burrow/go/types.h"
 

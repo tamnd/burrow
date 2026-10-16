@@ -757,6 +757,32 @@ Slice burrow__tc_rename_tparams(TypesChecker *check, TokenPos pos, Slice tparams
                                 TypesType typ, TypesType *out);
 bool burrow__tc_is_parameterized(Alloc *a, Slice tparams, TypesType typ);
 
+/* stmt.go. stmtContext is a bitset describing which control-flow statements
+ * are permissible, and provides additional context information for better
+ * error messages. */
+typedef unsigned GtStmtContext;
+/* permissible control-flow statements */
+#define GT_BREAK_OK 1u
+#define GT_CONTINUE_OK 2u
+#define GT_FALLTHROUGH_OK 4u
+/* additional context information */
+#define GT_FINAL_SWITCH_CASE 8u
+#define GT_IN_TYPE_SWITCH 16u
+void burrow__tc_stmt(TypesChecker *check, GtStmtContext ctxt, AstStmt s);
+void burrow__tc_stmt_list(TypesChecker *check, GtStmtContext ctxt, Slice list);
+
+/* labels.go */
+void burrow__tc_labels(TypesChecker *check, AstBlockStmt *body);
+
+/* return.go. label is empty when s is not labeled. */
+bool burrow__tc_is_terminating(TypesChecker *check, AstStmt s, Str label);
+
+/* range.go. s_key, s_value and s_extra may be NULL. */
+void burrow__tc_range_stmt(TypesChecker *check, GtStmtContext inner,
+                           AstRangeStmt *range_stmt, GtPosn no_new_var_pos,
+                           AstExpr s_key, AstExpr s_value, AstExpr s_extra,
+                           AstExpr range_var, bool is_def);
+
 /* assignments.go */
 void burrow__tc_assignment(TypesChecker *check, GtOperand *x, TypesType T, Str context);
 /* x may be NULL, and then rhs is evaluated; else rhs is ignored. */

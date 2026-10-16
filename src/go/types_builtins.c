@@ -1430,9 +1430,9 @@ static bool tbi_call(TypesChecker *check, GtOperand *x, AstCallExpr *call, Int i
     }
 
     case GT_ASSERT:
-        /* assert(pred) causes a typechecker error if pred is false. The result
-         * of assert is the value of pred if there is no error. Note: assert is
-         * only available in self-test mode. */
+        /* assert with argument pred causes a typechecker error if pred is
+         * false. The result of assert is the value of pred if there is no
+         * error. Note: assert is only available in self-test mode. */
         if (x->mode != GT_MODE_CONSTANT ||
             !burrow__types_is_basic(x->typ, TYPES_IS_BOOLEAN)) {
             Str xs = burrow__tc_xs(check, x);

@@ -916,17 +916,21 @@ bool types_satisfies(TypesType V, TypesInterface *T);
 /* ------------------------------------------------------------------ errors */
 
 /* types.Error: a type checking error. The text is fset's position for pos,
- * ": " and msg. The checker will make these; they have no constructor of their
- * own. Go also keeps an error code and a span here, unexported, which come
- * with the checker.
+ * ": " and msg. The checker makes these; they have no constructor of their
+ * own.
  *
  * Not in Go: a NULL fset writes the position as "-", which is what Go writes
- * for TOKEN_NO_POS. Go dereferences the nil FileSet for any other pos. */
+ * for TOKEN_NO_POS. Go dereferences the nil FileSet for any other pos. Go
+ * keeps code, start and end unexported, as go116code, go116start and
+ * go116end, and tools read them with reflection. Here they are fields. */
 typedef struct TypesError {
     TokenFileSet *fset; /* for reading pos */
     TokenPos pos;       /* where the error is */
     Str msg;            /* the message */
     bool soft;          /* if set, the error is "soft" */
+    Int code;           /* the code from internal/types/errors, or 0 */
+    TokenPos start;     /* where the expression or node at fault starts */
+    TokenPos end;       /* and where it ends */
 } TypesError;
 
 extern const Type *const TYPE_TYPES_ERROR;
@@ -958,6 +962,209 @@ BURROW_BORROWS(ret, e) Error types_argument_error_unwrap(const TypesArgumentErro
  * TYPE_TYPES_ARGUMENT_ERROR gets the struct back. */
 BURROW_OWNS(ret) Error types_argument_error_as_error(const TypesArgumentError *e,
                                                      Alloc *a);
+
+/* ---------------------------------------------------------------- checking
+ *
+ * The type checker: types_config_check takes the parsed files of one package
+ * and gives back the package, with every error it found. What it learns along
+ * the way about each expression and identifier goes into the maps of a
+ * TypesInfo, for whichever maps you made.
+ *
+ *     TypesConfig conf = {0};
+ *     TypesInfo info = {0};
+ *     info.types = map_make(a, TYPE_UNSAFE_POINTER, TYPE_TYPES_TYPE_AND_VALUE, 0);
+ *     Error err = {0};
+ *     TypesPackage *pkg = types_config_check(&conf, a, BURROW_S("p"), fset, files,
+ *                                            &info, &err);
+ *
+ * Everything the checker makes comes from a: the package, its types and
+ * objects, the scopes, the error messages and what goes into info, other than
+ * the maps themselves, which grow in the allocator they were made with. */
+
+/* ImportMode, which is reserved. The checker always passes 0. */
+typedef Int TypesImportMode;
+
+/* Importer and ImporterFrom: how the checker gets the package for an import
+ * path. Go has two interfaces and asks for the second with a type assertion.
+ * Here they are one vtable, and an importer with only Import leaves
+ * import_from NULL. dir is the directory of the file that has the import.
+ * Each gives back a complete package, or NULL and sets *err. */
+typedef struct TypesImporterVT {
+    const Type *self_type;
+    TypesPackage *(*import_)(void *self, Str path, Error *err);
+    TypesPackage *(*import_from)(void *self, Str path, Str dir, TypesImportMode mode,
+                                 Error *err);
+} TypesImporterVT;
+
+typedef struct TypesImporter {
+    const TypesImporterVT *vt;
+    void *data;
+} TypesImporter;
+
+/* Config.Error: what the checker calls with each error it finds. */
+BURROW_FUNC(TypesErrorFunc, void, const TypesError *e);
+
+/* Config: how to check a package. The zero value is ready to use.
+ *
+ * Not in Go: error is a TypesError and not an error interface. */
+typedef struct TypesConfig {
+    /* Where instances are shared. NULL means a new context for each check. */
+    TypesContext *context;
+    /* The language version, such as "go1.21". "" means the latest one. */
+    Str go_version;
+    /* Check function signatures but not their bodies. */
+    bool ignore_func_bodies;
+    /* Accept import "C" and make up a package for it, for tools that do not
+     * run cgo. */
+    bool fake_import_c;
+    /* Called with each error. With no f, checking stops at the first one. */
+    TypesErrorFunc error;
+    /* How imports are found. With no vt, every import is an error. */
+    TypesImporter importer;
+    /* How unsafe.Sizeof and friends work. With no vt, they work as gc does on
+     * amd64. */
+    TypesSizes sizes;
+    /* Do not report imports that are not used. */
+    bool disable_unused_import_check;
+} TypesConfig;
+
+/* TypeAndValue: the type of an expression, and its value when it is a
+ * constant. mode says what sort of operand it is and is read through the
+ * functions below. value is the zero ConstantValue, which is unknown, when the
+ * expression is not a constant. */
+typedef struct TypesTypeAndValue {
+    Int mode;
+    TypesType type;
+    ConstantValue value;
+} TypesTypeAndValue;
+
+extern const Type *const TYPE_TYPES_TYPE_AND_VALUE;
+
+/* IsVoid, IsType, IsBuiltin, IsValue, IsNil, Addressable, Assignable and
+ * HasOk: whether the expression is a call with no results, a type, a builtin,
+ * a value, the untyped nil, addressable, assignable, and usable on the right of
+ * a comma, ok assignment. */
+bool types_type_and_value_is_void(TypesTypeAndValue tv);
+bool types_type_and_value_is_type(TypesTypeAndValue tv);
+bool types_type_and_value_is_builtin(TypesTypeAndValue tv);
+bool types_type_and_value_is_value(TypesTypeAndValue tv);
+bool types_type_and_value_is_nil(TypesTypeAndValue tv);
+bool types_type_and_value_addressable(TypesTypeAndValue tv);
+bool types_type_and_value_assignable(TypesTypeAndValue tv);
+bool types_type_and_value_has_ok(TypesTypeAndValue tv);
+
+/* Instance: the type arguments of an instantiation, and the type it made. */
+typedef struct TypesInstance {
+    TypesTypeList *type_args;
+    TypesType type;
+} TypesInstance;
+
+extern const Type *const TYPE_TYPES_INSTANCE;
+
+/* Initializer: one package level variable initialization, var lhs = rhs. lhs
+ * is a Slice of TypesVar *. */
+typedef struct TypesInitializer {
+    Slice lhs;
+    AstExpr rhs;
+} TypesInitializer;
+
+/* Initializer.String, such as "x, y = f()". */
+BURROW_OWNS(ret) Str types_initializer_string(Alloc *a, const TypesInitializer *init);
+
+/* Info: what the checker found out, in whichever maps are not NULL. Each map
+ * is keyed by a node pointer, so make it with TYPE_UNSAFE_POINTER keys.
+ *
+ *   types         AstExpr to TypesTypeAndValue: every expression and type
+ *                 expression, but not identifiers that declare something.
+ *   instances     AstIdent * to TypesInstance: the name of each generic type or
+ *                 function that was instantiated.
+ *   defs          AstIdent * to TypesObject: what each identifier declares. The
+ *                 package name of a file and the blank name of a method or
+ *                 field map to NULL.
+ *   uses          AstIdent * to TypesObject: what each identifier refers to.
+ *   implicits     AstNode to TypesObject: what an import with no name, a case
+ *                 clause of a type switch, or an anonymous parameter declares.
+ *   selections    AstSelectorExpr * to TypesSelection *, for x.f other than
+ *                 a qualified identifier.
+ *   scopes        AstNode to TypesScope *: the scope each file, function type,
+ *                 block, statement and clause opens.
+ *   file_versions AstFile * to Str: the language version for each file.
+ *
+ * init_order is the package level variable initializations in the order they
+ * run, as TypesInitializer *, and is set by the checker, in its allocator. */
+typedef struct TypesInfo {
+    Map *types;
+    Map *instances;
+    Map *defs;
+    Map *uses;
+    Map *implicits;
+    Map *selections;
+    Map *scopes;
+    Slice init_order;
+    Map *file_versions;
+} TypesInfo;
+
+/* Not in Go: an Info with every map made in a, for when you want all of
+ * it. */
+TypesInfo types_info_all(Alloc *a);
+
+/* TypeOf: the type of e, from types, or for an identifier from defs or uses.
+ * NULL if none of those has it. */
+BURROW_BORROWS(ret, info) TypesType types_info_type_of(TypesInfo *info, AstExpr e);
+
+/* ObjectOf: what id declares or refers to, or NULL. */
+BURROW_BORROWS(ret, info) TypesObject types_info_object_of(TypesInfo *info,
+                                                           AstIdent *id);
+
+/* PkgNameOf: the package name an import declares, or NULL. */
+BURROW_BORROWS(ret, info) TypesPkgName *types_info_pkg_name_of(TypesInfo *info,
+                                                               AstImportSpec *imp);
+
+/* Checker: the state of checking one package, for checking it a few files at
+ * a time. */
+typedef struct TypesChecker TypesChecker;
+
+/* NewChecker: a checker that puts what it finds into pkg and info. conf and
+ * info may be NULL. conf, fset, pkg and info must outlive it. */
+BURROW_OWNS(ret) TypesChecker *types_new_checker(Alloc *a, TypesConfig *conf,
+                                                 TokenFileSet *fset, TypesPackage *pkg,
+                                                 TypesInfo *info);
+
+/* Checker.Files: checks files, a Slice of AstFile *, as more of the package.
+ * Returns false and sets *err to the first error, a TypesError, if there were
+ * any. err may be NULL. */
+bool types_checker_files(TypesChecker *check, Slice files, Error *err);
+
+/* Config.Check: checks files, a Slice of AstFile *, as the package with import
+ * path path. Gives back the package, which is there even when there were
+ * errors, and sets *err to the first error or to no error. conf, info and err
+ * may be NULL. */
+BURROW_OWNS(ret) TypesPackage *types_config_check(TypesConfig *conf, Alloc *a, Str path,
+                                                  TokenFileSet *fset, Slice files,
+                                                  TypesInfo *info, Error *err);
+
+/* CheckExpr: type checks expr as if it had appeared at position pos of pkg,
+ * and puts what it finds in info, which may be NULL. expr may be an identifier
+ * for an uninstantiated generic function or type.
+ *
+ * With a NULL pkg the universe scope is used and pos is ignored. With pkg and
+ * an invalid pos the package scope is used. Otherwise pos must be in the
+ * package. Returns false and sets *err to the error if pos is not in the
+ * package or expr cannot be type checked. err may be NULL.
+ *
+ * Eval and CheckExpr are for use alongside a full check, not instead of one.
+ * They ignore the context an expression is used in, such as an assignment, so
+ * a top-level untyped constant keeps its untyped type. */
+bool types_check_expr(Alloc *a, TokenFileSet *fset, TypesPackage *pkg, TokenPos pos,
+                      AstExpr expr, TypesInfo *info, Error *err);
+
+/* Eval: the type and, if constant, the value of the expression in the string
+ * expr, evaluated at position pos of pkg. pkg must come from checking files
+ * with full position information in fset. fset, pkg and pos mean what they do
+ * for types_check_expr. Sets *err if expr does not parse or does not type
+ * check. err may be NULL. */
+TypesTypeAndValue types_eval(Alloc *a, TokenFileSet *fset, TypesPackage *pkg,
+                             TokenPos pos, Str expr, Error *err);
 
 #ifdef __cplusplus
 }

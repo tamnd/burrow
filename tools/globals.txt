@@ -60,6 +60,8 @@ category	sql-drivers	database/sql's registered drivers. Go keeps them in a packa
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/go/types_lookup.c	gt_empty_method_set	tables	Go's emptyMethodSet, which every type with no methods gets. Zero and never written.
+global	src/go/types_check.c	tc_novalue	tables	The empty tuple that stands in for Go's nil *Tuple as the type of an expression with no value. Never written.
+global	src/go/types_check.c	tc_method_expr_sentinel	tables	Go's methodExprSentinel. Only its address is used, as a marker in recvold. Never written.
 global	src/go/types_object.c	gt_no_signature	tables	The empty signature of a function with no type yet. Initialised in place and never written.
 global	src/go/types_predicates.c	gt_invalid_type_set	tables	The type set of a union with too many terms. Zero and never written.
 global	src/go/types_type.c	gt_last_id	package-vars	Go's lastID, the counter that numbers type parameters. Only ever changed with an atomic add.

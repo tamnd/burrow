@@ -1,13 +1,7 @@
-/* go/types: AssignableTo and ConvertibleTo.
+/* go/types: operands, and AssignableTo and ConvertibleTo.
  *
- * Go answers both by making a non-constant operand of type V and running the
- * checker's own assignment and conversion rules on it, with a nil *Checker
- * and no cause. That is all that is done here, so none of the error text
- * those rules can build is needed, and there is no language version to hold
- * any rule back.
- *
- * Derived from Go's src/go/types/api_predicates.go, operand.go, expr.go and
- * conversions.go. Go source: go1.27.1.
+ * Derived from Go's src/go/types/api_predicates.go and operand.go. Go source:
+ * go1.27.1.
  *
  * Copyright 2012 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -16,118 +10,108 @@
 
 #include "burrow/go/types.h"
 
+#include "burrow/bytes.h"
 #include "burrow/core.h"
+#include "burrow/go/ast.h"
+#include "burrow/go/constant.h"
+#include "burrow/go/token.h"
+#include "burrow/panic.h"
 
+#include "types_check.h"
 #include "types_internal.h"
 
 #include <stdbool.h>
 
-static bool gt_assignable_to(TypesType xt, TypesType T);
-static bool gt_convertible_to(TypesType xt, TypesType T);
-
-/* ----------------------------------------------------- implicitTypeAndValue */
-
-/* Go's x.isNil() for an operand of mode value. */
-static bool gt_is_nil(TypesType xt) {
-    return xt == GT_TYP(TYPES_UNTYPED_NIL);
-}
-
-static bool gt_implicit_ok(TypesType xt, TypesType target);
-
-static bool gt_under_implicit_ok(void *env, TypesType t, TypesType u) {
-    (void)t;
-    return u != NULL && gt_implicit_ok(*(TypesType *)env, u);
-}
-
-/* Go's implicitTypeAndValue for a non-constant operand of type xt, reporting
- * whether the type it finds is not nil. A non-constant untyped value is the
- * result of a comparison, the left side of a shift, or nil. */
-static bool gt_implicit_ok(TypesType xt, TypesType target) {
-    if (burrow__types_is_typed(xt) || !burrow__types_is_valid(target))
-        return true;
-    /* xt is untyped */
-
-    if (!burrow__types_is_typed(target)) {
-        /* both xt and target are untyped */
-        return burrow__types_max_type(xt, target) != NULL;
-    }
-
-    TypesType u = types_type_underlying(target);
-    switch (u == NULL ? (Int)TYPES_KIND_INVALID : u->kind) {
-    case TYPES_KIND_BASIC:
-        switch (types_as_basic(xt)->kind) {
-        case TYPES_UNTYPED_BOOL:
-            return burrow__types_is_basic(target, TYPES_IS_BOOLEAN);
-        case TYPES_UNTYPED_INT:
-        case TYPES_UNTYPED_RUNE:
-        case TYPES_UNTYPED_FLOAT:
-        case TYPES_UNTYPED_COMPLEX:
-            return burrow__types_is_basic(target, TYPES_IS_NUMERIC);
-        case TYPES_UNTYPED_STRING:
-            /* Non-constant untyped string values are not permitted by the
-             * spec and should not occur during normal type checking, but this
-             * path is reachable through AssignableTo. */
-            return burrow__types_is_basic(target, TYPES_IS_STRING);
-        case TYPES_UNTYPED_NIL:
-            /* unsafe.Pointer is a basic type that includes nil. */
-            return burrow__types_has_nil(target);
-        default:
-            return false;
-        }
-    case TYPES_KIND_INTERFACE:
-        if (burrow__types_is_type_param(target))
-            return burrow__types_all(
-                target, BURROW_FN(GtTypePairFunc, gt_under_implicit_ok, &xt));
-        /* Values must have concrete dynamic types, but nil is kept untyped. */
-        if (gt_is_nil(xt))
-            return true;
-        /* cannot assign untyped values to non-empty interfaces */
-        return types_interface_empty(types_as_interface(u));
-    case TYPES_KIND_POINTER:
-    case TYPES_KIND_SIGNATURE:
-    case TYPES_KIND_SLICE:
-    case TYPES_KIND_MAP:
-    case TYPES_KIND_CHAN:
-        return gt_is_nil(xt);
-    default:
-        return false;
-    }
-}
-
 /* -------------------------------------------------------------- assignableTo */
 
-typedef struct GtOperandEnv {
-    TypesType x; /* the operand's type */
-    TypesType T; /* the target */
-} GtOperandEnv;
+/* What the walks over a type set in assignableTo close over. */
+typedef struct TopAssign {
+    TypesChecker *check;
+    GtOperand x; /* a copy, so the outer x is not clobbered */
+    TypesType T;
+    TypesType orig_T;
+    TypesTypeParam *p; /* the type parameter whose terms are walked */
+    Str *cause;
+    bool ok;
+    GtCode code;
+} TopAssign;
 
-/* each specific type in T's type set takes the untyped x */
-static bool gt_term_implicit_ok(void *env, TypesTerm *t) {
-    return t != NULL && gt_implicit_ok(((GtOperandEnv *)env)->x, t->typ);
+/* x, untyped, can take the type of the term */
+static bool top_term_implicit_ok(void *env, TypesTerm *t) {
+    if (t == NULL)
+        return false;
+    TopAssign *c = env;
+    /* A term may be a tilde term but the underlying type of an untyped value
+     * doesn't change so we don't need to do anything special. */
+    TypesType typ;
+    ConstantValue val;
+    bool has_val;
+    (void)burrow__tc_implicit_type_and_value(c->check, &c->x, t->typ, &typ, &val,
+                                             &has_val);
+    return typ != NULL;
 }
 
-/* x is assignable to the term */
-static bool gt_term_assignable_from(void *env, TypesTerm *t) {
-    return t != NULL && gt_assignable_to(((GtOperandEnv *)env)->x, t->typ);
+/* x is assignable to the term's type */
+static bool top_term_assignable_from(void *env, TypesTerm *t) {
+    if (t == NULL)
+        return false; /* no specific types */
+    TopAssign *c = env;
+    c->ok = burrow__tc_assignable_to(c->check, &c->x, t->typ, c->cause, &c->code);
+    if (!c->ok) {
+        if (c->check != NULL && c->cause != NULL) {
+            TypesChecker *check = c->check;
+            Str xs = burrow__tc_ts(check, c->x.typ), ts = burrow__tc_ts(check, t->typ);
+            Str ps = burrow__tc_ts(check, types_type(c->p));
+            burrow__tc_wrap_cause(
+                check, c->cause,
+                GT_SPRINTF(check, "cannot assign %s to %s (in %s)", xs, ts, ps));
+        }
+        return false;
+    }
+    return true;
 }
 
-/* the term is assignable to T */
-static bool gt_term_assignable_to(void *env, TypesTerm *t) {
-    return t != NULL && gt_assignable_to(t->typ, ((GtOperandEnv *)env)->T);
+/* values of the term's type are assignable to T */
+static bool top_term_assignable_to(void *env, TypesTerm *t) {
+    if (t == NULL)
+        return false; /* no specific types */
+    TopAssign *c = env;
+    c->x.typ = t->typ;
+    c->ok = burrow__tc_assignable_to(c->check, &c->x, c->T, c->cause, &c->code);
+    if (!c->ok) {
+        if (c->check != NULL && c->cause != NULL) {
+            TypesChecker *check = c->check;
+            Str vs = burrow__tc_ts(check, t->typ);
+            Str ps = burrow__tc_ts(check, types_type(c->p));
+            Str ts = burrow__tc_ts(check, c->orig_T);
+            burrow__tc_wrap_cause(
+                check, c->cause,
+                GT_SPRINTF(check, "cannot assign %s (in %s) to %s", vs, ps, ts));
+        }
+        return false;
+    }
+    return true;
 }
 
-static GtTypeSet *gt_tparam_set(TypesTypeParam *p) {
-    return burrow__types_iface_type_set(burrow__types_type_param_iface(p));
+void burrow__tc_wrap_cause(TypesChecker *check, Str *cause, Str msg) {
+    if (cause->len != 0)
+        msg = GT_SPRINTF(check, "%s\n\t%s", msg, *cause);
+    *cause = msg;
 }
 
-/* Go's x.assignableTo for a non-constant operand of type xt. Where Go sets
- * the operand's type to each term of V's type set, this calls itself with the
- * term's type, which is the same thing. */
-static bool gt_assignable_to(TypesType xt, TypesType T) {
-    if (!burrow__types_is_valid(T))
+bool burrow__tc_assignable_to(TypesChecker *check, const GtOperand *x, TypesType T,
+                              Str *cause, GtCode *code) {
+    /* Not in Go: without a checker there is nothing to make a cause with. */
+    burrow__types_assert(check != NULL || cause == NULL);
+    GtCode ignored;
+    if (code == NULL)
+        code = &ignored;
+    *code = GT_CODE_NONE;
+    if (!burrow__tc_op_valid(x) || !burrow__types_is_valid(T))
         return true; /* avoid spurious errors */
 
-    TypesType V = types_unalias(xt);
+    TypesType orig_T = T;
+    TypesType V = types_unalias(x->typ);
     T = types_unalias(T);
 
     /* x's type is identical to T */
@@ -138,16 +122,23 @@ static bool gt_assignable_to(TypesType xt, TypesType T) {
     TypesType Tu = types_type_underlying(T);
     TypesTypeParam *Vp = types_as_type_param(V);
     TypesTypeParam *Tp = types_as_type_param(T);
-    GtOperandEnv env = {xt, T};
+    TopAssign c = {check, *x,    T,     orig_T,
+                   NULL,  cause, false, GT_CODE_INCOMPATIBLE_ASSIGN};
 
     /* x is an untyped value representable by a value of type T. */
     if (!burrow__types_is_typed(Vu)) {
+        burrow__types_assert(Vp == NULL);
+        *code = GT_CODE_INCOMPATIBLE_ASSIGN;
         if (Tp != NULL)
             /* T is a type parameter: x is assignable to T if it is
              * representable by each specific type in the type set of T. */
-            return burrow__types_type_set_is(
-                gt_tparam_set(Tp), BURROW_FN(GtTermFunc, gt_term_implicit_ok, &env));
-        return gt_implicit_ok(xt, T);
+            return burrow__types_type_param_is(
+                Tp, BURROW_FN(GtTermFunc, top_term_implicit_ok, &c));
+        TypesType typ;
+        ConstantValue val;
+        bool has_val;
+        (void)burrow__tc_implicit_type_and_value(check, x, T, &typ, &val, &has_val);
+        return typ != NULL;
     }
     /* Vu is typed */
 
@@ -159,22 +150,32 @@ static bool gt_assignable_to(TypesType xt, TypesType T) {
         return true;
 
     /* T is an interface type, but not a type parameter, and V implements T.
-     * Also handle the case where T is a pointer to an interface. */
+     * Also handle the case where T is a pointer to an interface so that we get
+     * the Checker.implements error cause. */
     if ((types_as_interface(Tu) != NULL && Tp == NULL) ||
         burrow__types_is_interface_ptr(Tu)) {
-        if (burrow__types_implements(NULL, V, T, false, NULL))
+        if (burrow__types_implements(check, NULL, V, T, false, cause))
             return true;
         /* V doesn't implement T but V may still be assignable to T if V is a
-         * type parameter. */
-        if (Vp == NULL)
+         * type parameter; do not report an error in that case yet. */
+        if (Vp == NULL) {
+            *code = GT_CODE_INVALID_IFACE_ASSIGN;
             return false;
+        }
+        if (cause != NULL)
+            *cause = BURROW_STR_EMPTY;
     }
 
     /* If V is an interface, check if a missing type assertion is the
      * problem. */
     if (types_as_interface(Vu) != NULL && Vp == NULL) {
-        if (burrow__types_implements(NULL, T, V, false, NULL))
-            return false; /* T implements V, so it needs a type assertion */
+        if (burrow__types_implements(check, NULL, T, V, false, NULL)) {
+            /* T implements V, so give hint about type assertion. */
+            if (cause != NULL)
+                *cause = BURROW_S("need type assertion");
+            *code = GT_CODE_INCOMPATIBLE_ASSIGN;
+            return false;
+        }
     }
 
     /* x is a bidirectional channel value, T is a channel type, x's type V and
@@ -183,175 +184,310 @@ static bool gt_assignable_to(TypesType xt, TypesType T) {
     TypesChan *Vc = types_as_chan(Vu);
     if (Vc != NULL && types_chan_dir(Vc) == TYPES_SEND_RECV) {
         TypesChan *Tc = types_as_chan(Tu);
-        if (Tc != NULL && types_identical(types_chan_elem(Vc), types_chan_elem(Tc)))
+        if (Tc != NULL && types_identical(types_chan_elem(Vc), types_chan_elem(Tc))) {
+            *code = GT_CODE_INVALID_CHAN_ASSIGN;
             return !burrow__types_has_name(V) || !burrow__types_has_name(T);
+        }
     }
 
     /* optimization: if we don't have type parameters, we're done */
+    *code = GT_CODE_INCOMPATIBLE_ASSIGN;
     if (Vp == NULL && Tp == NULL)
         return false;
 
     /* x's type V is not a named type and T is a type parameter, and x is
      * assignable to each specific type in T's type set. */
-    if (!burrow__types_has_name(V) && Tp != NULL)
-        return burrow__types_type_set_is(
-            gt_tparam_set(Tp), BURROW_FN(GtTermFunc, gt_term_assignable_from, &env));
+    if (!burrow__types_has_name(V) && Tp != NULL) {
+        c.p = Tp;
+        (void)burrow__types_type_param_is(
+            Tp, BURROW_FN(GtTermFunc, top_term_assignable_from, &c));
+        *code = c.code;
+        return c.ok;
+    }
 
     /* x's type V is a type parameter and T is not a named type, and values x'
      * of each specific type in V's type set are assignable to T. */
-    if (Vp != NULL && !burrow__types_has_name(T))
-        return burrow__types_type_set_is(
-            gt_tparam_set(Vp), BURROW_FN(GtTermFunc, gt_term_assignable_to, &env));
+    if (Vp != NULL && !burrow__types_has_name(T)) {
+        c.p = Vp;
+        (void)burrow__types_type_param_is(
+            Vp, BURROW_FN(GtTermFunc, top_term_assignable_to, &c));
+        *code = c.code;
+        return c.ok;
+    }
 
     return false;
 }
 
-/* ------------------------------------------------------------- convertibleTo */
+/* ------------------------------------------------------------------- the API */
 
-static bool gt_is_kind(TypesType t, TypesBasicKind kind) {
-    TypesBasic *b = types_as_basic(types_type_underlying(t));
-    return b != NULL && b->kind == kind;
+/* AssignableTo reports whether a value of type V is assignable to a variable
+ * of type T. */
+bool types_assignable_to(TypesType V, TypesType T) {
+    GtOperand x = {.mode = GT_MODE_VALUE, .typ = V};
+    /* check not needed for non-constant x */
+    return burrow__tc_assignable_to(NULL, &x, T, NULL, NULL);
 }
 
-static bool gt_operand_is_pointer(TypesType t) {
-    return types_as_pointer(types_type_underlying(t)) != NULL;
+/* ConvertibleTo reports whether a value of type V is convertible to a value
+ * of type T. */
+bool types_convertible_to(TypesType V, TypesType T) {
+    GtOperand x = {.mode = GT_MODE_VALUE, .typ = V};
+    /* check not needed for non-constant x */
+    return burrow__tc_convertible_to(NULL, &x, T, NULL);
 }
 
-static bool gt_is_bytes_or_runes(TypesType t) {
-    TypesSlice *s = types_as_slice(types_type_underlying(t));
-    if (s == NULL)
-        return false;
-    TypesBasic *b = types_as_basic(types_type_underlying(types_slice_elem(s)));
-    return b != NULL && (b->kind == TYPES_BYTE || b->kind == TYPES_RUNE);
+/* ------------------------------------------------------------------ operands */
+
+static const Str gt_operand_mode_string[] = {
+    [GT_MODE_INVALID] = BURROW_S_INIT("invalid operand"),
+    [GT_MODE_NOVALUE] = BURROW_S_INIT("no value"),
+    [GT_MODE_BUILTIN] = BURROW_S_INIT("built-in"),
+    [GT_MODE_TYPEXPR] = BURROW_S_INIT("type"),
+    [GT_MODE_CONSTANT] = BURROW_S_INIT("constant"),
+    [GT_MODE_VARIABLE] = BURROW_S_INIT("variable"),
+    [GT_MODE_MAPINDEX] = BURROW_S_INIT("map index expression"),
+    [GT_MODE_VALUE] = BURROW_S_INIT("value"),
+    [GT_MODE_NILVALUE] = BURROW_S_INIT("nil"), /* only used by types2 */
+    [GT_MODE_COMMAOK] = BURROW_S_INIT("comma, ok expression"),
+    [GT_MODE_COMMAERR] = BURROW_S_INIT("comma, error expression"),
+    [GT_MODE_CGOFUNC] = BURROW_S_INIT("cgo function"),
+};
+
+bool burrow__tc_op_valid(const GtOperand *x) {
+    return x->mode != GT_MODE_INVALID;
 }
 
-/* the term converts to T */
-static bool gt_term_convertible_to(void *env, TypesTerm *t) {
-    return t != NULL && gt_convertible_to(t->typ, ((GtOperandEnv *)env)->T);
+void burrow__tc_op_invalidate(GtOperand *x) {
+    x->mode = GT_MODE_INVALID;
 }
 
-/* x converts to the term */
-static bool gt_term_convertible_from(void *env, TypesTerm *t) {
-    return t != NULL && gt_convertible_to(((GtOperandEnv *)env)->x, t->typ);
+/* Pos returns the position of the expression corresponding to x. If x is
+ * invalid the position is nopos. */
+TokenPos burrow__tc_op_pos(const GtOperand *x) {
+    /* x.expr may not be set if x is invalid */
+    if (x->expr == NULL)
+        return TOKEN_NO_POS;
+    return ast_expr_pos(x->expr);
 }
 
-typedef struct GtBothEnv {
-    TypesTypeParam *Tp;
-} GtBothEnv;
+/* Operand string formats (not all "untyped" cases can appear due to the type
+ * system, but they fall out naturally here)
+ *
+ * mode       format
+ *
+ * invalid    <expr> (               <mode>                    )
+ * novalue    <expr> (               <mode>                    )
+ * builtin    <expr> (               <mode>                    )
+ * typexpr    <expr> (               <mode>                    )
+ *
+ * constant   <expr> (<untyped kind> <mode>                    )
+ * constant   <expr> (               <mode>       of type <typ>)
+ * constant   <expr> (<untyped kind> <mode> <val>              )
+ * constant   <expr> (               <mode> <val> of type <typ>)
+ *
+ * variable   <expr> (<untyped kind> <mode>                    )
+ * variable   <expr> (               <mode>       of type <typ>)
+ *
+ * mapindex   <expr> (<untyped kind> <mode>                    )
+ * mapindex   <expr> (               <mode>       of type <typ>)
+ *
+ * value      <expr> (<untyped kind> <mode>                    )
+ * value      <expr> (               <mode>       of type <typ>)
+ *
+ * commaok    <expr> (<untyped kind> <mode>                    )
+ * commaok    <expr> (               <mode>       of type <typ>)
+ *
+ * commaerr   <expr> (<untyped kind> <mode>                    )
+ * commaerr   <expr> (               <mode>       of type <typ>)
+ *
+ * cgofunc    <expr> (<untyped kind> <mode>                    )
+ * cgofunc    <expr> (               <mode>       of type <typ>) */
+Str burrow__tc_operand_string(Alloc *a, const GtOperand *x, TypesQualifier qf) {
+    /* special-case nil */
+    if (x->mode == GT_MODE_VALUE && x->typ == GT_TYP(TYPES_UNTYPED_NIL))
+        return BURROW_S("nil");
 
-/* each term of Vp converts to each term of Tp */
-static bool gt_term_convertible_to_all(void *env, TypesTerm *t) {
-    if (t == NULL)
-        return false;
-    GtOperandEnv inner = {t->typ, NULL};
-    return burrow__types_type_set_is(
-        gt_tparam_set(((GtBothEnv *)env)->Tp),
-        BURROW_FN(GtTermFunc, gt_term_convertible_from, &inner));
-}
+    BytesBuffer buf = BYTES_BUFFER(a);
 
-/* Go's x.convertibleTo for a non-constant operand of type xt. */
-static bool gt_convertible_to(TypesType xt, TypesType T) {
-    /* "x is assignable to T" */
-    if (gt_assignable_to(xt, T))
-        return true;
-
-    TypesType V = types_unalias(xt);
-    T = types_unalias(T);
-    TypesType Vu = types_type_underlying(V);
-    TypesType Tu = types_type_underlying(T);
-    TypesTypeParam *Vp = types_as_type_param(V);
-    TypesTypeParam *Tp = types_as_type_param(T);
-
-    /* "V and T have identical underlying types if tags are ignored and V and
-     * T are not type parameters" */
-    if (types_identical_ignore_tags(Vu, Tu) && Vp == NULL && Tp == NULL)
-        return true;
-
-    /* "V and T are unnamed pointer types and their pointer base types have
-     * identical underlying types if tags are ignored and their pointer base
-     * types are not type parameters" */
-    TypesPointer *Vptr = types_as_pointer(V);
-    TypesPointer *Tptr = types_as_pointer(T);
-    if (Vptr != NULL && Tptr != NULL) {
-        TypesType vb = types_pointer_elem(Vptr), tb = types_pointer_elem(Tptr);
-        if (types_identical_ignore_tags(types_type_underlying(vb),
-                                        types_type_underlying(tb)) &&
-            !burrow__types_is_type_param(vb) && !burrow__types_is_type_param(tb))
-            return true;
-    }
-
-    /* "V and T are both integer or floating point types" */
-    if (burrow__types_is_basic(Vu, TYPES_IS_INTEGER | TYPES_IS_FLOAT) &&
-        burrow__types_is_basic(Tu, TYPES_IS_INTEGER | TYPES_IS_FLOAT))
-        return true;
-
-    /* "V and T are both complex types" */
-    if (burrow__types_is_basic(Vu, TYPES_IS_COMPLEX) &&
-        burrow__types_is_basic(Tu, TYPES_IS_COMPLEX))
-        return true;
-
-    /* "V is an integer or a slice of bytes or runes and T is a string type" */
-    if ((burrow__types_is_basic(Vu, TYPES_IS_INTEGER) || gt_is_bytes_or_runes(Vu)) &&
-        burrow__types_is_basic(Tu, TYPES_IS_STRING))
-        return true;
-
-    /* "V is a string and T is a slice of bytes or runes" */
-    if (burrow__types_is_basic(Vu, TYPES_IS_STRING) && gt_is_bytes_or_runes(Tu))
-        return true;
-
-    /* package unsafe: "any pointer or value of underlying type uintptr can be
-     * converted into a unsafe.Pointer" */
-    if ((gt_operand_is_pointer(Vu) || gt_is_kind(Vu, TYPES_UINTPTR)) &&
-        gt_is_kind(Tu, TYPES_UNSAFE_POINTER))
-        return true;
-    /* "and vice versa" */
-    if (gt_is_kind(Vu, TYPES_UNSAFE_POINTER) &&
-        (gt_operand_is_pointer(Tu) || gt_is_kind(Tu, TYPES_UINTPTR)))
-        return true;
-
-    /* "V is a slice, T is an array or pointer-to-array type, and the slice and
-     * array types have identical element types." */
-    TypesSlice *s = types_as_slice(Vu);
-    if (s != NULL) {
-        TypesArray *arr = types_as_array(Tu);
-        TypesPointer *p = types_as_pointer(Tu);
-        if (arr != NULL) {
-            if (types_identical(types_slice_elem(s), types_array_elem(arr)))
-                return true;
-        } else if (p != NULL) {
-            arr = types_as_array(types_type_underlying(types_pointer_elem(p)));
-            if (arr != NULL &&
-                types_identical(types_slice_elem(s), types_array_elem(arr)))
-                return true;
+    Str expr = BURROW_STR_EMPTY;
+    if (x->expr != NULL) {
+        expr = types_expr_string(a, x->expr);
+    } else {
+        switch ((Int)x->mode) {
+        case GT_MODE_BUILTIN:
+            expr = burrow__types_predeclared_funcs[x->id].name;
+            break;
+        case GT_MODE_TYPEXPR:
+            expr = types_type_string(a, x->typ, qf);
+            break;
+        case GT_MODE_CONSTANT:
+            expr = constant_value_string(x->val, a);
+            break;
+        default:
+            break;
         }
     }
 
-    /* optimization: if we don't have type parameters, we're done */
-    if (Vp == NULL && Tp == NULL)
-        return false;
-
-    /* generic cases with specific type terms (generic operands cannot be
-     * constants) */
-    GtOperandEnv env = {xt, T};
-    if (Vp != NULL && Tp != NULL) {
-        GtBothEnv both = {Tp};
-        return burrow__types_type_set_is(
-            gt_tparam_set(Vp),
-            BURROW_FN(GtTermFunc, gt_term_convertible_to_all, &both));
+    /* <expr> ( */
+    if (expr.len > 0) {
+        burrow__types_buf_str(&buf, expr);
+        burrow__types_buf_str(&buf, BURROW_S(" ("));
     }
-    if (Vp != NULL)
-        return burrow__types_type_set_is(
-            gt_tparam_set(Vp), BURROW_FN(GtTermFunc, gt_term_convertible_to, &env));
-    return burrow__types_type_set_is(
-        gt_tparam_set(Tp), BURROW_FN(GtTermFunc, gt_term_convertible_from, &env));
+
+    /* <untyped kind> */
+    bool has_type = false;
+    switch ((Int)x->mode) {
+    case GT_MODE_INVALID:
+    case GT_MODE_NOVALUE:
+    case GT_MODE_BUILTIN:
+    case GT_MODE_TYPEXPR:
+        /* no type */
+        break;
+    default:
+        /* should have a type, but be cautious (don't crash during printing) */
+        if (x->typ != NULL) {
+            if (!burrow__types_is_typed(x->typ)) {
+                burrow__types_buf_str(&buf, types_as_basic(x->typ)->name);
+                burrow__types_buf_byte(&buf, ' ');
+                break;
+            }
+            has_type = true;
+        }
+    }
+
+    /* <mode> */
+    burrow__types_buf_str(&buf, gt_operand_mode_string[x->mode]);
+
+    /* <val> */
+    if (x->mode == GT_MODE_CONSTANT) {
+        Str s = constant_value_string(x->val, a);
+        if (!str_eq(s, expr)) {
+            burrow__types_buf_byte(&buf, ' ');
+            burrow__types_buf_str(&buf, s);
+        }
+    }
+
+    /* <typ> */
+    if (has_type) {
+        if (burrow__types_is_valid(x->typ)) {
+            Str desc = BURROW_STR_EMPTY;
+            if (burrow__types_is_generic(x->typ))
+                desc = BURROW_S("generic ");
+
+            /* Describe the type structure if it is an *Alias or *Named type.
+             * If the type is a renamed basic type, describe the basic type, as
+             * in "int32 type MyInt" for a *Named type MyInt. If it is a type
+             * parameter, describe the constraint instead. */
+            TypesTypeParam *tpar = types_as_type_param(types_unalias(x->typ));
+            Str what = BURROW_STR_EMPTY;
+            if (tpar == NULL && (x->typ->kind == TYPES_KIND_ALIAS ||
+                                 x->typ->kind == TYPES_KIND_NAMED)) {
+                what = burrow__tc_composite_kind(x->typ);
+                if (what.len == 0) {
+                    /* x.typ must be basic type */
+                    what = types_as_basic(types_type_underlying(x->typ))->name;
+                }
+            }
+            /* desc is "" or has a trailing space at the end */
+
+            burrow__types_buf_str(&buf, BURROW_S(" of "));
+            burrow__types_buf_str(&buf, desc);
+            if (what.len > 0) {
+                burrow__types_buf_str(&buf, what);
+                burrow__types_buf_byte(&buf, ' ');
+            }
+            burrow__types_buf_str(&buf, BURROW_S("type "));
+            types_write_type(&buf, x->typ, qf);
+
+            if (tpar != NULL) {
+                burrow__types_buf_str(&buf, BURROW_S(" constrained by "));
+                /* do not compute interface type sets here */
+                types_write_type(&buf, tpar->bound, qf);
+                /* If we have the type set and it's empty, say so for better
+                 * error messages. */
+                if (burrow__types_has_empty_typeset(types_type(tpar)))
+                    burrow__types_buf_str(&buf, BURROW_S(" with empty type set"));
+            }
+        } else {
+            burrow__types_buf_str(&buf, BURROW_S(" with invalid type"));
+        }
+    }
+
+    /* ) */
+    if (expr.len > 0)
+        burrow__types_buf_byte(&buf, ')');
+
+    return burrow__types_buf_done(&buf, a);
 }
 
-/* ------------------------------------------------------------------- the API */
-
-bool types_assignable_to(TypesType V, TypesType T) {
-    return gt_assignable_to(V, T);
+/* compositeKind returns the kind of the given composite type ("array",
+ * "slice", etc.) or the empty string if typ is not composite but a basic
+ * type. */
+Str burrow__tc_composite_kind(TypesType typ) {
+    TypesType u = types_type_underlying(typ);
+    switch (u->kind) {
+    case TYPES_KIND_BASIC:
+        return BURROW_STR_EMPTY;
+    case TYPES_KIND_ARRAY:
+        return BURROW_S("array");
+    case TYPES_KIND_SLICE:
+        return BURROW_S("slice");
+    case TYPES_KIND_STRUCT:
+        return BURROW_S("struct");
+    case TYPES_KIND_POINTER:
+        return BURROW_S("pointer");
+    case TYPES_KIND_SIGNATURE:
+        return BURROW_S("func");
+    case TYPES_KIND_INTERFACE:
+        return BURROW_S("interface");
+    case TYPES_KIND_MAP:
+        return BURROW_S("map");
+    case TYPES_KIND_CHAN:
+        return BURROW_S("chan");
+    case TYPES_KIND_TUPLE:
+        return BURROW_S("tuple");
+    case TYPES_KIND_UNION:
+        return BURROW_S("union");
+    default:
+        panic_str(BURROW_S("unreachable"));
+    }
 }
 
-bool types_convertible_to(TypesType V, TypesType T) {
-    return gt_convertible_to(V, T);
+/* setConst sets x to the untyped constant for literal lit. */
+void burrow__tc_op_set_const(Alloc *a, GtOperand *x, Token k, Str lit) {
+    TypesBasicKind kind;
+    switch ((Int)k) {
+    case TOKEN_INT:
+        kind = TYPES_UNTYPED_INT;
+        break;
+    case TOKEN_FLOAT:
+        kind = TYPES_UNTYPED_FLOAT;
+        break;
+    case TOKEN_IMAG:
+        kind = TYPES_UNTYPED_COMPLEX;
+        break;
+    case TOKEN_CHAR:
+        kind = TYPES_UNTYPED_RUNE;
+        break;
+    case TOKEN_STRING:
+        kind = TYPES_UNTYPED_STRING;
+        break;
+    default:
+        panic_str(BURROW_S("unreachable"));
+    }
+
+    ConstantValue val = constant_make_from_literal(a, lit, k, 0);
+    if (constant_value_kind(val) == CONSTANT_UNKNOWN) {
+        burrow__tc_op_invalidate(x);
+        x->typ = GT_TYP(TYPES_INVALID);
+        return;
+    }
+    x->mode = GT_MODE_CONSTANT;
+    x->typ = GT_TYP(kind);
+    x->val = val;
+}
+
+/* isNil reports whether x is the (untyped) nil value. */
+bool burrow__tc_op_is_nil(const GtOperand *x) {
+    return x->mode == GT_MODE_VALUE && x->typ == GT_TYP(TYPES_UNTYPED_NIL);
 }

@@ -1,6 +1,6 @@
 # Go source
 
-`burrow/go/token.h` is Go's `go/token`, the bottom layer of Go's own tools for reading Go source. It has the tokens of the language and the positions that tie them back to a file, a line and a column. `burrow/go/scanner.h` is Go's `go/scanner`, which turns source into those tokens. `burrow/go/version.h`, Go's `go/version`, compares Go versions, and `burrow/go/constant.h`, Go's `go/constant`, does exact arithmetic on Go constants. `burrow/go/ast.h` and `burrow/go/parser.h`, Go's `go/ast` and `go/parser`, sit on top of the two and turn source into syntax trees, and `burrow/go/doc/comment.h`, Go's `go/doc/comment`, reads and prints doc comments. `burrow/go/types.h` is the start of Go's `go/types`: the types, objects, scopes and packages the type checker works on.
+`burrow/go/token.h` is Go's `go/token`, the bottom layer of Go's own tools for reading Go source. It has the tokens of the language and the positions that tie them back to a file, a line and a column. `burrow/go/scanner.h` is Go's `go/scanner`, which turns source into those tokens. `burrow/go/version.h`, Go's `go/version`, compares Go versions, and `burrow/go/constant.h`, Go's `go/constant`, does exact arithmetic on Go constants. `burrow/go/ast.h` and `burrow/go/parser.h`, Go's `go/ast` and `go/parser`, sit on top of the two and turn source into syntax trees, and `burrow/go/doc/comment.h`, Go's `go/doc/comment`, reads and prints doc comments. `burrow/go/types.h` is Go's `go/types`, the type checker, with the types, objects, scopes and packages it works on.
 
 ## Positions
 
@@ -1231,7 +1231,7 @@ The file system is reached through the hooks of the context, `join_path`, `read_
 
 ## Types
 
-`burrow/go/types.h` is the model part of Go's `go/types`. It has the types of Go programs, the objects that name them, the scopes and packages that hold the objects, and the universe everything starts from. The checker that fills them in from syntax trees comes later. Go's `Type` and `Object` interfaces are `TypesType` and `TypesObject` here. `types_type` and `types_object` turn a pointer to a concrete type or object into one, and the `types_as_` functions turn one back, giving `NULL` when it is something else.
+`burrow/go/types.h` is the model part of Go's `go/types`. It has the types of Go programs, the objects that name them, the scopes and packages that hold the objects, and the universe everything starts from. The checker that fills them in from syntax trees is under [Type checking](#type-checking). Go's `Type` and `Object` interfaces are `TypesType` and `TypesObject` here. `types_type` and `types_object` turn a pointer to a concrete type or object into one, and the `types_as_` functions turn one back, giving `NULL` when it is something else.
 
 Types and objects point at each other in cycles, since a named type's methods have the named type as their receiver. None of them can be freed on their own, so make them all in one arena and free the arena at the end. This builds `type Celsius float64` with a `String` method and prints a few types that use it:
 
@@ -1666,3 +1666,116 @@ MyInt to int: assign false convert true
 chan int to <-chan int: true and back: false
 nil to *int: true to int: false
 ```
+
+## Type checking
+
+`types_config_check` is Go's `Config.Check`. It takes the parsed files of one package and gives back the package, with every name declared in it given a type. Pass a `TypesInfo` to learn more: `types_info_all` makes one with every map in place, and the checker fills in the type of each expression, what each identifier declares or refers to, and the order the package variables are set in. The package, the info and everything in them come from the allocator you pass, so an arena is the easy way to free them.
+
+<!-- example: ../examples/go/types.c#check -->
+```c
+Str src = BURROW_S("package fib\n"
+                   "\n"
+                   "type S string\n"
+                   "\n"
+                   "var a, b, c = len(b), S(c), \"hello\"\n"
+                   "\n"
+                   "func fib(x int) int {\n"
+                   "\tif x < 2 {\n"
+                   "\t\treturn x\n"
+                   "\t}\n"
+                   "\treturn fib(x-1) - fib(x-2)\n"
+                   "}\n");
+TokenFileSet *fset = token_new_file_set(a);
+Error err = BURROW_NO_ERROR;
+AstFile *f = parser_parse_file(a, fset, BURROW_S("fib.go"),
+                               BURROW_ANY(TYPE_STRING, &src), 0, &err);
+if (BURROW_FAILED(err)) {
+    fmt_println_v(error_text(err));
+    return;
+}
+Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
+
+// Record everything the checker finds out.
+TypesInfo info = types_info_all(a);
+TypesPackage *pkg =
+    types_config_check(NULL, a, BURROW_S("fib"), fset, files, &info, &err);
+if (BURROW_FAILED(err)) {
+    fmt_println_v(error_text(err));
+    return;
+}
+
+// What the package declares, in name order.
+TypesScope *scope = types_package_scope(pkg);
+Slice names = types_scope_names(a, scope);
+for (Int i = 0; i < names.len; i++) {
+    TypesObject obj = types_scope_lookup(scope, BURROW_AT(Str, names, i));
+    fmt_println_v(types_object_string(a, obj, types_relative_to(pkg)));
+}
+
+// The order the package variables are set in.
+for (Int i = 0; i < info.init_order.len; i++) {
+    TypesInitializer *init = BURROW_AT(TypesInitializer *, info.init_order, i);
+    fmt_println_v("init", types_initializer_string(a, init));
+}
+
+// An expression, checked in the package scope.
+TypesTypeAndValue tv =
+    types_eval(a, fset, pkg, TOKEN_NO_POS, BURROW_S("b + \"!\""), &err);
+if (!BURROW_FAILED(err))
+    fmt_println_v("b + \"!\" has type",
+                  types_type_string(a, tv.type, types_relative_to(pkg)));
+```
+
+That prints:
+
+```
+type S string
+var a int
+var b S
+var c string
+func fib(x int) int
+init c = "hello"
+init b = S(c)
+init a = len(b)
+b + "!" has type S
+```
+
+`a` depends on `b` and `b` on `c`, so `c` is set first, the same order Go uses. `types_eval` is Go's `Eval`: it checks an expression as if it were written in the package, here at package level since the position is `TOKEN_NO_POS`.
+
+With no error function the checker stops at the first error and gives it back through `err`. Set `conf.error` and it calls the function with each error it finds and keeps going, and `err` still holds the first one:
+
+<!-- example: ../examples/go/types.c#errors -->
+```c
+Str src = BURROW_S("package p\n"
+                   "\n"
+                   "func f() {\n"
+                   "\tx := 1\n"
+                   "\tvar s string = 2\n"
+                   "}\n");
+TokenFileSet *fset = token_new_file_set(a);
+Error err = BURROW_NO_ERROR;
+AstFile *f = parser_parse_file(a, fset, BURROW_S("p.go"),
+                               BURROW_ANY(TYPE_STRING, &src), 0, &err);
+if (BURROW_FAILED(err)) {
+    fmt_println_v(error_text(err));
+    return;
+}
+Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
+
+// With an error function the checker goes on after the first error.
+TypesConfig conf = {0};
+conf.error = (TypesErrorFunc){report, a};
+(void)types_config_check(&conf, a, BURROW_S("p"), fset, files, NULL, &err);
+fmt_println_v("first:", error_text(err));
+```
+
+That prints:
+
+```
+p.go:5:17: cannot use 2 (untyped int constant) as string value in variable declaration
+p.go:4:2: declared and not used: x
+p.go:5:6: declared and not used: s
+first: p.go:5:17: cannot use 2 (untyped int constant) as string value in variable declaration
+```
+
+The messages are the same as Go's. Imports go through `conf.importer`. burrow has no importer of its own yet, since it can neither read compiled Go packages nor find their source, so with no importer every import is an error, `unsafe` included. An importer that gives back `types_unsafe()` for `"unsafe"` is enough for a package that imports nothing else.

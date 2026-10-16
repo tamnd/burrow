@@ -24,6 +24,7 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "types_check.h"
 #include "types_internal.h"
 
 #include <stdbool.h>
@@ -173,8 +174,8 @@ static Error gt_arg_error_clone(const void *self, Alloc *a) {
 
 /* -------------------------------------------------------------- implements */
 
-static Str gt_tstr(Alloc *a, TypesType t) {
-    return types_type_string(a, t, TYPES_NO_QUALIFIER);
+static Str gt_tstr(Alloc *a, TypesQualifier qf, TypesType t) {
+    return types_type_string(a, t, qf);
 }
 
 /* mentions: whether T mentions typ in an embedded element or term, whether or
@@ -229,8 +230,9 @@ static bool gt_term_excludes(void *env, TypesTerm *t) {
 }
 
 /* checkComparability, the part of implements that runs last. */
-static bool gt_check_comparability(Alloc *a, TypesType V, TypesInterface *Ti,
-                                   const char *verb, bool constraint, Str *cause) {
+static bool gt_check_comparability(TypesChecker *check, Alloc *a, TypesQualifier qf,
+                                   TypesType V, TypesInterface *Ti, const char *verb,
+                                   bool constraint, Str *cause) {
     if (!types_interface_is_comparable(Ti))
         return true;
     /* If T is comparable, V must be comparable. If V is strictly comparable,
@@ -238,19 +240,27 @@ static bool gt_check_comparability(Alloc *a, TypesType V, TypesInterface *Ti,
     if (burrow__types_comparable_type(V, false, NULL))
         return true;
     /* For constraint satisfaction, use dynamic (spec) comparability so that
-     * ordinary, non-type parameter interfaces implement comparable. Without a
-     * checker there is no language version to hold this back. */
-    if (constraint && burrow__types_comparable_type(V, true, NULL))
-        return true;
+     * ordinary, non-type parameter interfaces implement comparable. */
+    if (constraint && burrow__types_comparable_type(V, true, NULL)) {
+        /* V is comparable if we are at Go 1.20 or higher. */
+        if (check == NULL || burrow__tc_allow_version(check, burrow__tc_go1_20))
+            return true;
+        if (cause != NULL) {
+            Str vs = gt_tstr(a, qf, V);
+            *cause = fmt_sprintf_v(a, "%s to %s comparable requires go1.20 or later",
+                                   vs, verb);
+        }
+        return false;
+    }
     if (cause != NULL) {
-        Str vs = gt_tstr(a, V);
+        Str vs = gt_tstr(a, qf, V);
         *cause = fmt_sprintf_v(a, "%s does not %s comparable", vs, verb);
     }
     return false;
 }
 
-bool burrow__types_implements(Alloc *a, TypesType V, TypesType T, bool constraint,
-                              Str *cause) {
+bool burrow__types_implements(TypesChecker *check, Alloc *a, TypesType V, TypesType T,
+                              bool constraint, Str *cause) {
     TypesType Vu = types_type_underlying(V);
     TypesType Tu = types_type_underlying(T);
     if (!burrow__types_is_valid(Vu) || !burrow__types_is_valid(Tu))
@@ -260,13 +270,16 @@ bool burrow__types_implements(Alloc *a, TypesType V, TypesType T, bool constrain
         return true; /* avoid follow-on errors (see go.dev/issue/49541) */
 
     const char *verb = constraint ? "satisfy" : "implement";
+    if (check != NULL)
+        a = check->a;
+    TypesQualifier qf = burrow__tc_qualifier(check);
 
     TypesInterface *Ti = types_as_interface(Tu);
     if (Ti == NULL) {
         if (cause != NULL) {
-            Str vs = gt_tstr(a, V), ts = gt_tstr(a, T);
+            Str vs = gt_tstr(a, qf, V), ts = gt_tstr(a, qf, T);
             Str detail = burrow__types_is_interface_ptr(Tu)
-                             ? burrow__types_interface_ptr_error(a, T)
+                             ? burrow__types_interface_ptr_error(a, qf, T)
                              : fmt_sprintf_v(a, "%s is not an interface", ts);
             *cause = fmt_sprintf_v(a, "%s does not %s %s (%s)", vs, verb, ts, detail);
         }
@@ -287,16 +300,16 @@ bool burrow__types_implements(Alloc *a, TypesType V, TypesType T, bool constrain
     GtTypeSet *Ts = burrow__types_iface_type_set(Ti);
     if (burrow__types_type_set_is_empty(Ts)) {
         if (cause != NULL) {
-            Str ts = gt_tstr(a, T);
+            Str ts = gt_tstr(a, qf, T);
             *cause = fmt_sprintf_v(a, "cannot %s %s (empty type set)", verb, ts);
         }
         return false;
     }
 
     /* V must implement T's methods, if any. */
-    if (!burrow__types_has_all_methods(a, V, T, true, types_identical, cause)) {
+    if (!burrow__types_has_all_methods(check, a, V, T, true, GT_IDENTICAL_FN, cause)) {
         if (cause != NULL) {
-            Str vs = gt_tstr(a, V), ts = gt_tstr(a, T);
+            Str vs = gt_tstr(a, qf, V), ts = gt_tstr(a, qf, T);
             *cause = fmt_sprintf_v(a, "%s does not %s %s %s", vs, verb, ts, *cause);
         }
         return false;
@@ -304,29 +317,29 @@ bool burrow__types_implements(Alloc *a, TypesType V, TypesType T, bool constrain
 
     /* V must also be in the set of types of T, if any. */
     if (!burrow__types_type_set_has_terms(Ts))
-        return gt_check_comparability(a, V, Ti, verb, constraint, cause);
+        return gt_check_comparability(check, a, qf, V, Ti, verb, constraint, cause);
 
     /* If V is itself an interface, each of its possible types must be in the
      * set of T types. */
     if (Vi != NULL) {
         if (!burrow__types_type_set_subset_of(burrow__types_iface_type_set(Vi), Ts)) {
             if (cause != NULL) {
-                Str vs = gt_tstr(a, V), ts = gt_tstr(a, T);
+                Str vs = gt_tstr(a, qf, V), ts = gt_tstr(a, qf, T);
                 *cause = fmt_sprintf_v(a, "%s does not %s %s", vs, verb, ts);
             }
             return false;
         }
-        return gt_check_comparability(a, V, Ti, verb, constraint, cause);
+        return gt_check_comparability(check, a, qf, V, Ti, verb, constraint, cause);
     }
 
     /* Otherwise, V's type must be included in the iface type set. */
     GtExcludes x = {V, NULL};
     if (burrow__types_type_set_is(Ts, BURROW_FN(GtTermFunc, gt_term_excludes, &x))) {
         if (cause != NULL) {
-            Str vs = gt_tstr(a, V), ts = gt_tstr(a, T);
+            Str vs = gt_tstr(a, qf, V), ts = gt_tstr(a, qf, T);
             Str detail;
             if (x.alt != NULL) {
-                Str alts = gt_tstr(a, x.alt);
+                Str alts = gt_tstr(a, qf, x.alt);
                 detail = fmt_sprintf_v(a, "possibly missing ~ for %s in %s", alts, ts);
             } else if (gt_mentions(types_type(Ti), V)) {
                 detail = fmt_sprintf_v(
@@ -341,15 +354,16 @@ bool burrow__types_implements(Alloc *a, TypesType V, TypesType T, bool constrain
         return false;
     }
 
-    return gt_check_comparability(a, V, Ti, verb, constraint, cause);
+    return gt_check_comparability(check, a, qf, V, Ti, verb, constraint, cause);
 }
 
 /* ------------------------------------------------------------- instantiate */
 
 /* verify: the index of the first type argument that does not satisfy its
- * constraint, with *cause set to why, or -1. */
-static Int gt_verify(Alloc *a, Slice tparams, Slice targs, TypesContext *ctxt,
-                     Str *cause) {
+ * constraint, with *cause set to why, or -1. check may be NULL; pos is used
+ * only if check is not. */
+static Int gt_verify(TypesChecker *check, Alloc *a, TokenPos pos, Slice tparams,
+                     Slice targs, TypesContext *ctxt, Str *cause) {
     Map *smap = burrow__types_make_subst_map(a, tparams, targs);
     for (Int i = 0; i < tparams.len; i++) {
         TypesTypeParam *tpar = GT_AT(tparams, i, TypesTypeParam *);
@@ -360,12 +374,21 @@ static Int gt_verify(Alloc *a, Slice tparams, Slice targs, TypesContext *ctxt,
          * instantiated type, so it is instantiated with the same type
          * arguments before it is checked against. */
         TypesType bound =
-            burrow__types_subst(a, TOKEN_NO_POS, tpar->bound, smap, NULL, ctxt);
-        if (!burrow__types_implements(a, GT_AT(targs, i, TypesType), bound, true,
+            burrow__types_subst(check, a, pos, tpar->bound, smap, NULL, ctxt);
+        if (!burrow__types_implements(check, a, GT_AT(targs, i, TypesType), bound, true,
                                       cause))
             return i;
     }
     return -1;
+}
+
+Int burrow__tc_verify(TypesChecker *check, TokenPos pos, Slice tparams, Slice targs,
+                      TypesContext *ctxt, Error *err) {
+    Str cause = BURROW_STR_EMPTY;
+    Int i = gt_verify(check, check->a, pos, tparams, targs, ctxt, &cause);
+    if (i >= 0)
+        *err = errors_new(check->a, cause);
+    return i;
 }
 
 /* The type parameters of orig, which must be a named type, an alias or a
@@ -394,14 +417,14 @@ TypesType types_instantiate(Alloc *a, TypesContext *ctxt, TypesType orig, Slice 
     bool ok;
     TypesTypeParamList *tl = gt_generic_tparams(orig, &ok);
     if (!ok) {
-        Str s = gt_tstr(a, orig);
+        Str s = gt_tstr(a, TYPES_NO_QUALIFIER, orig);
         panic_str(fmt_sprintf_v(
             a,
             "cannot instantiate non-generic %s: expected *Named, *Alias, or *Signature",
             s));
     }
     if (targs.len == 0) {
-        Str s = gt_tstr(a, orig);
+        Str s = gt_tstr(a, TYPES_NO_QUALIFIER, orig);
         panic_str(
             fmt_sprintf_v(a, "cannot instantiate %s: empty type argument list", s));
     }
@@ -410,7 +433,7 @@ TypesType types_instantiate(Alloc *a, TypesContext *ctxt, TypesType orig, Slice 
         Slice tparams = burrow__types_tparam_list(tl);
         if (tparams.len == 0) {
             if (err != NULL) {
-                Str s = gt_tstr(a, orig);
+                Str s = gt_tstr(a, TYPES_NO_QUALIFIER, orig);
                 *err = errors_new(
                     a, fmt_sprintf_v(a,
                                      "cannot instantiate non-generic %s: has no type "
@@ -421,7 +444,7 @@ TypesType types_instantiate(Alloc *a, TypesContext *ctxt, TypesType orig, Slice 
         }
         if (targs.len != tparams.len) {
             if (err != NULL) {
-                Str s = gt_tstr(a, orig);
+                Str s = gt_tstr(a, TYPES_NO_QUALIFIER, orig);
                 *err =
                     errors_new(a, fmt_sprintf_v(a,
                                                 "cannot instantiate %s: got %d type "
@@ -431,7 +454,7 @@ TypesType types_instantiate(Alloc *a, TypesContext *ctxt, TypesType orig, Slice 
             return NULL;
         }
         Str cause = BURROW_STR_EMPTY;
-        Int i = gt_verify(a, tparams, targs, ctxt, &cause);
+        Int i = gt_verify(NULL, a, TOKEN_NO_POS, tparams, targs, ctxt, &cause);
         if (i >= 0) {
             if (err != NULL) {
                 TypesArgumentError ae = {i, errors_new(a, cause)};
@@ -441,7 +464,7 @@ TypesType types_instantiate(Alloc *a, TypesContext *ctxt, TypesType orig, Slice 
         }
     }
 
-    return burrow__types_instance(a, TOKEN_NO_POS, orig, targs, NULL, ctxt);
+    return burrow__types_instance(NULL, a, TOKEN_NO_POS, orig, targs, NULL, ctxt);
 }
 
 /* ---------------------------------------------------------- api predicates */
@@ -457,7 +480,7 @@ bool types_assertable_to(TypesInterface *V, TypesType T) {
     /* No static check is needed if T is an interface. */
     if (types_is_interface(T))
         return true;
-    return burrow__types_implements(NULL, T, types_type(V), false, NULL);
+    return burrow__types_implements(NULL, NULL, T, types_type(V), false, NULL);
 }
 
 bool types_implements(TypesType V, TypesInterface *T) {
@@ -468,9 +491,9 @@ bool types_implements(TypesType V, TypesInterface *T) {
      * handling here. */
     if (!burrow__types_is_valid(types_type_underlying(V)))
         return false;
-    return burrow__types_implements(NULL, V, types_type(T), false, NULL);
+    return burrow__types_implements(NULL, NULL, V, types_type(T), false, NULL);
 }
 
 bool types_satisfies(TypesType V, TypesInterface *T) {
-    return burrow__types_implements(NULL, V, types_type(T), true, NULL);
+    return burrow__types_implements(NULL, NULL, V, types_type(T), true, NULL);
 }

@@ -328,6 +328,93 @@ static void assign(Alloc *a) {
     // doc: end
 }
 
+static void report(void *env, const TypesError *e) {
+    Alloc *a = env;
+    fmt_println_v(types_error_error(e, a));
+}
+
+static void check(Alloc *a) {
+    // doc: check
+    Str src = BURROW_S("package fib\n"
+                       "\n"
+                       "type S string\n"
+                       "\n"
+                       "var a, b, c = len(b), S(c), \"hello\"\n"
+                       "\n"
+                       "func fib(x int) int {\n"
+                       "\tif x < 2 {\n"
+                       "\t\treturn x\n"
+                       "\t}\n"
+                       "\treturn fib(x-1) - fib(x-2)\n"
+                       "}\n");
+    TokenFileSet *fset = token_new_file_set(a);
+    Error err = BURROW_NO_ERROR;
+    AstFile *f = parser_parse_file(a, fset, BURROW_S("fib.go"),
+                                   BURROW_ANY(TYPE_STRING, &src), 0, &err);
+    if (BURROW_FAILED(err)) {
+        fmt_println_v(error_text(err));
+        return;
+    }
+    Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
+
+    // Record everything the checker finds out.
+    TypesInfo info = types_info_all(a);
+    TypesPackage *pkg =
+        types_config_check(NULL, a, BURROW_S("fib"), fset, files, &info, &err);
+    if (BURROW_FAILED(err)) {
+        fmt_println_v(error_text(err));
+        return;
+    }
+
+    // What the package declares, in name order.
+    TypesScope *scope = types_package_scope(pkg);
+    Slice names = types_scope_names(a, scope);
+    for (Int i = 0; i < names.len; i++) {
+        TypesObject obj = types_scope_lookup(scope, BURROW_AT(Str, names, i));
+        fmt_println_v(types_object_string(a, obj, types_relative_to(pkg)));
+    }
+
+    // The order the package variables are set in.
+    for (Int i = 0; i < info.init_order.len; i++) {
+        TypesInitializer *init = BURROW_AT(TypesInitializer *, info.init_order, i);
+        fmt_println_v("init", types_initializer_string(a, init));
+    }
+
+    // An expression, checked in the package scope.
+    TypesTypeAndValue tv =
+        types_eval(a, fset, pkg, TOKEN_NO_POS, BURROW_S("b + \"!\""), &err);
+    if (!BURROW_FAILED(err))
+        fmt_println_v("b + \"!\" has type",
+                      types_type_string(a, tv.type, types_relative_to(pkg)));
+    // doc: end
+}
+
+static void check_errors(Alloc *a) {
+    // doc: errors
+    Str src = BURROW_S("package p\n"
+                       "\n"
+                       "func f() {\n"
+                       "\tx := 1\n"
+                       "\tvar s string = 2\n"
+                       "}\n");
+    TokenFileSet *fset = token_new_file_set(a);
+    Error err = BURROW_NO_ERROR;
+    AstFile *f = parser_parse_file(a, fset, BURROW_S("p.go"),
+                                   BURROW_ANY(TYPE_STRING, &src), 0, &err);
+    if (BURROW_FAILED(err)) {
+        fmt_println_v(error_text(err));
+        return;
+    }
+    Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
+
+    // With an error function the checker goes on after the first error.
+    TypesConfig conf = {0};
+    conf.error = (TypesErrorFunc){report, a};
+    (void)types_config_check(&conf, a, BURROW_S("p"), fset, files, NULL, &err);
+    fmt_println_v("first:", error_text(err));
+    // doc: end
+}
+
 int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -340,6 +427,8 @@ int main(void) {
     hashing(a);
     instantiate(a);
     assign(a);
+    check(a);
+    check_errors(a);
     arena_free(&ar);
     return 0;
 }
@@ -390,4 +479,17 @@ MyInt to int: assign false convert true
 []byte to string: assign false convert true
 chan int to <-chan int: true and back: false
 nil to *int: true to int: false
+type S string
+var a int
+var b S
+var c string
+func fib(x int) int
+init c = "hello"
+init b = S(c)
+init a = len(b)
+b + "!" has type S
+p.go:5:17: cannot use 2 (untyped int constant) as string value in variable declaration
+p.go:4:2: declared and not used: x
+p.go:5:6: declared and not used: s
+first: p.go:5:17: cannot use 2 (untyped int constant) as string value in variable declaration
 */

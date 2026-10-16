@@ -25,7 +25,9 @@
 #include "burrow/panic.h"
 #include "burrow/slice.h"
 #include "burrow/type.h"
+#include "burrow/unicode.h"
 
+#include "types_check.h"
 #include "types_internal.h"
 
 #include <stdbool.h>
@@ -382,20 +384,21 @@ static void gt_union_set_put(Map *sets, TypesUnion *u, GtTypeSet *s) {
         burrow__types_oom();
 }
 
-/* computeUnionTypeSet with a nil checker. The type set and its terms come
- * from a, and sets, a map from TypesUnion * to GtTypeSet *, from wherever
- * the caller made it. */
-static GtTypeSet *gt_compute_union_type_set(Alloc *a, Map *sets, TokenPos pos,
-                                            TypesUnion *utyp) {
+/* computeUnionTypeSet may be called with check == NULL. The result is
+ * &invalidTypeSet if the union overflows.
+ *
+ * Not in Go: the type set and its terms come from a, and sets, a map from
+ * TypesUnion * to GtTypeSet *, from wherever the caller made it. */
+static GtTypeSet *gt_compute_union_type_set(TypesChecker *check, Alloc *a, Map *sets,
+                                            TokenPos pos, TypesUnion *utyp) {
     GtTypeSet *tset = gt_union_set_get(sets, utyp);
     if (tset != NULL)
         return tset;
 
-    /* avoid infinite recursion (see comment in computeInterfaceTypeSet) */
+    /* avoid infinite recursion (see also computeInterfaceTypeSet) */
     tset = burrow__types_alloc(a, sizeof *tset, _Alignof(GtTypeSet));
     gt_union_set_put(sets, utyp, tset);
 
-    /* compute the type set from the terms of the union */
     Slice all_terms = slice_nil(TYPE_UNSAFE_POINTER);
     for (Int i = 0; i < utyp->terms.len; i++) {
         TypesTerm *t = GT_TERM(utyp->terms, i);
@@ -405,13 +408,13 @@ static GtTypeSet *gt_compute_union_type_set(Alloc *a, Map *sets, TokenPos pos,
         if (ui != NULL) {
             /* For now we don't permit type parameters as constraints. */
             burrow__types_assert(!burrow__types_is_type_param(t->typ));
-            terms = burrow__types_compute_interface_type_set(pos, ui)->terms;
+            terms = burrow__types_compute_interface_type_set(check, pos, ui)->terms;
         } else if (!burrow__types_is_valid(u)) {
             continue;
         } else {
             if (t->tilde && !types_identical(t->typ, u))
-                /* There is no underlying type which is t.typ. The intersection
-                 * of t and t.typ is empty. */
+                /* There is no underlying type which is t.typ. The
+                 * corresponding type set is empty. */
                 t = NULL; /* ∅ term */
             terms = burrow__types_ptrs_make(a, 1);
             GT_TERM(terms, 0) = t;
@@ -420,6 +423,13 @@ static GtTypeSet *gt_compute_union_type_set(Alloc *a, Map *sets, TokenPos pos,
          * of each term. */
         all_terms = burrow__types_termlist_union(a, all_terms, terms);
         if (all_terms.len > GT_MAX_TERM_COUNT) {
+            if (check != NULL) {
+                Int max = GT_MAX_TERM_COUNT;
+                GT_ERRORF(check, burrow__tc_at_pos(pos), GT_CODE_INVALID_UNION,
+                          "cannot handle more than %d union terms (implementation "
+                          "limitation)",
+                          max);
+            }
             gt_union_set_put(sets, utyp, &gt_invalid_type_set);
             return &gt_invalid_type_set;
         }
@@ -457,10 +467,77 @@ static Slice gt_intersect_term_lists(Alloc *a, Slice xterms, bool xcomp, Slice y
     return terms;
 }
 
-GtTypeSet *burrow__types_compute_interface_type_set(TokenPos pos,
+/* What the later function of addMethod closes over. */
+typedef struct GtDupMethod {
+    TokenPos pos;  /* where m is embedded */
+    TokenPos opos; /* mpos[other] */
+    TypesFunc *m;  /* the method */
+    TypesObject other;
+} GtDupMethod;
+
+/* Check method signatures after all types are computed (go.dev/issue/33656).
+ * If we're pre-go1.14 (overlapping embeddings are not permitted), report that
+ * error here as well (even though we could do it eagerly) because it's the
+ * same error message. */
+static void gt_dup_method_later(TypesChecker *check, void *env) {
+    GtDupMethod *c = env;
+    if ((token_pos_is_valid(c->pos) &&
+         !burrow__tc_allow_version(check, burrow__tc_go1_14)) ||
+        !types_identical(GT_OBJ(c->m)->typ, types_object_type(c->other))) {
+        Str name = GT_OBJ(c->m)->name;
+        GtError *err = burrow__tc_new_error(check, GT_CODE_DUPLICATE_DECL);
+        GT_ADDF(err, burrow__tc_at_pos(c->pos), "duplicate method %s", name);
+        GT_ADDF(err, burrow__tc_at_pos(c->opos), "other declaration of method %s",
+                name);
+        burrow__tc_error_report(err);
+    }
+}
+
+/* Not in Go: the state addMethod closes over. */
+typedef struct GtMethodSet {
+    TypesChecker *check;
+    Alloc *a;
+    GtObjset seen;
+    Slice all_methods;
+    Map *mpos; /* TypesFunc * to TokenPos: method specification or method
+                * embedding position, for good error messages */
+} GtMethodSet;
+
+static void gt_add_method(GtMethodSet *ms, TokenPos pos, TypesFunc *m, bool explicit_) {
+    TypesChecker *check = ms->check;
+    TypesObject other = burrow__types_objset_insert(&ms->seen, types_object(m));
+    if (other == NULL) {
+        burrow__types_ptrs_append(ms->a, &ms->all_methods, m);
+        if (!map_set(ms->mpos, &m, &pos))
+            burrow__types_oom();
+    } else if (explicit_) {
+        if (check != NULL) {
+            Str name = GT_OBJ(m)->name;
+            const TokenPos *opos = map_get(ms->mpos, &other);
+            GtError *err = burrow__tc_new_error(check, GT_CODE_DUPLICATE_DECL);
+            GT_ADDF(err, burrow__tc_at_pos(pos), "duplicate method %s", name);
+            GT_ADDF(err, burrow__tc_at_pos(opos != NULL ? *opos : TOKEN_NO_POS),
+                    "other declaration of method %s", name);
+            burrow__tc_error_report(err);
+        }
+    } else {
+        /* We have a duplicate method name in an embedded (not explicitly
+         * declared) method. */
+        if (check != NULL) {
+            const TokenPos *opos = map_get(ms->mpos, &other);
+            GtDupMethod *c = GT_NEW(check->a, GtDupMethod);
+            c->pos = pos;
+            c->opos = opos != NULL ? *opos : TOKEN_NO_POS;
+            c->m = m;
+            c->other = other;
+            (void)burrow__tc_later(check, gt_dup_method_later, c);
+        }
+    }
+}
+
+/* computeInterfaceTypeSet may be called with check == NULL. */
+GtTypeSet *burrow__types_compute_interface_type_set(TypesChecker *check, TokenPos pos,
                                                     TypesInterface *ityp) {
-    /* pos only goes into errors, and those need the checker. */
-    (void)pos;
     if (ityp->tset != NULL)
         return ityp->tset;
 
@@ -468,9 +545,16 @@ GtTypeSet *burrow__types_compute_interface_type_set(TokenPos pos,
      * complete, which may lead to errors when using the type set (e.g. missing
      * method). Don't compute a partial type set (and don't store it!), so
      * that we still compute the full type set eventually. Instead, return the
-     * top type set and let any follow-on errors play out. */
+     * top type set and let any follow-on errors play out.
+     *
+     * TODO(gri) Consider recording when this happens and reporting it as an
+     * error (but only if there were no other errors so to not have
+     * unnecessary follow-on errors). */
     if (!ityp->complete)
         return burrow__types_top_type_set;
+
+    /* Not in Go: the tracing is left out, since burrow has no _Trace. */
+    (void)pos;
 
     Alloc *a = ityp->a;
 
@@ -480,27 +564,48 @@ GtTypeSet *burrow__types_compute_interface_type_set(TokenPos pos,
      * recursion if the validType check occurs later for some reason. */
     GtTypeSet *tset = burrow__types_alloc(a, sizeof *tset, _Alignof(GtTypeSet));
     tset->terms = burrow__types_all_termlist();
-    ityp->tset = tset;
+    ityp->tset = tset; /* TODO(gri) is this sufficient? */
 
-    /* The scratch: the union sets and the methods seen so far. */
+    /* Not in Go: the scratch for the methods seen so far, and for the union
+     * sets when there is no checker to keep them. */
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *sa = arena_allocator(&ar);
-    Map *union_sets = map_make(sa, TYPE_UNSAFE_POINTER, TYPE_UNSAFE_POINTER, 0);
-    if (union_sets == NULL)
-        burrow__types_oom();
-    GtObjset seen = {sa, NULL};
+    Map *union_sets;
+    if (check != NULL) {
+        if (check->union_type_sets == NULL) {
+            check->union_type_sets =
+                map_make(check->a, TYPE_UNSAFE_POINTER, TYPE_UNSAFE_POINTER, 0);
+            if (check->union_type_sets == NULL)
+                burrow__types_oom();
+        }
+        union_sets = check->union_type_sets;
+    } else {
+        union_sets = map_make(sa, TYPE_UNSAFE_POINTER, TYPE_UNSAFE_POINTER, 0);
+        if (union_sets == NULL)
+            burrow__types_oom();
+    }
 
     /* Methods of embedded interfaces are collected unchanged; i.e., the
      * identity of a method I.m's Func Object of an interface I is the same
-     * as that of the method m in an interface that embeds interface I. With
-     * no checker there is nobody to report a duplicate method to, so the
-     * first one is kept and the others dropped. */
-    Slice all_methods = slice_nil(TYPE_UNSAFE_POINTER);
+     * as that of the method m in an interface that embeds interface I. On the
+     * other hand, if a method is embedded via multiple overlapping embedded
+     * interfaces, we don't provide a guarantee which "original m" got chosen
+     * for the embedding interface. See also go.dev/issue/34421.
+     *
+     * If we don't care to provide this identity guarantee anymore, instead of
+     * reusing the original method in embeddings, we can clone the method's
+     * Func Object and give it the position of a corresponding embedded
+     * interface. Then we can get rid of the mpos map below and simply use the
+     * cloned method's position. */
+    GtMethodSet ms = {check, a, {sa, NULL}, slice_nil(TYPE_UNSAFE_POINTER), NULL};
+    ms.mpos = map_make(sa, TYPE_UNSAFE_POINTER, TYPE_INT, 0);
+    if (ms.mpos == NULL)
+        burrow__types_oom();
+
     for (Int i = 0; i < ityp->methods.len; i++) {
         TypesFunc *m = GT_AT(ityp->methods, i, TypesFunc *);
-        if (burrow__types_objset_insert(&seen, types_object(m)) == NULL)
-            burrow__types_ptrs_append(a, &all_methods, m);
+        gt_add_method(&ms, GT_OBJ(m)->pos, m, true);
     }
 
     /* collect embedded elements */
@@ -510,7 +615,7 @@ GtTypeSet *burrow__types_compute_interface_type_set(TokenPos pos,
         TypesType typ = GT_AT(ityp->embeddeds, i, TypesType);
         /* The embedding position is nil for imported interfaces. We don't
          * need to do version checks in those cases. */
-        TokenPos epos = TOKEN_NO_POS;
+        TokenPos epos = TOKEN_NO_POS; /* embedding position */
         if (ityp->embed_pos.len > i)
             epos = GT_AT(ityp->embed_pos, i, TokenPos);
         bool comparable = false;
@@ -519,18 +624,35 @@ GtTypeSet *burrow__types_compute_interface_type_set(TokenPos pos,
         if (u != NULL && u->kind == TYPES_KIND_INTERFACE) {
             /* For now we don't permit type parameters as constraints. */
             burrow__types_assert(!burrow__types_is_type_param(typ));
-            GtTypeSet *ts =
-                burrow__types_compute_interface_type_set(epos, types_as_interface(u));
+            GtTypeSet *ts = burrow__types_compute_interface_type_set(
+                check, epos, types_as_interface(u));
+            /* If typ is local, an error was already reported where typ is
+             * specified/defined. */
+            if (token_pos_is_valid(epos) && check != NULL &&
+                burrow__tc_is_imported_constraint(check, typ)) {
+                Str ts_typ = burrow__tc_ts(check, typ);
+                if (!GT_VERIFY_VERSIONF(check, burrow__tc_at_pos(epos),
+                                        burrow__tc_go1_18,
+                                        "embedding constraint interface %s", ts_typ))
+                    continue;
+            }
             comparable = ts->comparable;
             for (Int j = 0; j < ts->methods.len; j++) {
                 TypesFunc *m = GT_AT(ts->methods, j, TypesFunc *);
-                if (burrow__types_objset_insert(&seen, types_object(m)) == NULL)
-                    burrow__types_ptrs_append(a, &all_methods, m);
+                gt_add_method(&ms, epos, m, false); /* use embedding position pos
+                                                       rather than m.pos */
             }
             terms = ts->terms;
         } else if (u != NULL && u->kind == TYPES_KIND_UNION) {
-            GtTypeSet *ts =
-                gt_compute_union_type_set(a, union_sets, epos, types_as_union(u));
+            if (token_pos_is_valid(epos) && check != NULL) {
+                Str ts_u = burrow__tc_ts(check, u);
+                if (!GT_VERIFY_VERSIONF(check, burrow__tc_at_pos(epos),
+                                        burrow__tc_go1_18,
+                                        "embedding interface element %s", ts_u))
+                    continue;
+            }
+            GtTypeSet *ts = gt_compute_union_type_set(check, a, union_sets, epos,
+                                                      types_as_union(u));
             if (ts == &gt_invalid_type_set)
                 continue; /* ignore invalid unions */
             burrow__types_assert(!ts->comparable);
@@ -539,6 +661,13 @@ GtTypeSet *burrow__types_compute_interface_type_set(TokenPos pos,
         } else {
             if (!burrow__types_is_valid(u))
                 continue;
+            if (token_pos_is_valid(epos) && check != NULL) {
+                Str ts_typ = burrow__tc_ts(check, typ);
+                if (!GT_VERIFY_VERSIONF(check, burrow__tc_at_pos(epos),
+                                        burrow__tc_go1_18,
+                                        "embedding non-interface type %s", ts_typ))
+                    continue;
+            }
             TypesTerm *t = burrow__types_alloc(a, sizeof *t, _Alignof(TypesTerm));
             t->tilde = false;
             t->typ = typ;
@@ -552,6 +681,7 @@ GtTypeSet *burrow__types_compute_interface_type_set(TokenPos pos,
         all_terms = gt_intersect_term_lists(a, all_terms, all_comparable, terms,
                                             comparable, &all_comparable);
     }
+    Slice all_methods = ms.all_methods;
     arena_free(&ar);
 
     tset->comparable = all_comparable;
@@ -571,6 +701,11 @@ bool burrow__types_all(TypesType t, GtTypePairFunc f) {
         return burrow__types_type_set_all(
             burrow__types_iface_type_set(burrow__types_type_param_iface(p)), f);
     return BURROW_CALLF(f, t, types_type_underlying(t));
+}
+
+bool burrow__types_type_param_is(TypesTypeParam *t, GtTermFunc f) {
+    return burrow__types_type_set_is(
+        burrow__types_iface_type_set(burrow__types_type_param_iface(t)), f);
 }
 
 /* ------------------------------------------------------------- predicates */
@@ -674,11 +809,17 @@ bool types_comparable(TypesType t) {
     return burrow__types_comparable_type(t, true, NULL);
 }
 
-static bool gt_comparable_type(TypesType t, bool dynamic, Map *seen) {
+static bool gt_comparable_type(TypesType t, bool dynamic, Map *seen,
+                               GtIncomparable *why) {
     if (gt_seen_has(seen, t))
         return true;
     gt_seen_set(seen, t);
 
+    GtIncomparable none;
+    if (why == NULL)
+        why = &none;
+    why->kind = GT_INCOMPARABLE_EMPTY;
+    why->typ = NULL;
     TypesType u = types_type_underlying(t);
     switch (u->kind) {
     case TYPES_KIND_BASIC:
@@ -686,33 +827,52 @@ static bool gt_comparable_type(TypesType t, bool dynamic, Map *seen) {
         return types_as_basic(u)->kind != TYPES_UNTYPED_NIL;
     case TYPES_KIND_POINTER:
     case TYPES_KIND_CHAN:
+        /* always comparable */
         return true;
     case TYPES_KIND_STRUCT: {
         TypesStruct *st = types_as_struct(u);
         for (Int i = 0; i < st->fields.len; i++) {
             TypesVar *f = GT_AT(st->fields, i, TypesVar *);
-            if (!gt_comparable_type(GT_OBJ(f)->typ, dynamic, seen))
-                return false; /* struct containing f.typ cannot be compared */
+            if (!gt_comparable_type(GT_OBJ(f)->typ, dynamic, seen, NULL)) {
+                why->kind = GT_INCOMPARABLE_STRUCT;
+                why->typ = GT_OBJ(f)->typ;
+                return false;
+            }
         }
         return true;
     }
     case TYPES_KIND_ARRAY:
-        return gt_comparable_type(types_as_array(u)->elem, dynamic, seen);
-    case TYPES_KIND_INTERFACE:
-        return (dynamic && !burrow__types_is_type_param(t)) ||
-               burrow__types_type_set_is_comparable(
-                   burrow__types_iface_type_set(types_as_interface(u)), seen);
+        if (!gt_comparable_type(types_as_array(u)->elem, dynamic, seen, NULL)) {
+            why->kind = GT_INCOMPARABLE_ARRAY;
+            why->typ = t;
+            return false;
+        }
+        return true;
+    case TYPES_KIND_INTERFACE: {
+        GtTypeSet *ts = burrow__types_iface_type_set(types_as_interface(u));
+        if ((dynamic && !burrow__types_is_type_param(t)) ||
+            burrow__types_type_set_is_comparable(ts, seen))
+            return true;
+        why->kind = burrow__types_type_set_is_empty(ts) ? GT_INCOMPARABLE_EMPTY_SET
+                                                        : GT_INCOMPARABLE_TYPE_SET;
+        return false;
+    }
     default:
         return false;
     }
 }
 
 bool burrow__types_comparable_type(TypesType t, bool dynamic, Map *seen) {
+    return burrow__types_comparable_type_why(t, dynamic, seen, NULL);
+}
+
+bool burrow__types_comparable_type_why(TypesType t, bool dynamic, Map *seen,
+                                       GtIncomparable *why) {
     if (seen != NULL)
-        return gt_comparable_type(t, dynamic, seen);
+        return gt_comparable_type(t, dynamic, seen, why);
     Arena ar;
     arena_init(&ar, NULL, 0);
-    bool ok = gt_comparable_type(t, dynamic, gt_seen_map(arena_allocator(&ar)));
+    bool ok = gt_comparable_type(t, dynamic, gt_seen_map(arena_allocator(&ar)), why);
     arena_free(&ar);
     return ok;
 }
@@ -789,17 +949,17 @@ static bool gt_identical_signature(const GtComparer *c, TypesSignature *x,
             TypesTypeParam *xt = GT_AT(xtparams, i, TypesTypeParam *);
             TypesTypeParam *yt = GT_AT(ytparams, i, TypesTypeParam *);
             TypesType ybound =
-                burrow__types_subst(a, TOKEN_NO_POS, yt->bound, smap, NULL, ctxt);
+                burrow__types_subst(NULL, a, TOKEN_NO_POS, yt->bound, smap, NULL, ctxt);
             if (!gt_identical(c, xt->bound, ybound, p))
                 ok = false;
         }
         if (ok) {
             if (yparams != NULL)
-                yparams =
-                    burrow__types_subst(a, TOKEN_NO_POS, yparams, smap, NULL, ctxt);
+                yparams = burrow__types_subst(NULL, a, TOKEN_NO_POS, yparams, smap,
+                                              NULL, ctxt);
             if (yresults != NULL)
-                yresults =
-                    burrow__types_subst(a, TOKEN_NO_POS, yresults, smap, NULL, ctxt);
+                yresults = burrow__types_subst(NULL, a, TOKEN_NO_POS, yresults, smap,
+                                               NULL, ctxt);
         }
     }
     ok = ok && x->variadic == y->variadic &&
@@ -962,10 +1122,10 @@ static bool gt_identical(const GtComparer *c, TypesType x, TypesType y,
             Map *sets = map_make(a, TYPE_UNSAFE_POINTER, TYPE_UNSAFE_POINTER, 0);
             if (sets == NULL)
                 burrow__types_oom();
-            GtTypeSet *xset =
-                gt_compute_union_type_set(a, sets, TOKEN_NO_POS, types_as_union(x));
-            GtTypeSet *yset =
-                gt_compute_union_type_set(a, sets, TOKEN_NO_POS, types_as_union(y));
+            GtTypeSet *xset = gt_compute_union_type_set(NULL, a, sets, TOKEN_NO_POS,
+                                                        types_as_union(x));
+            GtTypeSet *yset = gt_compute_union_type_set(NULL, a, sets, TOKEN_NO_POS,
+                                                        types_as_union(y));
             bool eq = burrow__types_termlist_equal(xset->terms, yset->terms);
             arena_free(&ar);
             return eq;
@@ -1040,6 +1200,11 @@ bool types_identical_ignore_tags(TypesType x, TypesType y) {
     return gt_identical(&c, x, y, NULL);
 }
 
+bool burrow__types_identical_fn(void *env, TypesType x, TypesType y) {
+    (void)env;
+    return types_identical(x, y);
+}
+
 bool burrow__types_identical_origin(TypesNamed *x, TypesNamed *y) {
     /* TODO(gri) is this correct? */
     return types_named_origin(x)->obj == types_named_origin(y)->obj;
@@ -1089,4 +1254,16 @@ TypesType burrow__types_max_type(TypesType x, TypesType y) {
         return y;
     }
     return NULL;
+}
+
+/* isValidName reports whether s is a valid Go identifier. */
+bool burrow__types_is_valid_name(Str s) {
+    StrIter it = str_runes(s);
+    Int i;
+    Rune ch;
+    while (str_next_rune(&it, &i, &ch)) {
+        if (!(unicode_is_letter(ch) || ch == '_' || (i > 0 && unicode_is_digit(ch))))
+            return false;
+    }
+    return true;
 }

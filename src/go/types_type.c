@@ -27,6 +27,7 @@
 #include "burrow/sync/atomic.h"
 #include "burrow/type.h"
 
+#include "types_check.h"
 #include "types_internal.h"
 
 #include <stdbool.h>
@@ -424,7 +425,14 @@ TypesInterface *types_new_interface(Alloc *a, Slice methods, Slice embeddeds) {
 }
 
 GtTypeSet *burrow__types_iface_type_set(TypesInterface *t) {
-    return burrow__types_compute_interface_type_set(TOKEN_NO_POS, t);
+    return burrow__types_compute_interface_type_set(t->check, TOKEN_NO_POS, t);
+}
+
+void burrow__types_interface_cleanup(TypesInterface *t) {
+    /* any interface that escapes type checking must be safe for concurrent use */
+    (void)burrow__types_iface_type_set(t);
+    t->check = NULL;
+    t->embed_pos = slice_nil(TYPE_INT);
 }
 
 void types_interface_mark_implicit(TypesInterface *t) {
@@ -563,6 +571,26 @@ TypesTypeParam *types_new_type_param(Alloc *a, TypesTypeName *obj,
     return t;
 }
 
+TypesTypeParam *burrow__tc_new_type_param(TypesChecker *check, TypesTypeName *obj,
+                                          TypesType constraint) {
+    /* Always increment lastID, even if it is not used. */
+    (void)sync_atomic_uint32_add(&gt_last_id, 1);
+    TypesTypeParam *t = GT_NEW(check->a, TypesTypeParam);
+    t->hdr.kind = TYPES_KIND_TYPE_PARAM;
+    t->a = check->a;
+    t->check = check;
+    t->id = ++check->next_id;
+    t->obj = obj;
+    t->index = -1;
+    t->bound = constraint;
+    if (GT_OBJ(obj)->typ == NULL)
+        GT_OBJ(obj)->typ = types_type(t);
+    /* iface may mutate typ.bound, so we must ensure that iface() is called at
+     * least once before the resulting TypeParam escapes. */
+    burrow__tc_needs_cleanup(check, types_type(t));
+    return t;
+}
+
 TypesTypeName *types_type_param_obj(TypesTypeParam *t) {
     return t->obj;
 }
@@ -609,9 +637,14 @@ TypesInterface *burrow__types_type_param_iface(TypesTypeParam *t) {
         TypesNamed *n = burrow__types_as_named(bound);
         if (n != NULL)
             pos = GT_OBJ(n->obj)->pos;
-        (void)burrow__types_compute_interface_type_set(pos, ityp);
+        (void)burrow__types_compute_interface_type_set(t->check, pos, ityp);
     }
     return ityp;
+}
+
+void burrow__types_type_param_cleanup(TypesTypeParam *t) {
+    (void)burrow__types_type_param_iface(t);
+    t->check = NULL;
 }
 
 /* ------------------------------------------------------------- type lists */
@@ -706,13 +739,22 @@ TypesAlias *burrow__types_new_alias(Alloc *a, TypesTypeName *obj, TypesType rhs)
     return t;
 }
 
+TypesAlias *burrow__tc_new_alias(TypesChecker *check, TypesTypeName *obj,
+                                 TypesType rhs) {
+    TypesAlias *t = burrow__types_new_alias(check->a, obj, rhs);
+    /* Ensure that a.actual is set at the end of type checking. */
+    burrow__tc_needs_cleanup(check, types_type(t));
+    return t;
+}
+
 TypesAlias *types_new_alias(Alloc *a, TypesTypeName *obj, TypesType rhs) {
     TypesAlias *t = burrow__types_new_alias(a, obj, rhs);
     (void)burrow__types_unalias(t);
     return t;
 }
 
-TypesAlias *burrow__types_new_alias_instance(Alloc *a, TokenPos pos, TypesAlias *orig,
+TypesAlias *burrow__types_new_alias_instance(TypesChecker *check, Alloc *a,
+                                             TokenPos pos, TypesAlias *orig,
                                              Slice targs, TypesNamed *expanding,
                                              TypesContext *ctxt) {
     burrow__types_assert(targs.len > 0);
@@ -720,8 +762,10 @@ TypesAlias *burrow__types_new_alias_instance(Alloc *a, TokenPos pos, TypesAlias 
                                              GT_OBJ(orig->obj)->name, NULL);
     Map *smap = burrow__types_make_subst_map(
         a, burrow__types_tparam_list(types_alias_type_params(orig)), targs);
-    TypesType rhs = burrow__types_subst(a, pos, orig->from_rhs, smap, expanding, ctxt);
-    TypesAlias *res = burrow__types_new_alias(a, obj, rhs);
+    TypesType rhs =
+        burrow__types_subst(check, a, pos, orig->from_rhs, smap, expanding, ctxt);
+    TypesAlias *res = check != NULL ? burrow__tc_new_alias(check, obj, rhs)
+                                    : burrow__types_new_alias(a, obj, rhs);
     res->orig = orig;
     res->tparams = orig->tparams;
     res->targs = burrow__types_new_type_list(a, targs);

@@ -91,7 +91,8 @@ static TypesTuple *tuple(World *w, const TypesType *ts, Int n) {
 
 /* orig[targ], in the given context */
 static TypesType inst(World *w, TypesContext *ctxt, TypesType orig, TypesType targ) {
-    return burrow__types_instance(w->a, TOKEN_NO_POS, orig, ptrs1(w, targ), NULL, ctxt);
+    return burrow__types_instance(NULL, w->a, TOKEN_NO_POS, orig, ptrs1(w, targ), NULL,
+                                  ctxt);
 }
 
 /* Go's Instantiate(nil, orig, targs, true), which uses a new context */

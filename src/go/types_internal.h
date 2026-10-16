@@ -104,13 +104,14 @@ typedef struct GtTypeSet {
 
 struct TypesInterface {
     TypesTypeBase hdr;
-    Alloc *a;        /* for the type set */
-    Slice methods;   /* of TypesFunc *, explicitly declared */
-    Slice embeddeds; /* of TypesType, explicitly embedded */
-    Slice embed_pos; /* of TokenPos, for errors; empty if not known */
-    bool implicit;   /* the wrapper of a type set literal */
-    bool complete;   /* methods and embeddeds are set */
-    GtTypeSet *tset; /* worked out lazily */
+    Alloc *a;            /* for the type set */
+    TypesChecker *check; /* for error reporting; NULL once the type set is known */
+    Slice methods;       /* of TypesFunc *, explicitly declared */
+    Slice embeddeds;     /* of TypesType, explicitly embedded */
+    Slice embed_pos;     /* of TokenPos, for errors; empty if not known */
+    bool implicit;       /* the wrapper of a type set literal */
+    bool complete;       /* methods and embeddeds are set */
+    GtTypeSet *tset;     /* worked out lazily */
 };
 
 struct TypesMap {
@@ -143,6 +144,7 @@ typedef struct GtInstance {
 struct TypesNamed {
     TypesTypeBase hdr;
     Alloc *a;
+    TypesChecker *check; /* non-NULL during type checking; NULL otherwise */
     TypesTypeName *obj;
     bool allow_nil_rhs;
     GtInstance *inst;
@@ -158,7 +160,8 @@ struct TypesNamed {
 
 struct TypesTypeParam {
     TypesTypeBase hdr;
-    Alloc *a; /* for the implicit interface of the bound */
+    Alloc *a;            /* for the implicit interface of the bound */
+    TypesChecker *check; /* for lazy type bound completion */
     uint64_t id;
     TypesTypeName *obj;
     Int index;
@@ -368,6 +371,8 @@ TypesObject burrow__types_universe_iota(void);
 /* ----------------------------------------------------------------- objects */
 
 bool burrow__types_is_exported(Str name);
+/* isValidName, from predicates.go. */
+bool burrow__types_is_valid_name(Str s);
 /* Id(pkg1, name1) == Id(pkg2, name2) and strings.Compare of the two, without
  * making either. */
 bool burrow__types_id_eq(TypesPackage *pkg1, Str name1, TypesPackage *pkg2, Str name2);
@@ -385,6 +390,11 @@ BURROW_OWNS(ret) TypesVar *burrow__types_clone_var(Alloc *a, TypesVar *v,
 BURROW_OWNS(ret) TypesFunc *burrow__types_clone_func(Alloc *a, TypesFunc *f,
                                                      TypesType typ);
 bool burrow__types_func_has_ptr_recv(TypesFunc *f);
+void burrow__types_scope_insert_raw(TypesScope *s, Str name, TypesObject obj);
+/* Scope.lookupIgnoringCase: a Slice of TypesObject, made in a. */
+BURROW_OWNS(ret) Slice burrow__types_scope_lookup_ignoring_case(Alloc *a, TypesScope *s,
+                                                                Str name,
+                                                                bool exported);
 
 void burrow__types_write_object(BytesBuffer *buf, TypesObject obj, TypesQualifier qf);
 void burrow__types_write_func_name(BytesBuffer *buf, TypesFunc *f, TypesQualifier qf);
@@ -403,6 +413,10 @@ typedef struct GtObjset {
 BURROW_BORROWS(ret, s) TypesObject burrow__types_objset_insert(GtObjset *s,
                                                                TypesObject obj);
 
+/* Go's deref: the base of typ if it is a *Pointer, but not a named type whose
+ * underlying type is one. */
+TypesType burrow__types_deref(TypesType typ, bool *is_ptr);
+
 /* Go's objectKind. */
 BURROW_STATIC(ret) Str burrow__types_object_kind(TypesObject obj);
 
@@ -420,33 +434,40 @@ bool burrow__types_named_state_has(TypesNamed *n, uint32_t m);
 BURROW_BORROWS(ret, n) TypesType burrow__types_named_rhs(TypesNamed *n);
 /* Go's Named.Underlying. */
 BURROW_BORROWS(ret, n) TypesType burrow__types_named_underlying(TypesNamed *n);
+void burrow__types_named_cleanup(TypesNamed *n);
 Int burrow__types_named_method_index(TypesNamed *t, Str name, bool fold_case);
 BURROW_BORROWS(ret, n) TypesFunc *
 burrow__types_named_lookup_method(TypesNamed *n, TypesPackage *pkg, Str name,
                                   bool fold_case, Int *index);
-BURROW_OWNS(ret) TypesNamed *burrow__types_new_named_instance(Alloc *a, TokenPos pos,
-                                                              TypesNamed *orig,
-                                                              Slice targs,
-                                                              TypesNamed *expanding);
+/* Go's newNamedInstance; check may be NULL. */
+BURROW_OWNS(ret) TypesNamed *
+burrow__types_new_named_instance(TypesChecker *check, Alloc *a, TokenPos pos,
+                                 TypesNamed *orig, Slice targs, TypesNamed *expanding);
 BURROW_BORROWS(ret, t) TypesType burrow__types_safe_underlying(TypesType t);
 /* Go's asNamed: the named type t is once aliases are followed, or NULL. */
 BURROW_BORROWS(ret, t) TypesNamed *burrow__types_as_named(TypesType t);
 BURROW_BORROWS(ret, a0) TypesType burrow__types_unalias(TypesAlias *a0);
 BURROW_OWNS(ret) TypesAlias *burrow__types_new_alias(Alloc *a, TypesTypeName *obj,
                                                      TypesType rhs);
+/* Go's newAliasInstance; check may be NULL. */
 BURROW_OWNS(ret) TypesAlias *
-burrow__types_new_alias_instance(Alloc *a, TokenPos pos, TypesAlias *orig, Slice targs,
-                                 TypesNamed *expanding, TypesContext *ctxt);
+burrow__types_new_alias_instance(TypesChecker *check, Alloc *a, TokenPos pos,
+                                 TypesAlias *orig, Slice targs, TypesNamed *expanding,
+                                 TypesContext *ctxt);
 
 /* ---------------------------------------------------------- interfaces */
 
 BURROW_OWNS(ret) TypesInterface *burrow__types_new_interface(Alloc *a);
 BURROW_BORROWS(ret, t) GtTypeSet *burrow__types_iface_type_set(TypesInterface *t);
+/* computeInterfaceTypeSet; check may be NULL, and then nothing is reported. */
 BURROW_BORROWS(ret, ityp) GtTypeSet *
-burrow__types_compute_interface_type_set(TokenPos pos, TypesInterface *ityp);
+burrow__types_compute_interface_type_set(TypesChecker *check, TokenPos pos,
+                                         TypesInterface *ityp);
 BURROW_BORROWS(ret, t) TypesInterface *
 burrow__types_type_param_iface(TypesTypeParam *t);
 void burrow__types_sort_methods(Slice list);
+void burrow__types_interface_cleanup(TypesInterface *t);
+void burrow__types_type_param_cleanup(TypesTypeParam *t);
 
 /* --------------------------------------------------------- terms and sets */
 
@@ -495,6 +516,21 @@ bool burrow__types_type_set_is(GtTypeSet *s, GtTermFunc f);
 
 /* Go's all and underIs from under.go. */
 bool burrow__types_all(TypesType t, GtTypePairFunc f);
+/* Go's (*TypeParam).is: f called for each term of t's type set, or with NULL
+ * if there are no specific terms. */
+bool burrow__types_type_param_is(TypesTypeParam *t, GtTermFunc f);
+
+/* ---------------------------------------------------------------- sizes */
+
+/* Config.alignof, offsetsof, offsetof and sizeof from sizes.go. Not in Go:
+ * conf may be NULL, which uses stdSizes as a Config with no Sizes does. */
+int64_t burrow__types_conf_alignof(const TypesConfig *conf, TypesType T);
+BURROW_OWNS(ret) Slice burrow__types_conf_offsetsof(const TypesConfig *conf, Alloc *a,
+                                                    TypesStruct *T);
+/* index is of Int. -1 if T is too large. */
+int64_t burrow__types_conf_offsetof(const TypesConfig *conf, Alloc *a, TypesType T,
+                                    Slice index);
+int64_t burrow__types_conf_sizeof(const TypesConfig *conf, TypesType T);
 
 /* ----------------------------------------------------------- predicates */
 
@@ -512,8 +548,26 @@ bool burrow__types_is_generic(TypesType t);
 /* Go's comparableType, reporting whether it found no reason T is not
  * comparable. seen may be NULL. */
 bool burrow__types_comparable_type(TypesType t, bool dynamic, Map *seen);
+/* The typeError comparableType returns, as which message and its argument. */
+typedef enum GtIncomparableKind {
+    GT_INCOMPARABLE_EMPTY,     /* the empty typeError */
+    GT_INCOMPARABLE_STRUCT,    /* "struct containing %s cannot be compared" */
+    GT_INCOMPARABLE_ARRAY,     /* "%s cannot be compared" */
+    GT_INCOMPARABLE_EMPTY_SET, /* "empty type set" */
+    GT_INCOMPARABLE_TYPE_SET   /* "incomparable types in type set" */
+} GtIncomparableKind;
+typedef struct GtIncomparable {
+    GtIncomparableKind kind;
+    TypesType typ; /* the %s, for a struct or an array */
+} GtIncomparable;
+/* comparableType with the reason when it is false. why may be NULL. */
+bool burrow__types_comparable_type_why(TypesType t, bool dynamic, Map *seen,
+                                       GtIncomparable *why);
 bool burrow__types_has_nil(TypesType t);
 bool burrow__types_identical_origin(TypesNamed *x, TypesNamed *y);
+/* Identical as a GtTypePairFunc, for missingMethod's equivalent. */
+bool burrow__types_identical_fn(void *env, TypesType x, TypesType y);
+#define GT_IDENTICAL_FN BURROW_FN(GtTypePairFunc, burrow__types_identical_fn, NULL)
 bool burrow__types_identical_instance(TypesType xorig, Slice xargs, TypesType yorig,
                                       Slice yargs);
 BURROW_BORROWS(ret, x, y) TypesType burrow__types_max_type(TypesType x, TypesType y);
@@ -550,36 +604,49 @@ BURROW_OWNS(ret) Str burrow__types_buf_done(BytesBuffer *buf, Alloc *a);
 BURROW_OWNS(ret) TypesSelection *
 burrow__types_new_selection(Alloc *a, TypesSelectionKind kind, TypesType recv,
                             TypesObject obj, Slice index, bool indirect);
-/* missingMethod with a nil checker and the identity check passed in. When
- * cause is not NULL and a method is missing, *cause is set to why, made in a.
- * a may be NULL when cause is. */
-TypesFunc *burrow__types_missing_method(Alloc *a, TypesType V, TypesType T,
-                                        bool is_static,
-                                        bool (*equivalent)(TypesType x, TypesType y),
-                                        bool *wrong_type, Str *cause);
+/* missingMethod with the identity check passed in. check may be NULL, as in
+ * Go, for the exported API; then a cause is made in a and writes types with
+ * their package paths, and a may be NULL when cause is. With a checker, the
+ * methods found are type-checked first and the cause is made in check->a. */
+TypesFunc *burrow__types_missing_method(TypesChecker *check, Alloc *a, TypesType V,
+                                        TypesType T, bool is_static,
+                                        GtTypePairFunc equivalent, bool *wrong_type,
+                                        Str *cause);
 /* hasAllMethods, the same way. */
-bool burrow__types_has_all_methods(Alloc *a, TypesType V, TypesType T, bool is_static,
-                                   bool (*equivalent)(TypesType x, TypesType y),
-                                   Str *cause);
+bool burrow__types_has_all_methods(TypesChecker *check, Alloc *a, TypesType V,
+                                   TypesType T, bool is_static,
+                                   GtTypePairFunc equivalent, Str *cause);
+/* Go's lookupFieldOrMethod, for the checker: everything, the index too, is
+ * made in a. */
+BURROW_BORROWS(ret, T) TypesObject burrow__types_lookup_field_or_method(
+    Alloc *a, TypesType T, bool addressable, TypesPackage *pkg, Str name,
+    bool fold_case, Slice *index, bool *indirect);
+/* derefStructPtr: the base of typ if typ is a pointer to a struct, else typ. */
+TypesType burrow__types_deref_struct_ptr(TypesType typ);
+/* fieldPath, made in a. */
+BURROW_OWNS(ret) Str burrow__types_field_path(Alloc *a, TypesType typ, Slice index);
 bool burrow__types_is_interface_ptr(TypesType T);
 /* interfacePtrError, made in a. T must be a pointer to an interface. */
-BURROW_OWNS(ret) Str burrow__types_interface_ptr_error(Alloc *a, TypesType T);
+BURROW_OWNS(ret) Str burrow__types_interface_ptr_error(Alloc *a, TypesQualifier qf,
+                                                       TypesType T);
 /* funcString: f's name and signature, without parameter names, made in a. */
-BURROW_OWNS(ret) Str burrow__types_func_string(Alloc *a, TypesFunc *f, bool pkg_info);
+BURROW_OWNS(ret) Str burrow__types_func_string(Alloc *a, TypesQualifier qf,
+                                               TypesFunc *f, bool pkg_info);
 
-/* Go's Checker.implements with a nil checker: whether V implements T, or
- * satisfies it when constraint is set. When cause is not NULL and the answer
- * is no, *cause is set to why, made in a. a may be NULL when cause is. */
-bool burrow__types_implements(Alloc *a, TypesType V, TypesType T, bool constraint,
-                              Str *cause);
+/* Go's Checker.implements: whether V implements T, or satisfies it when
+ * constraint is set. When cause is not NULL and the answer is no, *cause is
+ * set to why. check may be NULL, the same way as for missingMethod. */
+bool burrow__types_implements(TypesChecker *check, Alloc *a, TypesType V, TypesType T,
+                              bool constraint, Str *cause);
 
 /* ----------------------------------------------------- subst and contexts */
 
 /* A substitution map is a Map from TypesTypeParam * to TypesType. */
 BURROW_OWNS(ret) Map *burrow__types_make_subst_map(Alloc *a, Slice tpars, Slice targs);
-BURROW_BORROWS(ret, typ) TypesType burrow__types_subst(Alloc *a, TokenPos pos,
-                                                       TypesType typ, Map *smap,
-                                                       TypesNamed *expanding,
+/* Go's Checker.subst; check may be NULL, as for Instantiate. */
+BURROW_BORROWS(ret, typ) TypesType burrow__types_subst(TypesChecker *check, Alloc *a,
+                                                       TokenPos pos, TypesType typ,
+                                                       Map *smap, TypesNamed *expanding,
                                                        TypesContext *ctxt);
 /* Go's replaceRecvType. Sets *copied when out is a new slice. */
 BURROW_OWNS(ret) Slice burrow__types_replace_recv_type(Alloc *a, Slice in,
@@ -597,10 +664,11 @@ BURROW_BORROWS(ret, ctxt) TypesType burrow__types_context_update(TypesContext *c
                                                                  TypesType inst);
 Int burrow__types_context_get_id(TypesContext *ctxt, TypesType t);
 
-/* Go's Checker.instance with a nil checker. */
-BURROW_OWNS(ret) TypesType burrow__types_instance(Alloc *a, TokenPos pos,
-                                                  TypesType orig, Slice targs,
-                                                  TypesNamed *expanding,
+/* Go's Checker.instance; check may be NULL, and then a wrong number of type
+ * arguments panics. */
+BURROW_OWNS(ret) TypesType burrow__types_instance(TypesChecker *check, Alloc *a,
+                                                  TokenPos pos, TypesType orig,
+                                                  Slice targs, TypesNamed *expanding,
                                                   TypesContext *ctxt);
 
 #endif

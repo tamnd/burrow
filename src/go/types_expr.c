@@ -960,14 +960,13 @@ void burrow__tc_match_types(TypesChecker *check, GtOperand *x, GtOperand *y) {
     }
 }
 
-/* If e is not NULL, it must be the binary expression; it may be NULL for
- * non-constant expressions (when invoked for an assignment operation where the
- * binary expression is implicit). */
-void burrow__tc_binary(TypesChecker *check, GtOperand *x, AstExpr e, AstExpr lhs,
-                       AstExpr rhs, Token op, TokenPos op_pos) {
+#define TEX_MODE_BIT(m) (1u << (unsigned)(m))
+
+/* What binary does once x holds lhs. */
+static void tex_binary_rest(TypesChecker *check, GtOperand *x, AstExpr e, AstExpr lhs,
+                            AstExpr rhs, Token op, TokenPos op_pos) {
     GtOperand y = {0};
 
-    burrow__tc_expr(check, NULL, x, lhs);
     burrow__tc_expr(check, NULL, &y, rhs);
 
     if (!burrow__tc_op_valid(x))
@@ -1068,6 +1067,60 @@ void burrow__tc_binary(TypesChecker *check, GtOperand *x, AstExpr e, AstExpr lhs
 
     x->mode = GT_MODE_VALUE;
     /* x.typ is unchanged */
+}
+
+/* Not in Go: check.expr(nil, x, lhs), for an lhs that is itself a binary
+ * expression, done in a loop down the left side of the tree. Go's checker
+ * recurses there, once for each operator, which is fine on a stack that grows.
+ * A C stack does not, and the tables in golang.org/x/text/unicode/norm have a
+ * string made of nearly two thousand constants added together. Each step does
+ * what binary, exprInternal, rawExpr and expr would do for that operator, in
+ * the same order. */
+static void tex_binary_lhs(TypesChecker *check, GtOperand *x, AstExpr lhs) {
+    Int n = 0;
+    for (AstExpr p = lhs; p->kind == AST_KIND_BINARY_EXPR;
+         p = ((AstBinaryExpr *)(void *)p)->x)
+        n++;
+    if (n == 0) {
+        burrow__tc_expr(check, NULL, x, lhs);
+        return;
+    }
+    AstBinaryExpr *buf[16];
+    AstBinaryExpr **chain = buf;
+    if (n > (Int)(sizeof buf / sizeof buf[0]))
+        chain = BURROW_NEW_N(check->a, AstBinaryExpr *, (size_t)n);
+    if (chain == NULL)
+        panic_str(BURROW_S("out of memory"));
+    Int i = 0;
+    for (AstExpr p = lhs; p->kind == AST_KIND_BINARY_EXPR;
+         p = ((AstBinaryExpr *)(void *)p)->x)
+        chain[i++] = (AstBinaryExpr *)(void *)p;
+
+    burrow__tc_expr(check, NULL, x, chain[n - 1]->x);
+    for (i = n - 1; i >= 0; i--) {
+        AstBinaryExpr *b = chain[i];
+        AstExpr e = &b->node;
+        tex_binary_rest(check, x, e, b->x, b->y, b->op, b->op_pos);
+        if (!burrow__tc_op_valid(x))
+            burrow__tc_op_invalidate(x);
+        x->expr = e;
+        burrow__tc_non_generic(check, NULL, x);
+        burrow__tc_record(check, x);
+        burrow__tc_exclude(check, x,
+                           TEX_MODE_BIT(GT_MODE_NOVALUE) |
+                               TEX_MODE_BIT(GT_MODE_BUILTIN) |
+                               TEX_MODE_BIT(GT_MODE_TYPEXPR));
+        burrow__tc_single_value(check, x);
+    }
+}
+
+/* If e is not NULL, it must be the binary expression; it may be NULL for
+ * non-constant expressions (when invoked for an assignment operation where the
+ * binary expression is implicit). */
+void burrow__tc_binary(TypesChecker *check, GtOperand *x, AstExpr e, AstExpr lhs,
+                       AstExpr rhs, Token op, TokenPos op_pos) {
+    tex_binary_lhs(check, x, lhs);
+    tex_binary_rest(check, x, e, lhs, rhs, op, op_pos);
 }
 
 /* ------------------------------------------------------------ expressions */
@@ -1482,8 +1535,6 @@ void burrow__tc_type_assertion(TypesChecker *check, AstExpr e, GtOperand *x,
               "impossible type assertion: %s\n\t%s does not implement %s %s", es, ts,
               xts, cause);
 }
-
-#define TEX_MODE_BIT(m) (1u << (unsigned)(m))
 
 /* expr typechecks expression e and initializes x with the expression value.
  * If a non-nil target T is given and e is a generic function or a function

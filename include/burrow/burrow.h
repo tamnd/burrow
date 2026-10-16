@@ -121,6 +121,7 @@
 #include "burrow/go/doc.h"
 #include "burrow/go/doc/comment.h"
 #include "burrow/go/format.h"
+#include "burrow/go/importer.h"
 #include "burrow/go/parser.h"
 #include "burrow/go/printer.h"
 #include "burrow/go/scanner.h"

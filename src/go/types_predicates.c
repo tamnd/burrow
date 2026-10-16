@@ -577,9 +577,6 @@ GtTypeSet *burrow__types_compute_interface_type_set(TypesChecker *check, TokenPo
      * panic, and that can start in here. */
     Arena ar;
     arena_init(&ar, NULL, 0);
-    Slice all_methods;
-    Slice all_terms = burrow__types_all_termlist();
-    bool all_comparable = false;
     BURROW_SCOPE {
         BURROW_DEFER(gt_free_scratch, &ar);
         Alloc *sa = arena_allocator(&ar);
@@ -621,6 +618,8 @@ GtTypeSet *burrow__types_compute_interface_type_set(TypesChecker *check, TokenPo
         }
 
         /* collect embedded elements */
+        Slice all_terms = burrow__types_all_termlist();
+        bool all_comparable = false;
         for (Int i = 0; i < ityp->embeddeds.len; i++) {
             TypesType typ = GT_AT(ityp->embeddeds, i, TypesType);
             /* The embedding position is nil for imported interfaces. We don't
@@ -691,16 +690,16 @@ GtTypeSet *burrow__types_compute_interface_type_set(TypesChecker *check, TokenPo
             all_terms = gt_intersect_term_lists(a, all_terms, all_comparable, terms,
                                                 comparable, &all_comparable);
         }
-        all_methods = ms.all_methods;
+        Slice all_methods = ms.all_methods;
+
+        tset->comparable = all_comparable;
+        if (all_methods.len != 0) {
+            burrow__types_sort_methods(all_methods);
+            tset->methods = all_methods;
+        }
+        tset->terms = all_terms;
     }
     BURROW_SCOPE_END;
-
-    tset->comparable = all_comparable;
-    if (all_methods.len != 0) {
-        burrow__types_sort_methods(all_methods);
-        tset->methods = all_methods;
-    }
-    tset->terms = all_terms;
     return tset;
 }
 

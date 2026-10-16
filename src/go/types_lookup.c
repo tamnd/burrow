@@ -748,7 +748,7 @@ TypesFunc *types_missing_method(TypesType V, TypesInterface *T, bool is_static,
 }
 
 /* derefStructPtr: the base of typ if typ is a pointer to a struct, else typ. */
-static TypesType gt_deref_struct_ptr(TypesType typ) {
+TypesType burrow__types_deref_struct_ptr(TypesType typ) {
     TypesPointer *p = types_as_pointer(types_type_underlying(typ));
     if (p != NULL && types_as_struct(types_type_underlying(p->base)) != NULL)
         return p->base;
@@ -761,7 +761,7 @@ Str burrow__types_field_path(Alloc *a, TypesType typ, Slice index) {
     Slice names = slice_nil(TYPE_STRING);
     for (Int k = 0; k < index.len; k++) {
         TypesStruct *u =
-            types_as_struct(types_type_underlying(gt_deref_struct_ptr(typ)));
+            types_as_struct(types_type_underlying(burrow__types_deref_struct_ptr(typ)));
         if (u == NULL) {
             /* should not happen if index is valid for typ */
             break;
@@ -779,7 +779,8 @@ Str burrow__types_field_path(Alloc *a, TypesType typ, Slice index) {
  * an embedded field of invalid type somewhere in it. seen holds the structs
  * already looked at, by pointer, and is made on first use. */
 static bool gt_has_invalid_embedded_fields(Alloc *a, TypesType T, Map **seen) {
-    TypesStruct *S = types_as_struct(types_type_underlying(gt_deref_struct_ptr(T)));
+    TypesStruct *S =
+        types_as_struct(types_type_underlying(burrow__types_deref_struct_ptr(T)));
     if (S == NULL || (*seen != NULL && map_get(*seen, &S) != NULL))
         return false;
     if (*seen == NULL) {

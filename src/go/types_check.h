@@ -725,6 +725,9 @@ bool burrow__tc_has_dots(const AstCallExpr *call);
 
 /* builtins.go: id is the index into burrow__types_predeclared_funcs. */
 bool burrow__tc_builtin(TypesChecker *check, GtOperand *x, AstCallExpr *call, Int id);
+/* arrayPtrDeref returns A if typ is of the form *A and A is an array;
+ * otherwise it returns typ. */
+TypesType burrow__tc_array_ptr_deref(TypesType typ);
 
 /* infer.go. Go's nil []Type result is a Slice with a NULL p. tparams is of
  * TypesTypeParam *, targs of TypesType with NULL for the ones to infer, and

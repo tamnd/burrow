@@ -617,6 +617,8 @@ bool burrow__types_has_all_methods(TypesChecker *check, Alloc *a, TypesType V,
 BURROW_BORROWS(ret, T) TypesObject burrow__types_lookup_field_or_method(
     Alloc *a, TypesType T, bool addressable, TypesPackage *pkg, Str name,
     bool fold_case, Slice *index, bool *indirect);
+/* derefStructPtr: the base of typ if typ is a pointer to a struct, else typ. */
+TypesType burrow__types_deref_struct_ptr(TypesType typ);
 /* fieldPath, made in a. */
 BURROW_OWNS(ret) Str burrow__types_field_path(Alloc *a, TypesType typ, Slice index);
 bool burrow__types_is_interface_ptr(TypesType T);

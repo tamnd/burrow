@@ -14,6 +14,7 @@
  * in the LICENSE file. */
 
 #include "check.h"
+#include "go_types_importer.h"
 
 #include "../src/go/importer_internal.h"
 #include "burrow/burrow.h"
@@ -46,26 +47,6 @@ static void gi_begin(TestingT *t) {
     testing_t_cleanup(t, BURROW_FN(Func, gi_free_arena, &ar));
 }
 
-/* The Go root from $GOROOT, or from the go command when it is not set. */
-static Str gi_find_goroot(void) {
-    Str goroot = os_getenv(a, S("GOROOT"));
-    if (goroot.len > 0)
-        return goroot;
-    Error e = BURROW_NO_ERROR;
-    Str go = exec_look_path(a, S("go"), &e);
-    if (BURROW_FAILED(e))
-        return BURROW_STR_EMPTY;
-    ExecCmd *cmd = exec_command_v(a, go, 2, S("env"), S("GOROOT"));
-    if (cmd == NULL)
-        return BURROW_STR_EMPTY;
-    Slice out = exec_cmd_output(cmd, a, &e);
-    if (BURROW_OK(e) && out.len > 0)
-        goroot = str_clone(
-            a, strings_trim_space(str_from_bytes((const Byte *)out.p, out.len)));
-    exec_cmd_free(cmd);
-    return goroot;
-}
-
 static void gi_chdir_back(void *env) {
     (void)os_chdir(*(Str *)env);
 }
@@ -76,10 +57,11 @@ static void gi_chdir_back(void *env) {
  * Not in Go: Go runs a package's tests in its directory, which matters here,
  * since "." is where imports are resolved from and the vendored packages are
  * only found from inside GOROOT. So the test goes there, and back once it is
- * done. */
+ * done. The sources also have to be go1.27's, as go_types_importer.h
+ * explains. */
 static Str gi_goroot(TestingT *t) {
     SKIP_WITHOUT_EXEC(t);
-    Str goroot = gi_find_goroot();
+    Str goroot = gtt_find_goroot(a);
     if (goroot.len == 0) {
         testing_t_skip_v(t, "no GOROOT and no go command to ask for one");
         return goroot;
@@ -88,6 +70,12 @@ static Str gi_goroot(TestingT *t) {
     (void)os_stat(a, filepath_join_v(a, 3, goroot, S("src"), S("go")), &e);
     if (BURROW_FAILED(e)) {
         testing_t_skipf_v(t, "no Go sources in %s", goroot);
+        return BURROW_STR_EMPTY;
+    }
+    Str version;
+    if (!gtt_goroot_is_go127(a, goroot, &version)) {
+        testing_t_skipf_v(t, "%s has %q, and these tests are go1.27's", goroot,
+                          version);
         return BURROW_STR_EMPTY;
     }
     Str *wd = BURROW_NEW(a, Str);

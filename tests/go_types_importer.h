@@ -5,8 +5,8 @@
  * runtime.Compiler, nil), which reads the export data the gc compiler wrote
  * for the installed packages. burrow has no gc importer yet, so this is the
  * source importer instead, the one Go's stdlib_test.go uses. It needs Go's
- * sources, from $GOROOT or from what go env says, and without them only
- * unsafe can be imported.
+ * sources, from $GOROOT or from what go env says, and they have to be
+ * go1.27's. Without them only unsafe can be imported.
  *
  * There is one importer for the whole test program, and it has a file set
  * of its own. Go makes one for each test, which with the gc importer is
@@ -48,7 +48,7 @@ static TypesImporter gtt_importer;
 
 /* What testenv.GOROOT finds: $GOROOT, or else what go env says, or "" when
  * there is no go command to ask. */
-static Str gtt_find_goroot(Alloc *a) {
+static inline Str gtt_find_goroot(Alloc *a) {
     Str goroot = os_getenv(a, BURROW_S("GOROOT"));
     if (goroot.len > 0)
         return goroot;
@@ -67,8 +67,27 @@ static Str gtt_find_goroot(Alloc *a) {
     return goroot;
 }
 
+/* Not in Go: whether goroot holds go1.27, from its VERSION file. Go's tests
+ * run against the tree they are part of, and these come from go1.27, so the
+ * declarations and the errors they expect are go1.27's. The version is put in
+ * *version, or "" when there is no VERSION file. */
+static inline bool gtt_goroot_is_go127(Alloc *a, Str goroot, Str *version) {
+    Error e = BURROW_NO_ERROR;
+    Slice b = os_read_file(a, filepath_join_v(a, 2, goroot, BURROW_S("VERSION")), &e);
+    *version = BURROW_STR_EMPTY;
+    if (BURROW_FAILED(e))
+        return false;
+    Str v = str_from_bytes((const Byte *)b.p, b.len);
+    Int nl = strings_index_byte(v, '\n');
+    if (nl >= 0)
+        v.len = nl;
+    *version = strings_trim_space(v);
+    return str_eq(*version, BURROW_S("go1.27")) ||
+           strings_has_prefix(*version, BURROW_S("go1.27."));
+}
+
 /* The importer without Go's sources, which knows unsafe and nothing else. */
-static TypesPackage *gtt_unsafe_import(void *self, Str path, Error *err) {
+static inline TypesPackage *gtt_unsafe_import(void *self, Str path, Error *err) {
     if (str_eq(path, BURROW_S("unsafe")))
         return types_unsafe();
     *err = errors_new((Alloc *)self,
@@ -78,7 +97,7 @@ static TypesPackage *gtt_unsafe_import(void *self, Str path, Error *err) {
 
 static const TypesImporterVT gtt_unsafe_vt = {NULL, gtt_unsafe_import, NULL};
 
-static void gtt_init(void) {
+static inline void gtt_init(void) {
     if (gtt_ready)
         return;
     gtt_ready = true;
@@ -92,6 +111,9 @@ static void gtt_init(void) {
     (void)os_stat(a, filepath_join_v(a, 3, goroot, BURROW_S("src"), BURROW_S("go")),
                   &e);
     if (BURROW_FAILED(e))
+        return;
+    Str version;
+    if (!gtt_goroot_is_go127(a, goroot, &version))
         return;
     BuildContext *ctxt = BURROW_NEW(a, BuildContext);
     Map *packages = map_make(a, TYPE_STRING, TYPE_UNSAFE_POINTER, 0);

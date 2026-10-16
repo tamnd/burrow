@@ -20,7 +20,7 @@
  * tools/gen-go-types-tests.sh writes from Go's testdata.
  *
  * Not in Go: imports come from the source importer in go_types_importer.h,
- * and with no Go sources to import from, a package that imports anything but
+ * and with no go1.27 sources to import from, a package that imports anything but
  * unsafe (or C, with -fakeImportC) is skipped. Not here: TestManual, which
  * reads files named on the command line.
  *
@@ -350,7 +350,7 @@ static void test_files(TestingT *t, Arena *ar, Slice filenames, Slice srcs,
                 memcpy(buf, path.p, (size_t)n);
             arena_free(ar);
             testing_t_skipf_v(
-                t, "imports %q, and there are no Go sources to import it from",
+                t, "imports %q, and there are no go1.27 sources to import it from",
                 str_from_bytes(buf, n));
         }
     }

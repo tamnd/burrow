@@ -41,7 +41,10 @@
 #define TST_STACK ((size_t)256 << 20)
 
 /* What testenv.MustHaveGoBuild and testenv.GOROOT(t) need here: the Go root
- * with its sources, or a skip. */
+ * with its sources, or a skip.
+ *
+ * Not in Go: the sources have to be go1.27's, as go_types_importer.h
+ * explains. */
 static Str must_have_goroot(TestingT *t, Alloc *a) {
     SKIP_WITHOUT_EXEC(t);
     Str goroot = gtt_find_goroot(a);
@@ -53,6 +56,10 @@ static Str must_have_goroot(TestingT *t, Alloc *a) {
     (void)os_stat(a, filepath_join_v(a, 2, goroot, S("src")), &e);
     if (BURROW_FAILED(e))
         testing_t_skipf_v(t, "no Go sources in %s", goroot);
+    Str version;
+    if (!gtt_goroot_is_go127(a, goroot, &version))
+        testing_t_skipf_v(t, "%s has %q, and these tests are go1.27's", goroot,
+                          version);
     return goroot;
 }
 
@@ -393,7 +400,8 @@ static void TestStdlib(TestingT *t) {
     if (testing_short())
         testing_t_skip_v(t, "skipping in short mode");
 
-    Arena ar;
+    /* static, since the cleanup runs after this returns */
+    static Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
     testing_t_cleanup(t, BURROW_FN(Func, free_arena, &ar));
@@ -550,7 +558,8 @@ static void test_dir_body(void *env) {
 
 static void test_test_dir(TestingT *t, Str path, const char *const *ignore,
                           size_t nignore) {
-    Arena ar;
+    /* static, since the cleanup runs after this returns */
+    static Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
     testing_t_cleanup(t, BURROW_FN(Func, free_arena, &ar));

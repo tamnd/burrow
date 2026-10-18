@@ -8,6 +8,8 @@ Each of Go's interfaces is a vtable and a handle, the way every interface in the
 
 A value crossing the boundary is a `DriverValue`, which is an `Any` holding nil, an `int64_t`, a `double`, a `bool`, `Bytes`, a `Str` or a `Time`, the same six types Go allows, or a decimal type with a `Decompose` method.
 
+For a whole driver over a real C library, see [`examples/sqlite`](../../examples/sqlite/README.md). It wraps the system's SQLite in about 650 lines, fills in the context slots, named parameters, read only transactions and column type names, and comes with its own tests and a demo.
+
 ## Converting parameters
 
 `driver_default_parameter_converter` is what `database/sql` uses on a query's arguments when the driver does not convert them itself. Each integer type becomes an `int64_t`, a `float` becomes a `double`, a named string or byte slice type becomes the plain one, and a pointer is followed, with a NULL pointer meaning SQL's NULL. A `uint64_t` with the high bit set is an error, because it does not fit:

@@ -606,6 +606,16 @@ void burrow__tc_func_body(TypesChecker *check, GtDeclInfo *decl, Str name,
                           const ConstantValue *iota);
 void burrow__tc_open_scope(TypesChecker *check, AstNode node, Str comment);
 void burrow__tc_close_scope(TypesChecker *check);
+/* assignOp: the operator of an op= assignment, or TOKEN_ILLEGAL. */
+Token burrow__tc_assign_op(Token op);
+/* trie.insert: inserts val for key, a non-empty Slice of Int, into keys, a
+ * Slice of pointers that starts out nil. Two keys collide if one is a prefix
+ * of the other. If an existing key is a prefix of (or equal to) key, it
+ * returns that key's value and sets *n to its length. If key is a proper
+ * prefix of existing keys, it returns the value of the smallest of them and
+ * sets *n to the length of key. Otherwise it inserts val, returns it and sets
+ * *n to 0. */
+void *burrow__tc_trie_insert(Alloc *a, Slice *keys, Slice key, void *val, Int *n);
 void burrow__tc_valid_type(TypesChecker *check, TypesNamed *typ);
 void burrow__tc_ident(TypesChecker *check, GtOperand *x, AstIdent *e, bool want_type);
 void burrow__tc_valid_var_type(TypesChecker *check, AstExpr e, TypesType typ);

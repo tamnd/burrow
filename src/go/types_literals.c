@@ -155,7 +155,7 @@ static bool tli_is_ddd_array(const AstArrayType *atyp) {
  * as in the trie, and a collision is found the way the trie finds it. */
 typedef struct TliKey {
     Slice key; /* of Int */
-    TypesVar *val;
+    void *val;
 } TliKey;
 
 /* tli_cmp_keys compares the first n elements of a and b, in order. */
@@ -168,12 +168,7 @@ static int tli_cmp_keys(Slice a, Slice b, Int n) {
     return 0;
 }
 
-/* insert attempts to insert val for key. If an existing key is a prefix of
- * (or equal to) key, it returns that key's value and length. If key is a
- * proper prefix of existing keys, it returns the value of the smallest of
- * them and the length of key. Otherwise it inserts val and returns 0. */
-static TypesVar *tli_insert(TypesChecker *check, Slice *keys, Slice key, TypesVar *val,
-                            Int *n) {
+void *burrow__tc_trie_insert(Alloc *a, Slice *keys, Slice key, void *val, Int *n) {
     burrow__types_assert(key.len > 0);
     TliKey *longer = NULL;
     for (Int i = 0; i < keys->len; i++) {
@@ -195,10 +190,10 @@ static TypesVar *tli_insert(TypesChecker *check, Slice *keys, Slice key, TypesVa
         *n = key.len;
         return longer->val;
     }
-    TliKey *k = GT_NEW(check->a, TliKey);
+    TliKey *k = GT_NEW(a, TliKey);
     k->key = key;
     k->val = val;
-    burrow__types_ptrs_append(check->a, keys, k);
+    burrow__types_ptrs_append(a, keys, k);
     *n = 0;
     return val;
 }
@@ -270,7 +265,7 @@ static void tli_struct_keyed(TypesChecker *check, GtOperand *x, AstCompositeLit 
         TypesType etyp = GT_OBJ(fld)->typ;
         burrow__tc_assignment(check, x, etyp, BURROW_S("struct literal"));
         Int n;
-        TypesVar *alt = tli_insert(check, &visited, index, fld, &n);
+        TypesVar *alt = burrow__tc_trie_insert(check->a, &visited, index, fld, &n);
         if (n != 0) {
             Str fname = GT_OBJ(fld)->name, aname = GT_OBJ(alt)->name;
             if (fld == alt)

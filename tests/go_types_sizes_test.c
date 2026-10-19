@@ -5,16 +5,18 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file.
  *
- * Go's tests type check a small package for each case. There is no checker
- * yet, so each case here builds the types the checker would make for its
- * source, which is kept next to it. TestIssue16902 type checks an
- * unsafe.Offsetof and waits for the checker. */
+ * Go's tests type check a small package for each case. These cases were
+ * written before burrow had a checker, so most of them build the types the
+ * checker would make for their source, which is kept next to them.
+ * TestIssue16902 uses the checker. */
 
 #include "check.h"
+#include "go_types_helpers.h"
 
 #include "../src/go/types_internal.h"
 #include "burrow/burrow.h"
 #include "burrow/go/types.h"
+#include "burrow/map.h"
 #include "burrow/mem/arena.h"
 
 #include <stdint.h>
@@ -153,6 +155,37 @@ static void TestAlignofNaclSlice(TestingT *t) {
 }
 
 /* go.dev/issue/53884. */
+static void TestIssue16902(TestingT *t) {
+    Str src = S("\n"
+                "package a\n"
+                "\n"
+                "import \"unsafe\"\n"
+                "\n"
+                "const _ = unsafe.Offsetof(struct{ x int64 }{}.x)\n");
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TypesInfo info = {
+        .types = map_make(a, TYPE_UNSAFE_POINTER, TYPE_TYPES_TYPE_AND_VALUE, 0)};
+    TypesStdSizes std = {8, 8};
+    TypesConfig conf = {
+        /* TODO(adonovan): use same FileSet as mustTypecheck. */
+        .importer = default_importer(token_new_file_set(a)),
+        .sizes = types_std_sizes_as_sizes(&std),
+    };
+    must_typecheck(a, src, &conf, &info);
+    MapIter it = map_iter(info.types);
+    const void *k;
+    void *v;
+    while (map_next(&it, &k, &v)) {
+        TypesTypeAndValue *tv = v;
+        (void)types_sizes_sizeof(conf.sizes, tv->type);
+        (void)types_sizes_alignof(conf.sizes, tv->type);
+    }
+    (void)t;
+    arena_free(&ar);
+}
+
 static void TestAtomicAlign(TestingT *t) {
     static const char *const arches[] = {"386", "amd64"};
     const int64_t want[] = {0, 8, 16};
@@ -444,6 +477,7 @@ static void TestSizesFor(TestingT *t) {
 #define TESTS(X)                                                                       \
     X(TestMultipleSizeUse)                                                             \
     X(TestAlignofNaclSlice)                                                            \
+    X(TestIssue16902)                                                                  \
     X(TestAtomicAlign)                                                                 \
     X(TestGCSizes)                                                                     \
     X(TestSizes)                                                                       \

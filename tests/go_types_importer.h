@@ -3,10 +3,11 @@
  *
  * Not in Go: Go's defaultImporter is importer.ForCompiler(fset,
  * runtime.Compiler, nil), which reads the export data the gc compiler wrote
- * for the installed packages. burrow has no gc importer yet, so this is the
- * source importer instead, the one Go's stdlib_test.go uses. It needs Go's
- * sources, from $GOROOT or from what go env says, and they have to be
- * go1.27's. Without them only unsafe can be imported.
+ * for the installed packages. Here it is the source importer instead, the one
+ * Go's stdlib_test.go uses, so that the tests need Go's sources but not a go
+ * command to build export data with. The sources come from $GOROOT or from
+ * what go env says, and they have to be go1.27's. Without them only unsafe can
+ * be imported.
  *
  * There is one importer for the whole test program, and it has a file set
  * of its own. Go makes one for each test, which with the gc importer is

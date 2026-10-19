@@ -10,6 +10,7 @@
 
 #include "burrow/go/importer.h"
 
+#include "gcimporter.h"
 #include "importer_internal.h"
 
 #include "burrow/core.h"
@@ -24,8 +25,46 @@
 
 #include <stddef.h>
 
+/* gc importer */
+
+typedef struct GiGcImports {
+    TokenFileSet *fset;
+    Map *packages; /* Str to TypesPackage * */
+    ImporterLookup lookup;
+    Map *exports; /* Not in Go: what go list said, by package directory */
+    Alloc *a;
+} GiGcImports;
+
+static TypesPackage *gi_gc_import_from(void *self, Str path, Str src_dir,
+                                       TypesImportMode mode, Error *err) {
+    GiGcImports *m = self;
+    if (mode != 0)
+        runtime_panic(BURROW_S("mode must be 0"));
+    return burrow__gcimporter_import(m->a, m->fset, m->packages, path, src_dir,
+                                     m->lookup, m->exports, err);
+}
+
+static TypesPackage *gi_gc_import(void *self, Str path, Error *err) {
+    return gi_gc_import_from(self, path, BURROW_S("") /* no vendoring */, 0, err);
+}
+
+static const TypesImporterVT gi_gc_vt = {NULL, gi_gc_import, gi_gc_import_from};
+
 TypesImporter importer_for_compiler(Alloc *a, TokenFileSet *fset, Str compiler,
                                     ImporterLookup lookup) {
+    if (str_eq(compiler, BURROW_S("gc"))) {
+        GiGcImports *m = BURROW_NEW(a, GiGcImports);
+        if (m == NULL)
+            return (TypesImporter){0};
+        m->fset = fset;
+        m->packages = map_make(a, TYPE_STRING, TYPE_UNSAFE_POINTER, 0);
+        m->lookup = lookup;
+        m->exports = map_make(a, TYPE_STRING, TYPE_UNSAFE_POINTER, 0);
+        m->a = a;
+        if (m->packages == NULL || m->exports == NULL)
+            return (TypesImporter){0};
+        return (TypesImporter){&gi_gc_vt, m};
+    }
     if (str_eq(compiler, BURROW_S("source"))) {
         if (!BURROW_FUNC_IS_NIL(lookup))
             runtime_panic(BURROW_S("source importer for custom import path lookup not "

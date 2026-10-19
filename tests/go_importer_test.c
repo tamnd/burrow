@@ -5,8 +5,8 @@
  * there is no GOROOT with them in it, which is what testenv.MustHaveSource
  * does for Go's.
  *
- * Not here yet: TestForCompiler from go/importer's importer_test.go, which is
- * about the "gc" importer.
+ * TestForCompiler is from go/importer's importer_test.go, and needs a go
+ * command as well.
  *
  * Copyright 2017 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -409,6 +409,114 @@ static void TestCgo(TestingT *t) {
         testing_t_fatalf_v(t, "Import failed: %v", err);
 }
 
+typedef struct ForCompilerCase {
+    TokenFileSet *fset;
+    Str compiler;
+    Str goroot;
+} ForCompilerCase;
+
+static const Str the_package = S_("math/big");
+
+static void for_compiler_lookup_default(void *env, TestingT *t) {
+    const ForCompilerCase *c = (const ForCompilerCase *)env;
+    TypesImporter imp =
+        importer_for_compiler(a, c->fset, c->compiler, (ImporterLookup){0});
+    Error err = BURROW_NO_ERROR;
+    TypesPackage *pkg = imp.vt->import_(imp.data, the_package, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatal_v(t, err);
+        return;
+    }
+    if (!str_eq(types_package_path(pkg), the_package)) {
+        testing_t_fatalf_v(t, "Path() = %q, want %q", types_package_path(pkg),
+                           the_package);
+        return;
+    }
+
+    /* Check that the fileset positions are accurate.
+     * https://github.com/golang/go#28995 */
+    TypesObject math_big_int = types_scope_lookup(types_package_scope(pkg), S("Int"));
+    /* "$GOROOT/src/math/big/int.go:25:1" */
+    TokenPosition posn =
+        token_file_set_position(c->fset, types_object_pos(math_big_int));
+    Str filename = strings_replace(a, posn.filename, S("$GOROOT"), c->goroot, 1);
+    Slice data = os_read_file(a, filename, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(
+            t, "can't read file containing declaration of math/big.Int: %v", err);
+        return;
+    }
+    Slice lines =
+        strings_split(a, str_from_bytes((const Byte *)data.p, data.len), S("\n"));
+    if (posn.line > lines.len ||
+        !strings_has_prefix(BURROW_AT(Str, lines, posn.line - 1), S("type Int")))
+        testing_t_fatalf_v(t, "Object %v position %s does not contain its declaration",
+                           types_object_string(a, math_big_int, TYPES_NO_QUALIFIER),
+                           token_position_string(posn, a));
+}
+
+static void for_compiler_lookup_custom(void *env, TestingT *t) {
+    (void)env;
+    /* TODO(mdempsky): Decide whether to remove this test, or to fix support for
+     * it in unified IR. It's not clear that we actually need to support
+     * importing "math/big" as "math/bigger", for example. cmd/link no longer
+     * supports that.
+     *
+     * Not in Go: the rest of Go's test comes after this skip and never runs,
+     * so it is not here. */
+    testing_t_skip_v(t, "not supported by GOEXPERIMENT=unified; see go.dev/cl/406319");
+}
+
+static void TestForCompiler(TestingT *t) {
+    gi_begin(t);
+    /* testenv.MustHaveGoBuild */
+    Str goroot = gi_goroot(t);
+    if (goroot.len == 0)
+        return;
+    Str go = filepath_join_v(a, 3, goroot, S("bin"), S("go"));
+    Error err = BURROW_NO_ERROR;
+    (void)exec_look_path(a, go, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_skipf_v(t, "no go command in %s", goroot);
+        return;
+    }
+    /* TestMain sets build.Default.GOROOT, which build_default reads from
+     * $GOROOT. */
+    err = os_setenv(S("GOROOT"), goroot);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatal_v(t, err);
+        return;
+    }
+
+    ExecCmd *cmd =
+        exec_command_v(a, go, 4, S("list"), S("-export"),
+                       S("-f={{context.Compiler}}:{{.Export}}"), the_package);
+    Slice out = exec_cmd_combined_output(cmd, a, &err);
+    exec_cmd_free(cmd);
+    Str outs = str_from_bytes((const Byte *)out.p, out.len);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "go list %s: %v\n%s", the_package, err, outs);
+        return;
+    }
+    Str export_ = strings_trim_space(outs);
+    Str target;
+    bool found;
+    Str compiler = strings_cut(export_, S(":"), &target, &found);
+
+    if (str_eq(compiler, S("gccgo"))) {
+        testing_t_skip_v(t, "golang.org/issue/22500");
+        return;
+    }
+
+    ForCompilerCase *c = BURROW_NEW(a, ForCompilerCase);
+    *c = (ForCompilerCase){token_new_file_set(a), compiler, goroot};
+
+    testing_t_run(t, S("LookupDefault"),
+                  BURROW_FN(TestingTFunc, for_compiler_lookup_default, c));
+    testing_t_run(t, S("LookupCustom"),
+                  BURROW_FN(TestingTFunc, for_compiler_lookup_custom, c));
+}
+
 #define TESTS(X)                                                                       \
     X(TestImportStdLib)                                                                \
     X(TestImportedTypes)                                                               \
@@ -416,6 +524,7 @@ static void TestCgo(TestingT *t) {
     X(TestIssue20855)                                                                  \
     X(TestIssue23092)                                                                  \
     X(TestIssue24392)                                                                  \
-    X(TestCgo)
+    X(TestCgo)                                                                         \
+    X(TestForCompiler)
 
 TESTING_MAIN(TESTS)

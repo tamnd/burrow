@@ -1266,16 +1266,18 @@ Go's off by one and burrow keeps it so that ported code counts the same frames.
 caller's buffer, using the same formatter `src/runtime/panic.c` uses so the two
 cannot drift.
 
-`runtime_stack(buf, true)` is the one of the four that is not finished. It gives
-the calling goroutine its frames and every other goroutine a line with its
-number and its status, because walking a goroutine that is parked on another
-thread means recovering a frame pointer from a saved machine context, which is
-per architecture work that belongs with the scheduler rather than here. The
-numbers and the states are enough to see a deadlock in, and the shape of the
-output does not change when the frames arrive. Two smaller gaps go with it:
-burrow records a goroutine's status and not the reason it parked, so the
-brackets say `waiting` where Go would say `chan receive`, and the file and line
-on `RuntimeFrame` stay empty until the amalgamation table lands.
+`runtime_stack(buf, true)` gives the calling goroutine its frames and then
+every other goroutine its number, its status and its own frames. Go stops the
+world to read them. burrow can't, so the scheduler holds each parked goroutine
+where it is with the scan bit while its stack is walked from the context the
+switch saved, and asks a running one to give way at its next safe point. That
+walk needs the amd64 or arm64 assembly switch, so a build without it, Windows
+among them, and a goroutine that never gave way, show the function the
+goroutine was started with instead. The brackets hold the reason a waiting
+goroutine parked, `chan receive` or `sleep`, with Go's words for each, and a
+goroutine parked through `sched_park` from outside the runtime says `waiting`.
+The file and line on `RuntimeFrame` stay empty until the amalgamation table
+lands.
 
 Naming every global function means the linker has to keep every object that
 defines one, so a small program linking `burrow` statically gets all of it.

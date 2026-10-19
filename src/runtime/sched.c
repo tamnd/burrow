@@ -307,49 +307,6 @@ int32_t burrow__gomaxprocs(void) {
     return sched.gomaxprocs;
 }
 
-#define SNAPSHOT_TRIES 100
-
-int32_t burrow__allg_snapshot(burrow__GInfo *out, int32_t max, int32_t *total) {
-    int32_t n = 0;
-    int32_t seen = 0;
-
-    if (total != NULL)
-        *total = 0;
-    if (out == NULL || max < 0)
-        return -1;
-
-    /* Try rather than wait, for the reason the header gives: this runs on the
-     * way out of a crash and the crash may be inside the section this lock
-     * protects. But try more than once. A healthy program holds this lock for
-     * a few hundred nanoseconds at a time and takes it on every schedule, so a
-     * goroutine in a tight loop of runtime_gosched on another thread wins a
-     * single try often enough to make the answer look random. A hundred tries
-     * with a yield between them is well under a millisecond when the lock is
-     * really stuck, and it is enough to get in between two holders when it is
-     * only busy. */
-    int tries = 0;
-    while (!burrow__trylock(&sched.lock)) {
-        if (++tries == SNAPSHOT_TRIES)
-            return -1;
-        burrow__thread_yield();
-    }
-
-    for (burrow__G *g = sched.allg; g != NULL; g = g->allnext) {
-        seen++;
-        if (n >= max)
-            continue;
-        out[n].id = g->id;
-        out[n].status = burrow__atomic_load_acquire_u32(&g->status) & ~BURROW_GSCAN;
-        n++;
-    }
-
-    burrow__unlock(&sched.lock);
-
-    if (total != NULL)
-        *total = seen;
-    return n;
-}
-
 /* How long a goroutine profile waits, all told, for goroutines running on other
  * threads to stop. Go stops the world instead, which preempts a goroutine in
  * microseconds wherever it is. Here one stops only at a safe point, and sysmon
@@ -381,20 +338,15 @@ static void record_start(burrow__G *g, burrow__StackRecord *r) {
     }
 }
 
-void burrow__goroutine_profile(burrow__StackRecordFn fn, void *env) {
+/* Every goroutine from head on but the caller, for the two functions below.
+ *
+ * The list only ever grows at the front and a G is never taken off it, so a
+ * head read under the lock is the start of a list that stays as it is from
+ * there on, and the walk needs no lock at all. */
+static void visit_goroutines(burrow__G *head, burrow__StackRecordFn fn, void *env) {
     burrow__M *m = getm();
     burrow__G *self = m != NULL ? m->curg : NULL;
     burrow__StackRecord r;
-
-    if (fn == NULL)
-        return;
-
-    /* The list only ever grows at the front and a G is never taken off it, so
-     * the head read under the lock is the start of a list that stays as it is
-     * from there on, and the walk below needs no lock at all. */
-    burrow__lock(&sched.lock);
-    burrow__G *head = sched.allg;
-    burrow__unlock(&sched.lock);
 
     int64_t deadline = burrow__nanotime() + PROFILE_WAIT_NS;
     for (burrow__G *g = head; g != NULL; g = g->allnext) {
@@ -413,6 +365,8 @@ void burrow__goroutine_profile(burrow__StackRecordFn fn, void *env) {
                 /* Held. Nothing can start g or reuse it until the bit goes, so
                  * its context, its stack and its labels all stay put. */
                 r.id = g->id;
+                r.status = st;
+                r.waitreason = st == (uint32_t)BURROW_GWAITING ? g->waitreason : 0;
                 r.labels = burrow__atomic_load_acquire_ptr(&g->labels);
                 r.n = (int32_t)burrow__callers_saved(saved_sp(g), g->stack.lo,
                                                      g->stack.hi, (Uintptr *)r.pcs,
@@ -429,7 +383,9 @@ void burrow__goroutine_profile(burrow__StackRecordFn fn, void *env) {
              * way, and waited for until the deadline. */
             if ((st & BURROW_GSCAN) == 0) {
                 if (burrow__nanotime() >= deadline) {
-                    r.id = 0;
+                    r.id = burrow__atomic_load_u64(&g->id);
+                    r.status = st;
+                    r.waitreason = 0;
                     r.labels = burrow__atomic_load_acquire_ptr(&g->labels);
                     record_start(g, &r);
                     fn(env, &r);
@@ -443,6 +399,41 @@ void burrow__goroutine_profile(burrow__StackRecordFn fn, void *env) {
                 burrow__thread_yield();
         }
     }
+}
+
+void burrow__goroutine_profile(burrow__StackRecordFn fn, void *env) {
+    if (fn == NULL)
+        return;
+
+    burrow__lock(&sched.lock);
+    burrow__G *head = sched.allg;
+    burrow__unlock(&sched.lock);
+    visit_goroutines(head, fn, env);
+}
+
+#define STACKS_TRIES 100
+
+bool burrow__goroutine_stacks(burrow__StackRecordFn fn, void *env) {
+    if (fn == NULL)
+        return true;
+
+    /* Try rather than wait, for the reason the header gives. But try more than
+     * once. A healthy program holds this lock for a few hundred nanoseconds at
+     * a time and takes it on every schedule, so a goroutine in a tight loop of
+     * runtime_gosched on another thread wins a single try often enough to make
+     * the answer look random. A hundred tries with a yield between them is well
+     * under a millisecond when the lock is really stuck, and it is enough to get
+     * in between two holders when it is only busy. */
+    int tries = 0;
+    while (!burrow__trylock(&sched.lock)) {
+        if (++tries == STACKS_TRIES)
+            return false;
+        burrow__thread_yield();
+    }
+    burrow__G *head = sched.allg;
+    burrow__unlock(&sched.lock);
+    visit_goroutines(head, fn, env);
+    return true;
 }
 
 int32_t burrow__thread_count(void) {
@@ -464,6 +455,8 @@ void burrow__thread_create_profile(burrow__StackRecordFn fn, void *env) {
     for (int32_t i = 0; i < n; i++) {
         burrow__M *m = &allm[i];
         r.id = (uint64_t)m->id;
+        r.status = 0; /* not a goroutine */
+        r.waitreason = 0;
         r.labels = NULL;
         r.n = m->ncreatestack;
         for (int32_t j = 0; j < r.n; j++)
@@ -916,12 +909,6 @@ static burrow__G *gfget(burrow__P *p, size_t bytes) {
         if (g == NULL)
             return NULL;
 
-        /* One based, because the add answers with the value before it and the
-         * header says zero is not a valid id. It also puts the main goroutine
-         * at 1, which is the number Go gives it and the number that turns up in
-         * every Go traceback anybody has ever read. */
-        g->id = burrow__atomic_add_u64(&sched.nextgoid, 1) + 1;
-
         burrow__lock(&sched.lock);
         g->allnext = sched.allg;
         sched.allg = g;
@@ -947,6 +934,15 @@ static burrow__G *gfget(burrow__P *p, size_t bytes) {
         burrow__unlock(&sched.lock);
         return NULL;
     }
+
+    /* A new id every time, for a G off a free list as much as for a new one,
+     * as Go's newproc1 does. One based, because the add answers with the value
+     * before it and the header says zero is not a valid id. It also puts the
+     * main goroutine at 1, which is the number Go gives it and the number that
+     * turns up in every Go traceback anybody has ever read. Atomic because a
+     * goroutine profile that gave up waiting for a running goroutine reads the
+     * id without holding it, and that goroutine may have ended since. */
+    burrow__atomic_store_u64(&g->id, burrow__atomic_add_u64(&sched.nextgoid, 1) + 1);
     return g;
 }
 
@@ -2471,6 +2467,7 @@ bool burrow__newcoro(burrow__Coro *c, void (*f)(burrow__Coro *c, void *env),
         burrow__bubble_blocking(newg);
     }
 
+    newg->waitreason = (uint8_t)BURROW_WAIT_COROUTINE;
     set_status_release(newg, BURROW_GWAITING);
     count_goroutine(m->p, 1);
     return true;
@@ -2505,6 +2502,7 @@ void burrow__coroswitch(burrow__Coro *c) {
         burrow__bubble_blocking(gp);
     }
 
+    gp->waitreason = (uint8_t)BURROW_WAIT_COROUTINE;
     set_status_release(gp, BURROW_GWAITING);
     burrow__atomic_store_release_ptr((void **)&m->curg, next);
     cas_running(next);
@@ -2514,10 +2512,45 @@ void burrow__coroswitch(burrow__Coro *c) {
 
 /* ------------------------------------------------------------ park and ready */
 
-void burrow__park(bool (*unlockf)(burrow__G *g, void *lock), void *lock, bool durable) {
+/* Go's waitReasonStrings, for the reasons burrow has. */
+static const char *const wait_reason_strings[] = {
+    [BURROW_WAIT_ZERO] = "",
+    [BURROW_WAIT_IO] = "IO wait",
+    [BURROW_WAIT_CHAN_RECEIVE_NIL_CHAN] = "chan receive (nil chan)",
+    [BURROW_WAIT_CHAN_SEND_NIL_CHAN] = "chan send (nil chan)",
+    [BURROW_WAIT_SELECT] = "select",
+    [BURROW_WAIT_SELECT_NO_CASES] = "select (no cases)",
+    [BURROW_WAIT_CHAN_RECEIVE] = "chan receive",
+    [BURROW_WAIT_CHAN_SEND] = "chan send",
+    [BURROW_WAIT_SEMACQUIRE] = "semacquire",
+    [BURROW_WAIT_SLEEP] = "sleep",
+    [BURROW_WAIT_SYNC_COND_WAIT] = "sync.Cond.Wait",
+    [BURROW_WAIT_SYNC_MUTEX_LOCK] = "sync.Mutex.Lock",
+    [BURROW_WAIT_SYNC_RW_MUTEX_R_LOCK] = "sync.RWMutex.RLock",
+    [BURROW_WAIT_SYNC_RW_MUTEX_LOCK] = "sync.RWMutex.Lock",
+    [BURROW_WAIT_SYNC_WAIT_GROUP_WAIT] = "sync.WaitGroup.Wait",
+    [BURROW_WAIT_COROUTINE] = "coroutine",
+    [BURROW_WAIT_SYNCTEST_RUN] = "synctest.Run",
+    [BURROW_WAIT_SYNCTEST_WAIT] = "synctest.Wait",
+    [BURROW_WAIT_SYNCTEST_CHAN_RECEIVE] = "chan receive (durable)",
+    [BURROW_WAIT_SYNCTEST_CHAN_SEND] = "chan send (durable)",
+    [BURROW_WAIT_SYNCTEST_SELECT] = "select (durable)",
+    [BURROW_WAIT_SYNCTEST_WAIT_GROUP_WAIT] = "sync.WaitGroup.Wait (durable)",
+};
+
+const char *burrow__wait_reason_string(burrow__WaitReason r) {
+    if ((unsigned)r >= sizeof wait_reason_strings / sizeof wait_reason_strings[0])
+        return "unknown wait reason";
+    return wait_reason_strings[r];
+}
+
+void burrow__park(bool (*unlockf)(burrow__G *g, void *lock), void *lock,
+                  burrow__WaitReason reason, bool durable) {
     burrow__M *m = getm();
     if (m == NULL || m->curg == NULL)
         runtime_throw(BURROW_S("sched_park: not on a goroutine"));
+
+    m->curg->waitreason = (uint8_t)reason;
 
     m->parkunlock = unlockf;
     m->parklock = lock;
@@ -2529,7 +2562,7 @@ void sched_park(SchedUnlockFn unlockf, void *lock) {
     /* Never durable. A caller outside the runtime has built its own waiting on
      * top of the scheduler, and a bubble has no way to tell what will end it,
      * so the honest answer is that this goroutine might still get somewhere. */
-    burrow__park(unlockf, lock, false);
+    burrow__park(unlockf, lock, BURROW_WAIT_ZERO, false);
 }
 
 void sched_ready(Goroutine *g) {

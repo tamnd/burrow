@@ -103,7 +103,7 @@ bool burrow__fdmu_rwlock(burrow__FdMutex *mu, bool read, bool wait) {
             if ((old & bit) == 0)
                 return true;
             /* Whoever wakes us has taken us off the count already. */
-            burrow__sema_acquire(sema, false, false);
+            burrow__sema_acquire(sema, false, BURROW_WAIT_SEMACQUIRE, false);
         }
     }
 }

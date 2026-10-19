@@ -325,7 +325,7 @@ bool synctest_run(Func f) {
          * bubble is here, and what these do is start goroutines in it. */
         (void)burrow__timers_check(&b.timers, burrow__bubble_now(&b), NULL, NULL);
 
-        burrow__park(NULL, NULL, true);
+        burrow__park(NULL, NULL, BURROW_WAIT_SYNCTEST_RUN, true);
 
         /* Past the park, so every other goroutine in the bubble is durably
          * blocked and none of them can arm a timer or exit underneath this.
@@ -401,7 +401,7 @@ void synctest_wait(void) {
      * giving back, once the lock above is released, which is the ordering every
      * durable wait in the runtime uses. */
     b->waiter = g;
-    burrow__park(unlock_bubble, b, true);
+    burrow__park(unlock_bubble, b, BURROW_WAIT_SYNCTEST_WAIT, true);
 }
 
 void synctest_sleep(Duration d) {

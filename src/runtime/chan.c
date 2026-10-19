@@ -475,9 +475,10 @@ static bool parked_commit(Parked *p) {
  * the channel was made inside it. A thread waiting on a note is never durable:
  * it is not a goroutine, so it is not in anybody's bubble, and the park below
  * is not the one being asked about. */
-static void parked_sleep(Parked *p, SchedUnlockFn unlockf, void *arg, bool durable) {
+static void parked_sleep(Parked *p, SchedUnlockFn unlockf, void *arg,
+                         burrow__WaitReason reason, bool durable) {
     if (p->g != NULL) {
-        burrow__park(unlockf, arg, durable);
+        burrow__park(unlockf, arg, reason, durable);
         return;
     }
 
@@ -531,7 +532,7 @@ static void parked_wake(Parked *p) {
  * Go's runtime notices when every goroutine in a program is stuck like this and
  * says so. burrow does not, for the reason in docs/design/06-runtime.md: a host
  * thread may be about to wake somebody and the runtime cannot see it. */
-BURROW_NORETURN static void block_forever(void) {
+BURROW_NORETURN static void block_forever(burrow__WaitReason reason) {
     if (sched_current() != NULL) {
         /* Durable, which sounds odd for a wait that never ends and is exactly
          * right. A bubble asks whether anything outside it could end this wait,
@@ -539,7 +540,7 @@ BURROW_NORETURN static void block_forever(void) {
          * goroutines have all ended up here has deadlocked and should say so.
          * Go counts a nil channel the same way. */
         for (;;)
-            burrow__park(NULL, NULL, true);
+            burrow__park(NULL, NULL, reason, true);
     }
 
     burrow__Note n;
@@ -701,7 +702,9 @@ static bool chan_send_impl(Chan *c, const void *v, bool block) {
     w2.sendp = v;
     waitq_push(&c->sendq, &w2);
 
-    parked_sleep(&p, unlock_chan, c, durable);
+    parked_sleep(&p, unlock_chan, c,
+                 durable ? BURROW_WAIT_SYNCTEST_CHAN_SEND : BURROW_WAIT_CHAN_SEND,
+                 durable);
     parked_done(&p);
 
     /* Woken. Either the value went somewhere or the channel closed under us,
@@ -714,7 +717,7 @@ static bool chan_send_impl(Chan *c, const void *v, bool block) {
 
 void chan_send(Chan *c, const void *v) {
     if (c == NULL)
-        block_forever();
+        block_forever(BURROW_WAIT_CHAN_SEND_NIL_CHAN);
 
     (void)chan_send_impl(c, v, true);
 }
@@ -809,7 +812,9 @@ static bool chan_recv_impl(Chan *c, void *out, bool *ok, bool block) {
     w2.recvp = out;
     waitq_push(&c->recvq, &w2);
 
-    parked_sleep(&p, unlock_chan, c, durable);
+    parked_sleep(&p, unlock_chan, c,
+                 durable ? BURROW_WAIT_SYNCTEST_CHAN_RECEIVE : BURROW_WAIT_CHAN_RECEIVE,
+                 durable);
     parked_done(&p);
 
     /* Woken. A sender filled `out` directly, or close zeroed it. */
@@ -820,7 +825,7 @@ static bool chan_recv_impl(Chan *c, void *out, bool *ok, bool block) {
 
 bool chan_recv(Chan *c, void *out) {
     if (c == NULL)
-        block_forever();
+        block_forever(BURROW_WAIT_CHAN_RECEIVE_NIL_CHAN);
 
     bool ok = false;
     (void)chan_recv_impl(c, out, &ok, true);
@@ -1258,7 +1263,7 @@ Int chan_select(SelectCase *cases, Int n) {
     if (home == NULL) {
         if (dflt >= 0)
             return dflt;
-        block_forever();
+        block_forever(n == 0 ? BURROW_WAIT_SELECT_NO_CASES : BURROW_WAIT_SELECT);
     }
 
     uint32_t small_order[SELECT_SMALL];
@@ -1332,7 +1337,8 @@ Int chan_select(SelectCase *cases, Int n) {
     s.p.won = -1;
 
     sel_enqueue(&s);
-    parked_sleep(&s.p, unlock_select, &s, durable);
+    parked_sleep(&s.p, unlock_select, &s,
+                 durable ? BURROW_WAIT_SYNCTEST_SELECT : BURROW_WAIT_SELECT, durable);
 
     /* Woken, which means somebody claimed this select and wrote down which case
      * they completed. The other entries are still sitting on their queues, or

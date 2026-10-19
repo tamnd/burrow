@@ -359,7 +359,7 @@ static bool netpoll_block(burrow__PollDesc *pd, uint32_t mode, bool waitio) {
      * happened while this was getting as far as PD_WAIT is one whose look
      * found nothing, and this is the look that catches it. */
     if (waitio || check_err(pd, mode) == BURROW_POLL_READY)
-        sched_park(park_commit, gpp);
+        burrow__park(park_commit, gpp, BURROW_WAIT_IO, false);
 
     uintptr_t old = burrow__atomic_swap_uptr(gpp, PD_NIL);
     if (old > PD_WAIT)

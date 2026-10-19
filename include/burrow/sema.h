@@ -8,7 +8,7 @@
  * waiting on has no queue anywhere.
  *
  *     uint32_t sema;              // yours, wherever you like
- *     burrow__sema_acquire(&sema, false);
+ *     burrow__sema_acquire(&sema, false, BURROW_WAIT_SEMACQUIRE, false);
  *     ...
  *     burrow__sema_release(&sema, false);
  *
@@ -43,6 +43,7 @@
 #define BURROW_SEMA_H
 
 #include "burrow/lock.h"
+#include "burrow/waitreason.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -66,8 +67,13 @@ extern "C" {
  * waiting like this has stopped. See burrow/synctest.h. Only the caller knows
  * the answer: a WaitGroup can say yes when every Add came from inside the
  * bubble, and a Mutex always says no, because a goroutine waiting for a mutex
- * is waiting for a goroutine that is running. */
-void burrow__sema_acquire(uint32_t *addr, bool lifo, bool durable);
+ * is waiting for a goroutine that is running.
+ *
+ * `reason` is what a traceback prints for a goroutine waiting here, the way Go's
+ * semacquire1 takes one: a Mutex says sync.Mutex.Lock, and something with no
+ * better name says semacquire. */
+void burrow__sema_acquire(uint32_t *addr, bool lifo, burrow__WaitReason reason,
+                          bool durable);
 
 /* Adds one wakeup to the counter and gives it to a waiter if there is one.
  *

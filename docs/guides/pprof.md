@@ -114,4 +114,4 @@ That counts four goroutines, the one that wrote the profile and the three it sta
 goroutine profile: total 4
 ```
 
-The stack of a goroutine that is waiting is read from where it stopped, on amd64 and arm64 outside Windows. On other systems, and for a goroutine still running after the profile has waited twenty milliseconds for it to stop, the stack is the function the goroutine was started with. With debug 2 the goroutine profile is what `runtime_stack` prints with all set, which lists the other goroutines without walking their stacks yet.
+The stack of a goroutine that is waiting is read from where it stopped, on amd64 and arm64 outside Windows. On other systems, and for a goroutine still running after the profile has waited twenty milliseconds for it to stop, the stack is the function the goroutine was started with. With debug 2 the goroutine profile is what `runtime_stack` prints with all set, which reads the stacks the same way.

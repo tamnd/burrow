@@ -195,6 +195,45 @@ static void TestAGoroutineRuns(TestingT *t) {
     CHECK(one_g != one_main_g);
 }
 
+/* Not in Go. Go's newproc1 gives every goroutine a new goid, even when the g it
+ * runs on is a dead one being reused, and two goroutines one after the other on
+ * one P are the case where the second reuses the first's G. */
+static uint64_t id_seen[2];
+static burrow__G *id_g[2];
+
+static void id_child(void *env) {
+    int i = (int)(intptr_t)env;
+    id_g[i] = burrow__curg();
+    id_seen[i] = id_g[i]->id;
+}
+
+static void id_body(void *env) {
+    TestingT *t = env;
+
+    for (int i = 0; i < 2; i++) {
+        CHECK(go(BURROW_FN(Func, id_child, (void *)(intptr_t)i)));
+        for (int j = 0; j < 1000 && id_seen[i] == 0; j++)
+            runtime_gosched();
+    }
+}
+
+static void TestAReusedGoroutineGetsANewID(TestingT *t) {
+    memset(id_seen, 0, sizeof id_seen);
+    memset(id_g, 0, sizeof id_g);
+
+    (void)runtime_gomaxprocs(1);
+    runtime_main(BURROW_FN(Func, id_body, t));
+
+    CHECK(id_seen[0] != 0);
+    CHECK(id_seen[1] != 0);
+    CHECK(id_seen[1] > id_seen[0]);
+
+    /* The case this is about. It is what one P and nothing else running gives,
+     * since the first goroutine's G is on that P's free list when the second
+     * is started. */
+    CHECK(id_g[0] == id_g[1]);
+}
+
 /* ---------------------------------------------------------------- the ordering
  *
  * With one P and one thread the order goroutines run in is decided entirely by
@@ -847,6 +886,7 @@ static void TestNothingIsLostWhileGoroutinesParkAndReadyEachOther(TestingT *t) {
     X(TestTheFunctionHandedToRuntimeMainRuns)                                          \
     X(TestRuntimeMainCanBeCalledTwice)                                                 \
     X(TestAGoroutineRuns)                                                              \
+    X(TestAReusedGoroutineGetsANewID)                                                  \
     X(TestTheNewestGoroutineRunsFirstAndTheRestRunOldestFirst)                         \
     X(TestGoschedLetsAnotherGoroutineHaveTheThread)                                    \
     X(TestGoschedDoesNotStarveTheGlobalQueue)                                          \

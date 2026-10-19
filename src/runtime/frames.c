@@ -36,17 +36,14 @@
 #include <stdio.h>
 #include <string.h>
 
-/* How many frames one call to runtime_stack walks, and how many goroutines it
- * names when it was asked for all of them.
+/* How many frames one call to runtime_stack walks for the calling goroutine.
  *
- * Both are caps on stack space rather than on anything interesting: the two
- * arrays together are a little over a kilobyte, which a goroutine stack can
- * spare and which a thread that is about to die can certainly spare. Sixty four
- * frames is what BURROW_TRACEBACK_MAX is and what an uncaught panic prints. A
- * program with more than sixty four goroutines gets a line saying how many were
- * left out, which is the number that actually matters in that case. */
+ * A cap on stack space rather than on anything interesting: the array is half a
+ * kilobyte, which a goroutine stack can spare and which a thread that is about
+ * to die can certainly spare. Sixty four frames is what BURROW_TRACEBACK_MAX is
+ * and what an uncaught panic prints. The other goroutines get what the
+ * scheduler's walk gives them, BURROW_PROFILE_DEPTH frames each. */
 #define STACK_FRAMES BURROW_TRACEBACK_MAX
-#define STACK_GOROUTINES 64
 
 /* -------------------------------------------------------------- one address */
 
@@ -161,11 +158,9 @@ static void out_put(Out *o, const char *s) {
 
 /* What Go puts in the brackets after the goroutine number.
  *
- * Go's words are more specific than these, because Go knows why a goroutine is
- * waiting and prints "chan receive" or "select" or "sleep". burrow's scheduler
- * records the status and not the reason, so waiting is as far as this goes.
- * Filling in the reason is a field on the G and a line at each park, and it
- * belongs with the work that makes the other goroutines walkable at all. */
+ * A waiting goroutine usually prints its wait reason instead, "chan receive" or
+ * "sleep", as Go's goroutineheader does. This word is for the rest: a park from
+ * outside the runtime, through sched_park, says nothing about why. */
 static const char *status_name(uint32_t status) {
     switch ((burrow__GStatus)status) {
     case BURROW_GIDLE:
@@ -185,38 +180,22 @@ static const char *status_name(uint32_t status) {
     }
 }
 
-/* The goroutines other than this one, as a line each.
- *
- * Split out because runtime_stack is long enough without it and because this
- * half is the half that is going to be replaced: when the scheduler can hand
- * over a parked goroutine's frame pointer, this grows a walk and stops being a
- * list of excuses. */
-static void other_goroutines(Out *o, uint64_t self) {
-    burrow__GInfo gs[STACK_GOROUTINES];
+/* One of the goroutines other than this one, with its frames, for the walk
+ * runtime_stack hands to the scheduler. */
+static void other_goroutine(void *env, const burrow__StackRecord *r) {
+    Out *o = env;
     char line[BURROW_FRAME_TEXT_MAX];
-    int32_t total = 0;
-    int32_t got = burrow__allg_snapshot(gs, STACK_GOROUTINES, &total);
 
-    if (got < 0) {
-        out_put(o, "\nother goroutines not listed: the scheduler was busy\n");
-        return;
-    }
+    const char *state = status_name(r->status);
 
-    for (int32_t i = 0; i < got; i++) {
-        /* This goroutine's frames are already above, and a dead one is a G on a
-         * free list waiting to be somebody else, which is noise. Go leaves the
-         * dead ones out for the same reason. */
-        if (gs[i].id == self || gs[i].status == BURROW_GDEAD)
-            continue;
-
-        snprintf(line, sizeof line, "\ngoroutine %llu [%s]:\n\tstack not walked\n",
-                 (unsigned long long)gs[i].id, status_name(gs[i].status));
-        out_put(o, line);
-    }
-
-    if (total > got) {
-        snprintf(line, sizeof line, "\n%d more goroutines not listed\n", total - got);
-        out_put(o, line);
+    if (r->status == (uint32_t)BURROW_GWAITING && r->waitreason != BURROW_WAIT_ZERO)
+        state = burrow__wait_reason_string((burrow__WaitReason)r->waitreason);
+    snprintf(line, sizeof line, "\ngoroutine %llu [%s]:\n", (unsigned long long)r->id,
+             state);
+    out_put(o, line);
+    for (int32_t i = 0; i < r->n; i++) {
+        if (burrow__frame_text((Uintptr)r->pcs[i], line, (Int)sizeof line) > 0)
+            out_put(o, line);
     }
 }
 
@@ -255,8 +234,8 @@ BURROW_NOINLINE Int runtime_stack(Slice buf, bool all) {
             out_put(&o, line);
     }
 
-    if (all)
-        other_goroutines(&o, g != NULL ? g->id : 0);
+    if (all && !burrow__goroutine_stacks(other_goroutine, &o))
+        out_put(&o, "\nother goroutines not listed: the scheduler was busy\n");
 
     return o.len;
 }

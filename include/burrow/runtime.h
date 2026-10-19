@@ -347,12 +347,13 @@ bool runtime_frames_next(RuntimeFrames *it, RuntimeFrame *out);
  *     fwrite(buf, 1, (size_t)n, stderr);
  *
  * With all false this is the calling goroutine, which is what almost every use
- * of it wants. With all true every other goroutine follows it, as a line each
- * giving its number and what it is doing, without frames. Walking a goroutine
- * that is parked on another thread means reading a stack nobody is on out of a
- * saved context, which is per architecture work the scheduler has not been
- * given yet, so those lines say so rather than guessing. The numbers and the
- * states are still enough to see a deadlock in.
+ * of it wants. With all true every other goroutine follows it, each with its
+ * number, what it is doing and its frames, up to thirty two of them. Go stops
+ * the world to read them. burrow holds each parked goroutine where it is while
+ * its stack is read, and asks a running one to give way, waiting up to twenty
+ * milliseconds in all. One still running after that, and every goroutine on a
+ * build without the amd64 or arm64 assembly switch, Windows among them, shows
+ * the function it was started with as its only frame.
  *
  * all true takes the scheduler lock if it is free and gives up on the other
  * goroutines if it is not, rather than waiting, since the thread that is failing

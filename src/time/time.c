@@ -141,7 +141,7 @@ static void sleep_in_bubble(Goroutine *g, burrow__Bubble *b, Duration d) {
                                              0, wake_sleeper, g, NULL))
         runtime_throw(BURROW_S("time_sleep: out of memory arming a bubbled timer"));
 
-    burrow__park(NULL, NULL, true);
+    burrow__park(NULL, NULL, BURROW_WAIT_SLEEP, true);
 }
 
 /* Arms the timer once the goroutine is off its thread and can no longer be
@@ -207,7 +207,7 @@ void time_sleep(Duration d) {
     }
 
     Sleeper s = {t, deadline(d), false};
-    sched_park(arm_sleep, &s);
+    burrow__park(arm_sleep, &s, BURROW_WAIT_SLEEP, false);
 
     if (!s.armed)
         sleep_thread(d);

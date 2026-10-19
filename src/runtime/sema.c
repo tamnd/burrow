@@ -361,9 +361,10 @@ static bool waiter_init(SemaWaiter *w) {
  * the way out. `durable` is the caller's answer to the synctest question, and a
  * thread has no opinion about it: a bubble is a set of goroutines, so a thread
  * blocking here is not in one and the flag has nowhere to go. */
-static void waiter_sleep(SemaWaiter *w, burrow__Lock *lk, bool durable) {
+static void waiter_sleep(SemaWaiter *w, burrow__Lock *lk, burrow__WaitReason reason,
+                         bool durable) {
     if (w->g != NULL) {
-        burrow__park(unlock_lock, lk, durable);
+        burrow__park(unlock_lock, lk, reason, durable);
         return;
     }
 
@@ -414,7 +415,8 @@ static bool can_acquire(uint32_t *addr) {
     }
 }
 
-void burrow__sema_acquire(uint32_t *addr, bool lifo, bool durable) {
+void burrow__sema_acquire(uint32_t *addr, bool lifo, burrow__WaitReason reason,
+                          bool durable) {
     /* The whole of the uncontended case. No lock, no queue, one compare and
      * swap on a word the caller already owns. */
     if (can_acquire(addr))
@@ -447,7 +449,7 @@ void burrow__sema_acquire(uint32_t *addr, bool lifo, bool durable) {
         }
 
         root_queue(root, addr, &w, lifo);
-        waiter_sleep(&w, &root->lock, durable);
+        waiter_sleep(&w, &root->lock, reason, durable);
 
         /* A ticket means the release handed the wakeup straight over and there
          * is nothing left to take. Otherwise the wakeup went back on the
@@ -564,7 +566,7 @@ void burrow__notify_list_wait(burrow__NotifyList *l, uint32_t t, bool durable) {
         l->tail->waitlink = &w;
     l->tail = &w;
 
-    waiter_sleep(&w, &l->lock, durable);
+    waiter_sleep(&w, &l->lock, BURROW_WAIT_SYNC_COND_WAIT, durable);
     waiter_free(&w);
 }
 

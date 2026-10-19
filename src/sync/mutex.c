@@ -154,7 +154,7 @@ void burrow__sync_mutex_lock_slow(SyncMutex *m) {
         /* Never durable. A goroutine waiting for a mutex is waiting for the
          * goroutine holding it, and that one is running, so a synctest bubble
          * full of these has not gone idle. */
-        burrow__sema_acquire(&m->sema, lifo, false);
+        burrow__sema_acquire(&m->sema, lifo, BURROW_WAIT_SYNC_MUTEX_LOCK, false);
 
         starving =
             starving || burrow__nanotime() - wait_start > STARVATION_THRESHOLD_NS;

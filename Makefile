@@ -242,7 +242,7 @@ TEST_GEN := $(wildcard tests/gen/*.c)
 DEPFLAGS := -MMD -MP
 DEPS     := $(OBJS:.o=.d) $(TEST_BINS:=.d)
 
-.PHONY: all lib test check collisions clean install fmt tidy amalgamation gofmt-gate
+.PHONY: all lib test check collisions clean install fmt tidy amalgamation gofmt-gate sqlite
 
 all: lib
 
@@ -427,6 +427,26 @@ $(GOFMT_BIN): tools/gofmt.c $(LIB)
 
 gofmt-gate: $(GOFMT_BIN)
 	@tools/check-gofmt.sh $(GOFMT_BIN)
+
+# The SQLite driver in examples/sqlite, the one program here that links a
+# library burrow does not have. pkg-config finds SQLite where it can, and
+# SQLITE_CFLAGS and SQLITE_LIBS say where it is when it cannot. make sqlite runs
+# the driver's tests and checks the demo's output against the comment at the
+# end of demo.c.
+SQLITE_CFLAGS ?= $(shell pkg-config --cflags sqlite3 2>/dev/null)
+SQLITE_LIBS ?= $(shell pkg-config --libs sqlite3 2>/dev/null || echo -lsqlite3)
+SQLITE_DIR := $(BUILD)/examples/sqlite
+SQLITE_DEPS := examples/sqlite/sqlite.c examples/sqlite/sqlite.h $(LIB)
+
+$(SQLITE_DIR)/%: examples/sqlite/%.c $(SQLITE_DEPS)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(THREADS) $(SQLITE_CFLAGS) -Iexamples/sqlite $< examples/sqlite/sqlite.c $(LIB) $(SQLITE_LIBS) $(LDLIBS) $(LDFLAGS) -o $@
+
+sqlite: $(SQLITE_DIR)/sqlite_test $(SQLITE_DIR)/demo
+	@./$(SQLITE_DIR)/sqlite_test $(TESTFLAGS)
+	@./$(SQLITE_DIR)/demo > $(SQLITE_DIR)/demo.out
+	@sed -n '/^\/\* Output:$$/,/^\*\/$$/p' examples/sqlite/demo.c | sed '1d;$$d' | \
+		diff -u - $(SQLITE_DIR)/demo.out && printf 'ok\t%s\n' 'demo output'
 
 install: $(LIB)
 	install -d $(DESTDIR)$(PREFIX)/lib $(DESTDIR)$(PREFIX)/include/burrow

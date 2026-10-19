@@ -457,6 +457,23 @@ jobs:
       - run: cmake --build build
       - run: ctest --test-dir build --output-on-failure
 
+  # The SQLite driver under examples/sqlite, the one program in the repository
+  # that links a library burrow does not have. Its tests and the demo's output
+  # run on Linux with Debian's SQLite and on macOS with the system's.
+  sqlite:
+    name: sqlite example (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v7
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libsqlite3-dev
+      - run: make -j4 TESTFLAGS=-test.v sqlite
+
   # Five sanitisers, because the memory design is the part of this project most
   # likely to be wrong and the part where being wrong is worst. MemorySanitizer
   # needs every dependency instrumented to avoid false positives, which for now

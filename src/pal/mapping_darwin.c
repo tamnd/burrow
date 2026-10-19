@@ -28,7 +28,9 @@
 #include "internal.h"
 
 #include <libproc.h>
-#include <mach/mach.h>
+/* Not <mach/mach.h>, which declares a panic() that clashes with burrow's own in the
+   amalgamation. */
+#include <mach/mach_init.h>
 #include <mach/mach_vm.h>
 #include <sys/param.h>
 #include <unistd.h>

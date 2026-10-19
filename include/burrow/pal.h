@@ -381,6 +381,22 @@ typedef void (*PalContentTypeFn)(void *env, const char *ext, int64_t ext_len,
                                  const char *type, int64_t type_len);
 bool pal_registry_content_types(PalContentTypeFn fn, void *env, PalErrno *err);
 
+/* The executable regions of the running process, for runtime/pprof to put in a
+ * profile so that tools can tell which binary an address belongs to.
+ *
+ * fn gets each region's start and end address, its offset in the file it was
+ * loaded from, and that file's name, which may be empty. On macOS this is Go's
+ * machVMInfo: every region mach_vm_region reports as readable and executable,
+ * named by proc_regionfilename, with the offset mach reports. On Windows it is
+ * Go's module snapshot, one region per loaded module with offset zero.
+ *
+ * Returns false when this system has no such call, which is every other one.
+ * There runtime/pprof reads /proc/self/maps itself, as Go does. Also false on
+ * macOS and Windows when the call fails before reporting anything. */
+typedef void (*PalMappingFn)(void *env, uint64_t lo, uint64_t hi, uint64_t offset,
+                             const char *file, int64_t file_len);
+bool pal_text_mappings(PalMappingFn fn, void *env);
+
 /* --------------------------------------------------------------- time zone
  *
  * Windows keeps the local time zone as a TIME_ZONE_INFORMATION rather than a

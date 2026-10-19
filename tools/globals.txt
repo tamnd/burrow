@@ -65,6 +65,8 @@ global	src/go/types_check.c	tc_method_expr_sentinel	tables	Go's methodExprSentin
 global	src/go/types_object.c	gt_no_signature	tables	The empty signature of a function with no type yet. Initialised in place and never written.
 global	src/go/types_predicates.c	gt_invalid_type_set	tables	The type set of a union with too many terms. Zero and never written.
 global	src/go/types_type.c	gt_last_id	package-vars	Go's lastID, the counter that numbers type parameters. Only ever changed with an atomic add.
+global	src/debug/pprof.c	ppr_profiles	package-vars	Go's profiles.m, every profile NewProfile has made, by name. Made on first use and only read or written with ppr_profiles_mu held.
+global	src/debug/pprof.c	ppr_profiles_mu	package-vars	Go's profiles.mu, the lock for ppr_profiles. Zero is an unlocked mutex, so it needs no setting up.
 global	src/go/types_universe.c	gt_all_term	tables	The term for all types. Initialised in place and never written.
 global	src/go/types_universe.c	gt_all_terms	tables	The termlist of all types, which holds gt_all_term. Initialised in place and never written.
 global	src/go/types_universe.c	gt_byte	tables	The byte alias of uint8. Initialised in place and never written.
@@ -121,6 +123,7 @@ global	src/pal/time_windows.c	qpc_hi	clock	Windows only. The high 32 bits, publi
 global	src/pal/time_darwin.c	timebase_numer	clock	macOS only. The numerator of the tick to nanosecond fraction, written before the denominator below and read after it.
 global	src/pal/time_darwin.c	timebase_denom	clock	macOS only. The denominator, and the flag. Written with a release and nonzero means both it and the numerator are readable, the same arrangement as qpc_ready above with one fewer variable because a denominator of zero is already impossible.
 global	src/runtime/sched.c	curm_slot	scheduler	Thread local. It is which M this thread is, written when the thread starts and cleared when it stops, and read by everything that needs to know which P it may use. Only ever touched through getm and setm, which are out of line so a goroutine that moved threads reads the new one.
+global	src/runtime/sched.c	thread_prof_labels	scheduler	Thread local. The profiling labels of a thread that is not running a goroutine, which is where runtime/pprof puts them when it is called from one. A goroutine keeps its own in its G, so only this thread ever reads or writes it.
 global	src/runtime/defer.c	thread_scopes	scheduler	Thread local, and only reachable from a thread that is not running a goroutine. A goroutine's defer chain is a field of the goroutine, because a goroutine that parks inside a scope can wake up on another thread.
 global	src/runtime/panic.c	thread_panic	scheduler	Thread local, and only reachable from a thread that is not running a goroutine. A goroutine keeps its panics and its recovery points in the goroutine, for the reason the defer chain is there: a goroutine that parks inside a BURROW_TRY can wake up on another thread.
 global	src/runtime/errarena.c	thread_errors	scheduler	Thread local, and only reachable from a thread that is not running a goroutine. A goroutine keeps its error arena in the goroutine, so that the errors it made are still there when it wakes up on another thread.

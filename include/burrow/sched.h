@@ -238,6 +238,12 @@ struct burrow__G {
      * runs it next. */
     bool dit_wanted;
 
+    /* The profiling labels runtime/pprof has set on this goroutine, or NULL.
+     * Go's g.labels. Copied to every goroutine it starts, so work started under
+     * a label is still labelled. The runtime never looks inside it; it is
+     * whatever pointer pprof gave it, and pprof says what it points at. */
+    BURROW_BORROWS(1) void *labels;
+
     /* The coroutine this goroutine was made for by burrow__newcoro, or NULL for
      * an ordinary goroutine. When one of these exits it hands its thread
      * straight to whoever is waiting in the coroutine, the way it would have
@@ -592,6 +598,13 @@ BURROW_STATIC(ret) burrow__M *burrow__curm(void);
 /* The goroutine running on this thread, or NULL. The same thing sched_current
  * answers, under the internal name. */
 BURROW_BORROWS(ret) burrow__G *burrow__curg(void);
+
+/* Go's runtime_setProfLabel and runtime_getProfLabel: the profiling labels of
+ * the calling goroutine. A thread that is not running a goroutine keeps them
+ * in a thread local instead, so code run before runtime_main can still use
+ * pprof_do. */
+void burrow__set_prof_label(void *labels);
+BURROW_BORROWS(ret) void *burrow__get_prof_label(void);
 
 /* The P at index i, or NULL if i is not in range. Every P exists for as long as
  * the scheduler is running, whether or not an M is holding it. */

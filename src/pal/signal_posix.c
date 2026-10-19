@@ -613,7 +613,21 @@ bool pal_signal_context_pc_fp(const void *ctx, uintptr_t *pc, uintptr_t *fp) {
     *fp = (uintptr_t)CONTEXT_FP(sc);
     return true;
 #elif defined(CONTEXT_PC)
+#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
+    /* The ucontext_t a handler is given here can be at an address only 8 byte
+     * aligned, where the type asks for 16, so it and the machine context it
+     * points at are read from aligned copies. */
+    ucontext_t ucv;
+    struct __darwin_mcontext64 mcv;
+    memcpy(&ucv, ctx, sizeof ucv);
+    if (ucv.uc_mcontext == NULL)
+        return false;
+    memcpy(&mcv, ucv.uc_mcontext, sizeof mcv);
+    ucv.uc_mcontext = &mcv;
+    const ucontext_t *uc = &ucv;
+#else
     const ucontext_t *uc = (const ucontext_t *)ctx;
+#endif
     *pc = (uintptr_t)CONTEXT_PC(uc);
     *fp = (uintptr_t)CONTEXT_FP(uc);
     return true;

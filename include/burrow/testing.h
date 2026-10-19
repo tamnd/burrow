@@ -186,9 +186,9 @@ typedef struct TestingTB {
  *
  * The flags are Go's, with Go's usage text for -h. As on a go test command
  * line the test. prefix can be left off, so -v and -run=Foo work. The ones
- * for profiles, coverage, tracing and fuzzing are accepted and do nothing.
- * -test.shuffle takes the same values but shuffles with a generator of its
- * own, so a seed gives a different order from the one Go would give. */
+ * for coverage and tracing are accepted and do nothing. -test.shuffle takes
+ * the same values but shuffles with a generator of its own, so a seed gives a
+ * different order from the one Go would give. */
 void testing_init(int argc, char **argv);
 
 /* testing.Short, testing.Verbose and testing.Testing. Short and Verbose read

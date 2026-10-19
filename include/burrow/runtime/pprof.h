@@ -257,8 +257,12 @@ BURROW_STATIC(ret) Error pprof_write_heap_profile(IoWriter w);
  * that is not running a goroutine, is the pc it stopped at and a frame named
  * burrow__prof_system or burrow__prof_external_code.
  *
- * Must be called from a goroutine, since the profile is written by one. w is
- * written from that goroutine until pprof_stop_cpu_profile returns. */
+ * While runtime_main is running, the profile is written by a goroutine, as in
+ * Go. Called when it is not, before it or between two runs of it, the profile
+ * is written by a thread of its own instead, and keeps going across any run of
+ * runtime_main in between. That needs threads, so on wasip1 it fails there. w
+ * is written from the goroutine or the thread until pprof_stop_cpu_profile
+ * returns. */
 BURROW_STATIC(ret) Error pprof_start_cpu_profile(IoWriter w);
 
 /* StopCPUProfile stops the current CPU profile, if any. StopCPUProfile only

@@ -37,6 +37,7 @@
 #include "burrow/sync.h"
 #include "burrow/syscall.h"
 #include "burrow/text/tabwriter.h"
+#include "burrow/thread.h"
 #include "burrow/time.h"
 #include "burrow/trace.h"
 #include "burrow/type.h"
@@ -1274,6 +1275,11 @@ typedef struct PprCpu {
     SyncMutex mu;
     bool profiling;
     Chan *done; /* of bool */
+    /* Not in Go. A profile started when runtime_main is not running, which has
+     * no goroutine to write it, is written by this thread instead, and
+     * stopping it waits for the thread to finish rather than on done. */
+    burrow__Thread writer;
+    bool on_thread;
 } PprCpu;
 
 static PprCpu ppr_cpu;
@@ -1285,11 +1291,13 @@ BURROW_SENTINEL_ERROR(ppr_err_cpu_no_writer, "cpu profiling: cannot start the wr
 
 typedef struct PprCpuWriter {
     IoWriter w;
+    bool on_thread; /* says nothing on done when it finishes */
 } PprCpuWriter;
 
 static void ppr_profile_writer(void *env) {
     PprCpuWriter *pw = (PprCpuWriter *)env;
     PprBuilder *b = burrow__ppr_new_builder(pw->w);
+    bool on_thread = pw->on_thread;
     mem_free(heap_allocator(), pw, sizeof *pw, _Alignof(PprCpuWriter));
     Error err = BURROW_NO_ERROR;
     for (;;) {
@@ -1314,6 +1322,8 @@ static void ppr_profile_writer(void *env) {
         ppr_panic_name("runtime/pprof: converting profile: ", error_text(err));
     }
     (void)burrow__ppr_build(b);
+    if (on_thread)
+        return;
     bool done = true;
     chan_send(ppr_cpu.done, &done);
 }
@@ -1350,7 +1360,15 @@ Error pprof_start_cpu_profile(IoWriter w) {
     pw->w = w;
     ppr_cpu.profiling = true;
     runtime_set_cpu_profile_rate(hz);
-    if (!go(BURROW_FN(Func, ppr_profile_writer, pw))) {
+    /* Not in Go. Before runtime_main, or between two runs of it, as the testing
+     * package's -test.cpuprofile is, `go` has nowhere to start the writer, so
+     * it gets a thread of its own. */
+    pw->on_thread = !burrow__sched_running();
+    ppr_cpu.on_thread = pw->on_thread;
+    bool started =
+        pw->on_thread ? burrow__thread_start(&ppr_cpu.writer, ppr_profile_writer, pw, 0)
+                      : go(BURROW_FN(Func, ppr_profile_writer, pw));
+    if (!started) {
         /* Not in Go. Stop the profile again and read the log to its end, which
          * is what lets the runtime free it. */
         runtime_set_cpu_profile_rate(0);
@@ -1373,7 +1391,11 @@ void pprof_stop_cpu_profile(void) {
     }
     ppr_cpu.profiling = false;
     runtime_set_cpu_profile_rate(0);
-    bool done;
-    (void)chan_recv(ppr_cpu.done, &done);
+    if (ppr_cpu.on_thread) {
+        (void)burrow__thread_join(&ppr_cpu.writer);
+    } else {
+        bool done;
+        (void)chan_recv(ppr_cpu.done, &done);
+    }
     sync_mutex_unlock(&ppr_cpu.mu);
 }

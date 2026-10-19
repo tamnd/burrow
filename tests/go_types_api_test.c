@@ -1,6 +1,6 @@
 /* Derived from Go's src/go/types/api_test.go. Go source: go1.27.1.
  *
- * Only the tests that need no importer are here so far.
+ * Not in Go: defaultImporter is the source importer in go_types_importer.h.
  *
  * Copyright 2013 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -8,13 +8,18 @@
  * in the LICENSE file. */
 
 #include "check.h"
+#include "go_types_importer.h"
 
 #include "burrow/burrow.h"
+#include "burrow/fmt.h"
 #include "burrow/go/ast.h"
+#include "burrow/go/constant.h"
 #include "burrow/go/parser.h"
 #include "burrow/go/token.h"
 #include "burrow/go/types.h"
+#include "burrow/map.h"
 #include "burrow/mem/arena.h"
+#include "burrow/slices.h"
 #include "burrow/strings.h"
 
 #define S(lit) BURROW_S(lit)
@@ -52,8 +57,6 @@ static void collect_all(void *env, const TypesError *e) {
     (void)e;
 }
 
-/* Not in Go: typecheck with no importer, since burrow has no default importer
- * yet. The sources here import nothing. */
 static TypesPackage *typecheck(Alloc *a, Str src, TypesConfig *conf, TypesInfo *info,
                                Error *err) {
     TokenFileSet *fset = token_new_file_set(a);
@@ -61,6 +64,7 @@ static TypesPackage *typecheck(Alloc *a, Str src, TypesConfig *conf, TypesInfo *
     TypesConfig conf0 = {0};
     if (conf == NULL) {
         conf0.error = (TypesErrorFunc){collect_all, NULL}; /* collect all errors */
+        conf0.importer = default_importer(fset);
         conf = &conf0;
     }
     Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
@@ -74,6 +78,1112 @@ static TypesPackage *must_typecheck(Alloc *a, Str src, TypesConfig *conf,
     if (BURROW_FAILED(err))
         panic_str(error_text(err)); /* so we don't need to pass *testing.T */
     return pkg;
+}
+
+static Map *new_types_map(Alloc *a) {
+    return map_make(a, TYPE_UNSAFE_POINTER, TYPE_TYPES_TYPE_AND_VALUE, 0);
+}
+
+static Map *new_objects_map(Alloc *a) {
+    return map_make(a, TYPE_UNSAFE_POINTER, TYPE_UNSAFE_POINTER, 0);
+}
+
+/* Type.String, made in a. */
+static Str type_string(Alloc *a, TypesType t) {
+    return types_type_string(a, t, TYPES_NO_QUALIFIER);
+}
+
+static const struct {
+    Str src;
+    Str expr; /* constant expression */
+    Str typ;  /* constant type */
+    Str val;  /* constant value */
+} values_tests[] = {
+    {S_("package a0; const _ = false"), S_("false"), S_("untyped bool"), S_("false")},
+    {S_("package a1; const _ = 0"), S_("0"), S_("untyped int"), S_("0")},
+    {S_("package a2; const _ = 'A'"), S_("'A'"), S_("untyped rune"), S_("65")},
+    {S_("package a3; const _ = 0."), S_("0."), S_("untyped float"), S_("0")},
+    {S_("package a4; const _ = 0i"), S_("0i"), S_("untyped complex"), S_("(0 + 0i)")},
+    {S_("package a5; const _ = \"foo\""), S_("\"foo\""), S_("untyped string"),
+     S_("\"foo\"")},
+
+    {S_("package b0; var _ = false"), S_("false"), S_("bool"), S_("false")},
+    {S_("package b1; var _ = 0"), S_("0"), S_("int"), S_("0")},
+    {S_("package b2; var _ = 'A'"), S_("'A'"), S_("rune"), S_("65")},
+    {S_("package b3; var _ = 0."), S_("0."), S_("float64"), S_("0")},
+    {S_("package b4; var _ = 0i"), S_("0i"), S_("complex128"), S_("(0 + 0i)")},
+    {S_("package b5; var _ = \"foo\""), S_("\"foo\""), S_("string"), S_("\"foo\"")},
+
+    {S_("package c0a; var _ = bool(false)"), S_("false"), S_("bool"), S_("false")},
+    {S_("package c0b; var _ = bool(false)"), S_("bool(false)"), S_("bool"),
+     S_("false")},
+    {S_("package c0c; type T bool; var _ = T(false)"), S_("T(false)"), S_("c0c.T"),
+     S_("false")},
+
+    {S_("package c1a; var _ = int(0)"), S_("0"), S_("int"), S_("0")},
+    {S_("package c1b; var _ = int(0)"), S_("int(0)"), S_("int"), S_("0")},
+    {S_("package c1c; type T int; var _ = T(0)"), S_("T(0)"), S_("c1c.T"), S_("0")},
+
+    {S_("package c2a; var _ = rune('A')"), S_("'A'"), S_("rune"), S_("65")},
+    {S_("package c2b; var _ = rune('A')"), S_("rune('A')"), S_("rune"), S_("65")},
+    {S_("package c2c; type T rune; var _ = T('A')"), S_("T('A')"), S_("c2c.T"),
+     S_("65")},
+
+    {S_("package c3a; var _ = float32(0.)"), S_("0."), S_("float32"), S_("0")},
+    {S_("package c3b; var _ = float32(0.)"), S_("float32(0.)"), S_("float32"), S_("0")},
+    {S_("package c3c; type T float32; var _ = T(0.)"), S_("T(0.)"), S_("c3c.T"),
+     S_("0")},
+
+    {S_("package c4a; var _ = complex64(0i)"), S_("0i"), S_("complex64"),
+     S_("(0 + 0i)")},
+    {S_("package c4b; var _ = complex64(0i)"), S_("complex64(0i)"), S_("complex64"),
+     S_("(0 + 0i)")},
+    {S_("package c4c; type T complex64; var _ = T(0i)"), S_("T(0i)"), S_("c4c.T"),
+     S_("(0 + 0i)")},
+
+    {S_("package c5a; var _ = string(\"foo\")"), S_("\"foo\""), S_("string"),
+     S_("\"foo\"")},
+    {S_("package c5b; var _ = string(\"foo\")"), S_("string(\"foo\")"), S_("string"),
+     S_("\"foo\"")},
+    {S_("package c5c; type T string; var _ = T(\"foo\")"), S_("T(\"foo\")"),
+     S_("c5c.T"), S_("\"foo\"")},
+    {S_("package c5d; var _ = string(65)"), S_("65"), S_("untyped int"), S_("65")},
+    {S_("package c5e; var _ = string('A')"), S_("'A'"), S_("untyped rune"), S_("65")},
+    {S_("package c5f; type T string; var _ = T('A')"), S_("'A'"), S_("untyped rune"),
+     S_("65")},
+
+    {S_("package d0; var _ = []byte(\"foo\")"), S_("\"foo\""), S_("string"),
+     S_("\"foo\"")},
+    {S_("package d1; var _ = []byte(string(\"foo\"))"), S_("\"foo\""), S_("string"),
+     S_("\"foo\"")},
+    {S_("package d2; var _ = []byte(string(\"foo\"))"), S_("string(\"foo\")"),
+     S_("string"), S_("\"foo\"")},
+    {S_("package d3; type T []byte; var _ = T(\"foo\")"), S_("\"foo\""), S_("string"),
+     S_("\"foo\"")},
+
+    {S_("package e0; const _ = float32( 1e-200)"), S_("float32(1e-200)"), S_("float32"),
+     S_("0")},
+    {S_("package e1; const _ = float32(-1e-200)"), S_("float32(-1e-200)"),
+     S_("float32"), S_("0")},
+    {S_("package e2; const _ = float64( 1e-2000)"), S_("float64(1e-2000)"),
+     S_("float64"), S_("0")},
+    {S_("package e3; const _ = float64(-1e-2000)"), S_("float64(-1e-2000)"),
+     S_("float64"), S_("0")},
+    {S_("package e4; const _ = complex64( 1e-200)"), S_("complex64(1e-200)"),
+     S_("complex64"), S_("(0 + 0i)")},
+    {S_("package e5; const _ = complex64(-1e-200)"), S_("complex64(-1e-200)"),
+     S_("complex64"), S_("(0 + 0i)")},
+    {S_("package e6; const _ = complex128( 1e-2000)"), S_("complex128(1e-2000)"),
+     S_("complex128"), S_("(0 + 0i)")},
+    {S_("package e7; const _ = complex128(-1e-2000)"), S_("complex128(-1e-2000)"),
+     S_("complex128"), S_("(0 + 0i)")},
+
+    {S_("package f0 ; var _ float32 =  1e-200"), S_("1e-200"), S_("float32"), S_("0")},
+    {S_("package f1 ; var _ float32 = -1e-200"), S_("-1e-200"), S_("float32"), S_("0")},
+    {S_("package f2a; var _ float64 =  1e-2000"), S_("1e-2000"), S_("float64"),
+     S_("0")},
+    {S_("package f3a; var _ float64 = -1e-2000"), S_("-1e-2000"), S_("float64"),
+     S_("0")},
+    {S_("package f2b; var _         =  1e-2000"), S_("1e-2000"), S_("float64"),
+     S_("0")},
+    {S_("package f3b; var _         = -1e-2000"), S_("-1e-2000"), S_("float64"),
+     S_("0")},
+    {S_("package f4 ; var _ complex64  =  1e-200 "), S_("1e-200"), S_("complex64"),
+     S_("(0 + 0i)")},
+    {S_("package f5 ; var _ complex64  = -1e-200 "), S_("-1e-200"), S_("complex64"),
+     S_("(0 + 0i)")},
+    {S_("package f6a; var _ complex128 =  1e-2000i"), S_("1e-2000i"), S_("complex128"),
+     S_("(0 + 0i)")},
+    {S_("package f7a; var _ complex128 = -1e-2000i"), S_("-1e-2000i"), S_("complex128"),
+     S_("(0 + 0i)")},
+    {S_("package f6b; var _            =  1e-2000i"), S_("1e-2000i"), S_("complex128"),
+     S_("(0 + 0i)")},
+    {S_("package f7b; var _            = -1e-2000i"), S_("-1e-2000i"), S_("complex128"),
+     S_("(0 + 0i)")},
+
+    {S_("package g0; const (a = len([iota]int{}); b; c); const _ = c"), S_("c"),
+     S_("int"), S_("2")}, /* go.dev/issue/22341 */
+    {S_("package g1; var(j int32; s int; n = 1.0<<s == j)"), S_("1.0"), S_("int32"),
+     S_("1")}, /* go.dev/issue/48422 */
+};
+
+static void TestValuesInfo(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    for (Int i = 0; i < NELEM(values_tests); i++) {
+        Str src = values_tests[i].src, expr_str = values_tests[i].expr;
+        Str typ = values_tests[i].typ, val = values_tests[i].val;
+        TypesInfo info = {0};
+        info.types = new_types_map(a);
+        Str name = types_package_name(must_typecheck(a, src, NULL, &info));
+
+        /* look for expression */
+        AstExpr expr = NULL;
+        TypesTypeAndValue tv = {0};
+        const void *k;
+        void *v;
+        for (MapIter it = map_iter(info.types); map_next(&it, &k, &v);) {
+            AstExpr e = *(AstExpr const *)k;
+            if (str_eq(types_expr_string(a, e), expr_str)) {
+                expr = e;
+                tv = *(const TypesTypeAndValue *)v;
+                break;
+            }
+        }
+        if (expr == NULL) {
+            testing_t_errorf_v(t, "package %s: no expression found for %s", name,
+                               expr_str);
+            continue;
+        }
+
+        /* check that type is correct */
+        Str got = type_string(a, tv.type);
+        if (!str_eq(got, typ)) {
+            testing_t_errorf_v(t, "package %s: got type %s; want %s", name, got, typ);
+            continue;
+        }
+
+        /* if we have a constant, check that value is correct. Not in Go: the
+         * zero ConstantValue, of kind unknown, is Go's nil Value. */
+        if (constant_value_kind(tv.value) != CONSTANT_UNKNOWN) {
+            got = constant_value_exact_string(tv.value, a);
+            if (!str_eq(got, val))
+                testing_t_errorf_v(t, "package %s: got value %s; want %s", name, got,
+                                   val);
+        } else if (val.len != 0) {
+            testing_t_errorf_v(t, "package %s: no constant found; want %s", name, val);
+        }
+    }
+    arena_free(&ar);
+}
+
+/* Test sources that are not expected to typecheck must start with the broken
+ * prefix. */
+static const Str types_broken = S_("package broken_");
+
+static const struct {
+    Str src;
+    Str expr; /* expression */
+    Str typ;  /* value type */
+} types_tests[] = {
+    /* single-valued expressions of untyped constants */
+    {S_("package b0; var x interface{} = false"), S_("false"), S_("bool")},
+    {S_("package b1; var x interface{} = 0"), S_("0"), S_("int")},
+    {S_("package b2; var x interface{} = 0."), S_("0."), S_("float64")},
+    {S_("package b3; var x interface{} = 0i"), S_("0i"), S_("complex128")},
+    {S_("package b4; var x interface{} = \"foo\""), S_("\"foo\""), S_("string")},
+
+    /* uses of nil */
+    {S_("package n0; var _ *int = nil"), S_("nil"), S_("untyped nil")},
+    {S_("package n1; var _ func() = nil"), S_("nil"), S_("untyped nil")},
+    {S_("package n2; var _ []byte = nil"), S_("nil"), S_("untyped nil")},
+    {S_("package n3; var _ map[int]int = nil"), S_("nil"), S_("untyped nil")},
+    {S_("package n4; var _ chan int = nil"), S_("nil"), S_("untyped nil")},
+    {S_("package n5; var _ interface{} = nil"), S_("nil"), S_("untyped nil")},
+    {S_("package n6; import \"unsafe\"; var _ unsafe.Pointer = nil"), S_("nil"),
+     S_("untyped nil")},
+
+    {S_("package n10; var (x *int; _ = x == nil)"), S_("nil"), S_("untyped nil")},
+    {S_("package n11; var (x func(); _ = x == nil)"), S_("nil"), S_("untyped nil")},
+    {S_("package n12; var (x []byte; _ = x == nil)"), S_("nil"), S_("untyped nil")},
+    {S_("package n13; var (x map[int]int; _ = x == nil)"), S_("nil"),
+     S_("untyped nil")},
+    {S_("package n14; var (x chan int; _ = x == nil)"), S_("nil"), S_("untyped nil")},
+    {S_("package n15; var (x interface{}; _ = x == nil)"), S_("nil"),
+     S_("untyped nil")},
+    {S_("package n15; import \"unsafe\"; var (x unsafe.Pointer; _ = x == nil)"),
+     S_("nil"), S_("untyped nil")},
+
+    {S_("package n20; var _ = (*int)(nil)"), S_("nil"), S_("untyped nil")},
+    {S_("package n21; var _ = (func())(nil)"), S_("nil"), S_("untyped nil")},
+    {S_("package n22; var _ = ([]byte)(nil)"), S_("nil"), S_("untyped nil")},
+    {S_("package n23; var _ = (map[int]int)(nil)"), S_("nil"), S_("untyped nil")},
+    {S_("package n24; var _ = (chan int)(nil)"), S_("nil"), S_("untyped nil")},
+    {S_("package n25; var _ = (interface{})(nil)"), S_("nil"), S_("untyped nil")},
+    {S_("package n26; import \"unsafe\"; var _ = unsafe.Pointer(nil)"), S_("nil"),
+     S_("untyped nil")},
+
+    {S_("package n30; func f(*int) { f(nil) }"), S_("nil"), S_("untyped nil")},
+    {S_("package n31; func f(func()) { f(nil) }"), S_("nil"), S_("untyped nil")},
+    {S_("package n32; func f([]byte) { f(nil) }"), S_("nil"), S_("untyped nil")},
+    {S_("package n33; func f(map[int]int) { f(nil) }"), S_("nil"), S_("untyped nil")},
+    {S_("package n34; func f(chan int) { f(nil) }"), S_("nil"), S_("untyped nil")},
+    {S_("package n35; func f(interface{}) { f(nil) }"), S_("nil"), S_("untyped nil")},
+    {S_("package n35; import \"unsafe\"; func f(unsafe.Pointer) { f(nil) }"), S_("nil"),
+     S_("untyped nil")},
+
+    /* comma-ok expressions */
+    {
+        S_("package p0; var x interface{}; var _, _ = x.(int)"),
+        S_("x.(int)"),
+        S_("(int, bool)"),
+    },
+    {
+        S_("package p1; var x interface{}; func _() { _, _ = x.(int) }"),
+        S_("x.(int)"),
+        S_("(int, bool)"),
+    },
+    {
+        S_("package p2a; type mybool bool; var m map[string]complex128; var b mybool; "
+           "func _() { _, b = m[\"foo\"] }"),
+        S_("m[\"foo\"]"),
+        S_("(complex128, p2a.mybool)"),
+    },
+    {
+        S_("package p2b; var m map[string]complex128; var b bool; func _() { _, b = "
+           "m[\"foo\"] }"),
+        S_("m[\"foo\"]"),
+        S_("(complex128, bool)"),
+    },
+    {
+        S_("package p3; var c chan string; var _, _ = <-c"),
+        S_("<-c"),
+        S_("(string, bool)"),
+    },
+
+    /* go.dev/issue/6796 */
+    {
+        S_("package issue6796_a; var x interface{}; var _, _ = (x.(int))"),
+        S_("x.(int)"),
+        S_("(int, bool)"),
+    },
+    {
+        S_("package issue6796_b; var c chan string; var _, _ = (<-c)"),
+        S_("(<-c)"),
+        S_("(string, bool)"),
+    },
+    {
+        S_("package issue6796_c; var c chan string; var _, _ = (<-c)"),
+        S_("<-c"),
+        S_("(string, bool)"),
+    },
+    {
+        S_("package issue6796_d; var c chan string; var _, _ = ((<-c))"),
+        S_("(<-c)"),
+        S_("(string, bool)"),
+    },
+    {
+        S_("package issue6796_e; func f(c chan string) { _, _ = ((<-c)) }"),
+        S_("(<-c)"),
+        S_("(string, bool)"),
+    },
+
+    /* go.dev/issue/7060 */
+    {
+        S_("package issue7060_a; var ( m map[int]string; x, ok = m[0] )"),
+        S_("m[0]"),
+        S_("(string, bool)"),
+    },
+    {
+        S_("package issue7060_b; var ( m map[int]string; x, ok interface{} = m[0] )"),
+        S_("m[0]"),
+        S_("(string, bool)"),
+    },
+    {
+        S_("package issue7060_c; func f(x interface{}, ok bool, m map[int]string) { x, "
+           "ok = m[0] }"),
+        S_("m[0]"),
+        S_("(string, bool)"),
+    },
+    {
+        S_("package issue7060_d; var ( ch chan string; x, ok = <-ch )"),
+        S_("<-ch"),
+        S_("(string, bool)"),
+    },
+    {
+        S_("package issue7060_e; var ( ch chan string; x, ok interface{} = <-ch )"),
+        S_("<-ch"),
+        S_("(string, bool)"),
+    },
+    {
+        S_("package issue7060_f; func f(x interface{}, ok bool, ch chan string) { x, "
+           "ok = <-ch }"),
+        S_("<-ch"),
+        S_("(string, bool)"),
+    },
+
+    /* go.dev/issue/28277 */
+    {
+        S_("package issue28277_a; func f(...int)"),
+        S_("...int"),
+        S_("[]int"),
+    },
+    {
+        S_("package issue28277_b; func f(a, b int, c ...[]struct{})"),
+        S_("...[]struct{}"),
+        S_("[][]struct{}"),
+    },
+
+    /* go.dev/issue/47243 */
+    {S_("package issue47243_a; var x int32; var _ = x << 3"), S_("3"),
+     S_("untyped int")},
+    {S_("package issue47243_b; var x int32; var _ = x << 3."), S_("3."),
+     S_("untyped float")},
+    {S_("package issue47243_c; var x int32; var _ = 1 << x"), S_("1 << x"), S_("int")},
+    {S_("package issue47243_d; var x int32; var _ = 1 << x"), S_("1"), S_("int")},
+    {S_("package issue47243_e; var x int32; var _ = 1 << 2"), S_("1"),
+     S_("untyped int")},
+    {S_("package issue47243_f; var x int32; var _ = 1 << 2"), S_("2"),
+     S_("untyped int")},
+    {S_("package issue47243_g; var x int32; var _ = int(1) << 2"), S_("2"),
+     S_("untyped int")},
+    {S_("package issue47243_h; var x int32; var _ = 1 << (2 << x)"), S_("1"),
+     S_("int")},
+    {S_("package issue47243_i; var x int32; var _ = 1 << (2 << x)"), S_("(2 << x)"),
+     S_("untyped int")},
+    {S_("package issue47243_j; var x int32; var _ = 1 << (2 << x)"), S_("2"),
+     S_("untyped int")},
+
+    /* tests for broken code that doesn't type-check */
+    {S_("package broken_x0; func _() { var x struct {f string}; x.f := 0 }"), S_("x.f"),
+     S_("string")},
+    {S_("package broken_x1; func _() { var z string; type x struct {f string}; y := "
+        "&x{q: z}}"),
+     S_("z"), S_("string")},
+    {S_("package broken_x2; func _() { var a, b string; type x struct {f string}; z := "
+        "&x{f: a, f: b,}}"),
+     S_("b"), S_("string")},
+    {S_("package broken_x3; var x = panic(\"\");"), S_("panic"),
+     S_("func(interface{})")},
+    {S_("package x4; func _() { panic(\"\") }"), S_("panic"), S_("func(interface{})")},
+    {S_("package broken_x5; func _() { var x map[string][...]int; x = "
+        "map[string][...]int{\"\": {1,2,3}} }"),
+     S_("x"), S_("map[string]invalid type")},
+
+    /* parameterized functions */
+    {S_("package p0; func f[T any](T) {}; var _ = f[int]"), S_("f"),
+     S_("func[T any](T)")},
+    {S_("package p1; func f[T any](T) {}; var _ = f[int]"), S_("f[int]"),
+     S_("func(int)")},
+    {S_("package p2; func f[T any](T) {}; func _() { f(42) }"), S_("f"),
+     S_("func(int)")},
+    {S_("package p3; func f[T any](T) {}; func _() { f[int](42) }"), S_("f[int]"),
+     S_("func(int)")},
+    {S_("package p4; func f[T any](T) {}; func _() { f[int](42) }"), S_("f"),
+     S_("func[T any](T)")},
+    {S_("package p5; func f[T any](T) {}; func _() { f(42) }"), S_("f(42)"), S_("()")},
+
+    /* type parameters */
+    {S_("package t0; type t[] int; var _ t"), S_("t"),
+     S_("t0.t")}, /* t[] is a syntax error that is ignored in this test in favor of t */
+    {S_("package t1; type t[P any] int; var _ t[int]"), S_("t"), S_("t1.t[P any]")},
+    {S_("package t2; type t[P interface{}] int; var _ t[int]"), S_("t"),
+     S_("t2.t[P interface{}]")},
+    {S_("package t3; type t[P, Q interface{}] int; var _ t[int, int]"), S_("t"),
+     S_("t3.t[P, Q interface{}]")},
+    {S_("package broken_t4; type t[P, Q interface{ m() }] int; var _ t[int, int]"),
+     S_("t"), S_("broken_t4.t[P, Q interface{m()}]")},
+
+    /* instantiated types must be sanitized */
+    {S_("package g0; type t[P any] int; var x struct{ f t[int] }; var _ = x.f"),
+     S_("x.f"), S_("g0.t[int]")},
+
+    /* go.dev/issue/45096 */
+    {S_("package issue45096; func _[T interface{ ~int8 | ~int16 | ~int32  }](x T) { _ "
+        "= x < 0 }"),
+     S_("0"), S_("T")},
+
+    /* go.dev/issue/47895 */
+    {S_("package p; import \"unsafe\"; type S struct { f int }; var s S; var _ = "
+        "unsafe.Offsetof(s.f)"),
+     S_("s.f"), S_("int")},
+
+    /* go.dev/issue/74303. Note that interface field types are synthetic, so */
+    /* even though `func()` doesn't appear in the source, it appears in the */
+    /* syntax tree. */
+    {S_("package p; type T interface { M(int) }"), S_("func(int)"), S_("func(int)")},
+
+    /* go.dev/issue/50093 */
+    {S_("package u0a; func _[_ interface{int}]() {}"), S_("int"), S_("int")},
+    {S_("package u1a; func _[_ interface{~int}]() {}"), S_("~int"), S_("~int")},
+    {S_("package u2a; func _[_ interface{int | string}]() {}"), S_("int | string"),
+     S_("int | string")},
+    {S_("package u3a; func _[_ interface{int | string | ~bool}]() {}"),
+     S_("int | string | ~bool"), S_("int | string | ~bool")},
+    {S_("package u3a; func _[_ interface{int | string | ~bool}]() {}"),
+     S_("int | string"), S_("int | string")},
+    {S_("package u3a; func _[_ interface{int | string | ~bool}]() {}"), S_("~bool"),
+     S_("~bool")},
+    {S_("package u3a; func _[_ interface{int | string | ~float64|~bool}]() {}"),
+     S_("int | string | ~float64"), S_("int | string | ~float64")},
+
+    {S_("package u0b; func _[_ int]() {}"), S_("int"), S_("int")},
+    {S_("package u1b; func _[_ ~int]() {}"), S_("~int"), S_("~int")},
+    {S_("package u2b; func _[_ int | string]() {}"), S_("int | string"),
+     S_("int | string")},
+    {S_("package u3b; func _[_ int | string | ~bool]() {}"), S_("int | string | ~bool"),
+     S_("int | string | ~bool")},
+    {S_("package u3b; func _[_ int | string | ~bool]() {}"), S_("int | string"),
+     S_("int | string")},
+    {S_("package u3b; func _[_ int | string | ~bool]() {}"), S_("~bool"), S_("~bool")},
+    {S_("package u3b; func _[_ int | string | ~float64|~bool]() {}"),
+     S_("int | string | ~float64"), S_("int | string | ~float64")},
+
+    {S_("package u0c; type _ interface{int}"), S_("int"), S_("int")},
+    {S_("package u1c; type _ interface{~int}"), S_("~int"), S_("~int")},
+    {S_("package u2c; type _ interface{int | string}"), S_("int | string"),
+     S_("int | string")},
+    {S_("package u3c; type _ interface{int | string | ~bool}"),
+     S_("int | string | ~bool"), S_("int | string | ~bool")},
+    {S_("package u3c; type _ interface{int | string | ~bool}"), S_("int | string"),
+     S_("int | string")},
+    {S_("package u3c; type _ interface{int | string | ~bool}"), S_("~bool"),
+     S_("~bool")},
+    {S_("package u3c; type _ interface{int | string | ~float64|~bool}"),
+     S_("int | string | ~float64"), S_("int | string | ~float64")},
+
+    /* reverse type inference */
+    {S_("package r1; var _ func(int) = g; func g[P any](P) {}"), S_("g"),
+     S_("func(int)")},
+    {S_("package r2; var _ func(int) = g[int]; func g[P any](P) {}"), S_("g"),
+     S_("func[P any](P)")}, /* go.dev/issues/60212 */
+    {S_("package r3; var _ func(int) = g[int]; func g[P any](P) {}"), S_("g[int]"),
+     S_("func(int)")},
+    {S_("package r4; var _ func(int, string) = g; func g[P, Q any](P, Q) {}"), S_("g"),
+     S_("func(int, string)")},
+    {S_("package r5; var _ func(int, string) = g[int]; func g[P, Q any](P, Q) {}"),
+     S_("g"), S_("func[P, Q any](P, Q)")}, /* go.dev/issues/60212 */
+    {S_("package r6; var _ func(int, string) = g[int]; func g[P, Q any](P, Q) {}"),
+     S_("g[int]"), S_("func(int, string)")},
+
+    {S_("package s1; func _() { f(g) }; func f(func(int)) {}; func g[P any](P) {}"),
+     S_("g"), S_("func(int)")},
+    {S_("package s2; func _() { f(g[int]) }; func f(func(int)) {}; func g[P any](P) "
+        "{}"),
+     S_("g"), S_("func[P any](P)")}, /* go.dev/issues/60212 */
+    {S_("package s3; func _() { f(g[int]) }; func f(func(int)) {}; func g[P any](P) "
+        "{}"),
+     S_("g[int]"), S_("func(int)")},
+    {S_("package s4; func _() { f(g) }; func f(func(int, string)) {}; func g[P, Q "
+        "any](P, Q) {}"),
+     S_("g"), S_("func(int, string)")},
+    {S_("package s5; func _() { f(g[int]) }; func f(func(int, string)) {}; func g[P, Q "
+        "any](P, Q) {}"),
+     S_("g"), S_("func[P, Q any](P, Q)")}, /* go.dev/issues/60212 */
+    {S_("package s6; func _() { f(g[int]) }; func f(func(int, string)) {}; func g[P, Q "
+        "any](P, Q) {}"),
+     S_("g[int]"), S_("func(int, string)")},
+
+    {S_("package s7; func _() { f(g, h) }; func f[P any](func(int, P), func(P, "
+        "string)) {}; func g[P any](P, P) {}; func h[P, Q any](P, Q) {}"),
+     S_("g"), S_("func(int, int)")},
+    {S_("package s8; func _() { f(g, h) }; func f[P any](func(int, P), func(P, "
+        "string)) {}; func g[P any](P, P) {}; func h[P, Q any](P, Q) {}"),
+     S_("h"), S_("func(int, string)")},
+    {S_("package s9; func _() { f(g, h[int]) }; func f[P any](func(int, P), func(P, "
+        "string)) {}; func g[P any](P, P) {}; func h[P, Q any](P, Q) {}"),
+     S_("h"), S_("func[P, Q any](P, Q)")}, /* go.dev/issues/60212 */
+    {S_("package s10; func _() { f(g, h[int]) }; func f[P any](func(int, P), func(P, "
+        "string)) {}; func g[P any](P, P) {}; func h[P, Q any](P, Q) {}"),
+     S_("h[int]"), S_("func(int, string)")},
+
+    /* go.dev/issue/68639 */
+    /* parenthesized and pointer type expressions in various positions */
+    /* - as variable type, not generic */
+    {S_("package qa1; type T int; var x T"), S_("T"), S_("qa1.T")},
+    {S_("package qa2; type T int; var x (T)"), S_("T"), S_("qa2.T")},
+    {S_("package qa3; type T int; var x (T)"), S_("(T)"), S_("qa3.T")},
+    {S_("package qa4; type T int; var x ((T))"), S_("T"), S_("qa4.T")},
+    {S_("package qa5; type T int; var x ((T))"), S_("(T)"), S_("qa5.T")},
+    {S_("package qa6; type T int; var x ((T))"), S_("((T))"), S_("qa6.T")},
+    {S_("package qa7; type T int; var x *T"), S_("T"), S_("qa7.T")},
+    {S_("package qa8; type T int; var x *T"), S_("*T"), S_("*qa8.T")},
+    {S_("package qa9; type T int; var x (*T)"), S_("T"), S_("qa9.T")},
+    {S_("package qa10; type T int; var x (*T)"), S_("*T"), S_("*qa10.T")},
+    {S_("package qa11; type T int; var x *(T)"), S_("T"), S_("qa11.T")},
+    {S_("package qa12; type T int; var x *(T)"), S_("(T)"), S_("qa12.T")},
+    {S_("package qa13; type T int; var x *(T)"), S_("*(T)"), S_("*qa13.T")},
+    {S_("package qa14; type T int; var x (*(T))"), S_("(T)"), S_("qa14.T")},
+    {S_("package qa15; type T int; var x (*(T))"), S_("*(T)"), S_("*qa15.T")},
+    {S_("package qa16; type T int; var x (*(T))"), S_("(*(T))"), S_("*qa16.T")},
+
+    /* - as ordinary function parameter, not generic */
+    {S_("package qb1; type T int; func _(T)"), S_("T"), S_("qb1.T")},
+    {S_("package qb2; type T int; func _((T))"), S_("T"), S_("qb2.T")},
+    {S_("package qb3; type T int; func _((T))"), S_("(T)"), S_("qb3.T")},
+    {S_("package qb4; type T int; func _(((T)))"), S_("T"), S_("qb4.T")},
+    {S_("package qb5; type T int; func _(((T)))"), S_("(T)"), S_("qb5.T")},
+    {S_("package qb6; type T int; func _(((T)))"), S_("((T))"), S_("qb6.T")},
+    {S_("package qb7; type T int; func _(*T)"), S_("T"), S_("qb7.T")},
+    {S_("package qb8; type T int; func _(*T)"), S_("*T"), S_("*qb8.T")},
+    {S_("package qb9; type T int; func _((*T))"), S_("T"), S_("qb9.T")},
+    {S_("package qb10; type T int; func _((*T))"), S_("*T"), S_("*qb10.T")},
+    {S_("package qb11; type T int; func _(*(T))"), S_("T"), S_("qb11.T")},
+    {S_("package qb12; type T int; func _(*(T))"), S_("(T)"), S_("qb12.T")},
+    {S_("package qb13; type T int; func _(*(T))"), S_("*(T)"), S_("*qb13.T")},
+    {S_("package qb14; type T int; func _((*(T)))"), S_("(T)"), S_("qb14.T")},
+    {S_("package qb15; type T int; func _((*(T)))"), S_("*(T)"), S_("*qb15.T")},
+    {S_("package qb16; type T int; func _((*(T)))"), S_("(*(T))"), S_("*qb16.T")},
+
+    /* - as method receiver, not generic */
+    {S_("package qc1; type T int; func (T) _() {}"), S_("T"), S_("qc1.T")},
+    {S_("package qc2; type T int; func ((T)) _() {}"), S_("T"), S_("qc2.T")},
+    {S_("package qc3; type T int; func ((T)) _() {}"), S_("(T)"), S_("qc3.T")},
+    {S_("package qc4; type T int; func (((T))) _() {}"), S_("T"), S_("qc4.T")},
+    {S_("package qc5; type T int; func (((T))) _() {}"), S_("(T)"), S_("qc5.T")},
+    {S_("package qc6; type T int; func (((T))) _() {}"), S_("((T))"), S_("qc6.T")},
+    {S_("package qc7; type T int; func (*T) _() {}"), S_("T"), S_("qc7.T")},
+    {S_("package qc8; type T int; func (*T) _() {}"), S_("*T"), S_("*qc8.T")},
+    {S_("package qc9; type T int; func ((*T)) _() {}"), S_("T"), S_("qc9.T")},
+    {S_("package qc10; type T int; func ((*T)) _() {}"), S_("*T"), S_("*qc10.T")},
+    {S_("package qc11; type T int; func (*(T)) _() {}"), S_("T"), S_("qc11.T")},
+    {S_("package qc12; type T int; func (*(T)) _() {}"), S_("(T)"), S_("qc12.T")},
+    {S_("package qc13; type T int; func (*(T)) _() {}"), S_("*(T)"), S_("*qc13.T")},
+    {S_("package qc14; type T int; func ((*(T))) _() {}"), S_("(T)"), S_("qc14.T")},
+    {S_("package qc15; type T int; func ((*(T))) _() {}"), S_("*(T)"), S_("*qc15.T")},
+    {S_("package qc16; type T int; func ((*(T))) _() {}"), S_("(*(T))"), S_("*qc16.T")},
+
+    /* - as variable type, generic */
+    {S_("package qd1; type T[_ any] int; var x T[int]"), S_("T"), S_("qd1.T[_ any]")},
+    {S_("package qd2; type T[_ any] int; var x (T[int])"), S_("T[int]"),
+     S_("qd2.T[int]")},
+    {S_("package qd3; type T[_ any] int; var x (T[int])"), S_("(T[int])"),
+     S_("qd3.T[int]")},
+    {S_("package qd4; type T[_ any] int; var x ((T[int]))"), S_("T"),
+     S_("qd4.T[_ any]")},
+    {S_("package qd5; type T[_ any] int; var x ((T[int]))"), S_("(T[int])"),
+     S_("qd5.T[int]")},
+    {S_("package qd6; type T[_ any] int; var x ((T[int]))"), S_("((T[int]))"),
+     S_("qd6.T[int]")},
+    {S_("package qd7; type T[_ any] int; var x *T[int]"), S_("T"), S_("qd7.T[_ any]")},
+    {S_("package qd8; type T[_ any] int; var x *T[int]"), S_("*T[int]"),
+     S_("*qd8.T[int]")},
+    {S_("package qd9; type T[_ any] int; var x (*T[int])"), S_("T"),
+     S_("qd9.T[_ any]")},
+    {S_("package qd10; type T[_ any] int; var x (*T[int])"), S_("*T[int]"),
+     S_("*qd10.T[int]")},
+    {S_("package qd11; type T[_ any] int; var x *(T[int])"), S_("T[int]"),
+     S_("qd11.T[int]")},
+    {S_("package qd12; type T[_ any] int; var x *(T[int])"), S_("(T[int])"),
+     S_("qd12.T[int]")},
+    {S_("package qd13; type T[_ any] int; var x *(T[int])"), S_("*(T[int])"),
+     S_("*qd13.T[int]")},
+    {S_("package qd14; type T[_ any] int; var x (*(T[int]))"), S_("(T[int])"),
+     S_("qd14.T[int]")},
+    {S_("package qd15; type T[_ any] int; var x (*(T[int]))"), S_("*(T[int])"),
+     S_("*qd15.T[int]")},
+    {S_("package qd16; type T[_ any] int; var x (*(T[int]))"), S_("(*(T[int]))"),
+     S_("*qd16.T[int]")},
+
+    /* - as ordinary function parameter, generic */
+    {S_("package qe1; type T[_ any] int; func _(T[int])"), S_("T"), S_("qe1.T[_ any]")},
+    {S_("package qe2; type T[_ any] int; func _((T[int]))"), S_("T[int]"),
+     S_("qe2.T[int]")},
+    {S_("package qe3; type T[_ any] int; func _((T[int]))"), S_("(T[int])"),
+     S_("qe3.T[int]")},
+    {S_("package qe4; type T[_ any] int; func _(((T[int])))"), S_("T"),
+     S_("qe4.T[_ any]")},
+    {S_("package qe5; type T[_ any] int; func _(((T[int])))"), S_("(T[int])"),
+     S_("qe5.T[int]")},
+    {S_("package qe6; type T[_ any] int; func _(((T[int])))"), S_("((T[int]))"),
+     S_("qe6.T[int]")},
+    {S_("package qe7; type T[_ any] int; func _(*T[int])"), S_("T"),
+     S_("qe7.T[_ any]")},
+    {S_("package qe8; type T[_ any] int; func _(*T[int])"), S_("*T[int]"),
+     S_("*qe8.T[int]")},
+    {S_("package qe9; type T[_ any] int; func _((*T[int]))"), S_("T"),
+     S_("qe9.T[_ any]")},
+    {S_("package qe10; type T[_ any] int; func _((*T[int]))"), S_("*T[int]"),
+     S_("*qe10.T[int]")},
+    {S_("package qe11; type T[_ any] int; func _(*(T[int]))"), S_("T[int]"),
+     S_("qe11.T[int]")},
+    {S_("package qe12; type T[_ any] int; func _(*(T[int]))"), S_("(T[int])"),
+     S_("qe12.T[int]")},
+    {S_("package qe13; type T[_ any] int; func _(*(T[int]))"), S_("*(T[int])"),
+     S_("*qe13.T[int]")},
+    {S_("package qe14; type T[_ any] int; func _((*(T[int])))"), S_("(T[int])"),
+     S_("qe14.T[int]")},
+    {S_("package qe15; type T[_ any] int; func _((*(T[int])))"), S_("*(T[int])"),
+     S_("*qe15.T[int]")},
+    {S_("package qe16; type T[_ any] int; func _((*(T[int])))"), S_("(*(T[int]))"),
+     S_("*qe16.T[int]")},
+
+    /* - as method receiver, generic */
+    {S_("package qf1; type T[_ any] int; func (T[_]) _() {}"), S_("T"),
+     S_("qf1.T[_ any]")},
+    {S_("package qf2; type T[_ any] int; func ((T[_])) _() {}"), S_("T[_]"),
+     S_("qf2.T[_]")},
+    {S_("package qf3; type T[_ any] int; func ((T[_])) _() {}"), S_("(T[_])"),
+     S_("qf3.T[_]")},
+    {S_("package qf4; type T[_ any] int; func (((T[_]))) _() {}"), S_("T"),
+     S_("qf4.T[_ any]")},
+    {S_("package qf5; type T[_ any] int; func (((T[_]))) _() {}"), S_("(T[_])"),
+     S_("qf5.T[_]")},
+    {S_("package qf6; type T[_ any] int; func (((T[_]))) _() {}"), S_("((T[_]))"),
+     S_("qf6.T[_]")},
+    {S_("package qf7; type T[_ any] int; func (*T[_]) _() {}"), S_("T"),
+     S_("qf7.T[_ any]")},
+    {S_("package qf8; type T[_ any] int; func (*T[_]) _() {}"), S_("*T[_]"),
+     S_("*qf8.T[_]")},
+    {S_("package qf9; type T[_ any] int; func ((*T[_])) _() {}"), S_("T"),
+     S_("qf9.T[_ any]")},
+    {S_("package qf10; type T[_ any] int; func ((*T[_])) _() {}"), S_("*T[_]"),
+     S_("*qf10.T[_]")},
+    {S_("package qf11; type T[_ any] int; func (*(T[_])) _() {}"), S_("T[_]"),
+     S_("qf11.T[_]")},
+    {S_("package qf12; type T[_ any] int; func (*(T[_])) _() {}"), S_("(T[_])"),
+     S_("qf12.T[_]")},
+    {S_("package qf13; type T[_ any] int; func (*(T[_])) _() {}"), S_("*(T[_])"),
+     S_("*qf13.T[_]")},
+    {S_("package qf14; type T[_ any] int; func ((*(T[_]))) _() {}"), S_("(T[_])"),
+     S_("qf14.T[_]")},
+    {S_("package qf15; type T[_ any] int; func ((*(T[_]))) _() {}"), S_("*(T[_])"),
+     S_("*qf15.T[_]")},
+    {S_("package qf16; type T[_ any] int; func ((*(T[_]))) _() {}"), S_("(*(T[_]))"),
+     S_("*qf16.T[_]")},
+
+    /* For historic reasons, type parameters in receiver type expressions */
+    /* are considered both definitions and uses and thus also show up in */
+    /* the Info.Types map (see go.dev/issue/68670). */
+    {S_("package t1; type T[_ any] int; func (T[P]) _() {}"), S_("P"), S_("P")},
+    {S_("package t2; type T[_, _ any] int; func (T[P, Q]) _() {}"), S_("P"), S_("P")},
+    {S_("package t3; type T[_, _ any] int; func (T[P, Q]) _() {}"), S_("Q"), S_("Q")},
+};
+
+static void TestTypesInfo(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    for (Int i = 0; i < NELEM(types_tests); i++) {
+        Str src = types_tests[i].src, expr = types_tests[i].expr;
+        Str want = types_tests[i].typ;
+        TypesInfo info = {0};
+        info.types = new_types_map(a);
+        Str name = S("");
+        if (strings_has_prefix(src, types_broken)) {
+            Error err = BURROW_NO_ERROR;
+            TypesPackage *pkg = typecheck(a, src, NULL, &info, &err);
+            if (BURROW_OK(err)) {
+                testing_t_errorf_v(t, "package %s: expected to fail but passed",
+                                   types_package_name(pkg));
+                continue;
+            }
+            if (pkg != NULL)
+                name = types_package_name(pkg);
+        } else {
+            name = types_package_name(must_typecheck(a, src, NULL, &info));
+        }
+
+        /* look for expression type */
+        TypesType typ = NULL;
+        const void *k;
+        void *v;
+        for (MapIter it = map_iter(info.types); map_next(&it, &k, &v);) {
+            if (str_eq(types_expr_string(a, *(AstExpr const *)k), expr)) {
+                typ = ((const TypesTypeAndValue *)v)->type;
+                break;
+            }
+        }
+        if (typ == NULL) {
+            testing_t_errorf_v(t, "package %s: no type found for %s", name, expr);
+            continue;
+        }
+
+        /* check that type is correct */
+        Str got = type_string(a, typ);
+        if (!str_eq(got, want))
+            testing_t_errorf_v(t, "package %s: expr = %s: got %s; want %s", name, expr,
+                               got, want);
+    }
+    arena_free(&ar);
+}
+
+/* testImporter: the packages it can import, by path. */
+static TypesPackage *test_importer_import(void *self, Str path, Error *err) {
+    Map *m = self;
+    TypesPackage *pkg = NULL;
+    if (map_get2(m, &path, &pkg) && pkg != NULL)
+        return pkg;
+    *err = fmt_errorf_v("package %q not found", path);
+    return NULL;
+}
+
+static const TypesImporterVT test_importer_vt = {NULL, test_importer_import, NULL};
+
+static Map *new_test_importer(Alloc *a) {
+    return map_make(a, TYPE_STRING, TYPE_UNSAFE_POINTER, 0);
+}
+
+static TypesImporter test_importer(Map *m) {
+    return (TypesImporter){&test_importer_vt, m};
+}
+
+enum { MAX_INSTS = 3, MAX_TARGS = 3 };
+
+typedef struct {
+    Str name;
+    Str targs[MAX_TARGS];
+    Str typ;
+} TestInst;
+
+static const Str instance_lib =
+    S_("package lib\n\nfunc F[P any](P) {}\n\ntype T[P any] []P\n");
+
+static const struct {
+    Str src;
+    TestInst instances[MAX_INSTS]; /* recorded instances in source order */
+} instance_tests[] = {
+    {
+        S_("package p0; func f[T any](T) {}; func _() { f(42) }"),
+        {{S_("f"), {S_("int")}, S_("func(int)")}},
+    },
+    {
+        S_("package p1; func f[T any](T) T { panic(0) }; func _() { f('@') }"),
+        {{S_("f"), {S_("rune")}, S_("func(rune) rune")}},
+    },
+    {
+        S_("package p2; func f[T any](...T) T { panic(0) }; func _() { f(0i) }"),
+        {{S_("f"), {S_("complex128")}, S_("func(...complex128) complex128")}},
+    },
+    {
+        S_("package p3; func f[A, B, C any](A, *B, []C) {}; func _() { f(1.2, "
+           "new(string), []byte{}) }"),
+        {{S_("f"),
+          {S_("float64"), S_("string"), S_("byte")},
+          S_("func(float64, *string, []byte)")}},
+    },
+    {
+        S_("package p4; func f[A, B any](A, *B, ...[]B) {}; func _() { f(1.2, "
+           "new(byte)) }"),
+        {{S_("f"), {S_("float64"), S_("byte")}, S_("func(float64, *byte, ...[]byte)")}},
+    },
+
+    {
+        S_("package s1; func f[T any, P interface{*T}](x T) {}; func _(x string) { "
+           "f(x) }"),
+        {{S_("f"), {S_("string"), S_("*string")}, S_("func(x string)")}},
+    },
+    {
+        S_("package s2; func f[T any, P interface{*T}](x []T) {}; func _(x []int) { "
+           "f(x) }"),
+        {{S_("f"), {S_("int"), S_("*int")}, S_("func(x []int)")}},
+    },
+    {
+        S_("package s3; type C[T any] interface{chan<- T}; func f[T any, P C[T]](x "
+           "[]T) {}; func _(x []int) { f(x) }"),
+        {
+            {S_("C"), {S_("T")}, S_("interface{chan<- T}")},
+            {S_("f"), {S_("int"), S_("chan<- int")}, S_("func(x []int)")},
+        },
+    },
+    {
+        S_("package s4; type C[T any] interface{chan<- T}; func f[T any, P C[T], Q "
+           "C[[]*P]](x []T) {}; func _(x []int) { f(x) }"),
+        {
+            {S_("C"), {S_("T")}, S_("interface{chan<- T}")},
+            {S_("C"), {S_("[]*P")}, S_("interface{chan<- []*P}")},
+            {S_("f"),
+             {S_("int"), S_("chan<- int"), S_("chan<- []*chan<- int")},
+             S_("func(x []int)")},
+        },
+    },
+
+    {
+        S_("package t1; func f[T any, P interface{*T}]() T { panic(0) }; func _() { _ "
+           "= f[string] }"),
+        {{S_("f"), {S_("string"), S_("*string")}, S_("func() string")}},
+    },
+    {
+        S_("package t2; func f[T any, P interface{*T}]() T { panic(0) }; func _() { _ "
+           "= (f[string]) }"),
+        {{S_("f"), {S_("string"), S_("*string")}, S_("func() string")}},
+    },
+    {
+        S_("package t3; type C[T any] interface{chan<- T}; func f[T any, P C[T], Q "
+           "C[[]*P]]() []T { return nil }; func _() { _ = f[int] }"),
+        {
+            {S_("C"), {S_("T")}, S_("interface{chan<- T}")},
+            {S_("C"), {S_("[]*P")}, S_("interface{chan<- []*P}")},
+            {S_("f"),
+             {S_("int"), S_("chan<- int"), S_("chan<- []*chan<- int")},
+             S_("func() []int")},
+        },
+    },
+    {
+        S_("package t4; type C[T any] interface{chan<- T}; func f[T any, P C[T], Q "
+           "C[[]*P]]() []T { return nil }; func _() { _ = (f[int]) }"),
+        {
+            {S_("C"), {S_("T")}, S_("interface{chan<- T}")},
+            {S_("C"), {S_("[]*P")}, S_("interface{chan<- []*P}")},
+            {S_("f"),
+             {S_("int"), S_("chan<- int"), S_("chan<- []*chan<- int")},
+             S_("func() []int")},
+        },
+    },
+    {
+        S_("package i0; import \"lib\"; func _() { lib.F(42) }"),
+        {{S_("F"), {S_("int")}, S_("func(int)")}},
+    },
+
+    {
+        S_("package duplfunc0; func f[T any](T) {}; func _() { f(42); f(\"foo\"); "
+           "f[int](3) }"),
+        {
+            {S_("f"), {S_("int")}, S_("func(int)")},
+            {S_("f"), {S_("string")}, S_("func(string)")},
+            {S_("f"), {S_("int")}, S_("func(int)")},
+        },
+    },
+    {
+        S_("package duplfunc1; import \"lib\"; func _() { lib.F(42); lib.F(\"foo\"); "
+           "lib.F(3) }"),
+        {
+            {S_("F"), {S_("int")}, S_("func(int)")},
+            {S_("F"), {S_("string")}, S_("func(string)")},
+            {S_("F"), {S_("int")}, S_("func(int)")},
+        },
+    },
+
+    {
+        S_("package type0; type T[P interface{~int}] struct{ x P }; var _ T[int]"),
+        {{S_("T"), {S_("int")}, S_("struct{x int}")}},
+    },
+    {
+        S_("package type1; type T[P interface{~int}] struct{ x P }; var _ (T[int])"),
+        {{S_("T"), {S_("int")}, S_("struct{x int}")}},
+    },
+    {
+        S_("package type2; type T[P interface{~int}] struct{ x P }; var _ T[(int)]"),
+        {{S_("T"), {S_("int")}, S_("struct{x int}")}},
+    },
+    {
+        S_("package type3; type T[P1 interface{~[]P2}, P2 any] struct{ x P1; y P2 }; "
+           "var _ T[[]int, int]"),
+        {{S_("T"), {S_("[]int"), S_("int")}, S_("struct{x []int; y int}")}},
+    },
+    {
+        S_("package type4; import \"lib\"; var _ lib.T[int]"),
+        {{S_("T"), {S_("int")}, S_("[]int")}},
+    },
+
+    {
+        S_("package dupltype0; type T[P interface{~int}] struct{ x P }; var x T[int]; "
+           "var y T[int]"),
+        {
+            {S_("T"), {S_("int")}, S_("struct{x int}")},
+            {S_("T"), {S_("int")}, S_("struct{x int}")},
+        },
+    },
+    {
+        S_("package dupltype1; type T[P ~int] struct{ x P }; func (r *T[Q]) add(z "
+           "T[Q]) { r.x += z.x }"),
+        {
+            {S_("T"), {S_("Q")}, S_("struct{x Q}")},
+            {S_("T"), {S_("Q")}, S_("struct{x Q}")},
+        },
+    },
+    {
+        S_("package dupltype1; import \"lib\"; var x lib.T[int]; var y lib.T[int]; var "
+           "z lib.T[string]"),
+        {
+            {S_("T"), {S_("int")}, S_("[]int")},
+            {S_("T"), {S_("int")}, S_("[]int")},
+            {S_("T"), {S_("string")}, S_("[]string")},
+        },
+    },
+    {
+        S_("package issue51803; func foo[T any](T) {}; func _() { foo[int]( /* leave "
+           "arg away on purpose */ ) }"),
+        {{S_("foo"), {S_("int")}, S_("func(int)")}},
+    },
+
+    /* reverse type inference */
+    {
+        S_("package reverse1a; var f func(int) = g; func g[P any](P) {}"),
+        {{S_("g"), {S_("int")}, S_("func(int)")}},
+    },
+    {
+        S_("package reverse1b; func f(func(int)) {}; func g[P any](P) {}; func _() { "
+           "f(g) }"),
+        {{S_("g"), {S_("int")}, S_("func(int)")}},
+    },
+    {
+        S_("package reverse2a; var f func(int, string) = g; func g[P, Q any](P, Q) {}"),
+        {{S_("g"), {S_("int"), S_("string")}, S_("func(int, string)")}},
+    },
+    {
+        S_("package reverse2b; func f(func(int, string)) {}; func g[P, Q any](P, Q) "
+           "{}; func _() { f(g) }"),
+        {{S_("g"), {S_("int"), S_("string")}, S_("func(int, string)")}},
+    },
+    {
+        S_("package reverse2c; func f(func(int, string)) {}; func g[P, Q any](P, Q) "
+           "{}; func _() { f(g[int]) }"),
+        {{S_("g"), {S_("int"), S_("string")}, S_("func(int, string)")}},
+    },
+    /* reverse3a not possible (cannot assign to generic function outside of argument passing) */
+    {
+        S_("package reverse3b; func f[R any](func(int) R) {}; func g[P any](P) string "
+           "{ return \"\" }; func _() { f(g) }"),
+        {
+            {S_("f"), {S_("string")}, S_("func(func(int) string)")},
+            {S_("g"), {S_("int")}, S_("func(int) string")},
+        },
+    },
+    {
+        S_("package reverse4a; var _, _ func([]int, *float32) = g, h; func g[P, Q "
+           "any]([]P, *Q) {}; func h[R any]([]R, *float32) {}"),
+        {
+            {S_("g"), {S_("int"), S_("float32")}, S_("func([]int, *float32)")},
+            {S_("h"), {S_("int")}, S_("func([]int, *float32)")},
+        },
+    },
+    {
+        S_("package reverse4b; func f(_, _ func([]int, *float32)) {}; func g[P, Q "
+           "any]([]P, *Q) {}; func h[R any]([]R, *float32) {}; func _() { f(g, h) }"),
+        {
+            {S_("g"), {S_("int"), S_("float32")}, S_("func([]int, *float32)")},
+            {S_("h"), {S_("int")}, S_("func([]int, *float32)")},
+        },
+    },
+    {
+        S_("package issue59956; func f(func(int), func(string), func(bool)) {}; func "
+           "g[P any](P) {}; func _() { f(g, g, g) }"),
+        {
+            {S_("g"), {S_("int")}, S_("func(int)")},
+            {S_("g"), {S_("string")}, S_("func(string)")},
+            {S_("g"), {S_("bool")}, S_("func(bool)")},
+        },
+    },
+};
+
+typedef struct {
+    AstIdent *ident;
+    TypesInstance inst;
+} RecordedInstance;
+
+static int cmp_recorded_instance(void *env, const void *x, const void *y) {
+    (void)env;
+    TokenPos p = (*(RecordedInstance *const *)x)->ident->name_pos;
+    TokenPos q = (*(RecordedInstance *const *)y)->ident->name_pos;
+    return p < q ? -1 : p > q;
+}
+
+/* Not in Go: the instances are a []*recordedInstance. */
+static Slice sorted_instances(Alloc *a, Map *m) {
+    Slice instances = slice_nil(TYPE_UNSAFE_POINTER);
+    const void *k;
+    void *v;
+    for (MapIter it = map_iter(m); map_next(&it, &k, &v);) {
+        RecordedInstance *r = BURROW_NEW(a, RecordedInstance);
+        r->ident = *(AstIdent *const *)k;
+        r->inst = *(const TypesInstance *)v;
+        instances = slice_append(a, instances, &r, 1);
+    }
+    slices_sort_func(instances, BURROW_FN(SlicesCmpFunc, cmp_recorded_instance, NULL));
+    return instances;
+}
+
+typedef struct {
+    Alloc *a;
+    TypesPackage *pkg;
+    Map *inst_map;
+    Map *use_map;
+    Int test;
+} InstanceEnv;
+
+static void instance_info_run(void *env, TestingT *t) {
+    InstanceEnv *e = env;
+    Alloc *a = e->a;
+    const TestInst *want = instance_tests[e->test].instances;
+    Int nwant = 0;
+    while (nwant < MAX_INSTS && want[nwant].name.len != 0)
+        nwant++;
+
+    /* Sort instances in source order for stability. */
+    Slice instances = sorted_instances(a, e->inst_map);
+    if (instances.len != nwant)
+        testing_t_fatalf_v(t, "got %d instances, want %d", instances.len, nwant);
+
+    /* Pairwise compare with the expected instances. */
+    for (Int ii = 0; ii < instances.len; ii++) {
+        const RecordedInstance *inst = BURROW_AT(RecordedInstance *, instances, ii);
+        Slice targs = slice_nil(TYPE_UNSAFE_POINTER);
+        for (Int i = 0; i < types_type_list_len(inst->inst.type_args); i++) {
+            TypesType targ = types_type_list_at(inst->inst.type_args, i);
+            targs = slice_append(a, targs, &targ, 1);
+        }
+        TypesType typ = inst->inst.type;
+
+        const TestInst *test_inst = &want[ii];
+        Int ntargs = 0;
+        while (ntargs < MAX_TARGS && test_inst->targs[ntargs].len != 0)
+            ntargs++;
+        if (!str_eq(inst->ident->name, test_inst->name))
+            testing_t_fatalf_v(t, "got name %s, want %s", inst->ident->name,
+                               test_inst->name);
+        if (targs.len != ntargs)
+            testing_t_fatalf_v(t, "got %d type arguments; want %d", targs.len, ntargs);
+        for (Int i = 0; i < targs.len; i++) {
+            Str got = type_string(a, BURROW_AT(TypesType, targs, i));
+            if (!str_eq(got, test_inst->targs[i]))
+                testing_t_errorf_v(t, "type argument %d: got %s; want %s", i, got,
+                                   test_inst->targs[i]);
+        }
+        Str got = type_string(a, types_type_underlying(typ));
+        if (!str_eq(got, test_inst->typ))
+            testing_t_errorf_v(t, "package %s: got %s; want %s",
+                               types_package_name(e->pkg), got, test_inst->typ);
+
+        /* Verify the invariant that re-instantiating the corresponding generic
+         * type with TypeArgs results in an identical instance. */
+        TypesObject obj = NULL;
+        (void)map_get2(e->use_map, &inst->ident, &obj);
+        TypesType ptype = types_object_type(obj);
+        TypesTypeParamList *tparams = NULL;
+        if (types_as_named(ptype) != NULL)
+            tparams = types_named_type_params(types_as_named(ptype));
+        else if (types_as_signature(ptype) != NULL)
+            tparams = types_signature_type_params(types_as_signature(ptype));
+        else if (types_as_alias(ptype) != NULL)
+            tparams = types_alias_type_params(types_as_alias(ptype));
+        if (tparams == NULL || types_type_param_list_len(tparams) == 0)
+            testing_t_fatalf_v(t, "info.Types[%s] = %s, want parameterized type",
+                               inst->ident->name, type_string(a, ptype));
+        Error err = BURROW_NO_ERROR;
+        TypesType inst2 = types_instantiate(a, NULL, ptype, targs, true, &err);
+        if (BURROW_FAILED(err))
+            testing_t_errorf_v(t, "Instantiate(%s, %d type arguments) failed: %v",
+                               type_string(a, ptype), targs.len, err);
+        if (!types_identical(inst->inst.type, inst2))
+            testing_t_errorf_v(t, "%s and %s are not identical",
+                               type_string(a, inst->inst.type), type_string(a, inst2));
+    }
+}
+
+static void TestInstanceInfo(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    for (Int i = 0; i < NELEM(instance_tests); i++) {
+        Map *imports = new_test_importer(a);
+        TypesConfig conf = {0};
+        conf.importer = test_importer(imports);
+        TypesInfo info = {0};
+        info.instances = map_make(a, TYPE_UNSAFE_POINTER, TYPE_TYPES_INSTANCE, 0);
+        info.uses = new_objects_map(a);
+        Str srcs[2] = {instance_lib, instance_tests[i].src};
+        TypesPackage *pkg = NULL;
+        for (int j = 0; j < 2; j++) {
+            Error err = BURROW_NO_ERROR;
+            pkg = typecheck(a, srcs[j], &conf, &info, &err);
+            /* allow error for issue51803 */
+            if (BURROW_FAILED(err) &&
+                (pkg == NULL || !str_eq(types_package_name(pkg), S("issue51803")))) {
+                testing_t_error_v(t, error_text(err));
+                arena_free(&ar);
+                return;
+            }
+            Str pname = types_package_name(pkg);
+            map_set(imports, &pname, &pkg);
+        }
+
+        InstanceEnv env = {a, pkg, info.instances, info.uses, i};
+        testing_t_run(t, types_package_name(pkg),
+                      BURROW_FN(TestingTFunc, instance_info_run, &env));
+    }
+    arena_free(&ar);
 }
 
 /* fmt.Sprint of a list of strings, a Slice of Str. */
@@ -290,6 +1400,9 @@ static void TestFirstErrorInTypeSet(TestingT *t) {
 }
 
 #define TESTS(X)                                                                       \
+    X(TestValuesInfo)                                                                  \
+    X(TestTypesInfo)                                                                   \
+    X(TestInstanceInfo)                                                                \
     X(TestInitOrderInfo)                                                               \
     X(TestMultiFileInitOrder)                                                          \
     X(TestFiles)                                                                       \

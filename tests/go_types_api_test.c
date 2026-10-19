@@ -3161,6 +3161,513 @@ static void TestFirstErrorInTypeSet(TestingT *t) {
     arena_free(&ar);
 }
 
+static void TestErrorURL(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TypesConfig conf = {0};
+    conf.error_url = S(" [go.dev/e/%s]");
+
+    /* test case for a one-line error */
+    Str src1 = S("\npackage p\nvar _ T\n");
+    Error err = BURROW_NO_ERROR;
+    (void)typecheck(a, src1, &conf, NULL, &err);
+    if (BURROW_OK(err) ||
+        !strings_has_suffix(error_text(err), S(" [go.dev/e/UndeclaredName]")))
+        testing_t_errorf_v(t, "src1: unexpected error: got %v",
+                           BURROW_OK(err) ? S("<nil>") : error_text(err));
+
+    /* test case for a multi-line error */
+    Str src2 = S("\npackage p\nfunc f() int { return 0 }\nvar _ = f(1, 2)\n");
+    err = BURROW_NO_ERROR;
+    (void)typecheck(a, src2, &conf, NULL, &err);
+    if (BURROW_OK(err) ||
+        !strings_contains(error_text(err), S(" [go.dev/e/WrongArgCount]\n")))
+        testing_t_errorf_v(t, "src1: unexpected error: got %v",
+                           BURROW_OK(err) ? S("<nil>") : error_text(err));
+    arena_free(&ar);
+}
+
+/* Not in Go: internal/goversion is not ported. This is the Go release whose
+ * go/types burrow follows, the one burrow__tc_go_current names. */
+#define GOVERSION_VERSION 27
+
+static void TestModuleVersion(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    /* version go1.dd must be able to typecheck go1.dd.0, go1.dd.1, etc. */
+    Str goversion = fmt_sprintf_v(a, "go1.%d", GOVERSION_VERSION);
+    Str versions[] = {
+        goversion,
+        fmt_sprintf_v(a, "%s.0", goversion),
+        fmt_sprintf_v(a, "%s.1", goversion),
+        fmt_sprintf_v(a, "%s.rc", goversion),
+    };
+    for (Int i = 0; i < NELEM(versions); i++) {
+        TypesConfig conf = {0};
+        conf.go_version = versions[i];
+        TypesPackage *pkg = must_typecheck(a, S("package p"), &conf, NULL);
+        if (!str_eq(types_package_go_version(pkg), conf.go_version))
+            testing_t_errorf_v(t, "got %s; want %s", types_package_go_version(pkg),
+                               conf.go_version);
+    }
+    arena_free(&ar);
+}
+
+static const struct {
+    Str go_version;
+    Str file_version;
+    Str want_version;
+} file_versions_tests[] = {
+    {S_(""), S_(""), S_("")},             /* no versions specified */
+    {S_("go1.19"), S_(""), S_("go1.19")}, /* module version specified */
+    {S_(""), S_("go1.20"),
+     S_("go1.21")},                 /* file version specified below minimum of 1.21 */
+    {S_("go1"), S_(""), S_("go1")}, /* no file version specified */
+    {S_("go1"), S_("goo1.22"), S_("go1")}, /* invalid file version specified */
+    {S_("go1"), S_("go1.19"),
+     S_("go1.21")}, /* file version specified below minimum of 1.21 */
+    {S_("go1"), S_("go1.20"),
+     S_("go1.21")}, /* file version specified below minimum of 1.21 */
+    {S_("go1"), S_("go1.21"), S_("go1.21")},     /* file version specified at 1.21 */
+    {S_("go1"), S_("go1.22"), S_("go1.22")},     /* file version specified above 1.21 */
+    {S_("go1.19"), S_(""), S_("go1.19")},        /* no file version specified */
+    {S_("go1.19"), S_("goo1.22"), S_("go1.19")}, /* invalid file version specified */
+    {S_("go1.19"), S_("go1.20"),
+     S_("go1.21")}, /* file version specified below minimum of 1.21 */
+    {S_("go1.19"), S_("go1.21"), S_("go1.21")},  /* file version specified at 1.21 */
+    {S_("go1.19"), S_("go1.22"), S_("go1.22")},  /* file version specified above 1.21 */
+    {S_("go1.20"), S_(""), S_("go1.20")},        /* no file version specified */
+    {S_("go1.20"), S_("goo1.22"), S_("go1.20")}, /* invalid file version specified */
+    {S_("go1.20"), S_("go1.19"),
+     S_("go1.21")}, /* file version specified below minimum of 1.21 */
+    {S_("go1.20"), S_("go1.20"),
+     S_("go1.21")}, /* file version specified below minimum of 1.21 */
+    {S_("go1.20"), S_("go1.21"), S_("go1.21")},  /* file version specified at 1.21 */
+    {S_("go1.20"), S_("go1.22"), S_("go1.22")},  /* file version specified above 1.21 */
+    {S_("go1.21"), S_(""), S_("go1.21")},        /* no file version specified */
+    {S_("go1.21"), S_("goo1.22"), S_("go1.21")}, /* invalid file version specified */
+    {S_("go1.21"), S_("go1.19"),
+     S_("go1.21")}, /* file version specified below minimum of 1.21 */
+    {S_("go1.21"), S_("go1.20"),
+     S_("go1.21")}, /* file version specified below minimum of 1.21 */
+    {S_("go1.21"), S_("go1.21"), S_("go1.21")},  /* file version specified at 1.21 */
+    {S_("go1.21"), S_("go1.22"), S_("go1.22")},  /* file version specified above 1.21 */
+    {S_("go1.22"), S_(""), S_("go1.22")},        /* no file version specified */
+    {S_("go1.22"), S_("goo1.22"), S_("go1.22")}, /* invalid file version specified */
+    {S_("go1.22"), S_("go1.19"),
+     S_("go1.21")}, /* file version specified below minimum of 1.21 */
+    {S_("go1.22"), S_("go1.20"),
+     S_("go1.21")}, /* file version specified below minimum of 1.21 */
+    {S_("go1.22"), S_("go1.21"), S_("go1.21")}, /* file version specified at 1.21 */
+    {S_("go1.22"), S_("go1.22"), S_("go1.22")}, /* file version specified above 1.21 */
+
+    /* versions containing release numbers */
+    /* (file versions containing release numbers are considered invalid) */
+    {S_("go1.19.0"), S_(""), S_("go1.19.0")},         /* no file version specified */
+    {S_("go1.20.1"), S_("go1.19.1"), S_("go1.20.1")}, /* invalid file version */
+    {S_("go1.20.1"), S_("go1.21.1"), S_("go1.20.1")}, /* invalid file version */
+    {S_("go1.21.1"), S_("go1.19.1"), S_("go1.21.1")}, /* invalid file version */
+    {S_("go1.21.1"), S_("go1.21.1"), S_("go1.21.1")}, /* invalid file version */
+    {S_("go1.22.1"), S_("go1.19.1"), S_("go1.22.1")}, /* invalid file version */
+    {S_("go1.22.1"), S_("go1.21.1"), S_("go1.22.1")}, /* invalid file version */
+};
+
+static void TestFileVersions(TestingT *t) {
+    for (Int i = 0; i < NELEM(file_versions_tests); i++) {
+        Arena ar;
+        arena_init(&ar, NULL, 0);
+        Alloc *a = arena_allocator(&ar);
+        Str src = S("package p");
+        if (file_versions_tests[i].file_version.len > 0)
+            src = fmt_sprintf_v(a, "//go:build %s\npackage p",
+                                file_versions_tests[i].file_version);
+
+        TypesConfig conf = {0};
+        conf.go_version = file_versions_tests[i].go_version;
+        Map *versions = map_make(a, TYPE_UNSAFE_POINTER, TYPE_STRING, 0);
+        TypesInfo info = {0};
+        info.file_versions = versions;
+        must_typecheck(a, src, &conf, &info);
+
+        Int n = 0;
+        const void *k;
+        void *v;
+        for (MapIter it = map_iter(versions); map_next(&it, &k, &v);) {
+            Str got = *(const Str *)v;
+            Str want = file_versions_tests[i].want_version;
+            if (!str_eq(got, want))
+                testing_t_errorf_v(t, "%q: unexpected file version: got %q, want %q",
+                                   src, got, want);
+            n++;
+        }
+        if (n != 1)
+            testing_t_errorf_v(t, "%q: incorrect number of map entries: got %d", src,
+                               n);
+        arena_free(&ar);
+    }
+}
+
+typedef struct {
+    Alloc *a;
+    Slice errs;
+} CollectErrorsEnv;
+
+static void collect_errors(void *env, const TypesError *e) {
+    CollectErrorsEnv *c = env;
+    Str s = types_error_error(e, c->a);
+    c->errs = slice_append(c->a, c->errs, &s, 1);
+}
+
+/* Not in Go: the name %T prints for each kind of object. */
+static Str object_go_type(TypesObject obj) {
+    switch (obj->kind) {
+    case TYPES_OBJECT_PKG_NAME:
+        return S("*types.PkgName");
+    case TYPES_OBJECT_CONST:
+        return S("*types.Const");
+    case TYPES_OBJECT_TYPE_NAME:
+        return S("*types.TypeName");
+    case TYPES_OBJECT_VAR:
+        return S("*types.Var");
+    case TYPES_OBJECT_FUNC:
+        return S("*types.Func");
+    case TYPES_OBJECT_LABEL:
+        return S("*types.Label");
+    case TYPES_OBJECT_BUILTIN:
+        return S("*types.Builtin");
+    case TYPES_OBJECT_NIL:
+        return S("*types.Nil");
+    default:
+        return S("<nil>");
+    }
+}
+
+static const struct {
+    Str go_version;   /* package's Go version (as if derived from go.mod file) */
+    Str file_version; /* file's Go version (becomes a build tag) */
+    Str want_err;     /* expected substring of concatenation of all errors */
+} too_new_tests[] = {
+    {S_("go1.98"), S_(""), S_("package requires newer Go version go1.98")},
+    {S_(""), S_("go1.99"), S_("p:2:9: file requires newer Go version go1.99")},
+    {S_("go1.98"), S_("go1.99"),
+     S_("package requires newer Go version go1.98")}, /* (two */
+    {S_("go1.98"), S_("go1.99"),
+     S_("file requires newer Go version go1.99")}, /* errors) */
+};
+
+/* TestTooNew ensures that "too new" errors are emitted when the file
+ * or module is tagged with a newer version of Go than this go/types. */
+static void TestTooNew(TestingT *t) {
+    for (Int i = 0; i < NELEM(too_new_tests); i++) {
+        Arena ar;
+        arena_init(&ar, NULL, 0);
+        Alloc *a = arena_allocator(&ar);
+        Str src = S("package p; func f()");
+        if (too_new_tests[i].file_version.len > 0)
+            src = fmt_sprintf_v(a, "//go:build %s\npackage p; func f()",
+                                too_new_tests[i].file_version);
+
+        CollectErrorsEnv errs = {a, slice_nil(TYPE_STRING)};
+        TypesConfig conf = {0};
+        conf.go_version = too_new_tests[i].go_version;
+        conf.error = (TypesErrorFunc){collect_errors, &errs};
+        TypesInfo info = {0};
+        info.defs = new_objects_map(a);
+        Error err = BURROW_NO_ERROR;
+        (void)typecheck(a, src, &conf, &info, &err);
+        Str got = fmt_sprintf_v(a, "[%s]", strings_join(a, errs.errs, S(" ")));
+        if (!strings_contains(got, too_new_tests[i].want_err))
+            testing_t_errorf_v(t, "%q: unexpected error: got %q, want substring %q",
+                               src, got, too_new_tests[i].want_err);
+
+        /* Assert that declarations were type checked nonetheless. */
+        Slice got_objs = slice_nil(TYPE_STRING);
+        const void *k;
+        void *v;
+        for (MapIter it = map_iter(info.defs); map_next(&it, &k, &v);) {
+            TypesObject obj = *(TypesObject *)v;
+            if (obj != NULL) {
+                Str obj_str = fmt_sprintf_v(a, "%s:%s", (*(AstIdent *const *)k)->name,
+                                            object_go_type(obj));
+                got_objs = slice_append(a, got_objs, &obj_str, 1);
+            }
+        }
+        Str want_objs = S("f:*types.Func");
+        Str got_str = fmt_sprintf_v(a, "[%s]", strings_join(a, got_objs, S(" ")));
+        if (!strings_contains(got_str, want_objs))
+            testing_t_errorf_v(t, "%q: got %s, want substring %q", src, got_str,
+                               want_objs);
+        arena_free(&ar);
+    }
+}
+
+/* This is a regression test for #66704. */
+static void TestUnaliasTooSoonInCycle(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Str src =
+        S("package a\n\nvar x T[B] // this appears to cause Unalias to be called on "
+          "B while still Invalid\n\ntype T[_ any] struct{}\ntype A T[B]\ntype B = "
+          "T[A]\n");
+    TypesPackage *pkg = must_typecheck(a, src, NULL, NULL);
+    TypesObject b = types_scope_lookup(types_package_scope(pkg), S("B"));
+
+    Str got = type_string(a, types_unalias(types_object_type(b)));
+    Str want = S("a.T[a.A]");
+    if (!str_eq(got, want))
+        testing_t_errorf_v(t, "Unalias(type B = T[A]) = %q, want %q", got, want);
+    arena_free(&ar);
+}
+
+static void TestAlias_Rhs(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Str src = S("package p\n\ntype A = B\ntype B = C\ntype C = int\n");
+
+    TypesPackage *pkg = must_typecheck(a, src, NULL, NULL);
+    TypesObject obj = types_scope_lookup(types_package_scope(pkg), S("A"));
+
+    TypesAlias *alias = types_as_alias(types_object_type(obj));
+    if (alias == NULL)
+        panic_str(S("A is not an alias"));
+    Str got = type_string(a, types_alias_rhs(alias));
+    Str want = S("p.B");
+    if (!str_eq(got, want))
+        testing_t_errorf_v(t, "A.Rhs = %s, want %s", got, want);
+    arena_free(&ar);
+}
+
+static bool set_basic_lit_pos(void *env, AstNode n) {
+    (void)env;
+    if (n != NULL && n->kind == AST_KIND_BASIC_LIT)
+        ((AstBasicLit *)n)->value_pos = 99999;
+    return true;
+}
+
+/* TestVersionIssue69477 is a regression test for issue #69477,
+ * in which the type checker would panic while attempting
+ * to compute which file it is "in" based on syntax position. */
+static void TestVersionIssue69477(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TokenFileSet *fset = token_new_file_set(a);
+    AstFile *f = must_parse(a, fset, S("package p; const k = 123"));
+
+    /* Set an invalid Pos on the BasicLit. */
+    ast_inspect((AstNode)f, BURROW_FN(AstInspectFunc, set_basic_lit_pos, NULL));
+
+    /* Type check. The checker will consult the effective
+     * version for the BasicLit 123. This used to panic. */
+    TypesPackage *pkg = types_new_package(a, S("p"), S("p"));
+    TypesConfig conf = {0};
+    TypesChecker *check = types_new_checker(a, &conf, fset, pkg, NULL);
+    Error err = BURROW_NO_ERROR;
+    Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
+    if (!types_checker_files(check, files, &err))
+        testing_t_fatal_v(t, "%s", error_text(err));
+    arena_free(&ar);
+}
+
+/* TestVersionWithoutPos is a regression test for issue #69477,
+ * in which the type checker would use position information
+ * to compute which file it is "in" based on syntax position.
+ *
+ * As a rule the type checker should not depend on position
+ * information for correctness, only for error messages and
+ * Object.Pos. (Scope.LookupParent was a mistake.)
+ *
+ * The Checker now holds the effective version in a state variable. */
+static void TestVersionWithoutPos(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TokenFileSet *fset = token_new_file_set(a);
+    AstFile *f = must_parse(a, fset, S("//go:build go1.22\n\npackage p; var _ int"));
+
+    /* Splice in a decl from another file. Its pos will be wrong. */
+    AstFile *f2 = must_parse(
+        a, fset, S("package q; func _(s func(func() bool)) { for range s {} }"));
+    ((AstDecl *)f->decls.p)[0] = ((AstDecl *)f2->decls.p)[0];
+
+    /* Type check. The checker will consult the effective
+     * version (1.22) for the for-range stmt to know whether
+     * range-over-func are permitted: they are not.
+     * (Previously, no error was reported.) */
+    TypesPackage *pkg = types_new_package(a, S("p"), S("p"));
+    TypesConfig conf = {0};
+    TypesChecker *check = types_new_checker(a, &conf, fset, pkg, NULL);
+    Error err = BURROW_NO_ERROR;
+    Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
+    (void)types_checker_files(check, files, &err);
+    Str got = BURROW_OK(err) ? S("<nil>") : error_text(err);
+    Str want = S("range over s (variable of type func(func() bool)): requires go1.23");
+    if (!strings_contains(got, want))
+        testing_t_errorf_v(t, "check error was %q, want substring %q", got, want);
+    arena_free(&ar);
+}
+
+static void TestVarKind(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TokenFileSet *fset = token_new_file_set(a);
+    AstFile *f = must_parse(
+        a, fset,
+        S("package p\n\nvar global int\n\ntype T struct { field int }\n\nfunc (recv T) "
+          "f(param int) (result int) {\n\tvar local int\n\tlocal2 := 0\n\tswitch "
+          "local3 "
+          ":= any(local).(type) {\n\tdefault:\n\t\t_ = local3\n\t}\n\treturn "
+          "local2\n}"));
+
+    TypesPackage *pkg = types_new_package(a, S("p"), S("p"));
+    TypesInfo info = {0};
+    info.defs = new_objects_map(a);
+    TypesConfig conf = {0};
+    TypesChecker *check = types_new_checker(a, &conf, fset, pkg, &info);
+    Error err = BURROW_NO_ERROR;
+    Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
+    if (!types_checker_files(check, files, &err))
+        testing_t_fatal_v(t, "%s", error_text(err));
+    Slice got = slice_nil(TYPE_STRING);
+    const void *k;
+    void *v;
+    for (MapIter it = map_iter(info.defs); map_next(&it, &k, &v);) {
+        TypesVar *var = types_as_var(*(TypesObject *)v);
+        if (var != NULL) {
+            Str s = fmt_sprintf_v(a, "%s: %s", types_object_name(types_object(var)),
+                                  types_var_kind_string(a, types_var_kind(var)));
+            got = slice_append(a, got, &s, 1);
+        }
+    }
+    sort_strings(got);
+    static const Str want[] = {
+        S_("field: FieldVar"),   S_("global: PackageVar"), S_("local2: LocalVar"),
+        S_("local: LocalVar"),   S_("param: ParamVar"),    S_("recv: RecvVar"),
+        S_("result: ResultVar"),
+    };
+    Slice want_slice = slice_append(a, slice_nil(TYPE_STRING), want, NELEM(want));
+    if (!slices_equal(got, want_slice))
+        testing_t_errorf_v(t, "got:\n[%s]\nwant:\n[%s]", strings_join(a, got, S(" ")),
+                           strings_join(a, want_slice, S(" ")));
+    arena_free(&ar);
+}
+
+static void TestIssue73871(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Str src =
+        S("package p\n\nfunc f[T ~[]byte](y T) []byte { return append([]byte(nil), "
+          "y...) }\n\ntype B []byte\nvar _ = f[B]\n");
+    TokenFileSet *fset = token_new_file_set(a);
+    AstFile *f = must_parse(a, fset, src);
+
+    TypesPackage *pkg = types_new_package(a, S("p"), S("p"));
+    TypesInfo info = {0};
+    info.types = new_types_map(a);
+    TypesConfig conf = {0};
+    TypesChecker *check = types_new_checker(a, &conf, fset, pkg, &info);
+    Error err = BURROW_NO_ERROR;
+    Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
+    if (!types_checker_files(check, files, &err))
+        testing_t_fatal_v(t, "%s", error_text(err));
+
+    /* Check type inferred for 'append'.
+     *
+     * Before CL 688815, the inferred type of append's y parameter
+     * was T. When a client such as x/tools/go/ssa instantiated T=B,
+     * it would result in the Signature "func([]byte, B)" with the
+     * variadic flag set, an invalid combination that caused
+     * NewSignatureType to panic. */
+    AstFuncDecl *decl = (AstFuncDecl *)((AstDecl *)f->decls.p)[0];
+    AstReturnStmt *ret = (AstReturnStmt *)((AstStmt *)decl->body->list.p)[0];
+    AstCallExpr *call = (AstCallExpr *)((AstExpr *)ret->results.p)[0];
+    TypesSignature *t_append = types_as_signature(types_info_type_of(&info, call->fun));
+    if (t_append == NULL)
+        testing_t_fatal_v(t, "append has no signature");
+    Str got = type_string(a, types_type(t_append));
+    Str want = S("func([]byte, ...byte) []byte");
+    if (!str_eq(got, want))
+        /* Before CL 688815, tAppend was func([]byte, T) []byte,
+         * where T prints as "<expected string type>". */
+        testing_t_errorf_v(t, "append: got type %s, want %s", got, want);
+
+    /* Instantiate the type inferred for append(...) at T=B.
+     * Before the fix in CL 689277, NewSignatureType would panic. */
+    TypesTuple *tparams = types_signature_params(t_append);
+    Slice params = slice_nil(TYPE_UNSAFE_POINTER);
+    for (Int i = 0; i < types_tuple_len(tparams); i++) {
+        TypesVar *p = types_tuple_at(tparams, i);
+        params = slice_append(a, params, &p, 1);
+    }
+    TypesObject b = types_scope_lookup(types_package_scope(pkg), S("B"));
+    TypesVar *pb = types_new_var(a, TOKEN_NO_POS, pkg, S(""), types_object_type(b));
+    ((TypesVar **)params.p)[1] = pb;
+    TypesSignature *sig = types_new_signature_type(
+        a, NULL, slice_nil(TYPE_UNSAFE_POINTER), slice_nil(TYPE_UNSAFE_POINTER),
+        types_new_tuple(a, params), types_signature_results(t_append), true);
+    got = type_string(a, types_type(sig));
+    want = S("func([]byte, p.B...) []byte");
+    if (!str_eq(got, want))
+        testing_t_errorf_v(t, "instantiated: got type %s, want %s", got, want);
+    arena_free(&ar);
+}
+
+static void issue79657_test(TestingT *t, Alloc *a, TypesInstance inst, Str want) {
+    TypesSignature *sig = types_as_signature(inst.type);
+    TypesVar *recv = sig != NULL ? types_signature_recv(sig) : NULL;
+    if (recv != NULL) {
+        Str got = type_string(a, types_object_type(types_object(recv)));
+        if (!str_eq(got, want))
+            testing_t_errorf_v(t, "instance %s has receiver type %s, want %s",
+                               type_string(a, inst.type), got, want);
+    } else {
+        testing_t_errorf_v(t, "instance %s has no receiver", type_string(a, inst.type));
+    }
+}
+
+static void TestIssue79657(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Str src =
+        S("package p\n\ntype T[P any] struct{}\nfunc (T[P])  M() {}\nfunc (T[P])  "
+          "N[Q any]() {}\nfunc (*T[P]) L[Q any]() {}\n\nvar (\n\tx = T[int]{}\n\t_ "
+          "= x.M\n\t_ = T[int].M\n\t_ = x.N[bool]\n\t_ = T[int].N[bool]\n\t_ = "
+          "x.L[bool]\n\t_ = (*T[int]).L[bool]\n)\n");
+
+    TypesInfo info = {0};
+    info.instances = map_make(a, TYPE_UNSAFE_POINTER, TYPE_TYPES_INSTANCE, 0);
+    must_typecheck(a, src, NULL, &info);
+
+    Int n = 0, l = 0;
+    const void *k;
+    void *v;
+    for (MapIter it = map_iter(info.instances); map_next(&it, &k, &v);) {
+        Str name = (*(AstIdent *const *)k)->name;
+        TypesInstance inst = *(const TypesInstance *)v;
+        if (str_eq(name, S("M"))) {
+            testing_t_errorf_v(t, "unexpected instance %s", type_string(a, inst.type));
+        } else if (str_eq(name, S("N"))) {
+            n++;
+            issue79657_test(t, a, inst, S("p.T[int]"));
+        } else if (str_eq(name, S("L"))) {
+            l++;
+            issue79657_test(t, a, inst, S("*p.T[int]"));
+        }
+    }
+    if (n != 2)
+        testing_t_errorf_v(t, "found %d instances of N, want 2", n);
+    if (l != 2)
+        testing_t_errorf_v(t, "found %d instances of L, want 2", l);
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestValuesInfo)                                                                  \
     X(TestTypesInfo)                                                                   \
@@ -3190,6 +3697,17 @@ static void TestFirstErrorInTypeSet(TestingT *t) {
     X(TestInstantiateConcurrent)                                                       \
     X(TestInstanceIdentity)                                                            \
     X(TestInstantiatedObjects)                                                         \
-    X(TestFirstErrorInTypeSet)
+    X(TestFirstErrorInTypeSet)                                                         \
+    X(TestErrorURL)                                                                    \
+    X(TestModuleVersion)                                                               \
+    X(TestFileVersions)                                                                \
+    X(TestTooNew)                                                                      \
+    X(TestUnaliasTooSoonInCycle)                                                       \
+    X(TestAlias_Rhs)                                                                   \
+    X(TestVersionIssue69477)                                                           \
+    X(TestVersionWithoutPos)                                                           \
+    X(TestVarKind)                                                                     \
+    X(TestIssue73871)                                                                  \
+    X(TestIssue79657)
 
 TESTING_MAIN(TESTS)

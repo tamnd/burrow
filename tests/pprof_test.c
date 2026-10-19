@@ -17,6 +17,7 @@
 #include "burrow/chan.h"
 #include "burrow/context.h"
 #include "burrow/math/big.h"
+#include "burrow/mcontext.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
 #include "burrow/os.h"
@@ -1532,6 +1533,13 @@ static void check_no_switch(void *env, uint64_t count, Slice stk, Slice labels) 
 static void TestGoroutineSwitch(TestingT *t) {
 #if defined(NO_CPU_SAMPLES)
     testing_t_skip_v(t, "no CPU profile samples on this platform");
+#endif
+#if !defined(BURROW_MCONTEXT_ASM)
+    /* Not in Go. Only the hand-written switch moves the stack pointer in the
+     * middle of a function. The others are a C function that calls into the C
+     * library to switch, and a sample in it has a whole stack, as one in any
+     * other function does. */
+    testing_t_skip_v(t, "the goroutine switch is not the hand-written one");
 #endif
     /* How much to try. These defaults take about 1 seconds on a 2012 MacBook
      * Pro. The ones in short mode take about 0.1 seconds. */

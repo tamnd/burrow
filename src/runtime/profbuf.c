@@ -76,7 +76,7 @@ static Int count_sub(uint32_t x, uint32_t y) {
  * cleared. */
 static uint64_t add_counts_and_clear_flags(uint64_t x, Int data, Int tag) {
     uint64_t tags = (x >> 34) + (uint64_t)(((uint32_t)tag << 2) >> 2);
-    return tags << 34 | (uint64_t)(uint32_t)((uint32_t)x + (uint32_t)data);
+    return tags << 34 | (uint64_t)((uint32_t)x + (uint32_t)data);
 }
 
 static bool has_overflow(burrow__ProfBuf *b) {
@@ -224,8 +224,9 @@ static bool can_write_two_records(burrow__ProfBuf *b, Int nstk1, Int nstk2) {
 
     want = 2 + b->hdrsize + nstk2;
     if (i + want > b->ndata) {
+        /* Can't fit in trailing fragment of slice. Skip over that. Go starts i
+         * over at 0 here too, but nothing reads it after. */
         nd -= b->ndata - i;
-        i = 0;
     }
     return nd >= want;
 }

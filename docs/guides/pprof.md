@@ -139,7 +139,7 @@ static void profile_cpu(void *env) {
         return;
     (void)spin(200 * TIME_MILLISECOND);
     pprof_stop_cpu_profile();
-    fmt_printf_v("cpu profile written: %t\n", bytes_buffer_len(&buf) > 0);
+    fmt_printf_v("cpu profile written: %t\n", (bool)(bytes_buffer_len(&buf) > 0));
 }
 ```
 

@@ -32,6 +32,7 @@ category	marker	An address that exists to be unique. Never read through, never w
 category	fatal-handler	Where an unrecoverable runtime failure goes before the process ends.
 category	rand	The generator behind map iteration order and hash seeding.
 category	atomic-lock-table	The spin locks that stand in for 64 bit atomics on machines that do not have them.
+category	cpu-profile	The CPU profiler's log and the timer behind it. The timer is one per process, setitimer's ITIMER_PROF, so the log it feeds is one per process too, as Go's cpuprof is.
 category	sema-table	The wait queues behind sync, keyed on the address of the counter being waited on, which is what makes them one per process by definition.
 category	futex	The wait queues that stand in for a futex on the platforms that have no such call, keyed on the address being waited on, which is what makes them one per process by definition.
 category	reclaim	The epoch and the handover lists behind lock free reading. One epoch per process is the whole idea, since a reader on any thread has to be able to hold any of them back.
@@ -69,6 +70,7 @@ global	src/debug/pprof.c	ppr_goroutine_profile	package-vars	Go's goroutineProfil
 global	src/debug/pprof.c	ppr_threadcreate_profile	package-vars	Go's threadcreateProfile, a built-in profile. Its count and write functions never change and its mutex is the only part written, by pprof_profile_count.
 global	src/debug/pprof.c	ppr_profiles	package-vars	Go's profiles.m, every profile NewProfile has made, by name. Made on first use and only read or written with ppr_profiles_mu held.
 global	src/debug/pprof.c	ppr_profiles_mu	package-vars	Go's profiles.mu, the lock for ppr_profiles. Zero is an unlocked mutex, so it needs no setting up.
+global	src/debug/pprof.c	ppr_cpu	package-vars	Go's cpu, whether a CPU profile is running and the channel its writer says it is done on. Only read or written with ppr_cpu.mu held, which pprof_stop_cpu_profile holds until the writer has said so.
 global	src/go/types_universe.c	gt_all_term	tables	The term for all types. Initialised in place and never written.
 global	src/go/types_universe.c	gt_all_terms	tables	The termlist of all types, which holds gt_all_term. Initialised in place and never written.
 global	src/go/types_universe.c	gt_byte	tables	The byte alias of uint8. Initialised in place and never written.
@@ -113,6 +115,11 @@ global	src/runtime/stack.c	current	scheduler	Thread local. Written by whoever sw
 global	src/runtime/panic.c	fatal_handler	fatal-handler	Written once during startup and read on the way out. Becomes an atomic load when sync/atomic lands, which weakens the contract rather than changing any caller.
 global	src/runtime/rand.c	rand_state	rand	Thread local, which is what makes it lock free. A shared generator would be a place for two goroutines to contend over bits neither of them cares about.
 global	src/runtime/atomic64.c	atomic64_locks	atomic-lock-table	This is the synchronisation. A table of spin locks, one taken for the duration of each 64 bit operation, chosen by hashing the address so that unrelated counters rarely meet.
+global	src/runtime/atomic64.c	atomic64_depth	atomic-lock-table	Thread local. How many slots of the table this thread holds or is waiting for, read by a profiling signal on the same thread to stay out of the table while it is in use.
+global	src/runtime/cpuprof.c	cpuprof	cpu-profile	Go's cpuprof. on and log are only touched with its lock held. extra, num_extra and lost_extra are only touched with prof_signal_lock held, which the signal handler takes too, and lost_atomic is an atomic because the handler adds to it without either lock.
+global	src/runtime/cpuprof.c	prof_signal_lock	cpu-profile	Go's prof.signalLock, a spin lock taken with a compare and swap by the SIGPROF handler and by whoever changes the rate. The rate changer blocks SIGPROF on its own thread first, so a handler never spins on a lock its own thread holds.
+global	src/runtime/cpuprof.c	prof_hz	cpu-profile	Go's prof.hz, the rate the profile runs at, or zero. Written with a release store while prof_signal_lock is held and read with relaxed loads by the handler, which checks it again under the lock before it writes.
+global	src/runtime/cpuprof.c	prof_handler_installed	cpu-profile	Whether the SIGPROF handler is in, set by a compare and swap the first time a rate is set and never cleared, except when the install fails.
 global	src/runtime/sema.c	semtable	sema-table	251 roots, each with its own lock and each holding the waiters for every address that hashed to it. A waiter is on exactly one root and every read and write of a root happens under that root's lock, except the waiter count, which is atomic so that an uncontended release can skip the lock entirely.
 global	src/runtime/sched.c	sched	scheduler	The scheduler itself, which is one per process because a second one would be a second set of threads fighting the first over the same cores. Every field is either under sched.lock or an atomic, and the comment on each one says which.
 global	src/runtime/sched.c	allp	scheduler	The Ps, a fixed array rather than an allocation so that the scheduler has nothing underneath it that can fail. A P is owned by at most one M at a time and that ownership is what makes its ring safe to touch.

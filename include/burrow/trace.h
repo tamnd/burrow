@@ -111,6 +111,16 @@ Int burrow__callers(void *from, Int skip, Uintptr *pcs, Int max);
  * that switch leaves a frame this knows how to read. */
 Int burrow__callers_saved(void *sp, void *lo, void *hi, Uintptr *pcs, Int max);
 
+/* The stack a signal interrupted, from the pc and frame pointer
+ * pal_signal_context_pc_fp read out of its context. pcs[0] is pc plus one, so
+ * that it can be symbolised like the return addresses that follow it, and
+ * those are the walk up from fp, which only happens when fp is between lo and
+ * hi. For the CPU profiler's signal handler: it touches nothing but that stack
+ * and asks nobody for its bounds. Answers zero for a zero pc and one where
+ * there is no walk, which is Windows and every machine but amd64, arm64 and 386. */
+Int burrow__callers_from(Uintptr pc, void *fp, void *lo, void *hi, Uintptr *pcs,
+                         Int max);
+
 /* How many frames burrow collects when it prints a trace of its own.
  *
  * Go stops at a hundred and says how many it dropped. Sixty four is the same

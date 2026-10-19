@@ -106,6 +106,20 @@ const void *pal_signal_fault_addr(const void *info) {
     return NULL;
 }
 
+bool pal_signal_context_pc_fp(const void *ctx, uintptr_t *pc, uintptr_t *fp) {
+    (void)ctx;
+    *pc = 0;
+    *fp = 0;
+    return false;
+}
+
+bool pal_profile_timer(int32_t hz, PalErrno *err) {
+    /* No timers that interrupt anything, and no handlers for them to call. */
+    (void)hz;
+    BURROW_OUT(err, PAL_ENOTSUP);
+    return false;
+}
+
 bool pal_signal_relay_init(PalSignalRelay send, PalErrno *err) {
     (void)send;
     BURROW_OUT(err, PAL_OK);

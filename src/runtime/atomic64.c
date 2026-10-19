@@ -40,6 +40,18 @@ typedef struct {
 
 static Atomic64Slot atomic64_locks[NSLOTS];
 
+/* How many slots this thread holds or is spinning for. A profiling signal that
+ * lands while it is not zero must not touch a 64 bit atomic, because the slot it
+ * hashes to may be the one the interrupted code is holding, and the handler
+ * would spin for ever on a lock that cannot be let go until it returns. Go has
+ * the same problem on its 32 bit machines and counts those samples as lost,
+ * which is what burrow__atomic64_locked_here is for.
+ *
+ * Raised before the slot is tried and lowered after it is let go, with read
+ * modify writes that keep the compiler from moving the lock across them, so
+ * there is no moment the slot is held and this says it is not. */
+static BURROW_THREAD_LOCAL uint32_t atomic64_depth;
+
 /* Shifted by three because a uint64_t is eight byte aligned when anybody has
  * been careful, so the low three bits carry no information and hashing on them
  * would waste most of the table. */
@@ -49,6 +61,7 @@ static Atomic64Slot *slot_for(const void *p) {
 }
 
 static void lock(Atomic64Slot *s) {
+    (void)burrow__atomic_add_u32(&atomic64_depth, 1);
     for (;;) {
         uint32_t free_ = 0;
         if (burrow__atomic_cas_acquire_u32(&s->held, &free_, 1))
@@ -60,6 +73,11 @@ static void lock(Atomic64Slot *s) {
 
 static void unlock(Atomic64Slot *s) {
     burrow__atomic_store_release_u32(&s->held, 0);
+    (void)burrow__atomic_add_u32(&atomic64_depth, 0U - 1U);
+}
+
+bool burrow__atomic64_locked_here(void) {
+    return burrow__atomic_load_relaxed_u32(&atomic64_depth) != 0;
 }
 
 uint64_t burrow__atomic64_load(const uint64_t *p) {

@@ -11,6 +11,7 @@
 
 #include "pprof_internal.h"
 
+#include "burrow/chan.h"
 #include "burrow/context.h"
 #include "burrow/core.h"
 #include "burrow/declare.h"
@@ -25,6 +26,7 @@
 #include "burrow/mem/heap.h"
 #include "burrow/panic.h"
 #include "burrow/proc.h"
+#include "burrow/profbuf.h"
 #include "burrow/runtime.h"
 #include "burrow/sched.h"
 #include "burrow/slice.h"
@@ -32,6 +34,7 @@
 #include "burrow/strings.h"
 #include "burrow/sync.h"
 #include "burrow/text/tabwriter.h"
+#include "burrow/time.h"
 #include "burrow/trace.h"
 #include "burrow/type.h"
 
@@ -853,4 +856,114 @@ static Error ppr_write_goroutine(IoWriter w, Int debug) {
     if (debug >= 2)
         return ppr_write_goroutine_stacks(w);
     return ppr_write_runtime_profile(w, debug, S_("goroutine"), ppr_fetch_goroutines);
+}
+
+/* -------------------------------------------------------------------- cpu */
+
+typedef struct PprCpu {
+    SyncMutex mu;
+    bool profiling;
+    Chan *done; /* of bool */
+} PprCpu;
+
+static PprCpu ppr_cpu;
+
+BURROW_SENTINEL_ERROR(ppr_err_cpu_in_use, "cpu profiling already in use");
+
+/* Not in Go, which ends the program when it cannot start a goroutine. */
+BURROW_SENTINEL_ERROR(ppr_err_cpu_no_writer, "cpu profiling: cannot start the writer");
+
+typedef struct PprCpuWriter {
+    IoWriter w;
+} PprCpuWriter;
+
+static void ppr_profile_writer(void *env) {
+    PprCpuWriter *pw = (PprCpuWriter *)env;
+    PprBuilder *b = burrow__ppr_new_builder(pw->w);
+    mem_free(heap_allocator(), pw, sizeof *pw, _Alignof(PprCpuWriter));
+    Error err = BURROW_NO_ERROR;
+    for (;;) {
+        /* Go sleeps here only on darwin and ios, where its read cannot block.
+         * burrow__read_cpu_profile never blocks, so this sleeps everywhere. */
+        time_sleep(100 * TIME_MILLISECOND);
+        burrow__ProfBufRead r = burrow__read_cpu_profile();
+        Slice data =
+            slice_from((void *)(uintptr_t)r.data, r.ndata, r.ndata, TYPE_UINT64);
+        Slice tags = slice_from((void *)(uintptr_t)r.tags, r.ntags, r.ntags,
+                                TYPE_UNSAFE_POINTER);
+        Error e = burrow__ppr_add_cpu_data(b, data, tags);
+        if (BURROW_FAILED(e) && BURROW_OK(err))
+            err = e;
+        if (r.eof)
+            break;
+    }
+    if (BURROW_FAILED(err)) {
+        /* The runtime should never produce an invalid or truncated profile.
+         * It drops records that can't fit into its log buffers. */
+        burrow__ppr_builder_free(b);
+        ppr_panic_name("runtime/pprof: converting profile: ", error_text(err));
+    }
+    (void)burrow__ppr_build(b);
+    bool done = true;
+    chan_send(ppr_cpu.done, &done);
+}
+
+Error pprof_start_cpu_profile(IoWriter w) {
+    /* The runtime routines allow a variable profiling rate, but in practice
+     * operating systems cannot trigger signals at more than about 500 Hz, and
+     * our processing of the signal is not cheap (mostly getting the stack
+     * trace). 100 Hz is a reasonable choice: it is frequent enough to produce
+     * useful data, rare enough not to bog down the system, and a nice round
+     * number to make it easy to convert sample counts to seconds. Instead of
+     * requiring each client to specify the frequency, we hard code it. */
+    enum { hz = 100 };
+
+    sync_mutex_lock(&ppr_cpu.mu);
+    if (ppr_cpu.done == NULL) {
+        ppr_cpu.done = chan_make(heap_allocator(), TYPE_BOOL, 0);
+        if (ppr_cpu.done == NULL) {
+            sync_mutex_unlock(&ppr_cpu.mu);
+            ppr_out_of_memory();
+        }
+    }
+    /* Double-check. */
+    if (ppr_cpu.profiling) {
+        sync_mutex_unlock(&ppr_cpu.mu);
+        return ppr_err_cpu_in_use;
+    }
+    PprCpuWriter *pw =
+        (PprCpuWriter *)mem_alloc(heap_allocator(), sizeof *pw, _Alignof(PprCpuWriter));
+    if (pw == NULL) {
+        sync_mutex_unlock(&ppr_cpu.mu);
+        ppr_out_of_memory();
+    }
+    pw->w = w;
+    ppr_cpu.profiling = true;
+    runtime_set_cpu_profile_rate(hz);
+    if (!go(BURROW_FN(Func, ppr_profile_writer, pw))) {
+        /* Not in Go. Stop the profile again and read the log to its end, which
+         * is what lets the runtime free it. */
+        runtime_set_cpu_profile_rate(0);
+        while (!burrow__read_cpu_profile().eof) {
+        }
+        mem_free(heap_allocator(), pw, sizeof *pw, _Alignof(PprCpuWriter));
+        ppr_cpu.profiling = false;
+        sync_mutex_unlock(&ppr_cpu.mu);
+        return ppr_err_cpu_no_writer;
+    }
+    sync_mutex_unlock(&ppr_cpu.mu);
+    return BURROW_NO_ERROR;
+}
+
+void pprof_stop_cpu_profile(void) {
+    sync_mutex_lock(&ppr_cpu.mu);
+    if (!ppr_cpu.profiling) {
+        sync_mutex_unlock(&ppr_cpu.mu);
+        return;
+    }
+    ppr_cpu.profiling = false;
+    runtime_set_cpu_profile_rate(0);
+    bool done;
+    (void)chan_recv(ppr_cpu.done, &done);
+    sync_mutex_unlock(&ppr_cpu.mu);
 }

@@ -10,10 +10,13 @@
 
 #include "../src/debug/pprof_internal.h"
 #include "../src/debug/pprof_profile.h"
+#include "../src/hash/internal.h"
+#include "../src/strings/bytealg.h"
 #include "burrow/burrow.h"
 #include "burrow/bytes.h"
 #include "burrow/chan.h"
 #include "burrow/context.h"
+#include "burrow/math/big.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
 #include "burrow/os.h"
@@ -803,13 +806,16 @@ static void TestEmptyStack(TestingT *t) {
 
 /* ------------------------------------------------------------ pprof_test.go */
 
-static void TestEmptyCallStack(TestingT *t) {
-    Str name = S("test18836_0");
+static Int empty_call_stack_test_run;
 
-    testing_t_parallel(t);
+static void TestEmptyCallStack(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
+    Str name = fmt_sprintf_v(a, "test18836_%d", empty_call_stack_test_run);
+    empty_call_stack_test_run++;
+
+    testing_t_parallel(t);
     StringsBuilder buf = STRINGS_BUILDER(a);
     PprofProfile *p = pprof_new_profile(name);
 
@@ -862,9 +868,14 @@ static void TestProfileWriteTo(TestingT *t) {
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
 
-    PprofProfile *p = pprof_new_profile(S("burrow.test/writeto"));
-    if (pprof_lookup(S("burrow.test/writeto")) != p)
-        testing_t_errorf_v(t, "Lookup did not find the new profile");
+    /* A run after the first, under -test.count, finds the profile already
+     * there, emptied by the run before. */
+    PprofProfile *p = pprof_lookup(S("burrow.test/writeto"));
+    if (p == NULL) {
+        p = pprof_new_profile(S("burrow.test/writeto"));
+        if (pprof_lookup(S("burrow.test/writeto")) != p)
+            testing_t_errorf_v(t, "Lookup did not find the new profile");
+    }
     Int vals[] = {1, 2, 3};
     add_here(p, &vals[0]);
     /* One call site for both, since a compiler can make each call to add_there
@@ -1137,6 +1148,480 @@ static void TestGoroutineCounts(TestingT *t) {
     arena_free(&ar);
 }
 
+/* ----------------------------------------------------------- cpu profile */
+
+/* Not in Go: the places the profiler has nothing to sample with. Windows and
+ * wasip1 have no SIGPROF, and outside amd64, arm64 and 386 the handler cannot
+ * read the interrupted pc, so every sample would be burrow__prof_system. */
+#if defined(BURROW_OS_WINDOWS) || defined(BURROW_OS_WASI) ||                           \
+    !(defined(BURROW_ARCH_AMD64) || defined(BURROW_ARCH_ARM64) ||                      \
+      defined(BURROW_ARCH_386))
+#define NO_CPU_SAMPLES 1
+#endif
+
+static void cpu_hogger(Int (*f)(Int x), Int *y, Duration dur) {
+    /* We only need to get one 100 Hz clock tick, so we've got a large safety
+     * buffer. But do at least 500 iterations (which should take about 100ms),
+     * otherwise TestCPUProfileMultithreaded can fail if only one thread is
+     * scheduled during the testing period. */
+    Time t0 = time_now();
+    Int accum = *y;
+    for (Int i = 0; i < 500 || time_since(t0) < dur; i++)
+        accum = f(accum);
+    *y = accum;
+}
+
+static Int salt1 = 0;
+static Int salt2 = 0;
+
+/* Not in Go. Go's hogs are functions of the test, and the profile finds them by
+ * name. The symbol table here names the library's global functions and nothing
+ * in a test, so each hog spends its time in one of those instead, called from
+ * another file so that it can't be inlined, and the profile looks for that. */
+static const Byte hog_data[1 << 16] = {1};
+
+/* The actual CPU hogging function. */
+static Int cpu_hog1(Int x) {
+    return x + (Int)burrow__adler32_update((uint32_t)x, hog_data, (Int)sizeof hog_data);
+}
+
+static Int cpu_hog2(Int x) {
+    Str s = {hog_data, (Int)sizeof hog_data};
+    return x + burrow__bytealg_count(s, (Byte)x);
+}
+
+/* Go's sampleMatchFunc. */
+typedef bool (*SampleMatchFunc)(Str spec, uint64_t count, Slice stk, Slice labels);
+
+/* What Go's matchAndAvoidStacks closes over. Go's avoidFunctions is empty
+ * except for gccgo, so there is nothing to avoid. */
+typedef struct ProfileMatch {
+    SampleMatchFunc matches;
+    const char *const *need;
+    Int nneed;
+} ProfileMatch;
+
+static Str location_name(const PfLocation *loc) {
+    if (loc->line.len == 0)
+        return BURROW_STR_EMPTY;
+    const PfLine *line = (const PfLine *)loc->line.p;
+    return line[0].function != NULL ? line[0].function->name : BURROW_STR_EMPTY;
+}
+
+static PfProfile *parse_profile(TestingT *t, Alloc *a, BytesBuffer *val_bytes,
+                                void (*f)(void *env, uint64_t count, Slice stk,
+                                          Slice labels),
+                                void *env) {
+    Error err = BURROW_NO_ERROR;
+    PfProfile *p = burrow__pf_parse(a, bytes_buffer_as_io_reader(val_bytes), &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    PfSample **ps = (PfSample **)p->sample.p;
+    for (Int i = 0; i < p->sample.len; i++) {
+        uint64_t count = (uint64_t)((const int64_t *)ps[i]->value.p)[0];
+        f(env, count, ps[i]->location, ps[i]->label);
+    }
+    return p;
+}
+
+/* stackContains matches if a function named spec appears anywhere in the stack
+ * trace. */
+static bool stack_contains(Str spec, uint64_t count, Slice stk, Slice labels) {
+    (void)count;
+    (void)labels;
+    PfLocation **locs = (PfLocation **)stk.p;
+    for (Int i = 0; i < stk.len; i++) {
+        const PfLine *lines = (const PfLine *)locs[i]->line.p;
+        for (Int j = 0; j < locs[i]->line.len; j++) {
+            if (lines[j].function != NULL &&
+                strings_contains(lines[j].function->name, spec))
+                return true;
+        }
+    }
+    return false;
+}
+
+static bool stack_contains_labeled(Str spec, uint64_t count, Slice stk, Slice labels) {
+    Str kv;
+    bool ok;
+    Str base = strings_cut(spec, S(";"), &kv, &ok);
+    if (!ok)
+        panic_str(S("no semicolon in key/value spec"));
+    Str v;
+    Str k = strings_cut(kv, S("="), &v, &ok);
+    if (!ok)
+        panic_str(S("missing = in key/value spec"));
+    PfStrLabels *l = burrow__pf_labels_get(labels, k);
+    bool have = false;
+    for (Int i = 0; l != NULL && i < l->values.len; i++)
+        have = have || str_eq(((const Str *)l->values.p)[i], v);
+    if (!have)
+        return false;
+    return stack_contains(base, count, stk, labels);
+}
+
+static void fprint_stack(Alloc *a, StringsBuilder *w, Slice stk) {
+    IoWriter out = strings_builder_as_io_writer(w);
+    if (stk.len == 0)
+        fmt_fprintf_v(out, " (stack empty)");
+    PfLocation **locs = (PfLocation **)stk.p;
+    for (Int i = 0; i < stk.len; i++) {
+        fmt_fprintf_v(out, " %#x", locs[i]->address);
+        fmt_fprintf_v(out, " (");
+        const PfLine *lines = (const PfLine *)locs[i]->line.p;
+        for (Int j = 0; j < locs[i]->line.len; j++) {
+            if (j > 0)
+                fmt_fprintf_v(out, " ");
+            Str name =
+                lines[j].function != NULL ? lines[j].function->name : BURROW_STR_EMPTY;
+            fmt_fprintf_v(out, "%s:%d", name, lines[j].line);
+        }
+        fmt_fprintf_v(out, ")");
+    }
+    (void)a;
+}
+
+typedef struct ProfileSamples {
+    Alloc *a;
+    StringsBuilder buf;
+    uint64_t samples;
+} ProfileSamples;
+
+static void count_sample(void *env, uint64_t count, Slice stk, Slice labels) {
+    ProfileSamples *s = (ProfileSamples *)env;
+    IoWriter out = strings_builder_as_io_writer(&s->buf);
+    fmt_fprintf_v(out, "%d:", count);
+    fprint_stack(s->a, &s->buf, stk);
+    PfStrLabels **ls = (PfStrLabels **)labels.p;
+    fmt_fprintf_v(out, " labels: map[");
+    for (Int i = 0; i < labels.len; i++)
+        fmt_fprintf_v(out, i > 0 ? " %s:%v" : "%s:%v", ls[i]->key, ls[i]->values);
+    fmt_fprintf_v(out, "]\n");
+    s->samples += count;
+    fmt_fprintf_v(out, "\n");
+}
+
+static bool match_and_avoid_stacks(TestingT *t, Alloc *a, const ProfileMatch *m,
+                                   PfProfile *p) {
+    bool ok = true;
+
+    /* Check that profile is well formed and contains 'need'. */
+    uint64_t *have = (uint64_t *)mem_alloc_array(
+        a, (size_t)(m->nneed > 0 ? m->nneed : 1), sizeof(uint64_t), _Alignof(uint64_t));
+    for (Int i = 0; i < m->nneed; i++)
+        have[i] = 0;
+
+    PfSample **ps = (PfSample **)p->sample.p;
+    for (Int s = 0; s < p->sample.len; s++) {
+        uint64_t count = (uint64_t)((const int64_t *)ps[s]->value.p)[0];
+        for (Int i = 0; i < m->nneed; i++) {
+            if (m->matches(str_from_cstr(m->need[i]), count, ps[s]->location,
+                           ps[s]->label))
+                have[i] += count;
+        }
+    }
+
+    if (m->nneed == 0)
+        return ok;
+
+    uint64_t total = 0;
+    for (Int i = 0; i < m->nneed; i++) {
+        total += have[i];
+        testing_t_logf_v(t, "found %d samples in expected function %s\n", have[i],
+                         m->need[i]);
+    }
+    if (total == 0) {
+        testing_t_logf_v(t, "no samples in expected functions");
+        ok = false;
+    }
+
+    /* We'd like to check a reasonable minimum, like total / len(have) /
+     * smallconstant, but this test is pretty flaky (see bug 7095). So we'll
+     * just test to make sure we got at least one sample. */
+    uint64_t min = 1;
+    for (Int i = 0; i < m->nneed; i++) {
+        if (have[i] < min) {
+            testing_t_logf_v(
+                t, "%s has %d samples out of %d, want at least %d, ideally %d",
+                m->need[i], have[i], total, min, total / (uint64_t)m->nneed);
+            ok = false;
+        }
+    }
+    return ok;
+}
+
+static bool profile_ok(TestingT *t, Alloc *a, const ProfileMatch *matches,
+                       BytesBuffer *prof, Duration duration, PfProfile **out) {
+    bool ok = true;
+
+    ProfileSamples s = {a, STRINGS_BUILDER(a), 0};
+    PfProfile *p = parse_profile(t, a, prof, count_sample, &s);
+    testing_t_logf_v(t, "total %d CPU profile samples collected:\n%s", s.samples,
+                     strings_builder_string(&s.buf));
+    *out = p;
+
+    /* Check that we got a reasonable number of samples. We used to always
+     * require at least ideal/4 samples, but that is too hard to guarantee on a
+     * loaded system. Now we accept 10 or more samples, which we take to be
+     * enough to show that at least some profiling is occurring. */
+    uint64_t ideal = (uint64_t)(duration * 100 / TIME_SECOND);
+    if (s.samples == 0 || (s.samples < ideal / 4 && s.samples < 10)) {
+        testing_t_logf_v(t, "too few samples; got %d, want at least %d, ideally %d",
+                         s.samples, ideal / 4, ideal);
+        ok = false;
+    }
+
+    if (matches != NULL && !match_and_avoid_stacks(t, a, matches, p))
+        ok = false;
+
+    return ok;
+}
+
+/* testCPUProfile runs f under the CPU profiler, checking for some conditions
+ * specified by need, as interpreted by matches, and returns the parsed
+ * profile. */
+static PfProfile *test_cpu_profile(TestingT *t, Alloc *a, const ProfileMatch *matches,
+                                   void (*f)(void *env, Duration dur), void *env) {
+#if defined(NO_CPU_SAMPLES)
+    testing_t_skip_v(t, "no CPU profile samples on this platform");
+#endif
+#if BURROW_TSAN
+    /* Not in Go. The thread sanitizer's checks, which the hogs call on every
+     * byte they read, keep no frame pointer, so a sample taken in one walks
+     * straight past the function the test is looking for. */
+    testing_t_skip_v(t, "the thread sanitizer hides the function being sampled");
+#endif
+    int64_t deadline;
+    if (!testing_t_deadline(t, &deadline))
+        deadline = burrow_nanotime() + 10 * TIME_SECOND;
+
+    /* If we're running a long test, start with a long duration for tests that
+     * try to make sure something *doesn't* happen. */
+    Duration duration = 5 * TIME_SECOND;
+    if (testing_short())
+        duration = 100 * TIME_MILLISECOND;
+
+    /* Profiling tests are inherently flaky, especially on a loaded system, such
+     * as when this test is running with several others under go test std. If a
+     * test fails in a way that could mean it just didn't run long enough, try
+     * with a longer duration. */
+    for (;;) {
+        /* Not in Go. The profile is written from another goroutine while f
+         * runs, and f may allocate from a, so the buffer has an arena of its
+         * own. */
+        Arena par;
+        arena_init(&par, NULL, 0);
+        BytesBuffer prof = BYTES_BUFFER(arena_allocator(&par));
+        Error err = pprof_start_cpu_profile(bytes_buffer_as_io_writer(&prof));
+        if (BURROW_FAILED(err))
+            testing_t_fatal_v(t, err);
+        f(env, duration);
+        pprof_stop_cpu_profile();
+
+        PfProfile *p;
+        bool ok = profile_ok(t, a, matches, &prof, duration, &p);
+        arena_free(&par);
+        if (ok)
+            return p;
+
+        duration *= 2;
+        if (deadline - burrow_nanotime() < duration)
+            break;
+        testing_t_logf_v(t, "retrying with %s duration", duration_string(duration, a));
+    }
+
+    /* Ignore the failure if the tests are running in a QEMU-based emulator,
+     * QEMU is not perfect at emulating everything. IN_QEMU environmental
+     * variable is set by some of the Go builders. IN_QEMU=1 indicates that the
+     * tests are running in QEMU. See issue 9605. */
+    if (str_eq(os_getenv(a, S("IN_QEMU")), S("1")))
+        testing_t_skip_v(t, "ignore the failure in QEMU; see golang.org/issue/9605");
+    testing_t_fail_now(t);
+}
+
+static void hog_salt1(void *env, Duration dur) {
+    (void)env;
+    cpu_hogger(cpu_hog1, &salt1, dur);
+}
+
+static void TestCPUProfile(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    static const char *const need[] = {"burrow__adler32_update"};
+    ProfileMatch matches = {stack_contains, need, 1};
+    (void)test_cpu_profile(t, a, &matches, hog_salt1, NULL);
+    arena_free(&ar);
+}
+
+typedef struct HogEnv {
+    Duration dur;
+    Chan *c;
+} HogEnv;
+
+static void hog1_then_send(void *env) {
+    HogEnv *h = (HogEnv *)env;
+    cpu_hogger(cpu_hog1, &salt1, h->dur);
+    Int one = 1;
+    chan_send(h->c, &one);
+}
+
+static void hog_both(void *env, Duration dur) {
+    HogEnv h = {dur, chan_make(heap_allocator(), TYPE_INT, 0)};
+    if (h.c == NULL || !go(BURROW_FN(Func, hog1_then_send, &h)))
+        panic_str(S("cannot start the second hog"));
+    cpu_hogger(cpu_hog2, &salt2, dur);
+    Int v;
+    (void)chan_recv(h.c, &v);
+    chan_free(h.c);
+    (void)env;
+}
+
+static void TestCPUProfileMultithreaded(TestingT *t) {
+    int procs = runtime_gomaxprocs(2);
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    static const char *const need[] = {"burrow__adler32_update",
+                                       "burrow__bytealg_count"};
+    ProfileMatch matches = {stack_contains, need, 2};
+    (void)test_cpu_profile(t, a, &matches, hog_both, NULL);
+    arena_free(&ar);
+    (void)runtime_gomaxprocs(procs);
+}
+
+typedef struct SwitchCheck {
+    TestingT *t;
+    Alloc *a;
+} SwitchCheck;
+
+static void check_no_switch(void *env, uint64_t count, Slice stk, Slice labels) {
+    SwitchCheck *c = (SwitchCheck *)env;
+    (void)count;
+    (void)labels;
+    PfLocation **locs = (PfLocation **)stk.p;
+
+    /* An entry with two frames with 'System' in its top frame exists to record
+     * a PC without a traceback. Those are okay. */
+    if (stk.len == 2) {
+        Str name = location_name(locs[1]);
+        if (str_eq(name, S("burrow__prof_system")) ||
+            str_eq(name, S("burrow__prof_external_code")))
+            return;
+    }
+
+    /* An entry with just one frame is OK too: it knew to stop at gogo. */
+    if (stk.len == 1)
+        return;
+
+    /* Otherwise, should not see gogo. The place we'd see it would be the inner
+     * most frame. Go's gogo is burrow__mcontext_switch_raw here, the part that
+     * changes stacks. */
+    if (stk.len > 0 &&
+        str_eq(location_name(locs[0]), S("burrow__mcontext_switch_raw"))) {
+        StringsBuilder buf = STRINGS_BUILDER(c->a);
+        fprint_stack(c->a, &buf, stk);
+        testing_t_fatalf_v(c->t, "found profile entry for gogo:\n%s",
+                           strings_builder_string(&buf));
+    }
+}
+
+/* Test that profiler does not observe runtime.gogo as "user" goroutine
+ * execution. If it did, it would see inconsistent state and would either record
+ * an incorrect stack or crash because the stack was malformed. */
+static void TestGoroutineSwitch(TestingT *t) {
+#if defined(NO_CPU_SAMPLES)
+    testing_t_skip_v(t, "no CPU profile samples on this platform");
+#endif
+    /* How much to try. These defaults take about 1 seconds on a 2012 MacBook
+     * Pro. The ones in short mode take about 0.1 seconds. */
+    int tries = 10;
+    Int count = 1000000;
+    if (testing_short())
+        tries = 1;
+    for (int try_ = 0; try_ < tries; try_++) {
+        Arena ar;
+        arena_init(&ar, NULL, 0);
+        Alloc *a = arena_allocator(&ar);
+        BytesBuffer prof = BYTES_BUFFER(a);
+        Error err = pprof_start_cpu_profile(bytes_buffer_as_io_writer(&prof));
+        if (BURROW_FAILED(err))
+            testing_t_fatal_v(t, err);
+        for (Int i = 0; i < count; i++)
+            runtime_gosched();
+        pprof_stop_cpu_profile();
+
+        /* Read profile to look for entries for gogo with an attempt at a
+         * traceback. */
+        SwitchCheck c = {t, a};
+        (void)parse_profile(t, a, &prof, check_no_switch, &c);
+        arena_free(&ar);
+    }
+}
+
+static void big_divide(void *env, Duration duration) {
+    (void)env;
+    Alloc *heap = heap_allocator();
+    Chan *t = time_after_chan(heap, duration);
+    if (t == NULL)
+        panic_str(S("out of memory"));
+    BigInt pi = BIG_INT(heap);
+    for (;;) {
+        for (int i = 0; i < 100; i++) {
+            BigInt n = BIG_INT(heap);
+            BigInt d = BIG_INT(heap);
+            (void)big_int_set_int64(&n, 2646693125139304345);
+            (void)big_int_set_int64(&d, 842468587426513207);
+            (void)big_int_div(&pi, &n, &d);
+            big_int_free(&n);
+            big_int_free(&d);
+        }
+        Time tm;
+        bool ok;
+        if (chan_try_recv(t, &tm, &ok))
+            break;
+    }
+    big_int_free(&pi);
+    chan_free(t);
+}
+
+/* Test that profiling of division operations is okay, especially on ARM. See
+ * issue 6681. */
+static void TestMathBigDivide(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    (void)test_cpu_profile(t, arena_allocator(&ar), NULL, big_divide, NULL);
+    arena_free(&ar);
+}
+
+static void hog_labelled(void *env, Context ctx) {
+    (void)ctx;
+    cpu_hogger(cpu_hog1, &salt1, *(const Duration *)env);
+}
+
+typedef struct LabelHog {
+    Alloc *a;
+} LabelHog;
+
+static void hog_with_label(void *env, Duration dur) {
+    LabelHog *h = (LabelHog *)env;
+    pprof_do(h->a, context_background(), pprof_labels_v(h->a, 2, S("key"), S("value")),
+             BURROW_FN(PprofDoFunc, hog_labelled, &dur));
+}
+
+static void TestCPUProfileLabel(TestingT *t) {
+    /* The label map goes into the profile as a pointer and is read when the
+     * profile is written, so it comes from an arena that lasts until then. */
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    static const char *const need[] = {"burrow__adler32_update;key=value"};
+    ProfileMatch matches = {stack_contains_labeled, need, 1};
+    LabelHog h = {a};
+    (void)test_cpu_profile(t, a, &matches, hog_with_label, &h);
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestContextLabels)                                                               \
     X(TestLabelMapStringer)                                                            \
@@ -1148,6 +1633,11 @@ static void TestGoroutineCounts(TestingT *t) {
     X(TestEmptyStack)                                                                  \
     X(TestEmptyCallStack)                                                              \
     X(TestProfileWriteTo)                                                              \
-    X(TestGoroutineCounts)
+    X(TestGoroutineCounts)                                                             \
+    X(TestCPUProfile)                                                                  \
+    X(TestCPUProfileMultithreaded)                                                     \
+    X(TestGoroutineSwitch)                                                             \
+    X(TestMathBigDivide)                                                               \
+    X(TestCPUProfileLabel)
 
 TESTING_MAIN(TESTS)

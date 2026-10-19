@@ -169,6 +169,25 @@ Int burrow__callers(void *from, Int skip, Uintptr *pcs, Int max) {
     return walk((void **)from, lo, hi, skip, pcs, 0, max);
 }
 
+/* The pc goes in one past itself, the way Go's tracebackPCs writes every frame,
+ * so that it reads like the return addresses after it and the one taken off
+ * when it is symbolised lands back on the instruction that was running.
+ *
+ * A signal that lands in a prologue, before the function has pushed its frame
+ * pointer, finds the caller's in the register, and the walk then starts one
+ * frame too far out and leaves the caller out. Go reads the frame sizes out of
+ * its tables to avoid that and burrow has no tables to read, so a sample there
+ * is a pc and its grandparents, which is what perf gives for the same code. */
+BURROW_NO_MSAN TRACE_NO_ASAN Int burrow__callers_from(Uintptr pc, void *fp, void *lo,
+                                                      void *hi, Uintptr *pcs, Int max) {
+    if (pc == 0 || pcs == NULL || max <= 0)
+        return 0;
+    pcs[0] = pc + 1;
+    if (lo == NULL || !readable(fp, lo, hi))
+        return 1;
+    return walk((void **)fp, lo, hi, 0, pcs, 1, max);
+}
+
 #if defined(BURROW_MCONTEXT_ASM)
 
 /* Where the switch in src/runtime/mcontext_amd64.c and mcontext_arm64.c leaves
@@ -305,6 +324,18 @@ Int burrow__callers(void *from, Int skip, Uintptr *pcs, Int max) {
 #endif
 
 #if defined(BURROW_OS_WINDOWS) || !defined(TRACE_FRAME_PAIR)
+
+/* Nothing to walk, for the same reasons as below, so the pc on its own. */
+Int burrow__callers_from(Uintptr pc, void *fp, void *lo, void *hi, Uintptr *pcs,
+                         Int max) {
+    (void)fp;
+    (void)lo;
+    (void)hi;
+    if (pc == 0 || pcs == NULL || max <= 0)
+        return 0;
+    pcs[0] = pc + 1;
+    return 1;
+}
 
 /* Windows switches with fibers, and the other architectures have no frame
  * layout here, so neither has a saved frame to start from. */

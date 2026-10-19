@@ -38,6 +38,13 @@
 #define MCONTEXT_AMD64_STR(x) MCONTEXT_AMD64_STR2(x)
 #define SYM(name) MCONTEXT_AMD64_STR(__USER_LABEL_PREFIX__) #name
 
+/* A label only this file can see, which has a different spelling on Mach-O. */
+#if defined(__APPLE__)
+#define LOCAL(name) "L" #name
+#else
+#define LOCAL(name) ".L" #name
+#endif
+
 /* The frame this builds and pops, measured from the saved stack pointer. Both
  * halves are in this file so the two can only disagree by somebody editing one
  * of them and not the other, which is the whole reason burrow__mcontext_make_asm
@@ -155,9 +162,31 @@ __asm__(
     "\t.cfi_adjust_cfa_offset -8\n"
     "\t.cfi_register %rip, %rdx\n"
     "\tjmp *%rdx\n"
+    LOCAL(switch_raw_end) ":\n"
     "\t.cfi_endproc\n"
 #if !defined(__APPLE__)
     "\t.size burrow__mcontext_switch_raw, . - burrow__mcontext_switch_raw\n"
+#endif
+
+/* const uint64_t burrow__mcontext_switch_raw_size
+ *
+ * How many bytes of code the switch is, for the CPU profiler to tell a pc in
+ * the middle of it, where the stack pointer and the frame pointer may belong to
+ * two different stacks. A difference of two labels in one section is a
+ * constant, so the word needs no relocation. */
+#if defined(__APPLE__)
+    "\t.section __TEXT,__const\n"
+#else
+    "\t.pushsection .rodata\n"
+#endif
+    "\t.globl " SYM(burrow__mcontext_switch_raw_size) "\n"
+    "\t.p2align 3\n"
+    SYM(burrow__mcontext_switch_raw_size) ":\n"
+    "\t.quad " LOCAL(switch_raw_end) " - " SYM(burrow__mcontext_switch_raw) "\n"
+#if defined(__APPLE__)
+    "\t.text\n"
+#else
+    "\t.popsection\n"
 #endif
 
 /* void *burrow__mcontext_make_asm(void *stack_top, burrow__MContext *self)

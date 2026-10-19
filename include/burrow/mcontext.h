@@ -283,6 +283,12 @@ void burrow__mcontext_free(burrow__MContext *ctx);
  * Call burrow__mcontext_switch below instead. */
 void burrow__mcontext_switch_raw(burrow__MContext *from, burrow__MContext *to);
 
+#if defined(BURROW_MCONTEXT_ASM)
+/* The size of burrow__mcontext_switch_raw in bytes, so a pc can be told to be in
+ * it. Defined by the assembly too. */
+extern const uint64_t burrow__mcontext_switch_raw_size;
+#endif
+
 /* The two halves of telling a sanitizer that a switch is about to happen and
  * that one has just happened. Leave is called on the old stack and enter on the
  * new one, and between them is the only place a thread is on neither.

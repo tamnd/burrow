@@ -360,6 +360,18 @@ bool runtime_frames_next(RuntimeFrames *it, RuntimeFrame *out);
  * may be the thread holding it. */
 Int runtime_stack(Slice buf, bool all);
 
+/* Go's runtime.SetCPUProfileRate: sample the program's stacks hz times a second
+ * of CPU time it uses, into the log pprof_start_cpu_profile reads. 0 or less
+ * turns the sampling off. While it is on the rate cannot be changed without
+ * turning it off first, and trying prints a line to stderr and does nothing.
+ *
+ * Most programs want pprof_start_cpu_profile instead, which calls this with
+ * 100 and writes what comes out as a profile.
+ *
+ * The timer is setitimer's ITIMER_PROF, so this is POSIX only. On Windows and
+ * wasip1 nothing interrupts the program, so the profile has no samples. */
+void runtime_set_cpu_profile_rate(Int hz);
+
 /* ------------------------------------------------------------------ random
  *
  * Sixty four random bits, from a generator seeded once per thread out of

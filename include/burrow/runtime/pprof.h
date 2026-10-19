@@ -26,8 +26,9 @@
  *     pprof_do(a, ctx, l, BURROW_FN(PprofDoFunc, work, env));
  *
  * Of the profiles Go's runtime fills in, "goroutine" and "threadcreate" are
- * here, and pprof_lookup says more. "heap", "allocs", "block", "mutex" and the
- * CPU profiler are not here yet.
+ * here, and pprof_lookup says more, and so is the CPU profiler, which
+ * pprof_start_cpu_profile starts. "heap", "allocs", "block" and "mutex" are not
+ * here yet.
  *
  * The stacks are what runtime_callers gives and the names are what
  * runtime_func_for_pc gives, so a static function shows up under the nearest
@@ -226,6 +227,31 @@ void pprof_profile_remove(PprofProfile *p, Any value);
  * goroutine stacks in the same form that a Go program uses when dying due to
  * an unrecovered panic. */
 BURROW_STATIC(ret) Error pprof_profile_write_to(PprofProfile *p, IoWriter w, Int debug);
+
+/* StartCPUProfile enables CPU profiling for the current process. While
+ * profiling, the profile will be buffered and written to w.
+ * StartCPUProfile returns an error if profiling is already enabled.
+ *
+ *     Error err = pprof_start_cpu_profile(w);
+ *     ...
+ *     pprof_stop_cpu_profile();
+ *
+ * The samples come from SIGPROF, a hundred a second of CPU time the process
+ * uses. The handler goes in the first time and stays, so a program that has its
+ * own SIGPROF handler loses it. On Windows and wasip1 there is no SIGPROF and
+ * the profile has no samples. A goroutine's stack is walked from where the
+ * signal stopped it, so it has every frame only where its frames have frame
+ * pointers. A sample taken while a thread is in the scheduler, or on a thread
+ * that is not running a goroutine, is the pc it stopped at and a frame named
+ * burrow__prof_system or burrow__prof_external_code.
+ *
+ * Must be called from a goroutine, since the profile is written by one. w is
+ * written from that goroutine until pprof_stop_cpu_profile returns. */
+BURROW_STATIC(ret) Error pprof_start_cpu_profile(IoWriter w);
+
+/* StopCPUProfile stops the current CPU profile, if any. StopCPUProfile only
+ * returns after all the writes for the profile have completed. */
+void pprof_stop_cpu_profile(void);
 
 #ifdef __cplusplus
 }

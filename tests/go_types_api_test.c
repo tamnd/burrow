@@ -1186,6 +1186,404 @@ static void TestInstanceInfo(TestingT *t) {
     arena_free(&ar);
 }
 
+static const struct {
+    Str src;
+    Str obj;
+    Str want;
+} defs_tests[] = {
+    {S_("package p0; const x = 42"), S_("x"), S_("const p0.x untyped int")},
+    {S_("package p1; const x int = 42"), S_("x"), S_("const p1.x int")},
+    {S_("package p2; var x int"), S_("x"), S_("var p2.x int")},
+    {S_("package p3; type x int"), S_("x"), S_("type p3.x int")},
+    {S_("package p4; func f()"), S_("f"), S_("func p4.f()")},
+    {S_("package p5; func f() int { x, _ := 1, 2; return x }"), S_("_"),
+     S_("var _ int")},
+
+    /* Tests using generics. */
+    {S_("package g0; type x[T any] int"), S_("x"), S_("type g0.x[T any] int")},
+    {S_("package g1; func f[T any]() {}"), S_("f"), S_("func g1.f[T any]()")},
+    {S_("package g2; type x[T any] int; func (*x[_]) m() {}"), S_("m"),
+     S_("func (*g2.x[_]).m()")},
+
+    /* Type parameters in receiver type expressions are definitions. */
+    {S_("package r0; type T[_ any] int; func (T[P]) _() {}"), S_("P"),
+     S_("type parameter P any")},
+    {S_("package r1; type T[_, _ any] int; func (T[P, Q]) _() {}"), S_("P"),
+     S_("type parameter P any")},
+    {S_("package r2; type T[_, _ any] int; func (T[P, Q]) _() {}"), S_("Q"),
+     S_("type parameter Q any")},
+};
+
+/* object_string: Object.String, made in a. */
+static Str object_string(Alloc *a, TypesObject obj) {
+    return types_object_string(a, obj, TYPES_NO_QUALIFIER);
+}
+
+static void TestDefsInfo(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    for (Int i = 0; i < NELEM(defs_tests); i++) {
+        TypesInfo info = {0};
+        info.defs = new_objects_map(a);
+        Str name =
+            types_package_name(must_typecheck(a, defs_tests[i].src, NULL, &info));
+
+        /* find object */
+        TypesObject def = NULL;
+        const void *k;
+        void *v;
+        for (MapIter it = map_iter(info.defs); map_next(&it, &k, &v);) {
+            const AstIdent *id = *(AstIdent *const *)k;
+            if (str_eq(id->name, defs_tests[i].obj)) {
+                def = *(TypesObject *)v;
+                break;
+            }
+        }
+        if (def == NULL) {
+            testing_t_errorf_v(t, "package %s: %s not found", name, defs_tests[i].obj);
+            continue;
+        }
+
+        Str got = object_string(a, def);
+        if (!str_eq(got, defs_tests[i].want))
+            testing_t_errorf_v(t, "package %s: got %s; want %s", name, got,
+                               defs_tests[i].want);
+    }
+    arena_free(&ar);
+}
+
+static const struct {
+    Str src;
+    Str obj;
+    Str want;
+} uses_tests[] = {
+    {S_("package p0; func _() { _ = x }; const x = 42"), S_("x"),
+     S_("const p0.x untyped int")},
+    {S_("package p1; func _() { _ = x }; const x int = 42"), S_("x"),
+     S_("const p1.x int")},
+    {S_("package p2; func _() { _ = x }; var x int"), S_("x"), S_("var p2.x int")},
+    {S_("package p3; func _() { type _ x }; type x int"), S_("x"), S_("type p3.x int")},
+    {S_("package p4; func _() { _ = f }; func f()"), S_("f"), S_("func p4.f()")},
+
+    /* Tests using generics. */
+    {S_("package g0; func _[T any]() { _ = x }; const x = 42"), S_("x"),
+     S_("const g0.x untyped int")},
+    {S_("package g1; func _[T any](x T) { }"), S_("T"), S_("type parameter T any")},
+    {S_("package g2; type N[A any] int; var _ N[int]"), S_("N"),
+     S_("type g2.N[A any] int")},
+    {S_("package g3; type N[A any] int; func (N[_]) m() {}"), S_("N"),
+     S_("type g3.N[A any] int")},
+
+    /* Uses of fields are instantiated. */
+    {S_("package s1; type N[A any] struct{ a A }; var f = N[int]{}.a"), S_("a"),
+     S_("field a int")},
+    {S_("package s2; type N[A any] struct{ a A }; func (r N[B]) m(b B) { r.a = b }"),
+     S_("a"), S_("field a B")},
+
+    /* Uses of methods are uses of the instantiated method. */
+    {S_("package m0; type N[A any] int; func (r N[B]) m() { r.n() }; func (N[C]) n() "
+        "{}"),
+     S_("n"), S_("func (m0.N[B]).n()")},
+    {S_("package m1; type N[A any] int; func (r N[B]) m() { }; var f = N[int].m"),
+     S_("m"), S_("func (m1.N[int]).m()")},
+    {S_("package m2; func _[A any](v interface{ m() A }) { v.m() }"), S_("m"),
+     S_("func (interface).m() A")},
+    {S_("package m3; func f[A any]() interface{ m() A } { return nil }; var _ = "
+        "f[int]().m()"),
+     S_("m"), S_("func (interface).m() int")},
+    {S_("package m4; type T[A any] func() interface{ m() A }; var x T[int]; var y = "
+        "x().m"),
+     S_("m"), S_("func (interface).m() int")},
+    {S_("package m5; type T[A any] interface{ m() A }; func _[B any](t T[B]) { t.m() "
+        "}"),
+     S_("m"), S_("func (m5.T[B]).m() B")},
+    {S_("package m6; type T[A any] interface{ m() }; func _[B any](t T[B]) { t.m() }"),
+     S_("m"), S_("func (m6.T[B]).m()")},
+    {S_("package m7; type T[A any] interface{ m() A }; func _(t T[int]) { t.m() }"),
+     S_("m"), S_("func (m7.T[int]).m() int")},
+    {S_("package m8; type T[A any] interface{ m() }; func _(t T[int]) { t.m() }"),
+     S_("m"), S_("func (m8.T[int]).m()")},
+    {S_("package m9; type T[A any] interface{ m() }; func _(t T[int]) { _ = t.m }"),
+     S_("m"), S_("func (m9.T[int]).m()")},
+    {
+        S_("package m10; type E[A any] interface{ m() }; type T[B any] interface{ "
+           "E[B]; n() }; func _(t T[int]) { t.m() }"),
+        S_("m"),
+        S_("func (m10.E[int]).m()"),
+    },
+    {S_("package m11; type T[A any] interface{ m(); n() }; func _(t1 T[int], t2 "
+        "T[string]) { t1.m(); t2.n() }"),
+     S_("m"), S_("func (m11.T[int]).m()")},
+    {S_("package m12; type T[A any] interface{ m(); n() }; func _(t1 T[int], t2 "
+        "T[string]) { t1.m(); t2.n() }"),
+     S_("n"), S_("func (m12.T[string]).n()")},
+
+    /* For historic reasons, type parameters in receiver type expressions */
+    /* are considered both definitions and uses (see go.dev/issue/68670). */
+    {S_("package r0; type T[_ any] int; func (T[P]) _() {}"), S_("P"),
+     S_("type parameter P any")},
+    {S_("package r1; type T[_, _ any] int; func (T[P, Q]) _() {}"), S_("P"),
+     S_("type parameter P any")},
+    {S_("package r2; type T[_, _ any] int; func (T[P, Q]) _() {}"), S_("Q"),
+     S_("type parameter Q any")},
+};
+
+static void TestUsesInfo(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    for (Int i = 0; i < NELEM(uses_tests); i++) {
+        TypesInfo info = {0};
+        info.uses = new_objects_map(a);
+        Str name =
+            types_package_name(must_typecheck(a, uses_tests[i].src, NULL, &info));
+
+        /* find object */
+        TypesObject use = NULL;
+        const void *k;
+        void *v;
+        for (MapIter it = map_iter(info.uses); map_next(&it, &k, &v);) {
+            const AstIdent *id = *(AstIdent *const *)k;
+            if (str_eq(id->name, uses_tests[i].obj)) {
+                if (use != NULL)
+                    panic_str(fmt_sprintf_v(a, "multiple uses of %q", id->name));
+                use = *(TypesObject *)v;
+            }
+        }
+        if (use == NULL) {
+            testing_t_errorf_v(t, "package %s: %s not found", name, uses_tests[i].obj);
+            continue;
+        }
+
+        Str got = object_string(a, use);
+        if (!str_eq(got, uses_tests[i].want))
+            testing_t_errorf_v(t, "package %s: got %s; want %s", name, got,
+                               uses_tests[i].want);
+    }
+    arena_free(&ar);
+}
+
+/* must_func: obj.(*Func), which panics if obj is something else. */
+static TypesFunc *must_func(TypesObject obj) {
+    TypesFunc *f = obj != NULL ? types_as_func(obj) : NULL;
+    if (f == NULL)
+        panic_str(S("interface conversion: object is not *types.Func"));
+    return f;
+}
+
+static TypesObject lookup_object(Map *m, const void *key) {
+    TypesObject obj = NULL;
+    (void)map_get2(m, &key, &obj);
+    return obj;
+}
+
+typedef struct {
+    TestingT *t;
+    Alloc *a;
+    TypesInfo *info;
+    TypesFunc *dmm, *dmn; /* the methods used in the body of m */
+} GenericMethodEnv;
+
+static bool generic_method_inspect(void *penv, AstNode n) {
+    GenericMethodEnv *env = penv;
+    if (n != NULL && n->kind == AST_KIND_CALL_EXPR) {
+        AstNode fun = ((AstCallExpr *)n)->fun;
+        if (fun->kind != AST_KIND_SELECTOR_EXPR)
+            panic_str(S("interface conversion: ast.Expr is not *ast.SelectorExpr"));
+        AstSelectorExpr *sel = (AstSelectorExpr *)fun;
+        TypesFunc *use = must_func(lookup_object(env->info->uses, sel->sel));
+        TypesSelection *selection = NULL;
+        (void)map_get2(env->info->selections, &sel, &selection);
+        if (types_selection_kind(selection) != TYPES_METHOD_VAL)
+            testing_t_errorf_v(env->t, "Selection kind = %v, want %v",
+                               (Int)types_selection_kind(selection),
+                               (Int)TYPES_METHOD_VAL);
+        if (types_selection_obj(selection) != types_object(use))
+            testing_t_errorf_v(env->t, "info.Selections contains %v, want %v",
+                               object_string(env->a, types_selection_obj(selection)),
+                               object_string(env->a, types_object(use)));
+        if (str_eq(sel->sel->name, S("m")))
+            env->dmm = use;
+        else if (str_eq(sel->sel->name, S("n")))
+            env->dmn = use;
+    }
+    return true;
+}
+
+static Str func_string(Alloc *a, TypesFunc *f) {
+    return f != NULL ? object_string(a, types_object(f)) : S("<nil>");
+}
+
+static void TestGenericMethodInfo(TestingT *t) {
+    Str src = S("package p\n"
+                "\n"
+                "type N[A any] int\n"
+                "\n"
+                "func (r N[B]) m() { r.m(); r.n() }\n"
+                "\n"
+                "func (r *N[C]) n() {  }\n");
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TokenFileSet *fset = token_new_file_set(a);
+    AstFile *f = must_parse(a, fset, src);
+    TypesInfo info = {0};
+    info.defs = new_objects_map(a);
+    info.uses = new_objects_map(a);
+    info.selections = map_make(a, TYPE_UNSAFE_POINTER, TYPE_UNSAFE_POINTER, 0);
+    TypesConfig conf = {0};
+    Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
+    Error err = BURROW_NO_ERROR;
+    TypesPackage *pkg = types_config_check(&conf, a, S("p"), fset, files, &info, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "%s", error_text(err));
+
+    TypesNamed *n = types_as_named(
+        types_object_type(types_scope_lookup(types_package_scope(pkg), S("N"))));
+
+    /* Find the generic methods stored on N. */
+    TypesFunc *gm = types_named_method(n, 0), *gn = types_named_method(n, 1);
+    if (str_eq(types_object_name(types_object(gm)), S("n"))) {
+        TypesFunc *tmp = gm;
+        gm = gn;
+        gn = tmp;
+    }
+
+    /* Collect objects from info. */
+    TypesFunc *dm = NULL, *dn = NULL; /* the declared methods */
+    GenericMethodEnv env = {t, a, &info, NULL, NULL};
+    for (Int i = 0; i < f->decls.len; i++) {
+        AstDecl decl = ((AstDecl *)f->decls.p)[i];
+        if (decl->kind != AST_KIND_FUNC_DECL)
+            continue;
+        AstFuncDecl *fdecl = (AstFuncDecl *)decl;
+        TypesFunc *def = must_func(lookup_object(info.defs, fdecl->name));
+        if (str_eq(fdecl->name->name, S("m"))) {
+            dm = def;
+            ast_inspect(&fdecl->body->node,
+                        BURROW_FN(AstInspectFunc, generic_method_inspect, &env));
+        } else if (str_eq(fdecl->name->name, S("n"))) {
+            dn = def;
+        }
+    }
+
+    if (gm != dm)
+        testing_t_errorf_v(t,
+                           "N.Method(...) returns %v for \"m\", but Info.Defs has %v",
+                           func_string(a, gm), func_string(a, dm));
+    if (gn != dn)
+        testing_t_errorf_v(t,
+                           "N.Method(...) returns %v for \"m\", but Info.Defs has %v",
+                           func_string(a, gm), func_string(a, dm));
+    if (env.dmm == dm)
+        testing_t_errorf_v(t, "Inside \"m\", r.m uses %v, want a func distinct from %v",
+                           func_string(a, env.dmm), func_string(a, dm));
+    if (env.dmn == dn)
+        testing_t_errorf_v(t, "Inside \"m\", r.n uses %v, want a func distinct from %v",
+                           func_string(a, env.dmn), func_string(a, dn));
+    arena_free(&ar);
+}
+
+static const struct {
+    Str src;
+    Str want;
+} implicits_tests[] = {
+    {S_("package p2; import . \"fmt\"; var _ = Println"),
+     S_("")}, /* no Implicits entry */
+    {S_("package p0; import local \"fmt\"; var _ = local.Println"),
+     S_("")}, /* no Implicits entry */
+    {S_("package p1; import \"fmt\"; var _ = fmt.Println"),
+     S_("importSpec: package fmt")},
+
+    {S_("package p3; func f(x interface{}) { switch x.(type) { case int: } }"),
+     S_("")}, /* no Implicits entry */
+    {S_("package p4; func f(x interface{}) { switch t := x.(type) { case int: _ = t } "
+        "}"),
+     S_("caseClause: var t int")},
+    {S_("package p5; func f(x interface{}) { switch t := x.(type) { case int, uint: _ "
+        "= t } }"),
+     S_("caseClause: var t interface{}")},
+    {S_("package p6; func f(x interface{}) { switch t := x.(type) { default: _ = t } "
+        "}"),
+     S_("caseClause: var t interface{}")},
+
+    {S_("package p7; func f(x int) {}"), S_("")}, /* no Implicits entry */
+    {S_("package p8; func f(int) {}"), S_("field: var  int")},
+    {S_("package p9; func f() (complex64) { return 0 }"), S_("field: var  complex64")},
+    {S_("package p10; type T struct{}; func (*T) f() {}"), S_("field: var  *p10.T")},
+
+    /* Tests using generics. */
+    {S_("package f0; func f[T any](x int) {}"), S_("")}, /* no Implicits entry */
+    {S_("package f1; func f[T any](int) {}"), S_("field: var  int")},
+    {S_("package f2; func f[T any](T) {}"), S_("field: var  T")},
+    {S_("package f3; func f[T any]() (complex64) { return 0 }"),
+     S_("field: var  complex64")},
+    {S_("package f4; func f[T any](t T) (T) { return t }"), S_("field: var  T")},
+    {S_("package t0; type T[A any] struct{}; func (*T[_]) f() {}"),
+     S_("field: var  *t0.T[_]")},
+    {S_("package t1; type T[A any] struct{}; func _(x interface{}) { switch t := "
+        "x.(type) { case T[int]: _ = t } }"),
+     S_("caseClause: var t t1.T[int]")},
+    {S_("package t2; type T[A any] struct{}; func _[P any](x interface{}) { switch t "
+        ":= x.(type) { case T[P]: _ = t } }"),
+     S_("caseClause: var t t2.T[P]")},
+    {S_("package t3; func _[P any](x interface{}) { switch t := x.(type) { case P: _ = "
+        "t } }"),
+     S_("caseClause: var t P")},
+};
+
+static void TestImplicitsInfo(TestingT *t) {
+    if (!have_source_importer())
+        testing_t_skip_v(t, "no go1.27 sources to import fmt from");
+
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    for (Int i = 0; i < NELEM(implicits_tests); i++) {
+        TypesInfo info = {0};
+        info.implicits = new_objects_map(a);
+        Str name =
+            types_package_name(must_typecheck(a, implicits_tests[i].src, NULL, &info));
+
+        /* the test cases expect at most one Implicits entry */
+        if (map_len(info.implicits) > 1) {
+            testing_t_errorf_v(t, "package %s: %d Implicits entries found", name,
+                               map_len(info.implicits));
+            continue;
+        }
+
+        /* extract Implicits entry, if any */
+        Str got = S("");
+        const void *k;
+        void *v;
+        for (MapIter it = map_iter(info.implicits); map_next(&it, &k, &v);) {
+            AstNode n = *(AstNode const *)k;
+            switch (n->kind) {
+            case AST_KIND_IMPORT_SPEC:
+                got = S("importSpec");
+                break;
+            case AST_KIND_CASE_CLAUSE:
+                got = S("caseClause");
+                break;
+            case AST_KIND_FIELD:
+                got = S("field");
+                break;
+            default:
+                testing_t_fatalf_v(t, "package %s: unexpected kind %d", name,
+                                   (Int)n->kind);
+            }
+            got = fmt_sprintf_v(a, "%s: %s", got, object_string(a, *(TypesObject *)v));
+        }
+
+        /* verify entry */
+        if (!str_eq(got, implicits_tests[i].want))
+            testing_t_errorf_v(t, "package %s: got %q; want %q", name, got,
+                               implicits_tests[i].want);
+    }
+    arena_free(&ar);
+}
+
 /* fmt.Sprint of a list of strings, a Slice of Str. */
 static Str sprint_list(Alloc *a, Slice list) {
     Str parts[3] = {S("["), strings_join(a, list, S(" ")), S("]")};
@@ -1403,6 +1801,10 @@ static void TestFirstErrorInTypeSet(TestingT *t) {
     X(TestValuesInfo)                                                                  \
     X(TestTypesInfo)                                                                   \
     X(TestInstanceInfo)                                                                \
+    X(TestDefsInfo)                                                                    \
+    X(TestUsesInfo)                                                                    \
+    X(TestGenericMethodInfo)                                                           \
+    X(TestImplicitsInfo)                                                               \
     X(TestInitOrderInfo)                                                               \
     X(TestMultiFileInitOrder)                                                          \
     X(TestFiles)                                                                       \

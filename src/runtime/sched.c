@@ -60,6 +60,7 @@
 #include "burrow/stack.h"
 #include "burrow/thread.h"
 #include "burrow/timer.h"
+#include "burrow/trace.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -259,7 +260,7 @@ static BURROW_THREAD_LOCAL void *thread_prof_labels;
 void burrow__set_prof_label(void *labels) {
     burrow__M *m = getm();
     if (m != NULL && m->curg != NULL)
-        m->curg->labels = labels;
+        burrow__atomic_store_release_ptr(&m->curg->labels, labels);
     else
         thread_prof_labels = labels;
 }
@@ -338,7 +339,7 @@ int32_t burrow__allg_snapshot(burrow__GInfo *out, int32_t max, int32_t *total) {
         if (n >= max)
             continue;
         out[n].id = g->id;
-        out[n].status = burrow__atomic_load_acquire_u32(&g->status);
+        out[n].status = burrow__atomic_load_acquire_u32(&g->status) & ~BURROW_GSCAN;
         n++;
     }
 
@@ -347,6 +348,128 @@ int32_t burrow__allg_snapshot(burrow__GInfo *out, int32_t max, int32_t *total) {
     if (total != NULL)
         *total = seen;
     return n;
+}
+
+/* How long a goroutine profile waits, all told, for goroutines running on other
+ * threads to stop. Go stops the world instead, which preempts a goroutine in
+ * microseconds wherever it is. Here one stops only at a safe point, and sysmon
+ * asks every ten milliseconds anyway, so twenty is long enough for a goroutine
+ * that reaches one regularly. It is also short enough that one blocked in a
+ * system call costs a profile a pause rather than a hang. */
+#define PROFILE_WAIT_NS ((int64_t)20 * 1000 * 1000)
+
+/* The saved stack pointer in g's context, where the switch leaves one. */
+static void *saved_sp(burrow__G *g) {
+#if defined(BURROW_MCONTEXT_ASM)
+    return g->ctx.sp;
+#else
+    (void)g;
+    return NULL;
+#endif
+}
+
+/* What a profile says about a goroutine whose stack it can't read: the
+ * function it was started with, as a return address into that function, which
+ * is what every other frame in a profile is. */
+static void record_start(burrow__G *g, burrow__StackRecord *r) {
+    uintptr_t pc = (uintptr_t)burrow__atomic_load_acquire_ptr(&g->startpc);
+
+    r->n = 0;
+    if (pc != 0) {
+        r->pcs[0] = pc + 1;
+        r->n = 1;
+    }
+}
+
+void burrow__goroutine_profile(burrow__StackRecordFn fn, void *env) {
+    burrow__M *m = getm();
+    burrow__G *self = m != NULL ? m->curg : NULL;
+    burrow__StackRecord r;
+
+    if (fn == NULL)
+        return;
+
+    /* The list only ever grows at the front and a G is never taken off it, so
+     * the head read under the lock is the start of a list that stays as it is
+     * from there on, and the walk below needs no lock at all. */
+    burrow__lock(&sched.lock);
+    burrow__G *head = sched.allg;
+    burrow__unlock(&sched.lock);
+
+    int64_t deadline = burrow__nanotime() + PROFILE_WAIT_NS;
+    for (burrow__G *g = head; g != NULL; g = g->allnext) {
+        if (g == self)
+            continue;
+
+        for (;;) {
+            uint32_t st = burrow__atomic_load_acquire_u32(&g->status);
+            if (st == (uint32_t)BURROW_GIDLE || st == (uint32_t)BURROW_GDEAD)
+                break;
+
+            if (st == (uint32_t)BURROW_GWAITING || st == (uint32_t)BURROW_GRUNNABLE) {
+                if (!burrow__atomic_cas_u32(&g->status, &st, st | BURROW_GSCAN))
+                    continue;
+
+                /* Held. Nothing can start g or reuse it until the bit goes, so
+                 * its context, its stack and its labels all stay put. */
+                r.id = g->id;
+                r.labels = burrow__atomic_load_acquire_ptr(&g->labels);
+                r.n = (int32_t)burrow__callers_saved(saved_sp(g), g->stack.lo,
+                                                     g->stack.hi, (Uintptr *)r.pcs,
+                                                     BURROW_PROFILE_DEPTH);
+                if (r.n == 0)
+                    record_start(g, &r);
+                burrow__atomic_store_release_u32(&g->status, st);
+                fn(env, &r);
+                break;
+            }
+
+            /* Some other profile has it, or it is running. The first lets go in
+             * the time it takes to read a stack. The second is asked to give
+             * way, and waited for until the deadline. */
+            if ((st & BURROW_GSCAN) == 0) {
+                if (burrow__nanotime() >= deadline) {
+                    r.id = 0;
+                    r.labels = burrow__atomic_load_acquire_ptr(&g->labels);
+                    record_start(g, &r);
+                    fn(env, &r);
+                    break;
+                }
+                burrow__atomic_store_u32(&g->preempt, 1);
+            }
+            if (self != NULL)
+                runtime_gosched();
+            else
+                burrow__thread_yield();
+        }
+    }
+}
+
+int32_t burrow__thread_count(void) {
+    burrow__lock(&sched.lock);
+    int32_t n = sched.nmcreated;
+    burrow__unlock(&sched.lock);
+    return n;
+}
+
+void burrow__thread_create_profile(burrow__StackRecordFn fn, void *env) {
+    burrow__StackRecord r;
+
+    if (fn == NULL)
+        return;
+
+    /* An M's stack is written once, under the lock, before the M is counted, so
+     * every M below the count read here is finished with. */
+    int32_t n = burrow__thread_count();
+    for (int32_t i = 0; i < n; i++) {
+        burrow__M *m = &allm[i];
+        r.id = (uint64_t)m->id;
+        r.labels = NULL;
+        r.n = m->ncreatestack;
+        for (int32_t j = 0; j < r.n; j++)
+            r.pcs[j] = m->createstack[j];
+        fn(env, &r);
+    }
 }
 
 /* The sweep callback, set once by the first sync.Pool that gets used and read
@@ -472,6 +595,36 @@ static void set_status(burrow__G *g, burrow__GStatus s) {
  * other's store. */
 static void set_status_release(burrow__G *g, burrow__GStatus s) {
     burrow__atomic_store_release_u32(&g->status, (uint32_t)s);
+}
+
+/* Go's casgstatus, for every move out of WAITING or RUNNABLE, since those are
+ * the two a goroutine profile may be holding with BURROW_GSCAN. Answers false
+ * when the status is something other than from, and waits when it is from with
+ * the bit on, which lasts as long as reading one stack does. */
+static bool cas_status(burrow__G *g, burrow__GStatus from, burrow__GStatus to) {
+    for (;;) {
+        uint32_t old = (uint32_t)from;
+        if (burrow__atomic_cas_u32(&g->status, &old, (uint32_t)to))
+            return true;
+        if (old != ((uint32_t)from | BURROW_GSCAN))
+            return false;
+        burrow__thread_yield();
+    }
+}
+
+/* Into RUNNING from whatever the goroutine was, once nobody is reading its
+ * stack. A compare and swap where this used to be a release store, because a
+ * profile setting the bit and this starting the goroutine have to agree on
+ * which of them went first, and nothing weaker than an atomic read and write
+ * gives that. */
+static void cas_running(burrow__G *g) {
+    for (;;) {
+        uint32_t old = burrow__atomic_load_relaxed_u32(&g->status);
+        if ((old & BURROW_GSCAN) == 0 &&
+            burrow__atomic_cas_u32(&g->status, &old, (uint32_t)BURROW_GRUNNING))
+            return;
+        burrow__thread_yield();
+    }
 }
 
 /* ------------------------------------------------------ the global run queue
@@ -920,7 +1073,7 @@ static burrow__G *execute(burrow__M *m, burrow__G *gp) {
      * back plainly everywhere else in this file, which is allowed because every
      * one of those reads is on the thread that owns the M. */
     burrow__atomic_store_release_ptr((void **)&m->curg, gp);
-    set_status_release(gp, BURROW_GRUNNING);
+    cas_running(gp);
     burrow__stack_set_current(&gp->stack);
 
     /* Both of these are the preemption bookkeeping and both belong here rather
@@ -996,7 +1149,8 @@ static burrow__G *goexit0(burrow__M *m, burrow__G *gp) {
         if (coronext == NULL)
             runtime_throw(BURROW_S("coroexit with nobody waiting"));
         burrow__bubble_unblock(coronext);
-        set_status(coronext, BURROW_GRUNNABLE);
+        if (!cas_status(coronext, BURROW_GWAITING, BURROW_GRUNNABLE))
+            runtime_throw(BURROW_S("coroexit: the waiting goroutine was not parked"));
     }
 
     bool was_main = gp == sched.maing;
@@ -1102,7 +1256,8 @@ static burrow__G *park0(burrow__M *m, burrow__G *gp) {
             burrow__bubble_unblock(gp);
             burrow__bubble_release(bubble);
         }
-        set_status(gp, BURROW_GRUNNABLE);
+        if (!cas_status(gp, BURROW_GWAITING, BURROW_GRUNNABLE))
+            runtime_throw(BURROW_S("park: goroutine changed state while parking"));
         return gp;
     }
 
@@ -1193,8 +1348,7 @@ static void ready_list(burrow__GQueue *q) {
         if (g == NULL)
             break;
 
-        uint32_t waiting = (uint32_t)BURROW_GWAITING;
-        if (!burrow__atomic_cas_u32(&g->status, &waiting, (uint32_t)BURROW_GRUNNABLE))
+        if (!cas_status(g, BURROW_GWAITING, BURROW_GRUNNABLE))
             runtime_throw(BURROW_S("netpoll: readied a goroutine that was not parked"));
 
         if (local)
@@ -2088,6 +2242,12 @@ static void mstart(void *arg) {
 /* Makes a thread and starts it on `p`. The M comes out of the static array, so
  * the only thing here that can fail is the thread itself. */
 static void newm(burrow__P *p, bool spinning) {
+    /* Before the lock rather than under it, because a walk is not free, and it
+     * is a walk that most calls throw away when there is no M left to make. */
+    Uintptr stk[BURROW_PROFILE_DEPTH];
+    Slice frames = {stk, BURROW_PROFILE_DEPTH, BURROW_PROFILE_DEPTH, NULL};
+    Int nstk = runtime_callers(1, frames);
+
     burrow__lock(&sched.lock);
     if (sched.nmcreated >= sched.gomaxprocs) {
         pidle_put(p);
@@ -2099,6 +2259,9 @@ static void newm(burrow__P *p, bool spinning) {
 
     burrow__M *m = &allm[sched.nmcreated];
     m->id = sched.nmcreated;
+    m->ncreatestack = (int32_t)nstk;
+    for (Int i = 0; i < nstk; i++)
+        m->createstack[i] = stk[i];
     sched.nmcreated++;
     burrow__unlock(&sched.lock);
 
@@ -2189,7 +2352,9 @@ static bool go_start(Func fn, size_t stack_bytes, burrow__Bubble *bubble, bool b
     newg->coro = NULL;
     newg->bubble = bubble;
     newg->dit_wanted = m != NULL && m->curg != NULL && m->curg->dit_wanted;
-    newg->labels = m != NULL && m->curg != NULL ? m->curg->labels : NULL;
+    burrow__atomic_store_release_ptr(&newg->startpc, (void *)(uintptr_t)fn.f);
+    burrow__atomic_store_release_ptr(
+        &newg->labels, m != NULL && m->curg != NULL ? m->curg->labels : NULL);
     burrow__atomic_store_release_u32(&newg->bubbleblocked, 0);
 
     if (!make_context(newg, stack_bytes)) {
@@ -2285,7 +2450,8 @@ bool burrow__newcoro(burrow__Coro *c, void (*f)(burrow__Coro *c, void *env),
     newg->coro = c;
     newg->bubble = m->curg->bubble;
     newg->dit_wanted = m->curg->dit_wanted;
-    newg->labels = m->curg->labels;
+    burrow__atomic_store_release_ptr(&newg->startpc, (void *)(uintptr_t)f);
+    burrow__atomic_store_release_ptr(&newg->labels, m->curg->labels);
     burrow__atomic_store_release_u32(&newg->bubbleblocked, 0);
 
     if (!make_context(newg, BURROW_GOROUTINE_STACK)) {
@@ -2341,7 +2507,7 @@ void burrow__coroswitch(burrow__Coro *c) {
 
     set_status_release(gp, BURROW_GWAITING);
     burrow__atomic_store_release_ptr((void **)&m->curg, next);
-    set_status_release(next, BURROW_GRUNNING);
+    cas_running(next);
     burrow__stack_set_current(&next->stack);
     burrow__mcontext_switch(&gp->ctx, &next->ctx);
 }
@@ -2372,8 +2538,7 @@ void sched_ready(Goroutine *g) {
 
     bool counted = outside_enter();
 
-    uint32_t waiting = (uint32_t)BURROW_GWAITING;
-    if (!burrow__atomic_cas_u32(&g->status, &waiting, (uint32_t)BURROW_GRUNNABLE)) {
+    if (!cas_status(g, BURROW_GWAITING, BURROW_GRUNNABLE)) {
         outside_leave(counted);
         runtime_throw(BURROW_S("sched_ready: goroutine is not parked"));
     }

@@ -24,6 +24,29 @@ static void close_conn(Int *id) {
 }
 // doc: end
 
+// doc: goroutines
+/* Three goroutines wait on a channel while the one that started them looks. */
+static void wait_on(void *env) {
+    (void)chan_recv((Chan *)env, NULL);
+}
+
+static void look(void *env) {
+    Alloc *a = (Alloc *)env;
+    Chan *c = chan_make(a, TYPE_INT, 0);
+    SyncWaitGroup wg = {0};
+    for (int i = 0; i < 3; i++)
+        sync_wait_group_go(&wg, BURROW_FN(Func, wait_on, c));
+
+    PprofProfile *p = pprof_lookup(BURROW_S("goroutine"));
+    StringsBuilder b = STRINGS_BUILDER(a);
+    (void)pprof_profile_write_to(p, strings_builder_as_io_writer(&b), 1);
+    Str text = strings_builder_string(&b);
+    fmt_printf_v("%s\n", strings_cut(text, BURROW_S("\n"), NULL, NULL));
+    chan_close(c);
+    sync_wait_group_wait(&wg);
+}
+// doc: end
+
 int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -53,6 +76,10 @@ int main(void) {
 
     close_conn(&ids[0]);
     close_conn(&ids[2]);
+
+    // doc: main
+    runtime_main(BURROW_FN(Func, look, a));
+    // doc: end
     arena_free(&ar);
     return 0;
 }
@@ -61,4 +88,5 @@ int main(void) {
 handling /users
 example.com/conns has 2
 example.com/conns profile: total 2
+goroutine profile: total 4
 */

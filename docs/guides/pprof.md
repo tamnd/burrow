@@ -1,6 +1,6 @@
 # Profiling
 
-`burrow/runtime/pprof.h` is Go's `runtime/pprof`. So far it has profiling labels, profiles of your own, and the writer for the profile format that `go tool pprof` reads. The built-in profiles (CPU, heap, goroutine and the rest) are not ported yet.
+`burrow/runtime/pprof.h` is Go's `runtime/pprof`. So far it has profiling labels, profiles of your own, the goroutine and threadcreate profiles, and the writer for the profile format that `go tool pprof` reads. The CPU, heap, allocs, block and mutex profiles are not ported yet.
 
 ## Labels
 
@@ -72,3 +72,46 @@ example.com/conns profile: total 2
 ```
 
 `pprof_profile_write_to` with debug 1 writes the text form, one record per distinct stack with how many values it holds, followed by the stack. A frame is shown by name only when burrow's symbol table has one, which covers the library and not your program, so most frames in your own code come out as bare addresses. With debug 0 it writes the gzipped protocol buffer that `go tool pprof` reads.
+
+## The goroutine profile
+
+`pprof_lookup` finds the profiles the runtime fills in by name, the same way it finds your own. "goroutine" has a stack for every goroutine that exists when it is written, and "threadcreate" has the stack that started each OS thread the scheduler made. Both are built in, so `pprof_profile_add` panics on them.
+
+<!-- example: ../examples/pprof/pprof.c#goroutines -->
+```c
+/* Three goroutines wait on a channel while the one that started them looks. */
+static void wait_on(void *env) {
+    (void)chan_recv((Chan *)env, NULL);
+}
+
+static void look(void *env) {
+    Alloc *a = (Alloc *)env;
+    Chan *c = chan_make(a, TYPE_INT, 0);
+    SyncWaitGroup wg = {0};
+    for (int i = 0; i < 3; i++)
+        sync_wait_group_go(&wg, BURROW_FN(Func, wait_on, c));
+
+    PprofProfile *p = pprof_lookup(BURROW_S("goroutine"));
+    StringsBuilder b = STRINGS_BUILDER(a);
+    (void)pprof_profile_write_to(p, strings_builder_as_io_writer(&b), 1);
+    Str text = strings_builder_string(&b);
+    fmt_printf_v("%s\n", strings_cut(text, BURROW_S("\n"), NULL, NULL));
+    chan_close(c);
+    sync_wait_group_wait(&wg);
+}
+```
+
+Goroutines run inside the scheduler, so `main` hands the work to `runtime_main`:
+
+<!-- example: ../examples/pprof/pprof.c#main -->
+```c
+runtime_main(BURROW_FN(Func, look, a));
+```
+
+That counts four goroutines, the one that wrote the profile and the three it started:
+
+```text
+goroutine profile: total 4
+```
+
+The stack of a goroutine that is waiting is read from where it stopped, on amd64 and arm64 outside Windows. On other systems, and for a goroutine still running after the profile has waited twenty milliseconds for it to stop, the stack is the function the goroutine was started with. With debug 2 the goroutine profile is what `runtime_stack` prints with all set, which lists the other goroutines without walking their stacks yet.

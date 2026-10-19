@@ -17,6 +17,7 @@
 #include "burrow/trace.h"
 
 #include "burrow/core.h"
+#include "burrow/mcontext.h"
 #include "burrow/platform.h"
 #include "burrow/runtime.h"
 #include "burrow/slice.h"
@@ -115,20 +116,24 @@ static bool bounds_for(const void *frame, void **lo, void **hi) {
     return readable(frame, *lo, *hi);
 }
 
-/* BURROW_NO_MSAN because the two words read at each step are written by call
+/* Reading another goroutine's stack, which burrow__callers_saved does, means
+ * reading words the address sanitizer may have marked as the space between two
+ * locals of a frame that is still live. The walk only ever reads a frame record,
+ * which is never in that space, unless the chain is broken, and then the bounds
+ * check is what keeps it safe, not the sanitizer. */
+#if BURROW_ASAN && !BURROW_CC_MSVC
+#define TRACE_NO_ASAN __attribute__((no_sanitize("address")))
+#else
+#define TRACE_NO_ASAN
+#endif
+
+/* Up the chain from frame, which has already been checked against lo and hi.
+ *
+ * BURROW_NO_MSAN because the two words read at each step are written by call
  * instructions and by libc frames, neither of which tells the memory sanitizer.
  * burrow/platform.h has the long version. */
-BURROW_NO_MSAN Int burrow__callers(void *from, Int skip, Uintptr *pcs, Int max) {
-    void **frame = (void **)from;
-    void *lo;
-    void *hi;
-    Int n = 0;
-
-    if (frame == NULL || pcs == NULL || max <= 0 || skip < 0)
-        return 0;
-    if (!bounds_for((const void *)frame, &lo, &hi))
-        return 0;
-
+BURROW_NO_MSAN TRACE_NO_ASAN static Int walk(void **frame, void *lo, void *hi, Int skip,
+                                             Uintptr *pcs, Int n, Int max) {
     while (n < max) {
         void **next = (void **)frame[0];
         Uintptr pc = (Uintptr)frame[1];
@@ -152,6 +157,68 @@ BURROW_NO_MSAN Int burrow__callers(void *from, Int skip, Uintptr *pcs, Int max) 
     }
     return n;
 }
+
+Int burrow__callers(void *from, Int skip, Uintptr *pcs, Int max) {
+    void *lo;
+    void *hi;
+
+    if (from == NULL || pcs == NULL || max <= 0 || skip < 0)
+        return 0;
+    if (!bounds_for(from, &lo, &hi))
+        return 0;
+    return walk((void **)from, lo, hi, skip, pcs, 0, max);
+}
+
+#if defined(BURROW_MCONTEXT_ASM)
+
+/* Where the switch in src/runtime/mcontext_amd64.c and mcontext_arm64.c leaves
+ * the frame pointer and the return address, in words from the saved stack
+ * pointer. The return address is into whatever called the switch, and the
+ * frame pointer is that function's, so the pair is the first step of the walk
+ * and the rest is the ordinary chain. */
+#if defined(BURROW_ARCH_AMD64)
+#define TRACE_SAVED_FP 6
+#define TRACE_SAVED_PC 7
+#else
+#define TRACE_SAVED_FP 10
+#define TRACE_SAVED_PC 11
+#endif
+
+BURROW_NO_MSAN TRACE_NO_ASAN Int burrow__callers_saved(void *sp, void *lo, void *hi,
+                                                       Uintptr *pcs, Int max) {
+    void **saved = (void **)sp;
+    const char *end = (const char *)sp + (TRACE_SAVED_PC + 1) * sizeof(void *);
+
+    if (saved == NULL || lo == NULL || pcs == NULL || max <= 0)
+        return 0;
+    if ((char *)saved < (char *)lo || end > (const char *)hi)
+        return 0;
+
+    Uintptr pc = (Uintptr)saved[TRACE_SAVED_PC];
+    void **frame = (void **)saved[TRACE_SAVED_FP];
+    if (pc == 0)
+        return 0;
+    pcs[0] = pc;
+
+    /* A goroutine that has never run has a zero frame pointer here, put there
+     * so that this is where its walk stops. */
+    if (!readable((const void *)frame, lo, hi))
+        return 1;
+    return walk(frame, lo, hi, 0, pcs, 1, max);
+}
+
+#else
+
+Int burrow__callers_saved(void *sp, void *lo, void *hi, Uintptr *pcs, Int max) {
+    (void)sp;
+    (void)lo;
+    (void)hi;
+    (void)pcs;
+    (void)max;
+    return 0;
+}
+
+#endif
 
 #elif defined(BURROW_OS_WINDOWS)
 
@@ -230,6 +297,21 @@ Int burrow__callers(void *from, Int skip, Uintptr *pcs, Int max) {
      * normal answer and this is the platform that gives it. */
     (void)from;
     (void)skip;
+    (void)pcs;
+    (void)max;
+    return 0;
+}
+
+#endif
+
+#if defined(BURROW_OS_WINDOWS) || !defined(TRACE_FRAME_PAIR)
+
+/* Windows switches with fibers, and the other architectures have no frame
+ * layout here, so neither has a saved frame to start from. */
+Int burrow__callers_saved(void *sp, void *lo, void *hi, Uintptr *pcs, Int max) {
+    (void)sp;
+    (void)lo;
+    (void)hi;
     (void)pcs;
     (void)max;
     return 0;

@@ -24,6 +24,7 @@
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
 #include "burrow/panic.h"
+#include "burrow/proc.h"
 #include "burrow/runtime.h"
 #include "burrow/sched.h"
 #include "burrow/slice.h"
@@ -31,6 +32,7 @@
 #include "burrow/strings.h"
 #include "burrow/sync.h"
 #include "burrow/text/tabwriter.h"
+#include "burrow/trace.h"
 #include "burrow/type.h"
 
 #include <stdarg.h>
@@ -315,14 +317,40 @@ struct PprofProfile {
 static SyncMutex ppr_profiles_mu;
 static Map *ppr_profiles; /* of Str to PprofProfile pointers */
 
+static Int ppr_count_goroutine(void);
+static Error ppr_write_goroutine(IoWriter w, Int debug);
+static Int ppr_count_thread_create(void);
+static Error ppr_write_thread_create(IoWriter w, Int debug);
+
+static PprofProfile ppr_goroutine_profile = {
+    .name = BURROW_S_INIT("goroutine"),
+    .count = ppr_count_goroutine,
+    .write = ppr_write_goroutine,
+};
+
+static PprofProfile ppr_threadcreate_profile = {
+    .name = BURROW_S_INIT("threadcreate"),
+    .count = ppr_count_thread_create,
+    .write = ppr_write_thread_create,
+};
+
 static void ppr_lock_profiles(void) {
     sync_mutex_lock(&ppr_profiles_mu);
     if (ppr_profiles == NULL) {
-        ppr_profiles = map_make(heap_allocator(), TYPE_STRING, TYPE_UNSAFE_POINTER, 0);
-        if (ppr_profiles == NULL) {
+        /* Initial built-in profiles. */
+        PprofProfile *builtin[] = {&ppr_goroutine_profile, &ppr_threadcreate_profile};
+        Map *m = map_make(heap_allocator(), TYPE_STRING, TYPE_UNSAFE_POINTER, 0);
+        bool ok = m != NULL;
+        for (size_t i = 0; ok && i < sizeof builtin / sizeof builtin[0]; i++) {
+            void *pv = builtin[i];
+            ok = map_set(m, &builtin[i]->name, &pv);
+        }
+        if (!ok) {
+            map_free(m);
             sync_mutex_unlock(&ppr_profiles_mu);
             ppr_out_of_memory();
         }
+        ppr_profiles = m;
     }
 }
 
@@ -689,4 +717,140 @@ Error pprof_profile_write_to(PprofProfile *p, IoWriter w, Int debug) {
     }
     BURROW_SCOPE_END;
     return err;
+}
+
+/* ------------------------------------------------------- runtime profiles */
+
+/* The records a runtime profile hands over, gathered for printCountProfile.
+ * Go sizes its slice with a first call that only counts and retries if the
+ * profile grew in between. The runtime here calls back once per record
+ * instead, so the slice just grows. */
+typedef struct PprRecords {
+    Alloc *a;
+    burrow__StackRecord *r;
+    Int n;
+    Int cap;
+} PprRecords;
+
+static void ppr_collect(void *env, const burrow__StackRecord *r) {
+    PprRecords *rs = (PprRecords *)env;
+    if (rs->n == rs->cap) {
+        Int cap = rs->cap > 0 ? 2 * rs->cap : 16;
+        burrow__StackRecord *grown = (burrow__StackRecord *)mem_alloc_array(
+            rs->a, (size_t)cap, sizeof(burrow__StackRecord),
+            _Alignof(burrow__StackRecord));
+        if (grown == NULL)
+            ppr_out_of_memory();
+        if (rs->n > 0)
+            memcpy(grown, rs->r, (size_t)rs->n * sizeof(burrow__StackRecord));
+        rs->r = grown;
+        rs->cap = cap;
+    }
+    rs->r[rs->n++] = *r;
+}
+
+static Error ppr_write_runtime_profile(IoWriter w, Int debug, Str name,
+                                       void (*fetch)(PprRecords *rs)) {
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    BURROW_SCOPE {
+        BURROW_DEFER(ppr_free_arena, &ar);
+
+        PprRecords rs = {a, NULL, 0, 0};
+        fetch(&rs);
+
+        size_t cap = (size_t)(rs.n > 0 ? rs.n : 1);
+        Slice *stacks =
+            (Slice *)mem_alloc_array(a, cap, sizeof(Slice), _Alignof(Slice));
+        const PprLabelMap **labels = (const PprLabelMap **)mem_alloc_array(
+            a, cap, sizeof(PprLabelMap *), _Alignof(PprLabelMap *));
+        if (stacks == NULL || labels == NULL)
+            ppr_out_of_memory();
+        for (Int i = 0; i < rs.n; i++) {
+            Int n = rs.r[i].n;
+            stacks[i] = slice_from(rs.r[i].pcs, n, n, TYPE_UINTPTR);
+            labels[i] = (const PprLabelMap *)rs.r[i].labels;
+        }
+
+        err = ppr_print_count_profile(a, w, debug, name, stacks, labels, rs.n);
+    }
+    BURROW_SCOPE_END;
+    return err;
+}
+
+/* countThreadCreate returns the size of the current ThreadCreateProfile. */
+static Int ppr_count_thread_create(void) {
+    return burrow__thread_count();
+}
+
+static void ppr_fetch_thread_create(PprRecords *rs) {
+    burrow__thread_create_profile(ppr_collect, rs);
+}
+
+/* writeThreadCreate writes the current runtime ThreadCreateProfile to w. */
+static Error ppr_write_thread_create(IoWriter w, Int debug) {
+    return ppr_write_runtime_profile(w, debug, S_("threadcreate"),
+                                     ppr_fetch_thread_create);
+}
+
+/* countGoroutine returns the number of goroutines. */
+static Int ppr_count_goroutine(void) {
+    return runtime_numgoroutine();
+}
+
+/* The goroutine asking goes first, as in Go, which records its own stack before
+ * it looks at any other. A thread outside the scheduler isn't a goroutine and
+ * isn't in the profile. */
+BURROW_NOINLINE static void ppr_fetch_goroutines(PprRecords *rs) {
+    if (burrow__curg() != NULL) {
+        burrow__StackRecord self;
+        memset(&self, 0, sizeof self);
+        self.labels = burrow__get_prof_label();
+        self.n =
+            (int32_t)runtime_callers(1, slice_from(self.pcs, BURROW_PROFILE_DEPTH,
+                                                   BURROW_PROFILE_DEPTH, TYPE_UINTPTR));
+        ppr_collect(rs, &self);
+    }
+    burrow__goroutine_profile(ppr_collect, rs);
+}
+
+static Error ppr_write_goroutine_stacks(IoWriter w) {
+    /* We don't know how big the buffer needs to be to collect all the
+     * goroutines. Start with 1 MB and try a few times, doubling each time. Give
+     * up and use a truncated trace if 64 MB is not enough.
+     *
+     * runtime_stack drops a line that doesn't fit instead of filling the
+     * buffer, so a buffer counts as big enough only when there is room left
+     * for the longest line it could have dropped. */
+    Alloc *heap = heap_allocator();
+    Int size = 1 << 20;
+    Byte *buf = NULL;
+    Int n = 0;
+    for (;;) {
+        buf = (Byte *)mem_alloc(heap, (size_t)size, 1);
+        if (buf == NULL)
+            ppr_out_of_memory();
+        n = runtime_stack(slice_from(buf, size, size, TYPE_BYTE), true);
+        if (n <= size - BURROW_FRAME_TEXT_MAX)
+            break;
+        if (size >= 64 << 20) {
+            /* Filled 64 MB - stop there. */
+            break;
+        }
+        mem_free(heap, buf, (size_t)size, 1);
+        size *= 2;
+    }
+    Error err = BURROW_NO_ERROR;
+    w.vt->write(w.data, slice_from(buf, n, n, TYPE_BYTE), &err);
+    mem_free(heap, buf, (size_t)size, 1);
+    return err;
+}
+
+/* writeGoroutine writes the current runtime GoroutineProfile to w. */
+static Error ppr_write_goroutine(IoWriter w, Int debug) {
+    if (debug >= 2)
+        return ppr_write_goroutine_stacks(w);
+    return ppr_write_runtime_profile(w, debug, S_("goroutine"), ppr_fetch_goroutines);
 }

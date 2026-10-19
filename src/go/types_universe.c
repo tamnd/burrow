@@ -317,18 +317,26 @@ void types_def_predeclared_test_funcs(void) {
     gt_def(types_object(gt_new_builtin(GT_TRACE)));
 }
 
+/* One of the objects gt_universe_init declared. Go keeps these in globals that
+ * are set once, so they are never nil, and the assert says as much to gcc. */
+static TypesObject gt_universe_obj(Str name) {
+    TypesObject obj = types_scope_lookup(types_universe(), name);
+    burrow__types_assert(obj != NULL);
+    return obj;
+}
+
 TypesType burrow__types_universe_error(void) {
-    return types_object_type(types_scope_lookup(types_universe(), BURROW_S("error")));
+    return types_object_type(gt_universe_obj(BURROW_S("error")));
 }
 
 TypesObject burrow__types_universe_any(void) {
-    return types_scope_lookup(types_universe(), BURROW_S("any"));
+    return gt_universe_obj(BURROW_S("any"));
 }
 
 TypesObject burrow__types_universe_comparable(void) {
-    return types_scope_lookup(types_universe(), BURROW_S("comparable"));
+    return gt_universe_obj(BURROW_S("comparable"));
 }
 
 TypesObject burrow__types_universe_iota(void) {
-    return types_scope_lookup(types_universe(), BURROW_S("iota"));
+    return gt_universe_obj(BURROW_S("iota"));
 }

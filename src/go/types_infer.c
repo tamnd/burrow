@@ -114,8 +114,7 @@ static bool tin_term_parameterized(void *env, TypesTerm *t) {
 }
 
 static bool tin_walk_type(TinWalker *w, TypesType typ) {
-    Int kind = typ->kind;
-    switch (kind) {
+    switch ((TypesTypeKind)typ->kind) {
     case TYPES_KIND_BASIC:
         /* nothing to do */
         return false;
@@ -124,16 +123,16 @@ static bool tin_walk_type(TinWalker *w, TypesType typ) {
         return tin_walk(w, types_unalias(typ));
 
     case TYPES_KIND_ARRAY:
-        return tin_walk(w, types_as_array(typ)->elem);
+        return tin_walk(w, GT_KNOWN(TypesArray, typ)->elem);
 
     case TYPES_KIND_SLICE:
-        return tin_walk(w, types_as_slice(typ)->elem);
+        return tin_walk(w, GT_KNOWN(TypesSlice, typ)->elem);
 
     case TYPES_KIND_STRUCT:
-        return tin_var_list(w, types_as_struct(typ)->fields);
+        return tin_var_list(w, GT_KNOWN(TypesStruct, typ)->fields);
 
     case TYPES_KIND_POINTER:
-        return tin_walk(w, types_as_pointer(typ)->base);
+        return tin_walk(w, GT_KNOWN(TypesPointer, typ)->base);
 
     case TYPES_KIND_TUPLE:
         /* This case does not occur from within isParameterized because
@@ -141,7 +140,7 @@ static bool tin_walk_type(TinWalker *w, TypesType typ) {
          * explicitly. But isParameterized is also called by Checker.callExpr
          * with a function result tuple if instantiation failed
          * (go.dev/issue/59890). */
-        return tin_var_list(w, types_as_tuple(typ)->vars);
+        return tin_var_list(w, GT_KNOWN(TypesTuple, typ)->vars);
 
     case TYPES_KIND_SIGNATURE: {
         /* t.tparams may not be nil if we are looking at a signature of a
@@ -150,13 +149,13 @@ static bool tin_walk_type(TinWalker *w, TypesType typ) {
          * Similarly, the receiver of a method may declare (rather than use)
          * type parameters, we don't care about those either. Thus, we only
          * need to look at the input and result parameters. */
-        TypesSignature *t = types_as_signature(typ);
+        TypesSignature *t = GT_KNOWN(TypesSignature, typ);
         return (t->params != NULL && tin_var_list(w, t->params->vars)) ||
                (t->results != NULL && tin_var_list(w, t->results->vars));
     }
 
     case TYPES_KIND_INTERFACE: {
-        GtTypeSet *tset = burrow__types_iface_type_set(types_as_interface(typ));
+        GtTypeSet *tset = burrow__types_iface_type_set(GT_KNOWN(TypesInterface, typ));
         for (Int i = 0; i < tset->methods.len; i++)
             if (tin_walk(w, GT_OBJ(GT_AT(tset->methods, i, TypesFunc *))->typ))
                 return true;
@@ -165,15 +164,15 @@ static bool tin_walk_type(TinWalker *w, TypesType typ) {
     }
 
     case TYPES_KIND_MAP:
-        return tin_walk(w, types_as_map(typ)->key) ||
-               tin_walk(w, types_as_map(typ)->elem);
+        return tin_walk(w, GT_KNOWN(TypesMap, typ)->key) ||
+               tin_walk(w, GT_KNOWN(TypesMap, typ)->elem);
 
     case TYPES_KIND_CHAN:
-        return tin_walk(w, types_as_chan(typ)->elem);
+        return tin_walk(w, GT_KNOWN(TypesChan, typ)->elem);
 
     case TYPES_KIND_NAMED: {
         Slice targs =
-            burrow__types_type_list(types_named_type_args(types_as_named(typ)));
+            burrow__types_type_list(types_named_type_args(GT_KNOWN(TypesNamed, typ)));
         for (Int i = 0; i < targs.len; i++)
             if (tin_walk(w, GT_AT(targs, i, TypesType)))
                 return true;
@@ -181,8 +180,10 @@ static bool tin_walk_type(TinWalker *w, TypesType typ) {
     }
 
     case TYPES_KIND_TYPE_PARAM:
-        return tin_index(w->tparams, types_as_type_param(typ)) >= 0;
+        return tin_index(w->tparams, GT_KNOWN(TypesTypeParam, typ)) >= 0;
 
+    case TYPES_KIND_INVALID:
+    case TYPES_KIND_UNION:
     default:
         panic_str(BURROW_S("unexpected type"));
     }
@@ -272,8 +273,7 @@ static void tin_cycle_var_list(TinCycleFinder *w, Slice list) {
 }
 
 static void tin_cycle_walk(TinCycleFinder *w, TypesType typ) {
-    Int kind = typ->kind;
-    switch (kind) {
+    switch ((TypesTypeKind)typ->kind) {
     case TYPES_KIND_BASIC:
         /* nothing to do */
         break;
@@ -282,26 +282,26 @@ static void tin_cycle_walk(TinCycleFinder *w, TypesType typ) {
      * types_unalias(typ) at the top. */
 
     case TYPES_KIND_ARRAY:
-        tin_cycle_typ(w, types_as_array(typ)->elem);
+        tin_cycle_typ(w, GT_KNOWN(TypesArray, typ)->elem);
         break;
 
     case TYPES_KIND_SLICE:
-        tin_cycle_typ(w, types_as_slice(typ)->elem);
+        tin_cycle_typ(w, GT_KNOWN(TypesSlice, typ)->elem);
         break;
 
     case TYPES_KIND_STRUCT:
-        tin_cycle_var_list(w, types_as_struct(typ)->fields);
+        tin_cycle_var_list(w, GT_KNOWN(TypesStruct, typ)->fields);
         break;
 
     case TYPES_KIND_POINTER:
-        tin_cycle_typ(w, types_as_pointer(typ)->base);
+        tin_cycle_typ(w, GT_KNOWN(TypesPointer, typ)->base);
         break;
 
         /* TYPES_KIND_TUPLE: This case should not occur because tuples only
      * appear in signatures where they are handled explicitly. */
 
     case TYPES_KIND_SIGNATURE: {
-        TypesSignature *t = types_as_signature(typ);
+        TypesSignature *t = GT_KNOWN(TypesSignature, typ);
         if (t->params != NULL)
             tin_cycle_var_list(w, t->params->vars);
         if (t->results != NULL)
@@ -310,14 +310,14 @@ static void tin_cycle_walk(TinCycleFinder *w, TypesType typ) {
     }
 
     case TYPES_KIND_UNION: {
-        Slice terms = types_as_union(typ)->terms;
+        Slice terms = GT_KNOWN(TypesUnion, typ)->terms;
         for (Int i = 0; i < terms.len; i++)
             tin_cycle_typ(w, GT_AT(terms, i, TypesTerm *)->typ);
         break;
     }
 
     case TYPES_KIND_INTERFACE: {
-        TypesInterface *t = types_as_interface(typ);
+        TypesInterface *t = GT_KNOWN(TypesInterface, typ);
         for (Int i = 0; i < t->methods.len; i++)
             tin_cycle_typ(w, GT_OBJ(GT_AT(t->methods, i, TypesFunc *))->typ);
         for (Int i = 0; i < t->embeddeds.len; i++)
@@ -326,29 +326,32 @@ static void tin_cycle_walk(TinCycleFinder *w, TypesType typ) {
     }
 
     case TYPES_KIND_MAP:
-        tin_cycle_typ(w, types_as_map(typ)->key);
-        tin_cycle_typ(w, types_as_map(typ)->elem);
+        tin_cycle_typ(w, GT_KNOWN(TypesMap, typ)->key);
+        tin_cycle_typ(w, GT_KNOWN(TypesMap, typ)->elem);
         break;
 
     case TYPES_KIND_CHAN:
-        tin_cycle_typ(w, types_as_chan(typ)->elem);
+        tin_cycle_typ(w, GT_KNOWN(TypesChan, typ)->elem);
         break;
 
     case TYPES_KIND_NAMED: {
         Slice targs =
-            burrow__types_type_list(types_named_type_args(types_as_named(typ)));
+            burrow__types_type_list(types_named_type_args(GT_KNOWN(TypesNamed, typ)));
         for (Int i = 0; i < targs.len; i++)
             tin_cycle_typ(w, GT_AT(targs, i, TypesType));
         break;
     }
 
     case TYPES_KIND_TYPE_PARAM: {
-        Int i = tin_index(w->tparams, types_as_type_param(typ));
+        Int i = tin_index(w->tparams, GT_KNOWN(TypesTypeParam, typ));
         if (i >= 0 && GT_AT(w->inferred, i, TypesType) != NULL)
             tin_cycle_typ(w, GT_AT(w->inferred, i, TypesType));
         break;
     }
 
+    case TYPES_KIND_INVALID:
+    case TYPES_KIND_TUPLE:
+    case TYPES_KIND_ALIAS:
     default:
         panic_str(BURROW_S("unexpected type"));
     }

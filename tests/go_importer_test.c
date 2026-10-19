@@ -189,6 +189,13 @@ static Int walk_dir(TestingT *t, burrow__SrcImporter *importer, Str goroot, Str 
 }
 
 static void TestImportStdLib(TestingT *t) {
+#if defined(BURROW_OS_COSMO)
+    /* Not in Go: a Cosmopolitan build reports its GOOS as cosmo, which the Go
+     * tree has no port for. No file in internal/goos is built for it, so the
+     * runtime package and everything that imports it fail to type-check. */
+    testing_t_skip_v(t, "the Go tree has no port for GOOS cosmo");
+    return;
+#endif
     gi_begin(t);
     Str goroot = gi_goroot(t);
     if (goroot.len == 0)
@@ -263,6 +270,13 @@ static void verify_interface_method_recvs(TestingT *t, TypesNamed *named, Int le
 }
 
 static void TestImportedTypes(TestingT *t) {
+#if defined(BURROW_OS_COSMO)
+    /* Not in Go: a Cosmopolitan build reports its GOOS as cosmo, which the Go
+     * tree has no port for. No file in internal/goos is built for it, so the
+     * runtime package and everything that imports it fail to type-check. */
+    testing_t_skip_v(t, "the Go tree has no port for GOOS cosmo");
+    return;
+#endif
     gi_begin(t);
     Str goroot = gi_goroot(t);
     if (goroot.len == 0)

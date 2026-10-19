@@ -73,6 +73,12 @@ static void *gt_ptr_at(Slice s, Int i) {
 
 /* ------------------------------------------------------------- downcasts */
 
+void *burrow__types_must(TypesType t, Int kind) {
+    if (t == NULL || t->kind != kind)
+        burrow__types_assert_failed();
+    return (void *)t;
+}
+
 #define GT_AS(T, KIND) return t != NULL && t->kind == (KIND) ? (T *)(void *)t : NULL
 
 TypesBasic *types_as_basic(TypesType t) {

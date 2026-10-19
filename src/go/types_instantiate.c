@@ -183,7 +183,7 @@ static Str gt_tstr(Alloc *a, TypesQualifier qf, TypesType t) {
 static bool gt_mentions(TypesType T, TypesType typ) {
     switch (T == NULL ? (Int)TYPES_KIND_INVALID : T->kind) {
     case TYPES_KIND_INTERFACE: {
-        TypesInterface *t = types_as_interface(T);
+        TypesInterface *t = GT_KNOWN(TypesInterface, T);
         for (Int i = 0; i < t->embeddeds.len; i++) {
             if (gt_mentions(GT_AT(t->embeddeds, i, TypesType), typ))
                 return true;
@@ -191,7 +191,7 @@ static bool gt_mentions(TypesType T, TypesType typ) {
         break;
     }
     case TYPES_KIND_UNION: {
-        TypesUnion *u = types_as_union(T);
+        TypesUnion *u = GT_KNOWN(TypesUnion, T);
         for (Int i = 0; i < u->terms.len; i++) {
             if (gt_mentions(GT_AT(u->terms, i, TypesTerm *)->typ, typ))
                 return true;
@@ -397,11 +397,11 @@ static TypesTypeParamList *gt_generic_tparams(TypesType orig, bool *ok) {
     *ok = true;
     switch (orig == NULL ? (Int)TYPES_KIND_INVALID : orig->kind) {
     case TYPES_KIND_NAMED:
-        return types_named_type_params(types_as_named(orig));
+        return types_named_type_params(GT_KNOWN(TypesNamed, orig));
     case TYPES_KIND_ALIAS:
-        return types_alias_type_params(types_as_alias(orig));
+        return types_alias_type_params(GT_KNOWN(TypesAlias, orig));
     case TYPES_KIND_SIGNATURE:
-        return types_signature_type_params(types_as_signature(orig));
+        return types_signature_type_params(GT_KNOWN(TypesSignature, orig));
     default:
         *ok = false;
         return NULL;

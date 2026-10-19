@@ -630,7 +630,7 @@ static TypesTypeName *trs_resolve_base_type_name(TypesChecker *check, bool ptr,
         AstExpr typ = ast_unparen(tdecl->type);
 
         /* dereference a pointer type */
-        if (typ->kind == AST_KIND_STAR_EXPR) {
+        if (typ != NULL && typ->kind == AST_KIND_STAR_EXPR) {
             /* if we've already seen a pointer, we're done */
             if (ptr)
                 break;
@@ -643,7 +643,8 @@ static TypesTypeName *trs_resolve_base_type_name(TypesChecker *check, bool ptr,
          * Referring to other packages (qualified identifiers) or going through
          * instantiated types (index expressions) is not permitted, so we can
          * ignore those. */
-        name = typ->kind == AST_KIND_IDENT ? (AstIdent *)(void *)typ : NULL;
+        name =
+            typ != NULL && typ->kind == AST_KIND_IDENT ? (AstIdent *)(void *)typ : NULL;
     }
 
     /* no base type found */
@@ -811,7 +812,7 @@ bool burrow__tc_unpack_recv(TypesChecker *check, AstExpr rtyp, bool unpack_param
 
     /* unpack receiver type */
     AstExpr base = ast_unparen(rtyp);
-    if (base->kind == AST_KIND_STAR_EXPR) {
+    if (base != NULL && base->kind == AST_KIND_STAR_EXPR) {
         ptr = true;
         base = ast_unparen(((AstStarExpr *)(void *)base)->x);
     }

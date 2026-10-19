@@ -451,7 +451,7 @@ TypesType types_selection_type(Alloc *a, TypesSelection *s) {
         /* The type of x.f is a method with its receiver type set to the type
          * of x. */
         TypesSignature *sig = GT_NEW(a, TypesSignature);
-        *sig = *types_as_signature(GT_OBJ(s->obj)->typ);
+        *sig = *GT_MUST(TypesSignature, TYPES_KIND_SIGNATURE, GT_OBJ(s->obj)->typ);
         TypesVar *recv = GT_NEW(a, TypesVar);
         *recv = *sig->recv;
         GT_OBJ(recv)->typ = s->recv;
@@ -462,7 +462,7 @@ TypesType types_selection_type(Alloc *a, TypesSelection *s) {
         /* The type of x.f is a function (without receiver) and an additional
          * first argument with the same type as x. */
         TypesSignature *sig = GT_NEW(a, TypesSignature);
-        *sig = *types_as_signature(GT_OBJ(s->obj)->typ);
+        *sig = *GT_MUST(TypesSignature, TYPES_KIND_SIGNATURE, GT_OBJ(s->obj)->typ);
         TypesVar *arg0 = GT_NEW(a, TypesVar);
         *arg0 = *sig->recv;
         sig->recvold = sig->recv; /* stash receiver (for consistency with call.go) */
@@ -554,7 +554,8 @@ bool burrow__types_is_interface_ptr(TypesType T) {
 
 Str burrow__types_interface_ptr_error(Alloc *a, TypesQualifier qf, TypesType T) {
     burrow__types_assert(burrow__types_is_interface_ptr(T));
-    TypesPointer *p = types_as_pointer(types_type_underlying(T));
+    TypesPointer *p =
+        GT_MUST(TypesPointer, TYPES_KIND_POINTER, types_type_underlying(T));
     Str ts = types_type_string(a, T, qf);
     if (burrow__types_is_type_param(p->base))
         return fmt_sprintf_v(

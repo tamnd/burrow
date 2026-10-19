@@ -155,10 +155,10 @@ static bool tvt_valid_type0(TypesChecker *check, TokenPos pos, TypesType typ,
 
     switch (typ->kind) {
     case TYPES_KIND_ARRAY:
-        return tvt_valid_type0(check, pos, types_as_array(typ)->elem, nest, path);
+        return tvt_valid_type0(check, pos, GT_KNOWN(TypesArray, typ)->elem, nest, path);
 
     case TYPES_KIND_STRUCT: {
-        Slice fields = types_as_struct(typ)->fields;
+        Slice fields = GT_KNOWN(TypesStruct, typ)->fields;
         for (Int i = 0; i < fields.len; i++) {
             TypesVar *f = GT_AT(fields, i, TypesVar *);
             if (!tvt_valid_type0(check, pos, GT_OBJ(f)->typ, nest, path))
@@ -168,7 +168,7 @@ static bool tvt_valid_type0(TypesChecker *check, TokenPos pos, TypesType typ,
     }
 
     case TYPES_KIND_UNION: {
-        Slice terms = types_as_union(typ)->terms;
+        Slice terms = GT_KNOWN(TypesUnion, typ)->terms;
         for (Int i = 0; i < terms.len; i++) {
             TypesTerm *t = GT_AT(terms, i, TypesTerm *);
             if (!tvt_valid_type0(check, pos, t->typ, nest, path))
@@ -178,7 +178,7 @@ static bool tvt_valid_type0(TypesChecker *check, TokenPos pos, TypesType typ,
     }
 
     case TYPES_KIND_INTERFACE: {
-        Slice embeddeds = types_as_interface(typ)->embeddeds;
+        Slice embeddeds = GT_KNOWN(TypesInterface, typ)->embeddeds;
         for (Int i = 0; i < embeddeds.len; i++) {
             if (!tvt_valid_type0(check, pos, GT_AT(embeddeds, i, TypesType), nest,
                                  path))
@@ -190,10 +190,11 @@ static bool tvt_valid_type0(TypesChecker *check, TokenPos pos, TypesType typ,
     case TYPES_KIND_NAMED:
         /* Go keeps a disabled check.valids optimization here; see the TODO in
          * validtype.go (go.dev/issue/65711). */
-        return tvt_valid_named(check, pos, types_as_named(typ), nest, path);
+        return tvt_valid_named(check, pos, GT_KNOWN(TypesNamed, typ), nest, path);
 
     case TYPES_KIND_TYPE_PARAM:
-        return tvt_valid_type_param(check, pos, types_as_type_param(typ), nest, path);
+        return tvt_valid_type_param(check, pos, GT_KNOWN(TypesTypeParam, typ), nest,
+                                    path);
 
     default:
         break;

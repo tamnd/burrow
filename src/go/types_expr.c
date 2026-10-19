@@ -49,7 +49,7 @@ static bool tex_under_implicit_ok(void *env, TypesType t, TypesType u) {
  * intermediate (delayed-checked) rhs operands of shifts, and as the value
  * nil. */
 static GtCode tex_implicit_basic(const GtOperand *x, TypesType target, TypesType *typ) {
-    switch ((Int)types_as_basic(x->typ)->kind) {
+    switch ((Int)GT_MUST(TypesBasic, TYPES_KIND_BASIC, x->typ)->kind) {
     case TYPES_UNTYPED_BOOL:
         if (!burrow__types_is_basic(target, TYPES_IS_BOOLEAN))
             return GT_CODE_INVALID_UNTYPED_CONVERSION;
@@ -117,7 +117,8 @@ GtCode burrow__tc_implicit_type_and_value(TypesChecker *check, const GtOperand *
     case TYPES_KIND_BASIC:
         if (x->mode == GT_MODE_CONSTANT) {
             ConstantValue v;
-            GtCode code = burrow__tc_representation(check, x, types_as_basic(u), &v);
+            GtCode code =
+                burrow__tc_representation(check, x, GT_KNOWN(TypesBasic, u), &v);
             if (code != GT_CODE_NONE)
                 return code;
             *typ = target;
@@ -144,7 +145,7 @@ GtCode burrow__tc_implicit_type_and_value(TypesChecker *check, const GtOperand *
             return GT_CODE_NONE;
         }
         /* cannot assign untyped values to non-empty interfaces */
-        if (!types_interface_empty(types_as_interface(u)))
+        if (!types_interface_empty(GT_KNOWN(TypesInterface, u)))
             return GT_CODE_INVALID_UNTYPED_CONVERSION;
         *typ = types_default(x->typ);
         return GT_CODE_NONE;
@@ -276,10 +277,11 @@ static void tex_unary(TypesChecker *check, GtOperand *x, AstUnaryExpr *e) {
 
     Token op = e->op;
     switch ((Int)op) {
-    case TOKEN_AND:
+    case TOKEN_AND: {
         /* spec: "As an exception to the addressability requirement x may also
          * be a composite literal." */
-        if (ast_unparen(e->x)->kind != AST_KIND_COMPOSITE_LIT &&
+        AstExpr ux = ast_unparen(e->x);
+        if ((ux == NULL || ux->kind != AST_KIND_COMPOSITE_LIT) &&
             x->mode != GT_MODE_VARIABLE) {
             Str xs = burrow__tc_xs(check, x);
             GT_ERRORF(check, burrow__tc_at_op(x), GT_CODE_UNADDRESSABLE_OPERAND,
@@ -290,6 +292,7 @@ static void tex_unary(TypesChecker *check, GtOperand *x, AstUnaryExpr *e) {
         x->mode = GT_MODE_VALUE;
         x->typ = types_type(types_new_pointer(check->a, x->typ));
         return;
+    }
 
     case TOKEN_ARROW: {
         /* We cannot receive a value with an incomplete type; make sure it's
@@ -391,7 +394,7 @@ TypesType burrow__tc_chan_elem(TypesChecker *check, GtPosn pos, const GtOperand 
     TypesType u = burrow__tc_common_under(
         check, x->typ, BURROW_FN(GtUnderCond, tex_chan_cond, &c), &cause);
     if (u != NULL)
-        return types_as_chan(u)->elem;
+        return GT_MUST(TypesChan, TYPES_KIND_CHAN, u)->elem;
 
     Str xs = burrow__tc_xs(check, x);
     if (recv) {

@@ -38,11 +38,20 @@ set -eu
 
 out="-"
 empty=0
+list=""
 
 while [ $# -gt 0 ]; do
 	case "$1" in
 	-o)
 		out="$2"
+		shift 2
+		;;
+	-f)
+		# A file naming the objects, one to a line, for when there are
+		# too many of them for one command line. Windows stops at 32767
+		# characters, and five hundred object paths under a build
+		# directory can be more than that.
+		list="$2"
 		shift 2
 		;;
 	--empty)
@@ -75,12 +84,17 @@ fi
 
 names=""
 
-if [ "$empty" -eq 0 ] && [ $# -gt 0 ]; then
+if [ "$empty" -eq 0 ] && { [ $# -gt 0 ] || [ -n "$list" ]; }; then
 	# Global text symbols, which is what a function that another file can name
 	# looks like in every object format this runs on. The three field test is
 	# what drops the undefined ones, whose lines are a U and a name with no
 	# address in front of them.
-	names=$(nm -g "$@" 2>/dev/null |
+	# The list goes through xargs in batches, so no single nm gets a
+	# command line longer than the one this script was spared.
+	names=$({
+		if [ $# -gt 0 ]; then nm -g "$@"; fi
+		if [ -n "$list" ]; then xargs -n 64 nm -g <"$list"; fi
+	} 2>/dev/null |
 		awk 'NF == 3 && $2 == "T" { print $3 }' |
 		sort -u)
 

@@ -385,7 +385,9 @@ Str burrow__tc_operand_string(Alloc *a, const GtOperand *x, TypesQualifier qf) {
                 what = burrow__tc_composite_kind(x->typ);
                 if (what.len == 0) {
                     /* x.typ must be basic type */
-                    what = types_as_basic(types_type_underlying(x->typ))->name;
+                    what = GT_MUST(TypesBasic, TYPES_KIND_BASIC,
+                                   types_type_underlying(x->typ))
+                               ->name;
                 }
             }
             /* desc is "" or has a trailing space at the end */

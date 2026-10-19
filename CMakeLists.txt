@@ -94,13 +94,19 @@ find_program(BURROW_SYMTAB_SH sh)
 find_program(BURROW_SYMTAB_NM nm)
 
 if(BURROW_SYMTAB AND BURROW_SYMTAB_SH AND BURROW_SYMTAB_NM AND NOT CMAKE_CROSSCOMPILING)
+    # The objects go to the script in a file rather than on its command line.
+    # There are more than five hundred of them, and together their paths can
+    # run past the 32767 characters a Windows command line holds.
+    set(BURROW_SYMTAB_LIST ${CMAKE_CURRENT_BINARY_DIR}/gen/symtab_objects_$<CONFIG>.txt)
+    file(GENERATE OUTPUT ${BURROW_SYMTAB_LIST}
+        CONTENT "$<JOIN:$<TARGET_OBJECTS:burrow_objects>,\n>\n")
     add_custom_command(
         OUTPUT ${BURROW_SYMTAB_SRC}
         COMMAND ${CMAKE_COMMAND} -E make_directory ${CMAKE_CURRENT_BINARY_DIR}/gen
         COMMAND ${BURROW_SYMTAB_SH} ${CMAKE_CURRENT_SOURCE_DIR}/tools/burrow-symtab
-                -o ${BURROW_SYMTAB_SRC} $<TARGET_OBJECTS:burrow_objects>
+                -o ${BURROW_SYMTAB_SRC} -f ${BURROW_SYMTAB_LIST}
         DEPENDS burrow_objects ${CMAKE_CURRENT_SOURCE_DIR}/tools/burrow-symtab
-        COMMAND_EXPAND_LISTS
+                ${BURROW_SYMTAB_LIST}
         VERBATIM
         COMMENT "Reading the traceback name table out of the objects")
 else()

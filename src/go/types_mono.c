@@ -78,15 +78,17 @@ static void tmo_report_instance_loop(TypesChecker *check, Int v) {
         seen[i] = false;
 
     /* v may only be reachable from the cycle, not on the cycle itself. Start
-     * by walking backwards along the path until a vertex appears twice. */
-    while (!seen[v]) {
+     * by walking backwards along the path until a vertex appears twice. Go
+     * writes this as a for loop. Nothing is seen yet, so the first step always
+     * runs, and a do while says so in a way gcc can see. */
+    do {
         Slice r = slice_append(check->a, stack, &v, 1);
         if (r.p == NULL)
             burrow__types_oom();
         stack = r;
         seen[v] = true;
         v = tmo_edge(w, tmo_vertex(w, v)->pre)->src;
-    }
+    } while (!seen[v]);
 
     /* Trim any vertices visited before visiting v the first time. Since v is
      * the first vertex found within the cycle, any vertices visited earlier
@@ -295,15 +297,15 @@ static void tmo_do_tuple(TmoAssign *c, TypesTuple *tup);
  * parameters. */
 static void tmo_do(TmoAssign *c, TypesType typ) {
     typ = types_unalias(typ);
-    switch (typ->kind) {
+    switch (typ == NULL ? (Int)TYPES_KIND_INVALID : typ->kind) {
     case TYPES_KIND_TYPE_PARAM: {
-        TypesTypeParam *t = types_as_type_param(typ);
+        TypesTypeParam *t = GT_KNOWN(TypesTypeParam, typ);
         burrow__types_assert(GT_OBJ(t->obj)->pkg == c->pkg);
         tmo_flow(c, tmo_type_param_vertex(c->check, t), typ);
         break;
     }
     case TYPES_KIND_NAMED: {
-        TypesNamed *t = types_as_named(typ);
+        TypesNamed *t = GT_KNOWN(TypesNamed, typ);
         Int src = tmo_local_named_vertex(c->check, c->pkg, types_named_origin(t));
         if (src >= 0)
             tmo_flow(c, src, typ);
@@ -313,36 +315,36 @@ static void tmo_do(TmoAssign *c, TypesType typ) {
         break;
     }
     case TYPES_KIND_ARRAY:
-        tmo_do(c, types_as_array(typ)->elem);
+        tmo_do(c, GT_KNOWN(TypesArray, typ)->elem);
         break;
     case TYPES_KIND_BASIC:
         /* ok */
         break;
     case TYPES_KIND_CHAN:
-        tmo_do(c, types_as_chan(typ)->elem);
+        tmo_do(c, GT_KNOWN(TypesChan, typ)->elem);
         break;
     case TYPES_KIND_MAP:
-        tmo_do(c, types_as_map(typ)->key);
-        tmo_do(c, types_as_map(typ)->elem);
+        tmo_do(c, GT_KNOWN(TypesMap, typ)->key);
+        tmo_do(c, GT_KNOWN(TypesMap, typ)->elem);
         break;
     case TYPES_KIND_POINTER:
-        tmo_do(c, types_as_pointer(typ)->base);
+        tmo_do(c, GT_KNOWN(TypesPointer, typ)->base);
         break;
     case TYPES_KIND_SLICE:
-        tmo_do(c, types_as_slice(typ)->elem);
+        tmo_do(c, GT_KNOWN(TypesSlice, typ)->elem);
         break;
     case TYPES_KIND_INTERFACE: {
-        TypesInterface *t = types_as_interface(typ);
+        TypesInterface *t = GT_KNOWN(TypesInterface, typ);
         for (Int i = 0; i < types_interface_num_methods(t); i++)
             tmo_do(c, GT_OBJ(types_interface_method(t, i))->typ);
         break;
     }
     case TYPES_KIND_SIGNATURE:
-        tmo_do_tuple(c, types_as_signature(typ)->params);
-        tmo_do_tuple(c, types_as_signature(typ)->results);
+        tmo_do_tuple(c, GT_KNOWN(TypesSignature, typ)->params);
+        tmo_do_tuple(c, GT_KNOWN(TypesSignature, typ)->results);
         break;
     case TYPES_KIND_STRUCT: {
-        TypesStruct *t = types_as_struct(typ);
+        TypesStruct *t = GT_KNOWN(TypesStruct, typ);
         for (Int i = 0; i < types_struct_num_fields(t); i++)
             tmo_do(c, GT_OBJ(types_struct_field(t, i))->typ);
         break;

@@ -1584,6 +1584,424 @@ static void TestImplicitsInfo(TestingT *t) {
     arena_free(&ar);
 }
 
+static const Str pkg_name_of_src =
+    S_("\npackage p\n\nimport (\n\t. \"os\"\n\t_ "
+       "\"io\"\n\t\"math\"\n\t\"path/filepath\"\n\tsnort \"sort\"\n)\n\n// avoid "
+       "imported and not used errors\nvar (\n\t_ = Open // os.Open\n\t_ = "
+       "math.Sin\n\t_ = filepath.Abs\n\t_ = snort.Ints\n)\n");
+
+static const struct {
+    Str path; /* path string enclosed in "'s */
+    Str want;
+} pkg_name_of_tests[] = {
+    {S_("\"os\""), S_(".")},       {S_("\"io\""), S_("_")},
+    {S_("\"math\""), S_("math")},  {S_("\"path/filepath\""), S_("filepath")},
+    {S_("\"sort\""), S_("snort")},
+};
+
+static void TestPkgNameOf(TestingT *t) {
+    if (!have_source_importer())
+        testing_t_skip_v(t, "no go1.27 sources to import os from");
+
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TokenFileSet *fset = token_new_file_set(a);
+    AstFile *f = must_parse(a, fset, pkg_name_of_src);
+    TypesInfo info = {0};
+    info.defs = new_objects_map(a);
+    info.implicits = new_objects_map(a);
+    TypesConfig conf = {0};
+    conf.importer = default_importer(fset);
+    Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
+    Error err = BURROW_NO_ERROR;
+    (void)types_config_check(&conf, a, S("p"), fset, files, &info, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "%s", error_text(err));
+
+    /* map import paths to importDecl */
+    Map *imports = map_make(a, TYPE_STRING, TYPE_UNSAFE_POINTER, 0);
+    AstGenDecl *gen = (AstGenDecl *)((AstDecl *)f->decls.p)[0];
+    for (Int i = 0; i < gen->specs.len; i++) {
+        AstSpec s = ((AstSpec *)gen->specs.p)[i];
+        if (s->kind == AST_KIND_IMPORT_SPEC) {
+            AstImportSpec *imp = (AstImportSpec *)s;
+            map_set(imports, &imp->path->value, &imp);
+        }
+    }
+
+    for (Int i = 0; i < NELEM(pkg_name_of_tests); i++) {
+        Str path = pkg_name_of_tests[i].path, want = pkg_name_of_tests[i].want;
+        AstImportSpec *imp = NULL;
+        (void)map_get2(imports, &path, &imp);
+        if (imp == NULL)
+            testing_t_fatalf_v(t, "invalid test case: import path %s not found", path);
+        TypesPkgName *got = types_info_pkg_name_of(&info, imp);
+        if (got == NULL)
+            testing_t_fatalf_v(t, "import %s: package name not found", path);
+        Str got_name = types_object_name(types_object(got));
+        if (!str_eq(got_name, want))
+            testing_t_errorf_v(t, "import %s: got %s; want %s", path, got_name, want);
+    }
+
+    /* test non-existing importDecl */
+    AstImportSpec *none = (AstImportSpec *)ast_node_new(a, AST_KIND_IMPORT_SPEC);
+    TypesPkgName *got = types_info_pkg_name_of(&info, none);
+    if (got != NULL)
+        testing_t_errorf_v(t, "got %s for non-existing import declaration",
+                           types_object_name(types_object(got)));
+    arena_free(&ar);
+}
+
+/* pred_string: the predicates tv satisfies. Not in Go: the zero
+ * ConstantValue, of kind unknown, is Go's nil Value. */
+static Str pred_string(Alloc *a, TypesTypeAndValue tv) {
+    bool is_const = constant_value_kind(tv.value) != CONSTANT_UNKNOWN;
+    const struct {
+        bool b;
+        Str s;
+    } preds[] = {
+        {types_type_and_value_is_void(tv), S("void")},
+        {types_type_and_value_is_type(tv), S("type")},
+        {types_type_and_value_is_builtin(tv), S("builtin")},
+        {types_type_and_value_is_value(tv) && is_const, S("const")},
+        {types_type_and_value_is_value(tv) && !is_const, S("value")},
+        {types_type_and_value_is_nil(tv), S("nil")},
+        {types_type_and_value_addressable(tv), S("addressable")},
+        {types_type_and_value_assignable(tv), S("assignable")},
+        {types_type_and_value_has_ok(tv), S("hasOk")},
+    };
+    Slice parts = slice_nil(TYPE_STRING);
+    for (Int i = 0; i < NELEM(preds); i++) {
+        if (preds[i].b)
+            parts = slice_append(a, parts, &preds[i].s, 1);
+    }
+    if (parts.len == 0)
+        return S("invalid");
+    return strings_join(a, parts, S(", "));
+}
+
+static const struct {
+    Str src;
+    Str expr;
+    Str pred;
+} predicates_tests[] = {
+    {S_("package n0; func f() { f() }"), S_("f()"), S_("void")},
+
+    /* types */
+    {S_("package t0; type _ int"), S_("int"), S_("type")},
+    {S_("package t1; type _ []int"), S_("[]int"), S_("type")},
+    {S_("package t2; type _ func()"), S_("func()"), S_("type")},
+    {S_("package t3; type _ func(int)"), S_("int"), S_("type")},
+    {S_("package t3; type _ func(...int)"), S_("...int"), S_("type")},
+
+    /* built-ins */
+    {S_("package b0; var _ = len(\"\")"), S_("len"), S_("builtin")},
+    {S_("package b1; var _ = (len)(\"\")"), S_("(len)"), S_("builtin")},
+
+    /* constants */
+    {S_("package c0; var _ = 42"), S_("42"), S_("const")},
+    {S_("package c1; var _ = \"foo\" + \"bar\""), S_("\"foo\" + \"bar\""), S_("const")},
+    {S_("package c2; const (i = 1i; _ = i)"), S_("i"), S_("const")},
+
+    /* values */
+    {S_("package v0; var (a, b int; _ = a + b)"), S_("a + b"), S_("value")},
+    {S_("package v1; var _ = &[]int{1}"), S_("[]int{\342\200\246}"), S_("value")},
+    {S_("package v2; var _ = func(){}"), S_("(func() literal)"), S_("value")},
+    {S_("package v4; func f() { _ = f }"), S_("f"), S_("value")},
+    {S_("package v3; var _ *int = nil"), S_("nil"), S_("value, nil")},
+    {S_("package v3; var _ *int = (nil)"), S_("(nil)"), S_("value, nil")},
+
+    /* addressable (and thus assignable) operands */
+    {S_("package a0; var (x int; _ = x)"), S_("x"),
+     S_("value, addressable, assignable")},
+    {S_("package a1; var (p *int; _ = *p)"), S_("*p"),
+     S_("value, addressable, assignable")},
+    {S_("package a2; var (s []int; _ = s[0])"), S_("s[0]"),
+     S_("value, addressable, assignable")},
+    {S_("package a3; var (s struct{f int}; _ = s.f)"), S_("s.f"),
+     S_("value, addressable, assignable")},
+    {S_("package a4; var (a [10]int; _ = a[0])"), S_("a[0]"),
+     S_("value, addressable, assignable")},
+    {S_("package a5; func _(x int) { _ = x }"), S_("x"),
+     S_("value, addressable, assignable")},
+    {S_("package a6; func _()(x int) { _ = x; return }"), S_("x"),
+     S_("value, addressable, assignable")},
+    {S_("package a7; type T int; func (x T) _() { _ = x }"), S_("x"),
+     S_("value, addressable, assignable")},
+    /* composite literals are not addressable */
+
+    /* assignable but not addressable values */
+    {S_("package s0; var (m map[int]int; _ = m[0])"), S_("m[0]"),
+     S_("value, assignable, hasOk")},
+    {S_("package s1; var (m map[int]int; _, _ = m[0])"), S_("m[0]"),
+     S_("value, assignable, hasOk")},
+
+    /* hasOk expressions */
+    {S_("package k0; var (ch chan int; _ = <-ch)"), S_("<-ch"), S_("value, hasOk")},
+    {S_("package k1; var (ch chan int; _, _ = <-ch)"), S_("<-ch"), S_("value, hasOk")},
+
+    /* missing entries */
+    /* - package names are collected in the Uses map */
+    /* - identifiers being declared are collected in the Defs map */
+    {S_("package m0; import \"os\"; func _() { _ = os.Stdout }"), S_("os"),
+     S_("<missing>")},
+    {S_("package m1; import p \"os\"; func _() { _ = p.Stdout }"), S_("p"),
+     S_("<missing>")},
+    {S_("package m2; const c = 0"), S_("c"), S_("<missing>")},
+    {S_("package m3; type T int"), S_("T"), S_("<missing>")},
+    {S_("package m4; var v int"), S_("v"), S_("<missing>")},
+    {S_("package m5; func f() {}"), S_("f"), S_("<missing>")},
+    {S_("package m6; func _(x int) {}"), S_("x"), S_("<missing>")},
+    {S_("package m6; func _()(x int) { return }"), S_("x"), S_("<missing>")},
+    {S_("package m6; type T int; func (x T) _() {}"), S_("x"), S_("<missing>")},
+};
+
+static void TestPredicatesInfo(TestingT *t) {
+    if (!have_source_importer())
+        testing_t_skip_v(t, "no go1.27 sources to import os from");
+
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    for (Int i = 0; i < NELEM(predicates_tests); i++) {
+        TypesInfo info = {0};
+        info.types = new_types_map(a);
+        Str name =
+            types_package_name(must_typecheck(a, predicates_tests[i].src, NULL, &info));
+
+        /* look for expression predicates */
+        Str got = S("<missing>");
+        const void *k;
+        void *v;
+        for (MapIter it = map_iter(info.types); map_next(&it, &k, &v);) {
+            if (str_eq(types_expr_string(a, *(AstExpr const *)k),
+                       predicates_tests[i].expr)) {
+                got = pred_string(a, *(const TypesTypeAndValue *)v);
+                break;
+            }
+        }
+
+        if (!str_eq(got, predicates_tests[i].pred))
+            testing_t_errorf_v(t, "package %s: got %s; want %s", name, got,
+                               predicates_tests[i].pred);
+    }
+    arena_free(&ar);
+}
+
+enum { MAX_SCOPES = 5 };
+
+static const struct {
+    Str src;
+    Str scopes[MAX_SCOPES]; /* list of scope descriptors of the form kind:varlist */
+} scopes_tests[] = {
+    {S_("package p0"),
+     {
+         S_("file:"),
+     }},
+    {S_("package p1; import ( \"fmt\"; m \"math\"; _ \"os\" ); var ( _ = fmt.Println; "
+        "_ = m.Pi )"),
+     {
+         S_("file:fmt m"),
+     }},
+    {S_("package p2; func _() {}"),
+     {
+         S_("file:"),
+         S_("func:"),
+     }},
+    {S_("package p3; func _(x, y int) {}"),
+     {
+         S_("file:"),
+         S_("func:x y"),
+     }},
+    {S_("package p4; func _(x, y int) { x, z := 1, 2; _ = z }"),
+     {
+         S_("file:"), S_("func:x y z"), /* redeclaration of x */
+     }},
+    {S_("package p5; func _(x, y int) (u, _ int) { return }"),
+     {
+         S_("file:"),
+         S_("func:u x y"),
+     }},
+    {S_("package p6; func _() { { var x int; _ = x } }"),
+     {
+         S_("file:"),
+         S_("func:"),
+         S_("block:x"),
+     }},
+    {S_("package p7; func _() { if true {} }"),
+     {
+         S_("file:"),
+         S_("func:"),
+         S_("if:"),
+         S_("block:"),
+     }},
+    {S_("package p8; func _() { if x := 0; x < 0 { y := x; _ = y } }"),
+     {
+         S_("file:"),
+         S_("func:"),
+         S_("if:x"),
+         S_("block:y"),
+     }},
+    {S_("package p9; func _() { switch x := 0; x {} }"),
+     {
+         S_("file:"),
+         S_("func:"),
+         S_("switch:x"),
+     }},
+    {S_("package p10; func _() { switch x := 0; x { case 1: y := x; _ = y; default: "
+        "}}"),
+     {
+         S_("file:"),
+         S_("func:"),
+         S_("switch:x"),
+         S_("case:y"),
+         S_("case:"),
+     }},
+    {S_("package p11; func _(t interface{}) { switch t.(type) {} }"),
+     {
+         S_("file:"),
+         S_("func:t"),
+         S_("type switch:"),
+     }},
+    {S_("package p12; func _(t interface{}) { switch t := t; t.(type) {} }"),
+     {
+         S_("file:"),
+         S_("func:t"),
+         S_("type switch:t"),
+     }},
+    {S_("package p13; func _(t interface{}) { switch x := t.(type) { case int: _ = x } "
+        "}"),
+     {
+         S_("file:"), S_("func:t"), S_("type switch:"),
+         S_("case:x"), /* x implicitly declared */
+     }},
+    {S_("package p14; func _() { select{} }"),
+     {
+         S_("file:"),
+         S_("func:"),
+     }},
+    {S_("package p15; func _(c chan int) { select{ case <-c: } }"),
+     {
+         S_("file:"),
+         S_("func:c"),
+         S_("comm:"),
+     }},
+    {S_("package p16; func _(c chan int) { select{ case i := <-c: x := i; _ = x} }"),
+     {
+         S_("file:"),
+         S_("func:c"),
+         S_("comm:i x"),
+     }},
+    {S_("package p17; func _() { for{} }"),
+     {
+         S_("file:"),
+         S_("func:"),
+         S_("for:"),
+         S_("block:"),
+     }},
+    {S_("package p18; func _(n int) { for i := 0; i < n; i++ { _ = i } }"),
+     {
+         S_("file:"),
+         S_("func:n"),
+         S_("for:i"),
+         S_("block:"),
+     }},
+    {S_("package p19; func _(a []int) { for i := range a { _ = i} }"),
+     {
+         S_("file:"),
+         S_("func:a"),
+         S_("range:i"),
+         S_("block:"),
+     }},
+    {S_("package p20; var s int; func _(a []int) { for i, x := range a { s += x; _ = i "
+        "} }"),
+     {
+         S_("file:"),
+         S_("func:a"),
+         S_("range:i x"),
+         S_("block:"),
+     }},
+};
+
+static void TestScopesInfo(TestingT *t) {
+    if (!have_source_importer())
+        testing_t_skip_v(t, "no go1.27 sources to import fmt from");
+
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    for (Int i = 0; i < NELEM(scopes_tests); i++) {
+        const Str *scopes = scopes_tests[i].scopes;
+        Int nscopes = 0;
+        while (nscopes < MAX_SCOPES && scopes[nscopes].len != 0)
+            nscopes++;
+
+        TypesInfo info = {0};
+        info.scopes = new_objects_map(a);
+        Str name =
+            types_package_name(must_typecheck(a, scopes_tests[i].src, NULL, &info));
+
+        /* number of scopes must match */
+        if (map_len(info.scopes) != nscopes)
+            testing_t_errorf_v(t, "package %s: got %d scopes; want %d", name,
+                               map_len(info.scopes), nscopes);
+
+        /* scope descriptions must match */
+        const void *k;
+        void *v;
+        for (MapIter it = map_iter(info.scopes); map_next(&it, &k, &v);) {
+            Str kind = S("<unknown node kind>");
+            switch ((*(AstNode const *)k)->kind) {
+            case AST_KIND_FILE:
+                kind = S("file");
+                break;
+            case AST_KIND_FUNC_TYPE:
+                kind = S("func");
+                break;
+            case AST_KIND_BLOCK_STMT:
+                kind = S("block");
+                break;
+            case AST_KIND_IF_STMT:
+                kind = S("if");
+                break;
+            case AST_KIND_SWITCH_STMT:
+                kind = S("switch");
+                break;
+            case AST_KIND_TYPE_SWITCH_STMT:
+                kind = S("type switch");
+                break;
+            case AST_KIND_CASE_CLAUSE:
+                kind = S("case");
+                break;
+            case AST_KIND_COMM_CLAUSE:
+                kind = S("comm");
+                break;
+            case AST_KIND_FOR_STMT:
+                kind = S("for");
+                break;
+            case AST_KIND_RANGE_STMT:
+                kind = S("range");
+                break;
+            default:
+                break;
+            }
+
+            /* look for matching scope description */
+            TypesScope *scope = *(TypesScope **)v;
+            Str desc = fmt_sprintf_v(
+                a, "%s:%s", kind, strings_join(a, types_scope_names(a, scope), S(" ")));
+            bool found = false;
+            for (Int j = 0; j < nscopes; j++)
+                found = found || str_eq(scopes[j], desc);
+            if (!found)
+                testing_t_errorf_v(t, "package %s: no matching scope found for %s",
+                                   name, desc);
+        }
+    }
+    arena_free(&ar);
+}
+
 /* fmt.Sprint of a list of strings, a Slice of Str. */
 static Str sprint_list(Alloc *a, Slice list) {
     Str parts[3] = {S("["), strings_join(a, list, S(" ")), S("]")};
@@ -1805,6 +2223,9 @@ static void TestFirstErrorInTypeSet(TestingT *t) {
     X(TestUsesInfo)                                                                    \
     X(TestGenericMethodInfo)                                                           \
     X(TestImplicitsInfo)                                                               \
+    X(TestPkgNameOf)                                                                   \
+    X(TestPredicatesInfo)                                                              \
+    X(TestScopesInfo)                                                                  \
     X(TestInitOrderInfo)                                                               \
     X(TestMultiFileInitOrder)                                                          \
     X(TestFiles)                                                                       \

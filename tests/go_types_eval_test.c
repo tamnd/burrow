@@ -1,5 +1,4 @@
-/* Derived from Go's src/go/types/eval_test.go, with independentTestTypes from
- * typestring_test.go. Go source: go1.27.1.
+/* Derived from Go's src/go/types/eval_test.go. Go source: go1.27.1.
  *
  * Not here yet: TestEvalPos and TestCheckExpr, which import fmt, math and io
  * through the default importer, which burrow does not have yet.
@@ -10,6 +9,7 @@
  * in the LICENSE file. */
 
 #include "check.h"
+#include "go_types_typestring.h"
 
 #include "burrow/burrow.h"
 #include "burrow/go/ast.h"
@@ -78,88 +78,6 @@ static void TestEvalBasic(TestingT *t) {
     }
     arena_free(&ar);
 }
-
-typedef struct {
-    Str src, str;
-} TestEntry;
-
-/* types that don't depend on any other type declarations */
-static const TestEntry independent_test_types[] = {
-    /* basic types */
-    {S_("int"), S_("int")},
-    {S_("float32"), S_("float32")},
-    {S_("string"), S_("string")},
-
-    /* arrays */
-    {S_("[10]int"), S_("[10]int")},
-
-    /* slices */
-    {S_("[]int"), S_("[]int")},
-    {S_("[][]int"), S_("[][]int")},
-
-    /* structs */
-    {S_("struct{}"), S_("struct{}")},
-    {S_("struct{x int}"), S_("struct{x int}")},
-    {S_("struct {\n\t\tx, y int\n\t\tz float32 \"foo\"\n\t}"),
-     S_("struct{x int; y int; z float32 \"foo\"}")},
-    {S_("struct {\n\t\tstring\n\t\telems []complex128\n\t}"),
-     S_("struct{string; elems []complex128}")},
-
-    /* pointers */
-    {S_("*int"), S_("*int")},
-    {S_("***struct{}"), S_("***struct{}")},
-    {S_("*struct{a int; b float32}"), S_("*struct{a int; b float32}")},
-
-    /* functions */
-    {S_("func()"), S_("func()")},
-    {S_("func(x int)"), S_("func(x int)")},
-    {S_("func(x, y int)"), S_("func(x int, y int)")},
-    {S_("func(x, y int, z string)"), S_("func(x int, y int, z string)")},
-    {S_("func(int)"), S_("func(int)")},
-    {S_("func(int, string, byte)"), S_("func(int, string, byte)")},
-
-    {S_("func() int"), S_("func() int")},
-    {S_("func() (string)"), S_("func() string")},
-    {S_("func() (u int)"), S_("func() (u int)")},
-    {S_("func() (u, v int, w string)"), S_("func() (u int, v int, w string)")},
-
-    {S_("func(int) string"), S_("func(int) string")},
-    {S_("func(x int) string"), S_("func(x int) string")},
-    {S_("func(x int) (u string)"), S_("func(x int) (u string)")},
-    {S_("func(x, y int) (u string)"), S_("func(x int, y int) (u string)")},
-
-    {S_("func(...int) string"), S_("func(...int) string")},
-    {S_("func(x ...int) string"), S_("func(x ...int) string")},
-    {S_("func(x ...int) (u string)"), S_("func(x ...int) (u string)")},
-    {S_("func(x int, y ...int) (u string)"), S_("func(x int, y ...int) (u string)")},
-
-    /* interfaces */
-    {S_("interface{}"), S_("interface{}")},
-    {S_("interface{m()}"), S_("interface{m()}")},
-    {S_("interface{String() string; m(int) float32}"),
-     S_("interface{String() string; m(int) float32}")},
-    {S_("interface{int | float32 | complex128}"),
-     S_("interface{int | float32 | complex128}")},
-    {S_("interface{int | ~float32 | ~complex128}"),
-     S_("interface{int | ~float32 | ~complex128}")},
-    {S_("interface{comparable}"), S_("interface{comparable}")},
-    /* TODO(gri) adjust test for EvalCompositeTest
-     * {"error", "interface{Error() string}"},
-     * {"any", "interface{}"},
-     * {"comparable", "interface{comparable}"}, */
-
-    /* maps */
-    {S_("map[string]int"), S_("map[string]int")},
-    {S_("map[struct{x, y int}][]byte"), S_("map[struct{x int; y int}][]byte")},
-
-    /* channels */
-    {S_("chan<- chan int"), S_("chan<- chan int")},
-    {S_("chan<- <-chan int"), S_("chan<- <-chan int")},
-    {S_("<-chan <-chan int"), S_("<-chan <-chan int")},
-    {S_("chan (<-chan int)"), S_("chan (<-chan int)")},
-    {S_("chan<- func()"), S_("chan<- func()")},
-    {S_("<-chan []func() int"), S_("<-chan []func() int")},
-};
 
 static void TestEvalComposite(TestingT *t) {
     Arena ar;

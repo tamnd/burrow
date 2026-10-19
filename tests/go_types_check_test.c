@@ -22,7 +22,8 @@
  * Not in Go: imports come from the source importer in go_types_importer.h,
  * and with no go1.27 sources to import from, a package that imports anything but
  * unsafe (or C, with -fakeImportC) is skipped. Not here: TestManual, which
- * reads files named on the command line.
+ * reads files named on the command line. TestIssue43124 and TestIssue59944
+ * come from Go's issues_test.go, and are here because they run testFiles.
  *
  * Copyright 2011 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -34,6 +35,7 @@
 
 #include "burrow/burrow.h"
 #include "burrow/flag.h"
+#include "burrow/fmt.h"
 #include "burrow/go/ast.h"
 #include "burrow/go/build.h"
 #include "burrow/go/build/constraint.h"
@@ -291,11 +293,17 @@ static bool needs_importer(Alloc *a, AstFile *file, bool fake_import_c, Str *pat
  * If provided, opts may be used to mutate the Config before type-checking.
  *
  * Not in Go: there is no manual parameter, since TestManual is not here, and
- * the one option the tests use, setting the Sizes, is a TypesStdSizes, or
- * NULL for none. Everything comes from the caller's arena ar, which a skip
- * frees on the way out. */
+ * the options the tests use are fields of a CheckOpts, or NULL for none.
+ * Everything comes from the caller's arena ar, which a skip frees on the way
+ * out. */
+typedef struct {
+    const TypesStdSizes *sizes;    /* withSizes */
+    const TypesImporter *importer; /* cfg.Importer */
+    bool go115_uses_cgo;           /* cfg.go115UsesCgo */
+} CheckOpts;
+
 static void test_files(TestingT *t, Arena *ar, Slice filenames, Slice srcs,
-                       const TypesStdSizes *sizes) {
+                       const CheckOpts *opts) {
     if (filenames.len == 0) {
         Str msg = S("no source files");
         testing_t_fatal_v(t, msg);
@@ -321,10 +329,14 @@ static void test_files(TestingT *t, Arena *ar, Slice filenames, Slice srcs,
 
     /* apply custom configuration */
     TypesStdSizes sz;
-    if (sizes != NULL) {
-        sz = *sizes;
+    if (opts != NULL && opts->sizes != NULL) {
+        sz = *opts->sizes;
         conf.sizes = types_std_sizes_as_sizes(&sz);
     }
+    if (opts != NULL && opts->importer != NULL)
+        conf.importer = *opts->importer;
+    if (opts != NULL)
+        conf.go115_uses_cgo = opts->go115_uses_cgo;
 
     /* apply flag setting (overrides custom configuration) */
     Str goexperiment = S("");
@@ -499,11 +511,12 @@ static void TestIndexRepresentability(TestingT *t) {
                 "\"int64\\\\(1\\\\) << 40 \\\\(.*\\\\) overflows int\" */ (1) << 40]");
     Str filename = S("index.go");
     const TypesStdSizes sizes = {4, 4};
+    const CheckOpts opts = {.sizes = &sizes};
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
     test_files(t, &ar, slice_append(a, slice_nil(TYPE_STRING), &filename, 1),
-               slice_append(a, slice_nil(TYPE_STRING), &src, 1), &sizes);
+               slice_append(a, slice_nil(TYPE_STRING), &src, 1), &opts);
     arena_free(&ar);
 }
 
@@ -514,11 +527,150 @@ static void TestIssue47243_TypedRHS(TestingT *t) {
         "package issue47243; var a uint64; var _ = a << uint64(4294967296)"); /* uint64(1<<32) */
     Str filename = S("p.go");
     const TypesStdSizes sizes = {4, 4};
+    const CheckOpts opts = {.sizes = &sizes};
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
     test_files(t, &ar, slice_append(a, slice_nil(TYPE_STRING), &filename, 1),
-               slice_append(a, slice_nil(TYPE_STRING), &src, 1), &sizes);
+               slice_append(a, slice_nil(TYPE_STRING), &src, 1), &opts);
+    arena_free(&ar);
+}
+
+typedef struct {
+    TypesPackage *pkg;
+    TypesImporter fallback;
+} CkImportHelper;
+
+static TypesPackage *ck_import_helper_import(void *self, Str path, Error *err) {
+    CkImportHelper *h = self;
+    if (str_eq(path, types_package_path(h->pkg)))
+        return h->pkg;
+    if (h->fallback.vt == NULL) {
+        *err = fmt_errorf_v("got package path %q; want %q", path,
+                            types_package_path(h->pkg));
+        return NULL;
+    }
+    return h->fallback.vt->import_(h->fallback.data, path, err);
+}
+
+static const TypesImporterVT ck_import_helper_vt = {NULL, ck_import_helper_import,
+                                                    NULL};
+
+/* Not in Go: one file as a []string, for test_files. */
+static Slice ck_one(Alloc *a, Str s) {
+    return slice_append(a, slice_nil(TYPE_STRING), &s, 1);
+}
+
+static void TestIssue43124(TestingT *t) {
+    /* Not in Go: in place of testenv.MustHaveGoBuild, the importer here reads
+     * Go's sources for text/template, html/template and fmt. */
+    if (!have_source_importer())
+        testing_t_skip_v(t, "no go1.27 sources to import text/template from");
+
+    /* All involved packages have the same name (template). Error messages
+     * should disambiguate between text/template and html/template by printing
+     * the full path. */
+    Str asrc = S("package a; import \"text/template\"; func F(template.Template) {}; "
+                 "func G(int) {}");
+    Str bsrc = S("\npackage b\n\nimport (\n\t\"a\"\n\t\"html/template\"\n)\n\nfunc _() "
+                 "{\n\t// Packages should be fully qualified when there is ambiguity "
+                 "within the\n\t// error string itself.\n\ta.F(template /* ERRORx "
+                 "\"cannot use.*html/template.* as .*text/template\" */ "
+                 ".Template{})\n}\n");
+    Str csrc =
+        S("\npackage c\n\nimport (\n\t\"a\"\n\t\"fmt\"\n\t\"html/template\"\n)\n\n// "
+          "go.dev/issue/46905: make sure template is not the first package "
+          "qualified.\nvar _ fmt.Stringer = 1 // ERRORx \"cannot use 1.*as "
+          "fmt\\\\.Stringer\"\n\n// Packages should be fully qualified when there "
+          "is ambiguity in reachable\n// packages. In this case both a (and for "
+          "that matter html/template) import\n// text/template.\nfunc _() { "
+          "a.G(template /* ERRORx \"cannot use .*html/template.*Template\" */ "
+          ".Template{}) }\n");
+    Str tsrc =
+        S("\npackage template\n\nimport \"text/template\"\n\ntype T int\n\n// "
+          "Verify that the current package name also causes disambiguation.\nvar "
+          "_ T = template /* ERRORx \"cannot use.*text/template.* as T value\" "
+          "*/.Template{}\n");
+
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TokenFileSet *fset = token_new_file_set(a);
+    Error err = BURROW_NO_ERROR;
+    AstFile *f = parser_parse_file(a, fset, S(""), BURROW_ANY(TYPE_STRING, &asrc),
+                                   PARSER_SKIP_OBJECT_RESOLUTION, &err);
+    TypesPackage *pa = NULL;
+    if (BURROW_OK(err)) {
+        TypesConfig conf = {0};
+        conf.importer = default_importer(fset);
+        pa = types_config_check(&conf, a, f->name->name, fset,
+                                slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1),
+                                NULL, &err);
+    }
+    if (BURROW_FAILED(err)) {
+        testing_t_error_v(t, error_text(err));
+        arena_free(&ar);
+        return;
+    }
+    CkImportHelper h = {pa, default_importer(token_new_file_set(a))};
+    const TypesImporter imp = {&ck_import_helper_vt, &h};
+    const CheckOpts with_importer = {.importer = &imp};
+
+    test_files(t, &ar, ck_one(a, S("b.go")), ck_one(a, bsrc), &with_importer);
+    test_files(t, &ar, ck_one(a, S("c.go")), ck_one(a, csrc), &with_importer);
+    test_files(t, &ar, ck_one(a, S("t.go")), ck_one(a, tsrc), &with_importer);
+    arena_free(&ar);
+}
+
+static void TestIssue59944(TestingT *t) {
+    /* Not in Go: in place of testenv.MustHaveCGO, the default build context
+     * must have cgo enabled, and the importer must have Go's sources for
+     * runtime/cgo and syscall. */
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    if (!build_default(a).cgo_enabled) {
+        arena_free(&ar);
+        testing_t_skip_v(t, "cgo is not enabled");
+    }
+    if (!have_source_importer()) {
+        arena_free(&ar);
+        testing_t_skip_v(t, "no go1.27 sources to import runtime/cgo from");
+    }
+
+    /* Methods declared on aliases of cgo types are not permitted. */
+    Str src =
+        S("\npackage p\n\n/*\nstruct layout {};\n*/\nimport \"C\"\n\ntype Layout = "
+          "C.struct_layout\n\nfunc (*Layout /* ERROR \"cannot define new methods on "
+          "non-local type Layout\" */) Binding() {}\n");
+
+    /* code generated by cmd/cgo for the above source. */
+    Str cgo_types = S(
+        "\n// Code generated by cmd/cgo; DO NOT EDIT.\n\npackage p\n\nimport "
+        "\"unsafe\"\n\nimport \"syscall\"\n\nimport _cgopackage "
+        "\"runtime/cgo\"\n\ntype _ "
+        "_cgopackage.Incomplete\nvar _ syscall.Errno\nfunc _Cgo_ptr(ptr "
+        "unsafe.Pointer) "
+        "unsafe.Pointer { return ptr }\n\n//go:linkname _Cgo_always_false "
+        "runtime.cgoAlwaysFalse\nvar _Cgo_always_false bool\n//go:linkname _Cgo_use "
+        "runtime.cgoUse\nfunc _Cgo_use(interface{})\n//go:linkname _Cgo_keepalive "
+        "runtime.cgoKeepAlive\n//go:noescape\nfunc _Cgo_keepalive(interface{})\n//"
+        "go:linkname _Cgo_no_callback runtime.cgoNoCallback\nfunc "
+        "_Cgo_no_callback(bool)\ntype _Ctype_struct_layout struct {\n}\n\ntype "
+        "_Ctype_void [0]byte\n\n//go:linkname _cgo_runtime_cgocall "
+        "runtime.cgocall\nfunc _cgo_runtime_cgocall(unsafe.Pointer, uintptr) "
+        "int32\n\n//go:linkname _cgoCheckPointer runtime.cgoCheckPointer\n//"
+        "go:noescape\nfunc _cgoCheckPointer(interface{}, interface{})\n\n//go:linkname "
+        "_cgoCheckResult runtime.cgoCheckResult\n//go:noescape\nfunc "
+        "_cgoCheckResult(interface{})\n");
+
+    Str cgo_name = S("_cgo_gotypes.go");
+    Slice filenames = ck_one(a, S("p.go"));
+    filenames = slice_append(a, filenames, &cgo_name, 1);
+    Slice srcs = ck_one(a, src);
+    srcs = slice_append(a, srcs, &cgo_types, 1);
+    const CheckOpts opts = {.go115_uses_cgo = true};
+    test_files(t, &ar, filenames, srcs, &opts);
     arena_free(&ar);
 }
 
@@ -618,6 +770,8 @@ static void TestLocal(TestingT *t) {
     X(TestLongConstants)                                                               \
     X(TestIndexRepresentability)                                                       \
     X(TestIssue47243_TypedRHS)                                                         \
+    X(TestIssue43124)                                                                  \
+    X(TestIssue59944)                                                                  \
     X(TestCheck)                                                                       \
     X(TestSpec)                                                                        \
     X(TestExamples)                                                                    \

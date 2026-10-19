@@ -635,7 +635,8 @@ bool burrow__types_is_interface_ptr(TypesType T);
 /* interfacePtrError, made in a. T must be a pointer to an interface. */
 BURROW_OWNS(ret) Str burrow__types_interface_ptr_error(Alloc *a, TypesQualifier qf,
                                                        TypesType T);
-/* funcString: f's name and signature, without parameter names, made in a. */
+/* funcString: f's name and signature, without parameter names, made in a.
+ * With pkg_info, qf is not used. */
 BURROW_OWNS(ret) Str burrow__types_func_string(Alloc *a, TypesQualifier qf,
                                                TypesFunc *f, bool pkg_info);
 

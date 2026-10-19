@@ -567,7 +567,11 @@ Str burrow__types_func_string(Alloc *a, TypesQualifier qf, TypesFunc *f,
                               bool pkg_info) {
     BytesBuffer buf = BYTES_BUFFER(a);
     burrow__types_buf_str(&buf, GT_OBJ(f)->name);
-    GtTypeWriter w = burrow__types_new_type_writer(&buf, qf);
+    /* With pkg_info the types are written unqualified, as Go's funcString
+     * does, since the writer only adds the package annotation without a
+     * qualifier. */
+    GtTypeWriter w =
+        burrow__types_new_type_writer(&buf, pkg_info ? TYPES_NO_QUALIFIER : qf);
     w.pkg_info = pkg_info;
     w.param_names = false;
     burrow__types_tw_signature(&w, types_as_signature(GT_OBJ(f)->typ));

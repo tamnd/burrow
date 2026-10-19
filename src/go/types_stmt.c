@@ -182,7 +182,7 @@ void burrow__tc_close_scope(TypesChecker *check) {
     check->env.scope = types_scope_parent(check->env.scope);
 }
 
-static Token tsm_assign_op(Token op) {
+Token burrow__tc_assign_op(Token op) {
     /* token_test.go verifies the token ordering this function relies on */
     if (TOKEN_ADD_ASSIGN <= op && op <= TOKEN_AND_NOT_ASSIGN)
         return op + (TOKEN_ADD - TOKEN_ADD_ASSIGN);
@@ -559,7 +559,7 @@ static void tsm_assign_stmt(TypesChecker *check, AstAssignStmt *s) {
                   "assignment operation %s requires single-valued expressions", ts);
         return;
     }
-    Token op = tsm_assign_op(tok);
+    Token op = burrow__tc_assign_op(tok);
     if (op == TOKEN_ILLEGAL) {
         Str ts = token_string(tok, check->a);
         GT_ERRORF(check, burrow__tc_at_pos(s->tok_pos), GT_CODE_INVALID_SYNTAX_TREE,

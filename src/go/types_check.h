@@ -606,6 +606,8 @@ void burrow__tc_func_body(TypesChecker *check, GtDeclInfo *decl, Str name,
                           const ConstantValue *iota);
 void burrow__tc_open_scope(TypesChecker *check, AstNode node, Str comment);
 void burrow__tc_close_scope(TypesChecker *check);
+/* assignOp: the operator of an op= assignment, or TOKEN_ILLEGAL. */
+Token burrow__tc_assign_op(Token op);
 void burrow__tc_valid_type(TypesChecker *check, TypesNamed *typ);
 void burrow__tc_ident(TypesChecker *check, GtOperand *x, AstIdent *e, bool want_type);
 void burrow__tc_valid_var_type(TypesChecker *check, AstExpr e, TypesType typ);

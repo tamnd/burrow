@@ -23,6 +23,7 @@
 #include "burrow/slices.h"
 #include "burrow/strconv.h"
 #include "burrow/strings.h"
+#include "burrow/sync.h"
 
 #define S(lit) BURROW_S(lit)
 #define S_(lit) BURROW_S_INIT(lit)
@@ -2612,6 +2613,341 @@ static void TestFailedImport(TestingT *t) {
     arena_free(&ar);
 }
 
+/* Not in Go: the lazily worked out parts of a type are allocated in the
+ * allocator the type was made in, and an arena is not safe to share between
+ * threads, so the concurrent test checks its package in an arena behind a
+ * lock. */
+typedef struct {
+    SyncMutex mu;
+    Alloc *inner;
+} LockedAlloc;
+
+static void *locked_alloc(void *self, size_t size, size_t align) {
+    LockedAlloc *l = self;
+    sync_mutex_lock(&l->mu);
+    void *p = mem_alloc(l->inner, size, align);
+    sync_mutex_unlock(&l->mu);
+    return p;
+}
+
+static void *locked_realloc(void *self, void *p, size_t old, size_t nsz, size_t align) {
+    LockedAlloc *l = self;
+    sync_mutex_lock(&l->mu);
+    void *q = mem_realloc(l->inner, p, old, nsz, align);
+    sync_mutex_unlock(&l->mu);
+    return q;
+}
+
+static void locked_free(void *self, void *p, size_t size, size_t align) {
+    LockedAlloc *l = self;
+    sync_mutex_lock(&l->mu);
+    mem_free(l->inner, p, size, align);
+    sync_mutex_unlock(&l->mu);
+}
+
+static const AllocVT locked_alloc_vt = {
+    .alloc = locked_alloc,
+    .alloc_zeroed = locked_alloc,
+    .realloc = locked_realloc,
+    .free = locked_free,
+};
+
+typedef struct {
+    TypesInterface *inst;
+    Alloc *a;
+    Int count;     /* method count */
+    Slice methods; /* method strings */
+} InstMethodsJob;
+
+static void inst_methods_job(void *env) {
+    InstMethodsJob *job = env;
+    job->count = types_interface_num_methods(job->inst);
+    for (Int mi = 0; mi < job->count; mi++) {
+        Str s =
+            object_string(job->a, types_object(types_interface_method(job->inst, mi)));
+        job->methods = slice_append(job->a, job->methods, &s, 1);
+    }
+}
+
+typedef struct {
+    TypesNamed *named;
+    Alloc *a;
+    Str bound;
+} BoundJob;
+
+static void bound_job(void *env) {
+    BoundJob *job = env;
+    TypesSignature *sig = types_as_signature(
+        types_object_type(types_object(types_named_method(job->named, 0))));
+    job->bound =
+        type_string(job->a, types_type_underlying(types_type(types_type_param_list_at(
+                                types_signature_type_params(sig), 0))));
+}
+
+static void TestInstantiateConcurrent(TestingT *t) {
+    Str src = S("package p\n\ntype I[P any] interface {\n\tm(P)\n\tn() P\n}\n\ntype J "
+                "= I[int]\n\ntype Nested[P any] *interface{b(P)}\n\ntype K = "
+                "Nested[string]\n\ntype G[T any] struct{}\n\nfunc (G[T]) M[P "
+                "interface{ ~*T }](P) {}\n\ntype GI = G[int]\n");
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    LockedAlloc locked = {.inner = arena_allocator(&ar)};
+    Alloc la = {.vt = &locked_alloc_vt, .self = &locked};
+    Alloc *a = &la;
+    TypesPackage *pkg = must_typecheck(a, src, NULL, NULL);
+    TypesScope *scope = types_package_scope(pkg);
+
+    TypesInterface *insts[] = {
+        types_as_interface(types_type_underlying(
+            types_object_type(types_scope_lookup(scope, S("J"))))),
+        types_as_interface(types_pointer_elem(types_as_pointer(types_type_underlying(
+            types_object_type(types_scope_lookup(scope, S("K"))))))),
+    };
+
+    /* Use the interface instances concurrently. */
+    for (Int k = 0; k < NELEM(insts); k++) {
+        TypesInterface *inst = insts[k];
+        InstMethodsJob jobs[2] = {
+            {inst, a, 0, slice_nil(TYPE_STRING)},
+            {inst, a, 0, slice_nil(TYPE_STRING)},
+        };
+        SyncWaitGroup wg = {0};
+        for (Int i = 0; i < 2; i++) {
+            if (!sync_wait_group_go(&wg, BURROW_FN(Func, inst_methods_job, &jobs[i])))
+                testing_t_fatal_v(t, "cannot start a thread");
+        }
+        sync_wait_group_wait(&wg);
+
+        Str inst_str = type_string(a, types_type(inst));
+        if (jobs[0].count != jobs[1].count) {
+            testing_t_errorf_v(t, "mismatching method counts for %s: %d vs %d",
+                               inst_str, jobs[0].count, jobs[1].count);
+            continue;
+        }
+        for (Int i = 0; i < jobs[0].count; i++) {
+            Str m0 = BURROW_AT(Str, jobs[0].methods, i);
+            Str m1 = BURROW_AT(Str, jobs[1].methods, i);
+            if (!str_eq(m0, m1))
+                testing_t_errorf_v(t, "mismatching methods for %s: %s vs %s", inst_str,
+                                   m0, m1);
+        }
+    }
+
+    /* Expand a generic method on a Named instance concurrently. */
+    TypesNamed *named = types_as_named(
+        types_unalias(types_object_type(types_scope_lookup(scope, S("GI")))));
+    BoundJob bounds[2] = {{named, a, S("")}, {named, a, S("")}};
+    SyncWaitGroup wg = {0};
+    for (Int i = 0; i < 2; i++) {
+        if (!sync_wait_group_go(&wg, BURROW_FN(Func, bound_job, &bounds[i])))
+            testing_t_fatal_v(t, "cannot start a thread");
+    }
+    sync_wait_group_wait(&wg);
+    if (!str_eq(bounds[0].bound, bounds[1].bound) ||
+        !str_eq(bounds[0].bound, S("interface{~*int}")))
+        testing_t_errorf_v(t, "mismatching bounds for GI.M: %s vs %s", bounds[0].bound,
+                           bounds[1].bound);
+    arena_free(&ar);
+}
+
+static TypesPackage *make_named_pkg(TestingT *t, Alloc *a, TypesConfig *conf,
+                                    Map *imports, Str src) {
+    TokenFileSet *fset = token_new_file_set(a);
+    AstFile *f = must_parse(a, fset, src);
+    Str name = f->name->name;
+    Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
+    Error err = BURROW_NO_ERROR;
+    TypesPackage *pkg = types_config_check(conf, a, name, fset, files, NULL, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "%s", error_text(err));
+    map_set(imports, &name, &pkg);
+    return pkg;
+}
+
+static void TestInstanceIdentity(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Map *imports = new_test_importer(a);
+    TypesConfig conf = {0};
+    conf.importer = test_importer(imports);
+    (void)make_named_pkg(t, a, &conf, imports,
+                         S("package lib; type T[P any] struct{}"));
+    TypesPackage *pa = make_named_pkg(t, a, &conf, imports,
+                                      S("package a; import \"lib\"; var A lib.T[int]"));
+    TypesPackage *pb = make_named_pkg(t, a, &conf, imports,
+                                      S("package b; import \"lib\"; var B lib.T[int]"));
+    TypesObject oa = types_scope_lookup(types_package_scope(pa), S("A"));
+    TypesObject ob = types_scope_lookup(types_package_scope(pb), S("B"));
+    if (!types_identical(types_object_type(oa), types_object_type(ob)))
+        testing_t_errorf_v(t, "mismatching types: a.A: %s, b.B: %s",
+                           type_string(a, types_object_type(oa)),
+                           type_string(a, types_object_type(ob)));
+    arena_free(&ar);
+}
+
+static TypesObject origin_object(TypesObject obj) {
+    if (types_as_var(obj) != NULL)
+        return types_object(types_var_origin(types_as_var(obj)));
+    if (types_as_func(obj) != NULL)
+        return types_object(types_func_origin(types_as_func(obj)));
+    return obj;
+}
+
+typedef struct {
+    Alloc *a;
+    Map *counts; /* Str to Int: how many identifiers have the name */
+    Map *first;  /* Str to AstIdent *: the first of them */
+} IdentsEnv;
+
+static bool collect_idents(void *penv, AstNode n) {
+    IdentsEnv *env = penv;
+    if (n != NULL && n->kind == AST_KIND_IDENT) {
+        AstIdent *id = (AstIdent *)n;
+        Int count = 0;
+        if (!map_get2(env->counts, &id->name, &count))
+            map_set(env->first, &id->name, &id);
+        count++;
+        map_set(env->counts, &id->name, &count);
+    }
+    return true;
+}
+
+typedef struct {
+    Alloc *a;
+    Str name;
+    TypesObject obj;
+    IdentsEnv *idents;
+    TypesInfo *info;
+} InstantiatedObjectEnv;
+
+static Str package_or_nil(Alloc *a, TypesPackage *pkg) {
+    return pkg != NULL ? types_package_string(a, pkg) : S("<nil>");
+}
+
+static Str scope_or_nil(Alloc *a, TypesScope *s) {
+    return s != NULL ? types_scope_string(a, s) : S("<nil>");
+}
+
+static void instantiated_object_run(void *penv, TestingT *t) {
+    InstantiatedObjectEnv *env = penv;
+    Alloc *a = env->a;
+    TypesObject obj = env->obj;
+    Int got = 0;
+    (void)map_get2(env->idents->counts, &env->name, &got);
+    if (got != 1)
+        testing_t_fatalf_v(t, "found %d identifiers named %s, want 1", got, env->name);
+    AstIdent *ident = NULL;
+    (void)map_get2(env->idents->first, &env->name, &ident);
+    TypesObject def = lookup_object(env->info->defs, ident);
+    if (def == obj)
+        testing_t_fatalf_v(t, "info.Defs[%s] contains the test object", env->name);
+    if (def != origin_object(obj))
+        testing_t_errorf_v(t, "info.Defs[%s] does not match obj.Origin()", env->name);
+    if (types_object_pkg(def) != types_object_pkg(obj))
+        testing_t_errorf_v(t, "Pkg() = %v, want %v",
+                           package_or_nil(a, types_object_pkg(def)),
+                           package_or_nil(a, types_object_pkg(obj)));
+    if (!str_eq(types_object_name(def), types_object_name(obj)))
+        testing_t_errorf_v(t, "Name() = %v, want %v", types_object_name(def),
+                           types_object_name(obj));
+    if (types_object_pos(def) != types_object_pos(obj))
+        testing_t_errorf_v(t, "Pos() = %v, want %v", (Int)types_object_pos(def),
+                           (Int)types_object_pos(obj));
+    if (types_object_parent(def) != types_object_parent(obj))
+        testing_t_fatalf_v(t, "Parent() = %v, want %v",
+                           scope_or_nil(a, types_object_parent(def)),
+                           scope_or_nil(a, types_object_parent(obj)));
+    if (types_object_exported(def) != types_object_exported(obj))
+        testing_t_fatalf_v(t, "Exported() = %v, want %v", types_object_exported(def),
+                           types_object_exported(obj));
+    Str def_id = types_object_id(a, def), obj_id = types_object_id(a, obj);
+    if (!str_eq(def_id, obj_id))
+        testing_t_fatalf_v(t, "Id() = %v, want %v", def_id, obj_id);
+    /* String and Type are expected to differ. */
+}
+
+/* TestInstantiatedObjects verifies properties of instantiated objects. */
+static void TestInstantiatedObjects(TestingT *t) {
+    Str src =
+        S("\npackage p\n\ntype T[P any] struct {\n\tfield P\n}\n\nfunc (recv *T[Q]) "
+          "concreteMethod(mParam Q) (mResult Q) { return }\n\ntype FT[P any] "
+          "func(ftParam P) (ftResult P)\n\nfunc F[P any](fParam P) (fResult P){ return "
+          "}\n\ntype I[P any] interface {\n\tinterfaceMethod(P)\n}\n\ntype R[P any] "
+          "T[P]\n\nfunc (R[P]) m() {} // having a method triggers expansion of "
+          "R\n\nvar (\n\tt T[int]\n\tft FT[int]\n\tf = F[int]\n\ti I[int]\n)\n\nfunc "
+          "fn() {\n\tvar r R[int]\n\t_ = r\n}\n");
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TypesInfo info = {0};
+    info.defs = new_objects_map(a);
+    TokenFileSet *fset = token_new_file_set(a);
+    AstFile *f = must_parse(a, fset, src);
+    TypesConfig conf = {0};
+    Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
+    Error err = BURROW_NO_ERROR;
+    TypesPackage *pkg =
+        types_config_check(&conf, a, f->name->name, fset, files, &info, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "%s", error_text(err));
+
+    TypesScope *scope = types_package_scope(pkg);
+#define LOOKUP(name) types_object_type(types_scope_lookup(scope, S(name)))
+    TypesScope *fn_scope =
+        types_func_scope(types_as_func(types_scope_lookup(scope, S("fn"))));
+    TypesFunc *m0 = types_named_method(types_as_named(LOOKUP("t")), 0);
+    TypesSignature *ft = types_as_signature(types_type_underlying(LOOKUP("ft")));
+    TypesSignature *fsig = types_as_signature(LOOKUP("f"));
+
+    const struct {
+        Str name;
+        TypesObject obj;
+    } tests[] = {
+        /* Struct fields */
+        {S("field"), types_object(types_struct_field(
+                         types_as_struct(types_type_underlying(LOOKUP("t"))), 0))},
+        {S("field"), types_object(types_struct_field(
+                         types_as_struct(types_type_underlying(
+                             types_object_type(types_scope_lookup(fn_scope, S("r"))))),
+                         0))},
+
+        /* Methods and method fields */
+        {S("concreteMethod"), types_object(m0)},
+        {S("recv"), types_object(types_signature_recv(types_func_signature(m0)))},
+        {S("mParam"), types_object(types_tuple_at(
+                          types_signature_params(types_func_signature(m0)), 0))},
+        {S("mResult"), types_object(types_tuple_at(
+                           types_signature_results(types_func_signature(m0)), 0))},
+
+        /* Interface methods */
+        {S("interfaceMethod"),
+         types_object(types_interface_method(
+             types_as_interface(types_type_underlying(LOOKUP("i"))), 0))},
+
+        /* Function type fields */
+        {S("ftParam"), types_object(types_tuple_at(types_signature_params(ft), 0))},
+        {S("ftResult"), types_object(types_tuple_at(types_signature_results(ft), 0))},
+
+        /* Function fields */
+        {S("fParam"), types_object(types_tuple_at(types_signature_params(fsig), 0))},
+        {S("fResult"), types_object(types_tuple_at(types_signature_results(fsig), 0))},
+    };
+#undef LOOKUP
+
+    /* Collect all identifiers by name. */
+    IdentsEnv idents = {a, map_make(a, TYPE_STRING, TYPE_INT, 0),
+                        map_make(a, TYPE_STRING, TYPE_UNSAFE_POINTER, 0)};
+    ast_inspect(&f->node, BURROW_FN(AstInspectFunc, collect_idents, &idents));
+
+    for (Int i = 0; i < NELEM(tests); i++) {
+        InstantiatedObjectEnv env = {a, tests[i].name, tests[i].obj, &idents, &info};
+        testing_t_run(t, tests[i].name,
+                      BURROW_FN(TestingTFunc, instantiated_object_run, &env));
+    }
+    arena_free(&ar);
+}
+
 /* fmt.Sprint of a list of strings, a Slice of Str. */
 static Str sprint_list(Alloc *a, Slice list) {
     Str parts[3] = {S("["), strings_join(a, list, S(" ")), S("]")};
@@ -2851,6 +3187,9 @@ static void TestFirstErrorInTypeSet(TestingT *t) {
     X(TestCompositeLitTypes)                                                           \
     X(TestObjectParents)                                                               \
     X(TestFailedImport)                                                                \
+    X(TestInstantiateConcurrent)                                                       \
+    X(TestInstanceIdentity)                                                            \
+    X(TestInstantiatedObjects)                                                         \
     X(TestFirstErrorInTypeSet)
 
 TESTING_MAIN(TESTS)

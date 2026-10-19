@@ -381,6 +381,10 @@ struct burrow__HttpPattern;
 /* httpmuxgo121=1 in GODEBUG, which gives every mux the one Go 1.21 had. */
 bool burrow__http_godebug_mux121(void);
 
+/* net/http/pprof's profileDescriptions, a lookup rather than a map: false and
+ * an empty *desc for a name it has no description of. Here for its tests. */
+bool burrow__http_pprof_description(Str name, Str *desc);
+
 /* redirectHandler, what http_redirect_handler makes. */
 typedef struct burrow__HttpRedirectHandler {
     Str url;

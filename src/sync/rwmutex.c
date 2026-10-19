@@ -64,8 +64,10 @@ const Type *const TYPE_SYNC_RW_MUTEX = &rwmutex_desc;
 void burrow__sync_rw_mutex_r_lock_slow(SyncRWMutex *rw) {
     /* Not durable, for the reason sync_mutex_lock gives: the writer this is
      * waiting for is running. */
-    burrow__sema_acquire(&rw->reader_sem, false, BURROW_WAIT_SYNC_RW_MUTEX_R_LOCK,
-                         false);
+    burrow__sema_acquire(&rw->reader_sem, false,
+                         BURROW_SEMA_BLOCK_PROFILE | BURROW_SEMA_MUTEX_PROFILE,
+                         BURROW_WAIT_SYNC_RW_MUTEX_R_LOCK, false);
+    BURROW_SEMA_KEEP_FRAME();
 }
 
 bool sync_rw_mutex_try_r_lock(SyncRWMutex *rw) {
@@ -86,8 +88,10 @@ void burrow__sync_rw_mutex_r_unlock_slow(SyncRWMutex *rw, int32_t r) {
     if (r + 1 == 0 || r + 1 == -RWMUTEX_MAX_READERS)
         runtime_throw(BURROW_S("sync: r_unlock of unlocked RWMutex"));
 
-    if (sync_atomic_add_int32(&rw->reader_wait, -1) == 0)
+    if (sync_atomic_add_int32(&rw->reader_wait, -1) == 0) {
         burrow__sema_release(&rw->writer_sem, false);
+        BURROW_SEMA_KEEP_FRAME();
+    }
 }
 
 /* ------------------------------------------------------------------ writers */
@@ -104,9 +108,12 @@ void sync_rw_mutex_lock(SyncRWMutex *rw) {
     /* Wait for those, if any are left by the time this add lands. A reader that
      * leaves in between takes reader_wait back to zero itself, which is why the
      * result of the add is what decides rather than r. */
-    if (r != 0 && sync_atomic_add_int32(&rw->reader_wait, r) != 0)
-        burrow__sema_acquire(&rw->writer_sem, false, BURROW_WAIT_SYNC_RW_MUTEX_LOCK,
-                             false);
+    if (r != 0 && sync_atomic_add_int32(&rw->reader_wait, r) != 0) {
+        burrow__sema_acquire(&rw->writer_sem, false,
+                             BURROW_SEMA_BLOCK_PROFILE | BURROW_SEMA_MUTEX_PROFILE,
+                             BURROW_WAIT_SYNC_RW_MUTEX_LOCK, false);
+        BURROW_SEMA_KEEP_FRAME();
+    }
 }
 
 bool sync_rw_mutex_try_lock(SyncRWMutex *rw) {

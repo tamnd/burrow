@@ -8,7 +8,7 @@
  * waiting on has no queue anywhere.
  *
  *     uint32_t sema;              // yours, wherever you like
- *     burrow__sema_acquire(&sema, false, BURROW_WAIT_SEMACQUIRE, false);
+ *     burrow__sema_acquire(&sema, false, 0, BURROW_WAIT_SEMACQUIRE, false);
  *     ...
  *     burrow__sema_release(&sema, false);
  *
@@ -71,9 +71,19 @@ extern "C" {
  *
  * `reason` is what a traceback prints for a goroutine waiting here, the way Go's
  * semacquire1 takes one: a Mutex says sync.Mutex.Lock, and something with no
- * better name says semacquire. */
-void burrow__sema_acquire(uint32_t *addr, bool lifo, burrow__WaitReason reason,
-                          bool durable);
+ * better name says semacquire.
+ *
+ * `profile` is Go's semaProfileFlags, which of the block and mutex profiles a
+ * wait here counts in. A wait in the block profile, or a release that ends one
+ * in the mutex profile, is recorded with a stack that starts at the function
+ * that called this or burrow__sema_release, so both are kept out of line. */
+enum {
+    BURROW_SEMA_BLOCK_PROFILE = 1 << 0,
+    BURROW_SEMA_MUTEX_PROFILE = 1 << 1,
+};
+
+void burrow__sema_acquire(uint32_t *addr, bool lifo, int profile,
+                          burrow__WaitReason reason, bool durable);
 
 /* Adds one wakeup to the counter and gives it to a waiter if there is one.
  *
@@ -86,6 +96,16 @@ void burrow__sema_acquire(uint32_t *addr, bool lifo, burrow__WaitReason reason,
  * Nothing else wants it. A handoff costs a scheduling round trip on every
  * unlock, which is exactly the cost the ordinary path exists to avoid. */
 void burrow__sema_release(uint32_t *addr, bool handoff);
+
+/* Keeps the function it ends from being left off a profile's stack. A call
+ * that is the last thing a function does can be made as a jump, and then the
+ * function that made it is not on the stack while the call runs. A volatile
+ * access after the call means the call is not the last thing. */
+#define BURROW_SEMA_KEEP_FRAME()                                                       \
+    do {                                                                               \
+        volatile int burrow_keep_frame_ = 0;                                           \
+        (void)burrow_keep_frame_;                                                      \
+    } while (0)
 
 /* ------------------------------------------------------------ notify lists
  *

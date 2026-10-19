@@ -37,6 +37,7 @@
 
 #include "burrow/atomic.h"
 #include "burrow/lock.h"
+#include "burrow/mprof.h"
 #include "burrow/note.h"
 #include "burrow/proc.h"
 #include "burrow/runtime.h"
@@ -158,6 +159,11 @@ struct ChanWaiter {
      * closed underneath, which is an answer for a receiver and the end of the
      * program for a sender. */
     bool success;
+
+    /* For the block profile, in ticks: -1 while a waiter it is timing waits,
+     * and then the time whoever completed the operation woke it at. 0 for a
+     * waiter it is not timing. */
+    int64_t releasetime;
 
     ChanWaiter *next;
     ChanWaiter *prev;
@@ -358,10 +364,18 @@ static uint8_t *slot(Chan *c, uint32_t i) {
 /* Straight into a waiting receiver's variable. This is what makes an unbuffered
  * channel a handoff rather than a queue of one, and what keeps a buffered
  * channel that is empty from touching its buffer at all. */
+/* The part of Go's goready that is about the block profile: a waiter being
+ * timed learns when it was let go. */
+static void release_time(ChanWaiter *w) {
+    if (w->releasetime != 0)
+        w->releasetime = burrow__cputicks();
+}
+
 static void give_to_receiver(Chan *c, ChanWaiter *w, const void *v) {
     if (w->recvp != NULL)
         type_copy(c->elem, w->recvp, v);
     w->success = true;
+    release_time(w);
 }
 
 /* Out of a waiting sender.
@@ -388,6 +402,7 @@ static void take_from_sender(Chan *c, ChanWaiter *w, void *out) {
         c->sendx = c->recvx;
     }
     w->success = true;
+    release_time(w);
 }
 
 /* Into the tail of the buffer, which the caller has checked has room. */
@@ -629,7 +644,9 @@ void chan_free(Chan *c) {
 
 /* -------------------------------------------------------------------- send */
 
-static bool chan_send_impl(Chan *c, const void *v, bool block) {
+/* Inlined into chan_send, so that a blocking send is recorded in the block
+ * profile with a stack that starts there. */
+static BURROW_INLINE bool chan_send_impl(Chan *c, const void *v, bool block) {
     /* A safe point, here at the top where no lock is held. A send that ends up
      * waiting gives the processor up anyway, so the one this matters for is the
      * send that finds a receiver or finds room and returns straight away: a
@@ -690,6 +707,13 @@ static bool chan_send_impl(Chan *c, const void *v, bool block) {
     /* 3. Wait, holding out a pointer to the value rather than a copy of it. The
      *    receiver that eventually arrives copies from there, so a send of a
      *    large struct across a full channel still copies it exactly once. */
+    /* Not in Go: Go reads the time on the way in, before it takes the lock,
+     * and here it is read once the send is known to block, so that a send that
+     * does not costs nothing more. */
+    int64_t t0 = 0;
+    if (burrow__block_profiling())
+        t0 = burrow__cputicks();
+
     Parked p;
     if (!parked_init(&p)) {
         burrow__unlock(&c->lock);
@@ -700,11 +724,15 @@ static bool chan_send_impl(Chan *c, const void *v, bool block) {
     memset(&w2, 0, sizeof(w2));
     w2.p = &p;
     w2.sendp = v;
+    if (t0 != 0)
+        w2.releasetime = -1;
     waitq_push(&c->sendq, &w2);
 
     parked_sleep(&p, unlock_chan, c,
                  durable ? BURROW_WAIT_SYNCTEST_CHAN_SEND : BURROW_WAIT_CHAN_SEND,
                  durable);
+    if (w2.releasetime > 0)
+        burrow__blockevent(w2.releasetime - t0, 1);
     parked_done(&p);
 
     /* Woken. Either the value went somewhere or the channel closed under us,
@@ -731,7 +759,8 @@ bool chan_try_send(Chan *c, const void *v) {
 
 /* ----------------------------------------------------------------- receive */
 
-static bool chan_recv_impl(Chan *c, void *out, bool *ok, bool block) {
+/* Inlined into chan_recv, as chan_send_impl is into chan_send. */
+static BURROW_INLINE bool chan_recv_impl(Chan *c, void *out, bool *ok, bool block) {
     /* The send side's safe point, mirrored, and for the consumer that is always
      * a value behind rather than the producer that is always ahead. */
     burrow__preempt_point();
@@ -800,6 +829,11 @@ static bool chan_recv_impl(Chan *c, void *out, bool *ok, bool block) {
         return false;
     }
 
+    /* Not in Go: read here rather than on the way in, as in chan_send_impl. */
+    int64_t t0 = 0;
+    if (burrow__block_profiling())
+        t0 = burrow__cputicks();
+
     Parked p;
     if (!parked_init(&p)) {
         burrow__unlock(&c->lock);
@@ -810,11 +844,15 @@ static bool chan_recv_impl(Chan *c, void *out, bool *ok, bool block) {
     memset(&w2, 0, sizeof(w2));
     w2.p = &p;
     w2.recvp = out;
+    if (t0 != 0)
+        w2.releasetime = -1;
     waitq_push(&c->recvq, &w2);
 
     parked_sleep(&p, unlock_chan, c,
                  durable ? BURROW_WAIT_SYNCTEST_CHAN_RECEIVE : BURROW_WAIT_CHAN_RECEIVE,
                  durable);
+    if (w2.releasetime > 0)
+        burrow__blockevent(w2.releasetime - t0, 1);
     parked_done(&p);
 
     /* Woken. A sender filled `out` directly, or close zeroed it. */
@@ -870,11 +908,13 @@ void chan_close(Chan *c) {
         if (w->recvp != NULL)
             type_zero(c->elem, w->recvp);
         w->success = false;
+        release_time(w);
         w->next = woken;
         woken = w;
     }
     while ((w = waitq_pop(&c->sendq)) != NULL) {
         w->success = false;
+        release_time(w);
         w->next = woken;
         woken = w;
     }
@@ -1158,7 +1198,7 @@ static Int sel_try(Select *s) {
 }
 
 /* Puts an entry on every channel in the list, with every channel locked. */
-static void sel_enqueue(Select *s) {
+static void sel_enqueue(Select *s, bool timed) {
     for (Int i = 0; i < s->n; i++) {
         SelectCase *sc = &s->cases[i];
         if (sc->op == SELECT_DEFAULT || sc->c == NULL)
@@ -1168,6 +1208,8 @@ static void sel_enqueue(Select *s) {
         memset(w, 0, sizeof(*w));
         w->p = &s->p;
         w->caseidx = i;
+        if (timed)
+            w->releasetime = -1;
 
         if (sc->op == SELECT_SEND) {
             w->sendp = sc->send;
@@ -1336,7 +1378,13 @@ Int chan_select(SelectCase *cases, Int n) {
     s.p.is_select = true;
     s.p.won = -1;
 
-    sel_enqueue(&s);
+    /* Not in Go: read once the select is known to block, as in
+     * chan_send_impl. */
+    int64_t t0 = 0;
+    if (burrow__block_profiling())
+        t0 = burrow__cputicks();
+
+    sel_enqueue(&s, t0 != 0);
     parked_sleep(&s.p, unlock_select, &s,
                  durable ? BURROW_WAIT_SYNCTEST_SELECT : BURROW_WAIT_SELECT, durable);
 
@@ -1353,6 +1401,7 @@ Int chan_select(SelectCase *cases, Int n) {
     won = s.p.won;
     SelectCase *sc = &cases[won];
     bool success = s.waiters[won].success;
+    int64_t case_release_time = s.waiters[won].releasetime;
 
     if (scratch != NULL)
         mem_free(home, scratch, scratch_size, scratch_align);
@@ -1365,6 +1414,8 @@ Int chan_select(SelectCase *cases, Int n) {
     if (sc->op == SELECT_RECV && sc->ok != NULL)
         *sc->ok = success;
 
+    if (case_release_time > 0)
+        burrow__blockevent(case_release_time - t0, 1);
     return won;
 }
 

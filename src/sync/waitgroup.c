@@ -206,7 +206,7 @@ void sync_wait_group_wait(SyncWaitGroup *wg) {
             bool durable =
                 (state & WAIT_GROUP_BUBBLE_FLAG) != 0 && associated(wg, bubble);
 
-            burrow__sema_acquire(&wg->sema, false,
+            burrow__sema_acquire(&wg->sema, false, BURROW_SEMA_BLOCK_PROFILE,
                                  durable ? BURROW_WAIT_SYNCTEST_WAIT_GROUP_WAIT
                                          : BURROW_WAIT_SYNC_WAIT_GROUP_WAIT,
                                  durable);

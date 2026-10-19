@@ -34,6 +34,7 @@
 
 #include "burrow/atomic.h"
 #include "burrow/lock.h"
+#include "burrow/mprof.h"
 #include "burrow/note.h"
 #include "burrow/proc.h"
 #include "burrow/runtime.h"
@@ -104,6 +105,15 @@ struct burrow__SemaWaiter {
      * looking for another. On a notify list it is the ticket, and none of the
      * treap's rules apply because a waiter there is never in a treap. */
     uint32_t ticket;
+
+    /* For the profiles, in ticks. acquiretime is when a waiter the mutex
+     * profile is timing started to wait, or 0. releasetime is -1 while a waiter
+     * the block profile is timing waits, and when it is woken, the time it was
+     * woken at. waiters is how many more wait behind the one in the treap,
+     * which a release charges for too. */
+    int64_t acquiretime;
+    int64_t releasetime;
+    uint16_t waiters;
 
     /* The goroutine to ready, or NULL for a thread that is not running one. */
     Goroutine *g;
@@ -218,6 +228,7 @@ static void root_queue(Root *root, uint32_t *addr, SemaWaiter *w, bool lifo) {
     w->next = NULL;
     w->waitlink = NULL;
     w->waittail = NULL;
+    w->waiters = 0;
 
     SemaWaiter *last = NULL;
     SemaWaiter **pt = &root->treap;
@@ -230,6 +241,8 @@ static void root_queue(Root *root, uint32_t *addr, SemaWaiter *w, bool lifo) {
                  * the list hanging off the new node. */
                 *pt = w;
                 w->ticket = t->ticket;
+                /* preserve head acquiretime as oldest time */
+                w->acquiretime = t->acquiretime;
                 w->parent = t->parent;
                 w->prev = t->prev;
                 w->next = t->next;
@@ -240,6 +253,9 @@ static void root_queue(Root *root, uint32_t *addr, SemaWaiter *w, bool lifo) {
 
                 w->waitlink = t;
                 w->waittail = t->waittail != NULL ? t->waittail : t;
+                w->waiters = t->waiters;
+                if ((uint16_t)(w->waiters + 1) != 0)
+                    w->waiters++;
 
                 t->parent = NULL;
                 t->prev = NULL;
@@ -252,6 +268,8 @@ static void root_queue(Root *root, uint32_t *addr, SemaWaiter *w, bool lifo) {
                 else
                     t->waittail->waitlink = w;
                 t->waittail = w;
+                if ((uint16_t)(t->waiters + 1) != 0)
+                    t->waiters++;
             }
             return;
         }
@@ -276,8 +294,14 @@ static void root_queue(Root *root, uint32_t *addr, SemaWaiter *w, bool lifo) {
 }
 
 /* Takes the longest waiting waiter for `addr` off the queue, or NULL if there
- * is none. The root's lock is held. */
-static SemaWaiter *root_dequeue(Root *root, const uint32_t *addr) {
+ * is none. The root's lock is held.
+ *
+ * If the waiter was being profiled, *now is the time at which it was woken
+ * up. Otherwise *now is 0. If there are additional entries in the wait list,
+ * *tailtime is the last entry's acquiretime. Otherwise it is the found
+ * waiter's. */
+static SemaWaiter *root_dequeue(Root *root, const uint32_t *addr, int64_t *now,
+                                int64_t *tailtime) {
     SemaWaiter **ps = &root->treap;
     SemaWaiter *w = *ps;
 
@@ -285,9 +309,13 @@ static SemaWaiter *root_dequeue(Root *root, const uint32_t *addr) {
         ps = (uintptr_t)addr < (uintptr_t)w->addr ? &w->prev : &w->next;
         w = *ps;
     }
-    if (w == NULL)
+    if (w == NULL) {
+        *now = 0;
+        *tailtime = 0;
         return NULL;
+    }
 
+    *now = w->acquiretime != 0 ? burrow__cputicks() : 0;
     SemaWaiter *t = w->waitlink;
     if (t != NULL) {
         /* Somebody else is waiting on this address, so they take the treap node
@@ -302,6 +330,15 @@ static SemaWaiter *root_dequeue(Root *root, const uint32_t *addr) {
         if (t->next != NULL)
             t->next->parent = t;
         t->waittail = t->waitlink != NULL ? w->waittail : NULL;
+        t->waiters = w->waiters;
+        if (t->waiters > 1)
+            t->waiters--;
+        /* Set head and tail acquire time to now, because the caller will take
+         * care of charging the delays before now for all entries in the
+         * list. */
+        t->acquiretime = *now;
+        *tailtime = w->waittail->acquiretime;
+        w->waittail->acquiretime = *now;
     } else {
         /* Nobody else. Rotate it down to a leaf, taking the lower priority
          * child up each time so the heap survives, and then unhook it. */
@@ -318,6 +355,7 @@ static SemaWaiter *root_dequeue(Root *root, const uint32_t *addr) {
             w->parent->prev = NULL;
         else
             w->parent->next = NULL;
+        *tailtime = w->acquiretime;
     }
 
     w->parent = NULL;
@@ -393,8 +431,10 @@ static void waiter_free(SemaWaiter *w) {
 }
 
 /* Starts a waiter again. The root's lock must not be held, and the waiter must
- * not be touched afterwards. */
+ * not be touched afterwards. Go's readyWithTime. */
 static void waiter_wake(SemaWaiter *w) {
+    if (w->releasetime != 0)
+        w->releasetime = burrow__cputicks();
     if (w->g != NULL) {
         sched_ready(w->g);
         return;
@@ -415,8 +455,8 @@ static bool can_acquire(uint32_t *addr) {
     }
 }
 
-void burrow__sema_acquire(uint32_t *addr, bool lifo, burrow__WaitReason reason,
-                          bool durable) {
+BURROW_NOINLINE void burrow__sema_acquire(uint32_t *addr, bool lifo, int profile,
+                                          burrow__WaitReason reason, bool durable) {
     /* The whole of the uncontended case. No lock, no queue, one compare and
      * swap on a word the caller already owns. */
     if (can_acquire(addr))
@@ -427,6 +467,16 @@ void burrow__sema_acquire(uint32_t *addr, bool lifo, burrow__WaitReason reason,
         runtime_throw(BURROW_S("sema: out of memory blocking on a semaphore"));
 
     Root *root = root_for(addr);
+    int64_t t0 = 0;
+    if ((profile & BURROW_SEMA_BLOCK_PROFILE) != 0 && burrow__block_profiling()) {
+        t0 = burrow__cputicks();
+        w.releasetime = -1;
+    }
+    if ((profile & BURROW_SEMA_MUTEX_PROFILE) != 0 && burrow__mutex_profiling()) {
+        if (t0 == 0)
+            t0 = burrow__cputicks();
+        w.acquiretime = t0;
+    }
     bool first = true;
 
     for (;;) {
@@ -466,11 +516,13 @@ void burrow__sema_acquire(uint32_t *addr, bool lifo, burrow__WaitReason reason,
      * which happens when a release has already dequeued this waiter to wake it.
      * The analyser cannot follow that, because the dequeue is in another
      * function and the wakeup that orders the two is a note. */
+    if (w.releasetime > 0)
+        burrow__blockevent(w.releasetime - t0, 2);
     /* NOLINTNEXTLINE(clang-analyzer-core.StackAddressEscape) */
     waiter_free(&w);
 }
 
-void burrow__sema_release(uint32_t *addr, bool handoff) {
+BURROW_NOINLINE void burrow__sema_release(uint32_t *addr, bool handoff) {
     Root *root = root_for(addr);
 
     burrow__atomic_add_u32(addr, 1);
@@ -492,13 +544,38 @@ void burrow__sema_release(uint32_t *addr, bool handoff) {
         return;
     }
 
-    SemaWaiter *w = root_dequeue(root, addr);
+    int64_t t0, tailtime;
+    SemaWaiter *w = root_dequeue(root, addr, &t0, &tailtime);
     if (w != NULL)
         burrow__atomic_add_u32(&root->nwait, (uint32_t)-1);
     burrow__unlock(&root->lock);
 
     if (w == NULL)
         return;
+
+    if (w->acquiretime != 0) {
+        /* Charge contention that this (delayed) unlock caused. If there are N
+         * more goroutines waiting beyond the one that's waking up, charge their
+         * delay as well, so that contention holding up many goroutines shows up
+         * as more costly than contention holding up a single goroutine. It
+         * would take O(N) time to calculate how long each goroutine has been
+         * waiting, so instead we charge avg(head-wait, tail-wait)*N. head-wait
+         * is the longest wait and tail-wait is the shortest. (When we do a lifo
+         * insertion, we preserve this property by copying the old head's
+         * acquiretime into the inserted new head. In that case the overall
+         * average may be slightly high, but that's fine: the average of the
+         * ends is only an approximation to the actual average anyway.) The
+         * root_dequeue above changed the head and tail acquiretime to the
+         * current time, so the next unlock will not re-count this
+         * contention. */
+        int64_t dt0 = t0 - w->acquiretime;
+        int64_t dt = dt0;
+        if (w->waiters != 0) {
+            int64_t dtail = t0 - tailtime;
+            dt += (dtail + dt0) / 2 * (int64_t)w->waiters;
+        }
+        burrow__mutexevent(dt, 2);
+    }
 
     /* Read out of the waiter before waking it, because after the wake the frame
      * it lives in belongs to somebody who may already be running in it. */
@@ -540,7 +617,8 @@ uint32_t burrow__notify_list_add(burrow__NotifyList *l) {
     return burrow__atomic_add_u32(&l->wait, 1);
 }
 
-void burrow__notify_list_wait(burrow__NotifyList *l, uint32_t t, bool durable) {
+BURROW_NOINLINE void burrow__notify_list_wait(burrow__NotifyList *l, uint32_t t,
+                                              bool durable) {
     burrow__lock(&l->lock);
 
     /* Already notified, between the ticket being taken and this lock. This is
@@ -555,6 +633,11 @@ void burrow__notify_list_wait(burrow__NotifyList *l, uint32_t t, bool durable) {
     if (!waiter_init(&w))
         runtime_throw(BURROW_S("sema: out of memory waiting on a condition"));
     w.ticket = t;
+    int64_t t0 = 0;
+    if (burrow__block_profiling()) {
+        t0 = burrow__cputicks();
+        w.releasetime = -1;
+    }
 
     /* On the end, which is where the tickets say this one belongs. Two waiters
      * can take their numbers and then reach this lock in the other order, so
@@ -567,6 +650,8 @@ void burrow__notify_list_wait(burrow__NotifyList *l, uint32_t t, bool durable) {
     l->tail = &w;
 
     waiter_sleep(&w, &l->lock, BURROW_WAIT_SYNC_COND_WAIT, durable);
+    if (t0 != 0)
+        burrow__blockevent(w.releasetime - t0, 2);
     waiter_free(&w);
 }
 

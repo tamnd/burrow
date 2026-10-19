@@ -125,7 +125,8 @@ Error burrow__pfd_close(burrow__PollFD *fd) {
     /* The descriptor is closed by whichever of the users went last, and Close
      * does not return until that has happened, so that a Close followed by a
      * Listen on the same port finds the port free. */
-    burrow__sema_acquire(&fd->csema, false, BURROW_WAIT_SEMACQUIRE, false);
+    burrow__sema_acquire(&fd->csema, false, BURROW_SEMA_BLOCK_PROFILE,
+                         BURROW_WAIT_SEMACQUIRE, false);
     return e;
 }
 

@@ -1,6 +1,6 @@
 # Profiling
 
-`burrow/runtime/pprof.h` is Go's `runtime/pprof`. So far it has profiling labels, profiles of your own, the goroutine, threadcreate, heap and allocs profiles, the CPU profile, and the writer for the profile format that `go tool pprof` reads. The block and mutex profiles are not ported yet.
+`burrow/runtime/pprof.h` is Go's `runtime/pprof`. So far it has profiling labels, profiles of your own, the goroutine, threadcreate, heap, allocs, block and mutex profiles, the CPU profile, and the writer for the profile format that `go tool pprof` reads.
 
 ## Labels
 
@@ -201,3 +201,59 @@ buffers in the profile: true
 In the text form each record is a line of in-use objects and bytes, then the allocated objects and bytes in brackets, then the stack, so the buffers are a record that starts `64: 262144 [64: 262144] @`. With debug 0 the profile is the gzipped protocol buffer that `go tool pprof` reads, and `pprof_write_heap_profile` writes it in one call.
 
 Go hears about a free when its collector sweeps the object, so its heap profile is as of the last collection. Here a free is a call to `mem_free` and is counted as it happens, so the profile is as of the moment it is written. Memory from an arena is profiled when the arena takes a block from the heap, and the stack is the one that made the arena grow. Frames inside the allocator are left off the top of every stack, as Go leaves off its runtime.
+
+## The block and mutex profiles
+
+"block" has the places goroutines waited: a channel send or receive, a select, a `sync_mutex` or `sync_rw_mutex` lock, `sync_cond_wait` and `sync_wait_group_wait`. "mutex" has the places that made them wait, which is the unlock of a contended `sync_mutex` or `sync_rw_mutex`. Both are off until the program turns them on. `runtime_set_block_profile_rate` takes the average number of nanoseconds blocked per sample, so 1 keeps every event, and `runtime_set_mutex_profile_fraction` takes the 1 in n contention events to keep. This example turns both on, then has one goroutine hold a lock while another waits for it:
+
+<!-- example: ../examples/pprof/pprof.c#contention -->
+```c
+/* One goroutine holds a lock while another waits for it. */
+static SyncMutex mu;
+
+static void hold(void *env) {
+    sync_mutex_lock(&mu);
+    bool ok = true;
+    chan_send((Chan *)env, &ok);
+    time_sleep(50 * TIME_MILLISECOND);
+    sync_mutex_unlock(&mu);
+}
+
+static void contend(void *env) {
+    runtime_set_block_profile_rate(1);
+    runtime_set_mutex_profile_fraction(1);
+
+    Chan *locked = chan_make((Alloc *)env, TYPE_BOOL, 0);
+    if (locked == NULL || !go(BURROW_FN(Func, hold, locked)))
+        return;
+    (void)chan_recv(locked, NULL);
+    sync_mutex_lock(&mu); /* waits until hold lets go */
+    sync_mutex_unlock(&mu);
+    chan_free(locked);
+
+    const char *names[] = {"block", "mutex"};
+    for (int i = 0; i < 2; i++) {
+        PprofProfile *p = pprof_lookup(str_from_cstr(names[i]));
+        fmt_printf_v("%s profile has records: %t\n", names[i],
+                     pprof_profile_count(p) > 0);
+    }
+}
+```
+
+`main` runs it as a goroutine:
+
+<!-- example: ../examples/pprof/pprof.c#run -->
+```c
+runtime_main(BURROW_FN(Func, contend, a));
+```
+
+That prints:
+
+```text
+block profile has records: true
+mutex profile has records: true
+```
+
+In the text form, debug 1, a profile starts with `--- contention:` for block and `--- mutex:` for mutex, then `cycles/second=`, and each record is the time spent waiting, the number of waits and the stack. Go counts CPU cycles, and burrow counts nanoseconds, so cycles/second is always 1000000000. With debug 0 the profile is the protocol buffer `go tool pprof` reads, with contentions and delay in nanoseconds. `runtime_block_profile` and `runtime_mutex_profile` hand back the same records as structs.
+
+The stack of a block record starts at the function that blocked, such as `chan_recv` or `burrow__sync_mutex_lock_slow`, and the stack of a mutex record starts at the unlock, `burrow__sync_mutex_unlock_slow` or the `sync_rw_mutex` function that let the lock go. When an unlock wakes one goroutine and others are still queued, the unlock is charged an estimate of their waiting as well, as Go does. Go's mutex profile also has contention on the runtime's own locks, and burrow's scheduler locks are not profiled.

@@ -612,7 +612,7 @@ void burrow__tc_short_var_decl(TypesChecker *check, GtPosn pos, Slice lhs,
         AstExpr e = GT_AT(lhs, i, AstExpr);
         AstIdent *ident = e->kind == AST_KIND_IDENT ? (AstIdent *)(void *)e : NULL;
         if (ident == NULL) {
-            (void)burrow__tc_use_lhs(check, slice_sub(lhs, i, i + 1));
+            (void)burrow__tc_use1(check, e, true);
             /* TODO(gri) This is redundant with a go/parser error. Consider
              * omitting in go/types? */
             Str es = burrow__tc_es(check, e);

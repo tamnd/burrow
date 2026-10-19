@@ -205,7 +205,8 @@ static TypesFunc *gt_expand_method(TypesNamed *t, Int i) {
     /* Ensure that the original method is type-checked. */
     if (check != NULL)
         burrow__tc_obj_decl(check, types_object(orig));
-    TypesSignature *old_sig = types_as_signature(GT_OBJ(orig)->typ);
+    TypesSignature *old_sig =
+        GT_MUST(TypesSignature, TYPES_KIND_SIGNATURE, GT_OBJ(orig)->typ);
     Slice rtpars = burrow__types_tparam_list(old_sig->rparams);
     Slice rtargs = burrow__types_type_list(t->inst->targs);
     TypesSignature *new_sig = old_sig;
@@ -299,7 +300,7 @@ static void gt_resolve_underlying(TypesNamed *n) {
     for (TypesType rhs = types_type(n); u == NULL;) {
         switch ((TypesTypeKind)rhs->kind) {
         case TYPES_KIND_ALIAS:
-            rhs = burrow__types_unalias(types_as_alias(rhs));
+            rhs = burrow__types_unalias(GT_KNOWN(TypesAlias, rhs));
             break;
         case TYPES_KIND_NAMED: {
             TypesNamed *t = types_as_named(rhs);
@@ -640,7 +641,7 @@ static TypesType gt_subst_typ(GtSubster *subst, TypesType typ) {
     case TYPES_KIND_BASIC:
         break;
     case TYPES_KIND_ALIAS: {
-        TypesAlias *t = types_as_alias(typ);
+        TypesAlias *t = GT_KNOWN(TypesAlias, typ);
         TypesAlias *orig = types_alias_origin(t);
         Int n = types_type_param_list_len(types_alias_type_params(orig));
         if (n == 0)
@@ -656,21 +657,21 @@ static TypesType gt_subst_typ(GtSubster *subst, TypesType typ) {
         break;
     }
     case TYPES_KIND_ARRAY: {
-        TypesArray *t = types_as_array(typ);
+        TypesArray *t = GT_KNOWN(TypesArray, typ);
         TypesType elem = gt_subst_typ_or_nil(subst, t->elem);
         if (elem != t->elem)
             return types_type(types_new_array(subst->a, elem, t->len));
         break;
     }
     case TYPES_KIND_SLICE: {
-        TypesSlice *t = types_as_slice(typ);
+        TypesSlice *t = GT_KNOWN(TypesSlice, typ);
         TypesType elem = gt_subst_typ_or_nil(subst, t->elem);
         if (elem != t->elem)
             return types_type(types_new_slice(subst->a, elem));
         break;
     }
     case TYPES_KIND_STRUCT: {
-        TypesStruct *t = types_as_struct(typ);
+        TypesStruct *t = GT_KNOWN(TypesStruct, typ);
         Slice fields = gt_subst_list(subst, t->fields, gt_subst_var);
         if (fields.p != NULL) {
             TypesStruct *s = GT_NEW(subst->a, TypesStruct);
@@ -683,26 +684,27 @@ static TypesType gt_subst_typ(GtSubster *subst, TypesType typ) {
         break;
     }
     case TYPES_KIND_POINTER: {
-        TypesPointer *t = types_as_pointer(typ);
+        TypesPointer *t = GT_KNOWN(TypesPointer, typ);
         TypesType base = gt_subst_typ(subst, t->base);
         if (base != t->base)
             return types_type(types_new_pointer(subst->a, base));
         break;
     }
     case TYPES_KIND_TUPLE:
-        return types_type(gt_subst_tuple(subst, types_as_tuple(typ)));
+        return types_type(gt_subst_tuple(subst, GT_KNOWN(TypesTuple, typ)));
     case TYPES_KIND_SIGNATURE:
-        return gt_subst_signature(subst, types_as_signature(typ));
+        return gt_subst_signature(subst, GT_KNOWN(TypesSignature, typ));
     case TYPES_KIND_UNION: {
-        Slice terms = gt_subst_list(subst, types_as_union(typ)->terms, gt_subst_term);
+        Slice terms =
+            gt_subst_list(subst, GT_KNOWN(TypesUnion, typ)->terms, gt_subst_term);
         if (terms.p != NULL)
             return types_type(types_new_union(subst->a, terms));
         break;
     }
     case TYPES_KIND_INTERFACE:
-        return gt_subst_interface(subst, types_as_interface(typ));
+        return gt_subst_interface(subst, GT_KNOWN(TypesInterface, typ));
     case TYPES_KIND_MAP: {
-        TypesMap *t = types_as_map(typ);
+        TypesMap *t = GT_KNOWN(TypesMap, typ);
         TypesType key = gt_subst_typ(subst, t->key);
         TypesType elem = gt_subst_typ(subst, t->elem);
         if (key != t->key || elem != t->elem)
@@ -710,14 +712,14 @@ static TypesType gt_subst_typ(GtSubster *subst, TypesType typ) {
         break;
     }
     case TYPES_KIND_CHAN: {
-        TypesChan *t = types_as_chan(typ);
+        TypesChan *t = GT_KNOWN(TypesChan, typ);
         TypesType elem = gt_subst_typ(subst, t->elem);
         if (elem != t->elem)
             return types_type(types_new_chan(subst->a, t->dir, elem));
         break;
     }
     case TYPES_KIND_NAMED: {
-        TypesNamed *t = types_as_named(typ);
+        TypesNamed *t = GT_KNOWN(TypesNamed, typ);
         TypesNamed *orig = types_named_origin(t);
         Int n = types_type_param_list_len(types_named_type_params(orig));
         if (n == 0)
@@ -733,7 +735,7 @@ static TypesType gt_subst_typ(GtSubster *subst, TypesType typ) {
         break;
     }
     case TYPES_KIND_TYPE_PARAM:
-        return gt_smap_lookup(subst->smap, types_as_type_param(typ));
+        return gt_smap_lookup(subst->smap, GT_KNOWN(TypesTypeParam, typ));
     case TYPES_KIND_INVALID:
     default:
         panic_str(BURROW_S("unreachable"));
@@ -899,10 +901,10 @@ TypesType burrow__types_instance(TypesChecker *check, Alloc *a, TokenPos pos,
     case TYPES_KIND_NAMED:
         /* substituted lazily */
         res = types_type(burrow__types_new_named_instance(
-            check, a, pos, types_as_named(orig), targs, expanding));
+            check, a, pos, GT_KNOWN(TypesNamed, orig), targs, expanding));
         break;
     case TYPES_KIND_ALIAS: {
-        TypesAlias *al = types_as_alias(orig);
+        TypesAlias *al = GT_KNOWN(TypesAlias, orig);
         Int ntp = types_type_param_list_len(types_alias_type_params(al));
         /* verify type parameter count (see go.dev/issue/71198 for a test
          * case) */
@@ -915,7 +917,7 @@ TypesType burrow__types_instance(TypesChecker *check, Alloc *a, TokenPos pos,
         break;
     }
     case TYPES_KIND_SIGNATURE: {
-        TypesSignature *sig = types_as_signature(orig);
+        TypesSignature *sig = GT_KNOWN(TypesSignature, orig);
         burrow__types_assert(expanding == NULL);
         burrow__types_assert(sig->rparams == NULL);
         burrow__types_assert(sig->tparams != NULL);
@@ -928,8 +930,9 @@ TypesType burrow__types_instance(TypesChecker *check, Alloc *a, TokenPos pos,
             return orig;
         Map *smap = burrow__types_make_subst_map(
             a, burrow__types_tparam_list(sig->tparams), targs);
-        TypesSignature *s = types_as_signature(
-            burrow__types_subst(check, a, pos, orig, smap, NULL, ctxt));
+        TypesSignature *s =
+            GT_MUST(TypesSignature, TYPES_KIND_SIGNATURE,
+                    burrow__types_subst(check, a, pos, orig, smap, NULL, ctxt));
         if (s == sig) {
             TypesSignature *copy = GT_NEW(a, TypesSignature);
             *copy = *s;

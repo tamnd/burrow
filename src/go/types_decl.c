@@ -137,21 +137,22 @@ void burrow__tc_obj_decl(TypesChecker *check, TypesObject obj) {
     switch (obj->kind) {
     case TYPES_OBJECT_CONST:
         check->env.decl = d; /* new package-level const decl */
-        tcd_const_decl(check, types_as_const(obj), d->vtyp, d->init, d->inherited);
+        tcd_const_decl(check, GT_KNOWN(TypesConst, obj), d->vtyp, d->init,
+                       d->inherited);
         break;
     case TYPES_OBJECT_VAR:
         check->env.decl = d; /* new package-level var decl */
-        tcd_var_decl(check, types_as_var(obj), d->lhs, d->vtyp, d->init);
+        tcd_var_decl(check, GT_KNOWN(TypesVar, obj), d->lhs, d->vtyp, d->init);
         break;
     case TYPES_OBJECT_TYPE_NAME:
         /* invalid recursive types are detected via path */
-        tcd_type_decl(check, types_as_type_name(obj), d->tdecl);
+        tcd_type_decl(check, GT_KNOWN(TypesTypeName, obj), d->tdecl);
         /* methods can only be added to top-level types */
-        burrow__tc_collect_methods(check, types_as_type_name(obj));
+        burrow__tc_collect_methods(check, GT_KNOWN(TypesTypeName, obj));
         break;
     case TYPES_OBJECT_FUNC:
         /* functions may be recursive - no need to track dependencies */
-        tcd_func_decl(check, types_as_func(obj), d);
+        tcd_func_decl(check, GT_KNOWN(TypesFunc, obj), d);
         break;
     default:
         panic_str(BURROW_S("unreachable"));
@@ -191,7 +192,7 @@ static bool tcd_valid_cycle(TypesChecker *check, TypesObject obj) {
                 break;
             }
 
-            if (!types_type_name_is_alias(types_as_type_name(o)))
+            if (!types_type_name_is_alias(GT_KNOWN(TypesTypeName, o)))
                 ndef++;
             break;
         case TYPES_OBJECT_FUNC:
@@ -285,6 +286,7 @@ void burrow__tc_cycle_error(TypesChecker *check, Slice cycle, Int start) {
 /* firstInSrc reports the index of the object with the "smallest" source
  * position in path. path must not be empty. */
 Int burrow__tc_first_in_src(Slice path) {
+    burrow__types_assert(path.len > 0 && path.p != NULL);
     Int fst = 0;
     TokenPos pos = GT_OBJ(GT_AT(path, 0, TypesObject))->pos;
     for (Int i = 1; i < path.len; i++) {
@@ -803,8 +805,9 @@ void burrow__tc_collect_methods(TypesChecker *check, TypesTypeName *obj) {
     Slice methods = **list;
     map_del(check->methods, &obj);
     /* don't use TypeName.IsAlias (requires fully set up object) */
-    burrow__types_assert(burrow__tc_obj_info(check, types_object(obj))->tdecl->assign ==
-                         TOKEN_NO_POS);
+    GtDeclInfo *info = burrow__tc_obj_info(check, types_object(obj));
+    burrow__types_assert(info != NULL);
+    burrow__types_assert(info->tdecl->assign == TOKEN_NO_POS);
 
     /* use an objset to check for name conflicts */
     GtObjset mset = {check->a, NULL};

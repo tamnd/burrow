@@ -114,7 +114,7 @@ static void hr_hash(GtHasher hr, MaphashHash *h, TypesType t) {
         break;
 
     case TYPES_KIND_ARRAY: {
-        TypesArray *a = types_as_array(t);
+        TypesArray *a = GT_KNOWN(TypesArray, t);
         hr_byte(h, 'A');
         int64_t n = types_array_len(a);
         maphash_write_comparable(h, TYPE_INT64, &n);
@@ -124,11 +124,11 @@ static void hr_hash(GtHasher hr, MaphashHash *h, TypesType t) {
 
     case TYPES_KIND_BASIC:
         hr_byte(h, 'B');
-        hr_byte(h, (Byte)types_basic_kind(types_as_basic(t)));
+        hr_byte(h, (Byte)types_basic_kind(GT_KNOWN(TypesBasic, t)));
         break;
 
     case TYPES_KIND_CHAN: {
-        TypesChan *c = types_as_chan(t);
+        TypesChan *c = GT_KNOWN(TypesChan, t);
         hr_byte(h, 'C');
         hr_byte(h, (Byte)types_chan_dir(c));
         hr_hash(hr, h, types_chan_elem(c));
@@ -136,7 +136,7 @@ static void hr_hash(GtHasher hr, MaphashHash *h, TypesType t) {
     }
 
     case TYPES_KIND_INTERFACE: {
-        TypesInterface *it = types_as_interface(t);
+        TypesInterface *it = GT_KNOWN(TypesInterface, t);
         Int n = types_interface_num_methods(it);
         hr_byte(h, 'I');
         hr_byte(h, (Byte)n);
@@ -174,7 +174,7 @@ static void hr_hash(GtHasher hr, MaphashHash *h, TypesType t) {
     }
 
     case TYPES_KIND_MAP: {
-        TypesMap *m = types_as_map(t);
+        TypesMap *m = GT_KNOWN(TypesMap, t);
         hr_byte(h, 'M');
         hr_hash(hr, h, types_map_key(m));
         hr_hash(hr, h, types_map_elem(m));
@@ -182,7 +182,7 @@ static void hr_hash(GtHasher hr, MaphashHash *h, TypesType t) {
     }
 
     case TYPES_KIND_NAMED: {
-        TypesNamed *n = types_as_named(t);
+        TypesNamed *n = GT_KNOWN(TypesNamed, t);
         hr_byte(h, 'N');
         hr_type_name(h, types_named_obj(n));
         TypesTypeList *targs = types_named_type_args(n);
@@ -193,11 +193,11 @@ static void hr_hash(GtHasher hr, MaphashHash *h, TypesType t) {
 
     case TYPES_KIND_POINTER:
         hr_byte(h, 'P');
-        hr_hash(hr, h, types_pointer_elem(types_as_pointer(t)));
+        hr_hash(hr, h, types_pointer_elem(GT_KNOWN(TypesPointer, t)));
         break;
 
     case TYPES_KIND_SIGNATURE: {
-        TypesSignature *sig = types_as_signature(t);
+        TypesSignature *sig = GT_KNOWN(TypesSignature, t);
         hr_byte(h, 'F');
         hr_bool(h, types_signature_variadic(sig));
         TypesTypeParamList *tparams = types_signature_type_params(sig);
@@ -218,11 +218,11 @@ static void hr_hash(GtHasher hr, MaphashHash *h, TypesType t) {
 
     case TYPES_KIND_SLICE:
         hr_byte(h, 'S');
-        hr_hash(hr, h, types_slice_elem(types_as_slice(t)));
+        hr_hash(hr, h, types_slice_elem(GT_KNOWN(TypesSlice, t)));
         break;
 
     case TYPES_KIND_STRUCT: {
-        TypesStruct *s = types_as_struct(t);
+        TypesStruct *s = GT_KNOWN(TypesStruct, t);
         hr_byte(h, 'R'); /* mnemonic: a struct is a record type */
         Int n = types_struct_num_fields(s);
         hr_byte(h, (Byte)n);
@@ -239,11 +239,11 @@ static void hr_hash(GtHasher hr, MaphashHash *h, TypesType t) {
     }
 
     case TYPES_KIND_TUPLE:
-        hr_tuple(hr, h, types_as_tuple(t));
+        hr_tuple(hr, h, GT_KNOWN(TypesTuple, t));
         break;
 
     case TYPES_KIND_TYPE_PARAM:
-        hr_type_param(hr, h, types_as_type_param(t));
+        hr_type_param(hr, h, GT_KNOWN(TypesTypeParam, t));
         break;
 
     case TYPES_KIND_UNION:
@@ -327,7 +327,7 @@ static void hr_shallow_hash(GtHasher hr, MaphashHash *h, TypesType t) {
 
     case TYPES_KIND_ARRAY: {
         hr_byte(h, 'A');
-        int64_t n = types_array_len(types_as_array(t));
+        int64_t n = types_array_len(GT_KNOWN(TypesArray, t));
         maphash_write_comparable(h, TYPE_INT64, &n);
         /* ignore the element type */
         break;
@@ -335,7 +335,7 @@ static void hr_shallow_hash(GtHasher hr, MaphashHash *h, TypesType t) {
 
     case TYPES_KIND_BASIC:
         hr_byte(h, 'B');
-        hr_byte(h, (Byte)types_basic_kind(types_as_basic(t)));
+        hr_byte(h, (Byte)types_basic_kind(GT_KNOWN(TypesBasic, t)));
         break;
 
     case TYPES_KIND_CHAN:
@@ -354,7 +354,7 @@ static void hr_shallow_hash(GtHasher hr, MaphashHash *h, TypesType t) {
         break;
 
     case TYPES_KIND_NAMED:
-        hr_type_name(h, types_named_obj(types_as_named(t)));
+        hr_type_name(h, types_named_obj(GT_KNOWN(TypesNamed, t)));
         break;
 
     case TYPES_KIND_POINTER:
@@ -363,7 +363,7 @@ static void hr_shallow_hash(GtHasher hr, MaphashHash *h, TypesType t) {
         break;
 
     case TYPES_KIND_SIGNATURE: {
-        TypesSignature *sig = types_as_signature(t);
+        TypesSignature *sig = GT_KNOWN(TypesSignature, t);
         hr_byte(h, types_signature_variadic(sig) ? 1 : 0);
         /* The Signature/Tuple recursion is always finite and invariably
          * shallow. */
@@ -379,16 +379,16 @@ static void hr_shallow_hash(GtHasher hr, MaphashHash *h, TypesType t) {
 
     case TYPES_KIND_STRUCT:
         hr_byte(h, 'R'); /* mnemonic: a struct is a record type */
-        hr_byte(h, (Byte)types_struct_num_fields(types_as_struct(t)));
+        hr_byte(h, (Byte)types_struct_num_fields(GT_KNOWN(TypesStruct, t)));
         /* ignore the fields */
         break;
 
     case TYPES_KIND_TUPLE:
-        hr_shallow_tuple(hr, h, types_as_tuple(t));
+        hr_shallow_tuple(hr, h, GT_KNOWN(TypesTuple, t));
         break;
 
     case TYPES_KIND_TYPE_PARAM:
-        hr_type_param(hr, h, types_as_type_param(t));
+        hr_type_param(hr, h, GT_KNOWN(TypesTypeParam, t));
         break;
 
     case TYPES_KIND_UNION:

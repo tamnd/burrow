@@ -8,6 +8,8 @@
 #ifndef BURROW_GO_IMPORTER_INTERNAL_H
 #define BURROW_GO_IMPORTER_INTERNAL_H
 
+#include "burrow/go/importer.h"
+
 #include "burrow/core.h"
 #include "burrow/error.h"
 #include "burrow/go/build.h"

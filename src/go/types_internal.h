@@ -217,6 +217,12 @@ typedef struct GtObject {
  * check it again, and gcc then warns about the NULL it could give. */
 #define GT_KNOWN(T, x) ((T *)(void *)(x))
 
+/* Go's x.(*T) with no comma ok: x as T if it is that kind, and a panic if it
+ * is NULL or another kind. Where types_as_* would give back a NULL that the
+ * next line dereferences, this panics first, and gcc can see that it does. */
+BURROW_BORROWS(ret, t) void *burrow__types_must(TypesType t, Int kind);
+#define GT_MUST(T, KIND, x) ((T *)burrow__types_must((x), (KIND)))
+
 struct TypesPkgName {
     GtObject obj;
     TypesPackage *imported;

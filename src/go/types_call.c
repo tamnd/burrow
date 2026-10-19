@@ -860,7 +860,8 @@ TypesSignature *burrow__tc_arguments(TypesChecker *check, AstCallExpr *call,
         Int j = n;
         for (Int gi = 0; gi < generic_args.len; gi++) {
             GtOperand *arg = GT_AT(args, GT_AT(generic_args, gi, Int), GtOperand *);
-            TypesSignature *asig = types_as_signature(arg->typ);
+            TypesSignature *asig =
+                GT_MUST(TypesSignature, TYPES_KIND_SIGNATURE, arg->typ);
             Int k = j + types_type_param_list_len(asig->tparams);
             /* targs[j:k] are the inferred type arguments for asig */
             arg->typ = types_type(burrow__tc_instantiate_signature(
@@ -967,7 +968,7 @@ static void tca_qualified(TypesChecker *check, GtOperand *x, AstSelectorExpr *e,
     case TYPES_OBJECT_CONST:
         x->mode = GT_MODE_CONSTANT;
         x->typ = GT_OBJ(exp)->typ;
-        x->val = types_as_const(exp)->val;
+        x->val = GT_KNOWN(TypesConst, exp)->val;
         break;
     case TYPES_OBJECT_TYPE_NAME:
         x->mode = GT_MODE_TYPEXPR;
@@ -995,7 +996,7 @@ static void tca_qualified(TypesChecker *check, GtOperand *x, AstSelectorExpr *e,
     case TYPES_OBJECT_BUILTIN:
         x->mode = GT_MODE_BUILTIN;
         x->typ = GT_OBJ(exp)->typ;
-        x->id = types_as_builtin(exp)->id;
+        x->id = GT_KNOWN(TypesBuiltin, exp)->id;
         break;
     default:
         panic_str(BURROW_S("unreachable"));
@@ -1203,7 +1204,7 @@ void burrow__tc_selector(TypesChecker *check, GtOperand *x, AstSelectorExpr *e,
             /* method expression */
             burrow__tc_record_selection(check, e, TYPES_METHOD_EXPR, x->typ, obj, index,
                                         indirect);
-            if (!tca_method_expr(check, x, e, types_as_func(obj)))
+            if (!tca_method_expr(check, x, e, GT_KNOWN(TypesFunc, obj)))
                 goto error;
         } else {
             /* method value */
@@ -1220,7 +1221,7 @@ void burrow__tc_selector(TypesChecker *check, GtOperand *x, AstSelectorExpr *e,
 
             /* remove/stash receiver */
             TypesSignature *sig = GT_NEW(check->a, TypesSignature);
-            *sig = *types_as_signature(GT_OBJ(obj)->typ);
+            *sig = *GT_MUST(TypesSignature, TYPES_KIND_SIGNATURE, GT_OBJ(obj)->typ);
             sig->recvold = sig->recv;
             sig->recv = NULL;
             x->typ = types_type(sig);

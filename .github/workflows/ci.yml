@@ -141,16 +141,20 @@ jobs:
           cmake --build build --config Release
           ctest --test-dir build -C Release --output-on-failure
 
+      # The build runs four compilers at once, which is about as many cores as
+      # the hosted runners have. The tests still run one binary at a time.
+      # Building one file after another took macos-x64-clang past its 35
+      # minutes before a single test had finished.
       - if: ${{ !matrix.cmake && matrix.shell != 'msys2' }}
         name: build and test
-        run: make CC=${{ matrix.cc }} test
+        run: make -j4 CC=${{ matrix.cc }} test
         env:
           CC: ${{ matrix.cc }}
 
       - if: matrix.shell == 'msys2'
         name: build and test
         shell: msys2 {0}
-        run: make CC=${{ matrix.cc }} test
+        run: make -j4 CC=${{ matrix.cc }} test
 
   # clang-tidy, which is a separate job because it takes a couple of minutes and
   # lint is meant to answer in under one. The configuration is .clang-tidy in the

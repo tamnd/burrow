@@ -131,7 +131,7 @@ static void tst_embedded_later(TypesChecker *check, void *env) {
         if (!burrow__types_is_valid(t))
             return; /* error was reported before */
         /* unsafe.Pointer is treated like a regular pointer */
-        if (types_as_basic(u)->kind == TYPES_UNSAFE_POINTER)
+        if (GT_KNOWN(TypesBasic, u)->kind == TYPES_UNSAFE_POINTER)
             burrow__tc_error(check, at, GT_CODE_INVALID_PTR_EMBED,
                              BURROW_S("embedded field type cannot be unsafe.Pointer"));
         break;

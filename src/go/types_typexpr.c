@@ -122,7 +122,7 @@ void burrow__tc_ident(TypesChecker *check, GtOperand *x, AstIdent *e, bool want_
             }
             x->val = *check->env.iota;
         } else {
-            x->val = types_as_const(obj)->val;
+            x->val = GT_KNOWN(TypesConst, obj)->val;
         }
         x->mode = GT_MODE_CONSTANT;
         break;
@@ -135,7 +135,7 @@ void burrow__tc_ident(TypesChecker *check, GtOperand *x, AstIdent *e, bool want_
         /* It's ok to mark non-local variables, but ignore variables from other
          * packages to avoid potential race conditions with dot-imported
          * variables. */
-        TypesVar *v = types_as_var(obj);
+        TypesVar *v = GT_KNOWN(TypesVar, obj);
         if (GT_OBJ(v)->pkg == check->pkg)
             tte_set_used(check->used_vars, &v);
         burrow__tc_add_decl_dep(check, obj);
@@ -151,7 +151,7 @@ void burrow__tc_ident(TypesChecker *check, GtOperand *x, AstIdent *e, bool want_
         break;
 
     case TYPES_OBJECT_BUILTIN:
-        x->id = types_as_builtin(obj)->id;
+        x->id = GT_KNOWN(TypesBuiltin, obj)->id;
         x->mode = GT_MODE_BUILTIN;
         break;
 

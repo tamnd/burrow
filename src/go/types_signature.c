@@ -84,9 +84,9 @@ static void tsg_valid_recv(TypesChecker *check, GtPosn pos, TypesVar *recv) {
     /* spec: "The type denoted by T is called the receiver base type; it must
      * not be a pointer or interface type and it must be declared in the same
      * package as the method." */
-    switch (atyp->kind) {
+    switch (atyp == NULL ? (Int)TYPES_KIND_INVALID : atyp->kind) {
     case TYPES_KIND_NAMED: {
-        TypesNamed *T = types_as_named(atyp);
+        TypesNamed *T = GT_KNOWN(TypesNamed, atyp);
         if (GT_OBJ(T->obj)->pkg != check->pkg ||
             tsg_is_cgo_type_obj(check->fset, T->obj)) {
             GT_ERRORF(check, pos, GT_CODE_INVALID_RECV,
@@ -191,7 +191,7 @@ static TypesNamed *tsg_generic_recv_base(TypesChecker *check, AstExpr rbase) {
     }
     switch (t->kind) {
     case TYPES_KIND_NAMED:
-        return types_as_named(t);
+        return GT_KNOWN(TypesNamed, t);
     case TYPES_KIND_ALIAS:
         /* Methods on generic aliases are not permitted. Only report an error if
          * the alias type is valid. */

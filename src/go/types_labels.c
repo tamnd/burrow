@@ -259,6 +259,7 @@ static void tlb_branch_stmt(TlbBranches *bb, AstBranchStmt *s) {
 
     /* record label use */
     TypesObject obj = types_scope_lookup(bb->all, name);
+    burrow__types_assert(obj != NULL);
     GT_KNOWN(TypesLabel, obj)->used = true;
     burrow__tc_record_use(check, s->label, obj);
 }

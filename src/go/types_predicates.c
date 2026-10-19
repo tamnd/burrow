@@ -824,13 +824,13 @@ static bool gt_comparable_type(TypesType t, bool dynamic, Map *seen,
     switch (u->kind) {
     case TYPES_KIND_BASIC:
         /* assume invalid types to be comparable to avoid follow-up errors */
-        return types_as_basic(u)->kind != TYPES_UNTYPED_NIL;
+        return GT_KNOWN(TypesBasic, u)->kind != TYPES_UNTYPED_NIL;
     case TYPES_KIND_POINTER:
     case TYPES_KIND_CHAN:
         /* always comparable */
         return true;
     case TYPES_KIND_STRUCT: {
-        TypesStruct *st = types_as_struct(u);
+        TypesStruct *st = GT_KNOWN(TypesStruct, u);
         for (Int i = 0; i < st->fields.len; i++) {
             TypesVar *f = GT_AT(st->fields, i, TypesVar *);
             if (!gt_comparable_type(GT_OBJ(f)->typ, dynamic, seen, NULL)) {
@@ -842,14 +842,14 @@ static bool gt_comparable_type(TypesType t, bool dynamic, Map *seen,
         return true;
     }
     case TYPES_KIND_ARRAY:
-        if (!gt_comparable_type(types_as_array(u)->elem, dynamic, seen, NULL)) {
+        if (!gt_comparable_type(GT_KNOWN(TypesArray, u)->elem, dynamic, seen, NULL)) {
             why->kind = GT_INCOMPARABLE_ARRAY;
             why->typ = t;
             return false;
         }
         return true;
     case TYPES_KIND_INTERFACE: {
-        GtTypeSet *ts = burrow__types_iface_type_set(types_as_interface(u));
+        GtTypeSet *ts = burrow__types_iface_type_set(GT_KNOWN(TypesInterface, u));
         if ((dynamic && !burrow__types_is_type_param(t)) ||
             burrow__types_type_set_is_comparable(ts, seen))
             return true;
@@ -887,7 +887,7 @@ bool burrow__types_has_nil(TypesType t) {
     TypesType u = types_type_underlying(t);
     switch (u->kind) {
     case TYPES_KIND_BASIC:
-        return types_as_basic(u)->kind == TYPES_UNSAFE_POINTER;
+        return GT_KNOWN(TypesBasic, u)->kind == TYPES_UNSAFE_POINTER;
     case TYPES_KIND_SLICE:
     case TYPES_KIND_POINTER:
     case TYPES_KIND_SIGNATURE:
@@ -1027,14 +1027,14 @@ static bool gt_identical(const GtComparer *c, TypesType x, TypesType y,
         /* Basic types are singletons except for the rune and byte aliases,
          * thus we cannot solely rely on the x == y check above. */
         if (y->kind == TYPES_KIND_BASIC)
-            return types_as_basic(x)->kind == types_as_basic(y)->kind;
+            return GT_KNOWN(TypesBasic, x)->kind == GT_KNOWN(TypesBasic, y)->kind;
         return false;
 
     case TYPES_KIND_ARRAY:
         if (y->kind == TYPES_KIND_ARRAY) {
             /* Two array types are identical if they have identical element
              * types and the same array length. */
-            TypesArray *xa = types_as_array(x), *ya = types_as_array(y);
+            TypesArray *xa = GT_KNOWN(TypesArray, x), *ya = GT_KNOWN(TypesArray, y);
             /* If one or both array lengths are unknown (< 0) due to some
              * error, assume they are the same to avoid spurious follow-on
              * errors. */
@@ -1047,7 +1047,8 @@ static bool gt_identical(const GtComparer *c, TypesType x, TypesType y,
         /* Two slice types are identical if they have identical element
          * types. */
         if (y->kind == TYPES_KIND_SLICE)
-            return gt_identical(c, types_as_slice(x)->elem, types_as_slice(y)->elem, p);
+            return gt_identical(c, GT_KNOWN(TypesSlice, x)->elem,
+                                GT_KNOWN(TypesSlice, y)->elem, p);
         return false;
 
     case TYPES_KIND_STRUCT:
@@ -1057,7 +1058,7 @@ static bool gt_identical(const GtComparer *c, TypesType x, TypesType y,
              * and identical types, and identical tags. Two embedded fields
              * are considered to have the same name. Lower-case field names
              * from different packages are always different. */
-            TypesStruct *xs = types_as_struct(x), *ys = types_as_struct(y);
+            TypesStruct *xs = GT_KNOWN(TypesStruct, x), *ys = GT_KNOWN(TypesStruct, y);
             if (xs->fields.len != ys->fields.len)
                 return false;
             for (Int i = 0; i < xs->fields.len; i++) {
@@ -1079,15 +1080,15 @@ static bool gt_identical(const GtComparer *c, TypesType x, TypesType y,
         /* Two pointer types are identical if they have identical base
          * types. */
         if (y->kind == TYPES_KIND_POINTER)
-            return gt_identical(c, types_as_pointer(x)->base, types_as_pointer(y)->base,
-                                p);
+            return gt_identical(c, GT_KNOWN(TypesPointer, x)->base,
+                                GT_KNOWN(TypesPointer, y)->base, p);
         return false;
 
     case TYPES_KIND_TUPLE:
         /* Two tuples types are identical if they have the same number of
          * elements and corresponding elements have identical types. */
         if (y->kind == TYPES_KIND_TUPLE) {
-            TypesTuple *xt = types_as_tuple(x), *yt = types_as_tuple(y);
+            TypesTuple *xt = GT_KNOWN(TypesTuple, x), *yt = GT_KNOWN(TypesTuple, y);
             if (xt->vars.len != yt->vars.len)
                 return false;
             for (Int i = 0; i < xt->vars.len; i++) {
@@ -1108,8 +1109,8 @@ static bool gt_identical(const GtComparer *c, TypesType x, TypesType y,
          * match, and type parameters are considered identical modulo
          * renaming. */
         if (y->kind == TYPES_KIND_SIGNATURE)
-            return gt_identical_signature(c, types_as_signature(x),
-                                          types_as_signature(y), p);
+            return gt_identical_signature(c, GT_KNOWN(TypesSignature, x),
+                                          GT_KNOWN(TypesSignature, y), p);
         return false;
 
     case TYPES_KIND_UNION:
@@ -1123,9 +1124,9 @@ static bool gt_identical(const GtComparer *c, TypesType x, TypesType y,
             if (sets == NULL)
                 burrow__types_oom();
             GtTypeSet *xset = gt_compute_union_type_set(NULL, a, sets, TOKEN_NO_POS,
-                                                        types_as_union(x));
+                                                        GT_KNOWN(TypesUnion, x));
             GtTypeSet *yset = gt_compute_union_type_set(NULL, a, sets, TOKEN_NO_POS,
-                                                        types_as_union(y));
+                                                        GT_KNOWN(TypesUnion, y));
             bool eq = burrow__types_termlist_equal(xset->terms, yset->terms);
             arena_free(&ar);
             return eq;
@@ -1134,15 +1135,15 @@ static bool gt_identical(const GtComparer *c, TypesType x, TypesType y,
 
     case TYPES_KIND_INTERFACE:
         if (y->kind == TYPES_KIND_INTERFACE)
-            return gt_identical_interface(c, types_as_interface(x),
-                                          types_as_interface(y), p);
+            return gt_identical_interface(c, GT_KNOWN(TypesInterface, x),
+                                          GT_KNOWN(TypesInterface, y), p);
         return false;
 
     case TYPES_KIND_MAP:
         /* Two map types are identical if they have identical key and value
          * types. */
         if (y->kind == TYPES_KIND_MAP) {
-            TypesMap *xm = types_as_map(x), *ym = types_as_map(y);
+            TypesMap *xm = GT_KNOWN(TypesMap, x), *ym = GT_KNOWN(TypesMap, y);
             return gt_identical(c, xm->key, ym->key, p) &&
                    gt_identical(c, xm->elem, ym->elem, p);
         }
@@ -1152,7 +1153,7 @@ static bool gt_identical(const GtComparer *c, TypesType x, TypesType y,
         /* Two channel types are identical if they have identical value
          * types and the same direction. */
         if (y->kind == TYPES_KIND_CHAN) {
-            TypesChan *xc = types_as_chan(x), *yc = types_as_chan(y);
+            TypesChan *xc = GT_KNOWN(TypesChan, x), *yc = GT_KNOWN(TypesChan, y);
             return xc->dir == yc->dir && gt_identical(c, xc->elem, yc->elem, p);
         }
         return false;
@@ -1164,7 +1165,7 @@ static bool gt_identical(const GtComparer *c, TypesType x, TypesType y,
         TypesNamed *yn = burrow__types_as_named(y);
         if (yn == NULL)
             return false;
-        TypesNamed *xn = types_as_named(x);
+        TypesNamed *xn = GT_KNOWN(TypesNamed, x);
         /* check type arguments before origins to match unifier (see
          * go.dev/issue/63655) */
         Slice xargs = burrow__types_type_list(types_named_type_args(xn));

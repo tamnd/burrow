@@ -280,16 +280,16 @@ bool types_type_name_is_alias(TypesTypeName *obj) {
         return false;
     switch ((TypesTypeKind)typ->kind) {
     case TYPES_KIND_BASIC: {
-        TypesBasic *t = types_as_basic(typ);
+        TypesBasic *t = GT_KNOWN(TypesBasic, typ);
         if (o->pkg != NULL && o->pkg == types_unsafe())
             return false;
         return o->pkg != NULL || !str_eq(t->name, o->name) ||
                t == burrow__types_universe_byte || t == burrow__types_universe_rune;
     }
     case TYPES_KIND_NAMED:
-        return obj != types_as_named(typ)->obj;
+        return obj != GT_KNOWN(TypesNamed, typ)->obj;
     case TYPES_KIND_TYPE_PARAM:
-        return obj != types_as_type_param(typ)->obj;
+        return obj != GT_KNOWN(TypesTypeParam, typ)->obj;
     case TYPES_KIND_INVALID:
     case TYPES_KIND_POINTER:
     case TYPES_KIND_ARRAY:
@@ -584,7 +584,7 @@ Str types_object_string(Alloc *a, TypesObject obj, TypesQualifier qf) {
 void burrow__types_write_func_name(BytesBuffer *buf, TypesFunc *f, TypesQualifier qf) {
     TypesType typ = GT_OBJ(f)->typ;
     if (typ != NULL) {
-        TypesSignature *sig = types_as_signature(typ);
+        TypesSignature *sig = GT_MUST(TypesSignature, TYPES_KIND_SIGNATURE, typ);
         TypesVar *recv = sig->recv;
         if (recv != NULL) {
             burrow__types_buf_byte(buf, '(');

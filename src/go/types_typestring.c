@@ -396,6 +396,7 @@ static void gt_tw_interface(GtTypeWriter *w, TypesInterface *t) {
     if (w->ctxt == NULL) {
         TypesNamed *cmp = burrow__types_as_named(
             types_object_type(burrow__types_universe_comparable()));
+        burrow__types_assert(cmp != NULL);
         if (types_type(t) == cmp->underlying) {
             burrow__types_tw_string(w, BURROW_S("interface{comparable}"));
             return;
@@ -571,10 +572,10 @@ void burrow__types_tw_typ(GtTypeWriter *w, TypesType typ) {
 
     switch ((TypesTypeKind)typ->kind) {
     case TYPES_KIND_BASIC:
-        gt_tw_basic(w, types_as_basic(typ));
+        gt_tw_basic(w, GT_KNOWN(TypesBasic, typ));
         break;
     case TYPES_KIND_ARRAY: {
-        TypesArray *t = types_as_array(typ);
+        TypesArray *t = GT_KNOWN(TypesArray, typ);
         gt_tw_byte(w, '[');
         gt_tw_int(w, t->len);
         gt_tw_byte(w, ']');
@@ -583,30 +584,30 @@ void burrow__types_tw_typ(GtTypeWriter *w, TypesType typ) {
     }
     case TYPES_KIND_SLICE:
         burrow__types_tw_string(w, BURROW_S("[]"));
-        burrow__types_tw_typ(w, types_as_slice(typ)->elem);
+        burrow__types_tw_typ(w, GT_KNOWN(TypesSlice, typ)->elem);
         break;
     case TYPES_KIND_STRUCT:
-        gt_tw_struct(w, types_as_struct(typ));
+        gt_tw_struct(w, GT_KNOWN(TypesStruct, typ));
         break;
     case TYPES_KIND_POINTER:
         gt_tw_byte(w, '*');
-        burrow__types_tw_typ(w, types_as_pointer(typ)->base);
+        burrow__types_tw_typ(w, GT_KNOWN(TypesPointer, typ)->base);
         break;
     case TYPES_KIND_TUPLE:
-        gt_tw_tuple(w, types_as_tuple(typ), false);
+        gt_tw_tuple(w, GT_KNOWN(TypesTuple, typ), false);
         break;
     case TYPES_KIND_SIGNATURE:
         burrow__types_tw_string(w, BURROW_S("func"));
-        burrow__types_tw_signature(w, types_as_signature(typ));
+        burrow__types_tw_signature(w, GT_KNOWN(TypesSignature, typ));
         break;
     case TYPES_KIND_UNION:
-        gt_tw_union(w, types_as_union(typ));
+        gt_tw_union(w, GT_KNOWN(TypesUnion, typ));
         break;
     case TYPES_KIND_INTERFACE:
-        gt_tw_interface(w, types_as_interface(typ));
+        gt_tw_interface(w, GT_KNOWN(TypesInterface, typ));
         break;
     case TYPES_KIND_MAP: {
-        TypesMap *t = types_as_map(typ);
+        TypesMap *t = GT_KNOWN(TypesMap, typ);
         burrow__types_tw_string(w, BURROW_S("map["));
         burrow__types_tw_typ(w, t->key);
         gt_tw_byte(w, ']');
@@ -614,16 +615,16 @@ void burrow__types_tw_typ(GtTypeWriter *w, TypesType typ) {
         break;
     }
     case TYPES_KIND_CHAN:
-        gt_tw_chan(w, types_as_chan(typ));
+        gt_tw_chan(w, GT_KNOWN(TypesChan, typ));
         break;
     case TYPES_KIND_NAMED:
-        gt_tw_named(w, types_as_named(typ));
+        gt_tw_named(w, GT_KNOWN(TypesNamed, typ));
         break;
     case TYPES_KIND_TYPE_PARAM:
-        gt_tw_type_param(w, types_as_type_param(typ));
+        gt_tw_type_param(w, GT_KNOWN(TypesTypeParam, typ));
         break;
     case TYPES_KIND_ALIAS:
-        gt_tw_alias(w, types_as_alias(typ));
+        gt_tw_alias(w, GT_KNOWN(TypesAlias, typ));
         break;
     case TYPES_KIND_INVALID:
     default:

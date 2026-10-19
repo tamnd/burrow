@@ -265,9 +265,9 @@ BURROW_FUNC_TYPE_DEFINE_VARIADIC(VariadicIntFn, Str, SIG_VARIADIC_INT);
 BURROW_FUNC(NilOkFn, bool, IntPtr s);
 BURROW_FUNC_TYPE_DEFINE(NilOkFn, SIG_NIL_OK);
 
-#define SIG_ERR(IN, OUT) OUT(Str) OUT(ErrorResult)
+#define SIG_ERR_FN(IN, OUT) OUT(Str) OUT(ErrorResult)
 BURROW_FUNC(ErrFn, Str, Error *err);
-BURROW_FUNC_TYPE_DEFINE(ErrFn, SIG_ERR);
+BURROW_FUNC_TYPE_DEFINE(ErrFn, SIG_ERR_FN);
 
 /* T has lots of interesting pieces to use to test execution. */
 typedef struct T T;

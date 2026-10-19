@@ -51,6 +51,7 @@
 #include "burrow/stack.h"
 #include "burrow/thread.h"
 #include "burrow/timer.h"
+#include "burrow/waitreason.h"
 
 #include <stdbool.h>
 #include <stddef.h>
@@ -168,13 +169,20 @@ struct burrow__G {
      * Atomic, because the profile reads it while the goroutine runs. */
     void *startpc;
 
-    /* Monotonic and never reused, unlike Go's, which is also monotonic. Zero is
-     * not a valid id, so a zeroed G is recognisably not a live one. */
+    /* Go's goid: given out in order and new for every goroutine, even one that
+     * reuses a G. Zero is not a valid id, so a zeroed G is recognisably not a
+     * live one. Written atomically when the G is handed out, before it runs. */
     uint64_t id;
 
     /* burrow__GStatus. Atomic: read by whoever is stealing or reporting, written
      * by whoever is running it. */
     uint32_t status;
+
+    /* burrow__WaitReason, why it is waiting, which only means anything while the
+     * status says it is. Go's g.waitreason. Written before the status goes to
+     * waiting, and read by a traceback that holds the goroutine there, so the
+     * status is what orders the two. */
+    uint8_t waitreason;
 
     /* Set while this goroutine is on a free list or a linked queue. Not used by
      * the per P ring. */
@@ -635,33 +643,13 @@ BURROW_STATIC(ret) burrow__P *burrow__allp(int32_t i);
 /* How many Ps there are. Fixed while the scheduler is running. */
 int32_t burrow__gomaxprocs(void);
 
-/* One goroutine, as much of it as a traceback can say from outside. */
-typedef struct burrow__GInfo {
-    uint64_t id;
-    uint32_t status; /* burrow__GStatus */
-} burrow__GInfo;
-
-/* Copies out the id and status of every goroutine that has ever been created,
- * for runtime_stack when it was asked for all of them.
- *
- * It copies rather than handing the list over because the list is only stable
- * under the scheduler lock, and the caller is formatting text, which is far too
- * much work to do while holding it. Copying an id and a word of status per
- * goroutine is a few hundred nanoseconds for a program with a thousand of them.
- *
- * Takes the lock if it is free and answers -1 if it is not, rather than waiting.
- * The caller is usually a program that is failing, and the thread that failed
- * may be the one holding this lock, in which case waiting for it is a hang on
- * top of a crash. A -1 costs the report the other goroutines and nothing else.
- *
- * Writes at most max entries and puts the number that exist in total, so a
- * caller with a small buffer can say how many it left out. */
-int32_t burrow__allg_snapshot(burrow__GInfo *out, int32_t max, int32_t *total);
-
-/* One stack for runtime/pprof: a goroutine where it is stopped, with its id and
- * its profiling labels, or the place a thread was started from. */
+/* One stack for runtime/pprof and runtime_stack: a goroutine where it is
+ * stopped, with its id, its status and its profiling labels, or the place a
+ * thread was started from. */
 typedef struct burrow__StackRecord {
     uint64_t id;
+    uint32_t status;    /* burrow__GStatus, without BURROW_GSCAN */
+    uint8_t waitreason; /* burrow__WaitReason, zero unless status is waiting */
     BURROW_BORROWS(1) void *labels;
     int32_t n;
     uintptr_t pcs[BURROW_PROFILE_DEPTH];
@@ -684,6 +672,15 @@ typedef void (*burrow__StackRecordFn)(void *env, const burrow__StackRecord *r);
  * is any build that doesn't use the amd64 or arm64 assembly switch, Windows
  * among them. */
 void burrow__goroutine_profile(burrow__StackRecordFn fn, void *env);
+
+/* The same walk for runtime_stack when it was asked for every goroutine.
+ *
+ * The difference is the lock. This takes it if it is free and answers false if
+ * it is not, rather than waiting, because the caller is usually a program that
+ * is failing, and the thread that failed may be the one holding it, in which
+ * case waiting for it is a hang on top of a crash. False costs the report the
+ * other goroutines and nothing else. */
+bool burrow__goroutine_stacks(burrow__StackRecordFn fn, void *env);
 
 /* How many threads the scheduler has started, which is Go's
  * ThreadCreateProfile(nil). */
@@ -750,8 +747,9 @@ BURROW_BORROWS(ret) burrow__Timer *burrow__sleep_timer(void);
  * touch the scheduler, which is why none of this costs anything to a program
  * that never makes a bubble. */
 
-/* Parks the calling goroutine, the same as sched_park, and says whether a
- * bubble should count the wait as durable.
+/* Parks the calling goroutine, the same as sched_park, says why for a
+ * traceback, and says whether a bubble should count the wait as durable. Go's
+ * gopark.
  *
  * Durable means the only thing that can end this wait is another goroutine in
  * the same bubble. A receive on a channel that was made in the bubble is
@@ -763,7 +761,8 @@ BURROW_BORROWS(ret) burrow__Timer *burrow__sleep_timer(void);
  * for anything the runtime does not recognise: a caller that has built its own
  * waiting on top of the scheduler is waiting for something the bubble has no
  * way to reason about. */
-void burrow__park(bool (*unlockf)(burrow__G *g, void *lock), void *lock, bool durable);
+void burrow__park(bool (*unlockf)(burrow__G *g, void *lock), void *lock,
+                  burrow__WaitReason reason, bool durable);
 
 /* ------------------------------------------------------------- preemption
  *

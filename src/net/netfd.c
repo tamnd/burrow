@@ -361,7 +361,7 @@ static Error nf_connect(burrow__NetFD *fd, Context ctx, const PalSockAddr *rsa,
             /* Too late to stop it: the descriptor has been made unwritable or
              * is about to be, so a connect that got through anyway is no
              * use, and fd has to outlive the function either way. */
-            burrow__sema_acquire(&cancel.done, false, false);
+            burrow__sema_acquire(&cancel.done, false, BURROW_WAIT_SEMACQUIRE, false);
             if (BURROW_OK(e))
                 e = burrow__net_map_err(context_err(ctx));
         }

@@ -167,8 +167,8 @@ BURROW_STATIC(ret) PprofProfile *pprof_new_profile(Str name);
  * stopped, on amd64 and arm64 outside Windows. Elsewhere, and for a goroutine
  * that is still running after the profile has waited twenty milliseconds for it
  * to stop, the stack is the function the goroutine was started with. The
- * debug=2 form of the profile is runtime_stack with all set, which doesn't
- * walk the other goroutines yet. */
+ * debug=2 form of the profile is runtime_stack with all set, which reads the
+ * stacks the same way. */
 BURROW_STATIC(ret) PprofProfile *pprof_lookup(Str name);
 
 /* Profiles returns a slice of all the known profiles, sorted by name. The

@@ -29,7 +29,10 @@
 #include "burrow/runtime.h"
 
 #include "burrow/atomic.h"
+#include "burrow/chan.h"
 #include "burrow/core.h"
+#include "burrow/mcontext.h"
+#include "burrow/mem/heap.h"
 #include "burrow/platform.h"
 #include "burrow/proc.h"
 #include "burrow/slice.h"
@@ -408,7 +411,37 @@ static int count_in_stack(Int n, const char *needle) {
     return found;
 }
 
-static void TestAllGoroutinesListsTheOthersByNumber(TestingT *t) {
+/* The most lines under any goroutine header after the first, or -1 if there is
+ * no second header. */
+static int most_lines_under_the_others(Int n) {
+    const char *head = "\ngoroutine ";
+    size_t hl = strlen(head);
+    int most = -1;
+    Int i = 0;
+
+    for (;;) {
+        while (i + (Int)hl <= n && memcmp(stack_buf + i, head, hl) != 0)
+            i++;
+        if (i + (Int)hl > n)
+            return most;
+
+        /* Past the header line, then count lines to the next blank one. */
+        i++;
+        while (i < n && stack_buf[i] != '\n')
+            i++;
+        int lines = 0;
+        while (i + 1 < n && stack_buf[i + 1] != '\n') {
+            i++;
+            while (i < n && stack_buf[i] != '\n')
+                i++;
+            lines++;
+        }
+        if (lines > most)
+            most = lines;
+    }
+}
+
+static void TestAllGoroutinesGivesTheOthersTheirFrames(TestingT *t) {
     all_child_up = 0;
     all_child_go = 0;
     all_n = 0;
@@ -418,15 +451,66 @@ static void TestAllGoroutinesListsTheOthersByNumber(TestingT *t) {
 
     CHECK(all_n > 0);
 
-    /* The calling goroutine with its frames, then the child as a line of its
-     * own. Two headers is the least this can be: the main goroutine and the one
-     * it started. */
+    /* The calling goroutine with its frames, then the child with its own. Two
+     * headers is the least this can be: the main goroutine and the one it
+     * started. */
     CHECK(count_in_stack(all_n, "goroutine ") >= 2);
-    CHECK(count_in_stack(all_n, "stack not walked") >= 1);
+
+    /* Every goroutine has at least the function it was started with. Where the
+     * switch saves a frame pointer the child's stack is walked, which is that
+     * function and what it called, so more than the one line an unnamed start
+     * function takes. */
+    int lines = most_lines_under_the_others(all_n);
+    CHECK(lines >= 1);
+#if defined(BURROW_MCONTEXT_ASM)
+    if (have_walk())
+        CHECK(lines >= 2);
+#endif
 
     /* The one it was called on is the one that got frames, and it is not listed
      * a second time among the others. */
     CHECK(count_in_stack(all_n, "[running]:") >= 1);
+}
+
+static Chan *reason_c;
+static int reason_found;
+
+static void reason_child(void *env) {
+    (void)env;
+    Int v = 0;
+
+    (void)chan_recv(reason_c, &v);
+}
+
+static void reason_body(void *env) {
+    TestingT *t = env;
+    Int v = 1;
+
+    CHECK(go(BURROW_FN(Func, reason_child, NULL)));
+
+    /* Until the child has got as far as parking in the receive. Before that it
+     * is runnable or running, and either of those is also what it would say. */
+    for (int i = 0; i < 1000 && reason_found == 0; i++) {
+        runtime_gosched();
+        memset(stack_buf, 0, sizeof stack_buf);
+        Int n = runtime_stack(whole_buf(), true);
+        reason_found = count_in_stack(n, "[chan receive]:");
+    }
+
+    chan_send(reason_c, &v);
+}
+
+/* Not in Go. Go's goroutine headers print the wait reason too, but the tests
+ * for that read a crash's output. This checks the same words come out of
+ * runtime_stack for a goroutine parked on a receive. */
+static void TestAWaitingGoroutineSaysWhatItIsWaitingFor(TestingT *t) {
+    reason_c = chan_make(heap_allocator(), TYPE_INT, 0);
+    reason_found = 0;
+
+    runtime_main(BURROW_FN(Func, reason_body, t));
+
+    CHECK_INT_EQ(reason_found, 1);
+    chan_free(reason_c);
 }
 
 static void TestOneGoroutineIsTheDefaultAndLeavesTheOthersOut(TestingT *t) {
@@ -437,7 +521,7 @@ static void TestOneGoroutineIsTheDefaultAndLeavesTheOthersOut(TestingT *t) {
     n = runtime_stack(s, false);
 
     CHECK(n > 0);
-    CHECK_INT_EQ(count_in_stack(n, "stack not walked"), 0);
+    CHECK_INT_EQ(count_in_stack(n, "\ngoroutine "), 0);
 }
 
 #define TESTS(X)                                                                       \
@@ -461,6 +545,7 @@ static void TestOneGoroutineIsTheDefaultAndLeavesTheOthersOut(TestingT *t) {
     X(TestABufferThatFitsTheHeaderAndNotTheFramesGetsTheHeader)                        \
     X(TestNoBufferAtAllIsNotAFault)                                                    \
     X(TestOneGoroutineIsTheDefaultAndLeavesTheOthersOut)                               \
-    X(TestAllGoroutinesListsTheOthersByNumber)
+    X(TestAllGoroutinesGivesTheOthersTheirFrames)                                      \
+    X(TestAWaitingGoroutineSaysWhatItIsWaitingFor)
 
 TESTING_MAIN_BARE(TESTS)

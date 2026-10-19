@@ -799,7 +799,7 @@ Error os_file_close(OsFile *f) {
     Error e = os_decref(f);
     /* Wait until the descriptor is closed. If this was the only reference it
      * is closed already and the semaphore has its wakeup. */
-    burrow__sema_acquire(&f->csema, false, false);
+    burrow__sema_acquire(&f->csema, false, BURROW_WAIT_SEMACQUIRE, false);
     if (BURROW_FAILED(e))
         return fs_path_error_new(error_allocator(), OS_LIT("close"), f->name, e);
     return BURROW_NO_ERROR;

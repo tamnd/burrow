@@ -206,7 +206,10 @@ void sync_wait_group_wait(SyncWaitGroup *wg) {
             bool durable =
                 (state & WAIT_GROUP_BUBBLE_FLAG) != 0 && associated(wg, bubble);
 
-            burrow__sema_acquire(&wg->sema, false, durable);
+            burrow__sema_acquire(&wg->sema, false,
+                                 durable ? BURROW_WAIT_SYNCTEST_WAIT_GROUP_WAIT
+                                         : BURROW_WAIT_SYNC_WAIT_GROUP_WAIT,
+                                 durable);
 
             /* Add zeroes the state before releasing anybody, so a state that
              * is not zero here means somebody started a second round of work

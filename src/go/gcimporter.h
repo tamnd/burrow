@@ -9,6 +9,8 @@
 #ifndef BURROW_GO_GCIMPORTER_H
 #define BURROW_GO_GCIMPORTER_H
 
+/* burrow:package go/internal/gcimporter */
+
 #include "burrow/bufio.h"
 #include "burrow/core.h"
 #include "burrow/error.h"

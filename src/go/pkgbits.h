@@ -23,6 +23,8 @@
 #ifndef BURROW_GO_PKGBITS_H
 #define BURROW_GO_PKGBITS_H
 
+/* burrow:package internal/pkgbits */
+
 #include "burrow/core.h"
 #include "burrow/error.h"
 #include "burrow/go/constant.h"

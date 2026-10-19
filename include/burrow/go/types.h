@@ -1033,6 +1033,13 @@ typedef struct TypesConfig {
      * Not in Go: Go's go115UsesCgo is unexported and only its source importer
      * sets it. C has no way to hide a field, so it is here for the same use. */
     bool go115_uses_cgo;
+    /* A format with one %s, such as " [go.dev/e/%s]". When set, the name of
+     * each error's code is put through it and the result goes at the end of
+     * the first line of the message.
+     *
+     * Not in Go: Go's _ErrorURL is unexported, and only the go command and the
+     * tests set it. C has no way to hide a field, so it is here. */
+    Str error_url;
 } TypesConfig;
 
 /* TypeAndValue: the type of an expression, and its value when it is a

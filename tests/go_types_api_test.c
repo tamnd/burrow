@@ -3469,7 +3469,7 @@ static void TestVersionIssue69477(TestingT *t) {
     Error err = BURROW_NO_ERROR;
     Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
     if (!types_checker_files(check, files, &err))
-        testing_t_fatal_v(t, "%s", error_text(err));
+        testing_t_fatal_v(t, error_text(err));
     arena_free(&ar);
 }
 
@@ -3532,7 +3532,7 @@ static void TestVarKind(TestingT *t) {
     Error err = BURROW_NO_ERROR;
     Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
     if (!types_checker_files(check, files, &err))
-        testing_t_fatal_v(t, "%s", error_text(err));
+        testing_t_fatal_v(t, error_text(err));
     Slice got = slice_nil(TYPE_STRING);
     const void *k;
     void *v;
@@ -3575,7 +3575,7 @@ static void TestIssue73871(TestingT *t) {
     Error err = BURROW_NO_ERROR;
     Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
     if (!types_checker_files(check, files, &err))
-        testing_t_fatal_v(t, "%s", error_text(err));
+        testing_t_fatal_v(t, error_text(err));
 
     /* Check type inferred for 'append'.
      *

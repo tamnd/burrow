@@ -1,6 +1,6 @@
 /* The helpers from Go's src/go/types/api_test.go that the other go/types test
- * files use: pkgName, mustParse, typecheck and mustTypecheck. Go source:
- * go1.27.1.
+ * files use: pkgName, mustParse, typecheck, mustTypecheck and testImporter. Go
+ * source: go1.27.1.
  *
  * Not in Go: Go's test files are one package and share these. Each burrow test
  * is its own program, so they live here. tests/go_types_api_test.c keeps its
@@ -17,10 +17,12 @@
 #include "go_types_importer.h"
 
 #include "burrow/burrow.h"
+#include "burrow/fmt.h"
 #include "burrow/go/ast.h"
 #include "burrow/go/parser.h"
 #include "burrow/go/token.h"
 #include "burrow/go/types.h"
+#include "burrow/map.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
 #include "burrow/strings.h"
@@ -77,6 +79,26 @@ static inline TypesPackage *must_typecheck(Alloc *a, Str src, TypesConfig *conf,
     if (BURROW_FAILED(err))
         panic_str(error_text(err)); /* so we don't need to pass *testing.T */
     return pkg;
+}
+
+/* testImporter: the packages it can import, by path. */
+static inline TypesPackage *test_importer_import(void *self, Str path, Error *err) {
+    Map *m = self;
+    TypesPackage **pkg = map_get(m, &path);
+    if (pkg != NULL && *pkg != NULL)
+        return *pkg;
+    *err = fmt_errorf_v("package %q not found", path);
+    return NULL;
+}
+
+static const TypesImporterVT test_importer_vt = {NULL, test_importer_import, NULL};
+
+static inline Map *new_test_importer(Alloc *a) {
+    return map_make(a, TYPE_STRING, TYPE_UNSAFE_POINTER, 0);
+}
+
+static inline TypesImporter test_importer(Map *m) {
+    return (TypesImporter){&test_importer_vt, m};
 }
 
 #endif

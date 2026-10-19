@@ -20,6 +20,7 @@
 #include "burrow/map.h"
 #include "burrow/mem/arena.h"
 #include "burrow/slices.h"
+#include "burrow/strconv.h"
 #include "burrow/strings.h"
 
 #define S(lit) BURROW_S(lit)
@@ -2002,6 +2003,235 @@ static void TestScopesInfo(TestingT *t) {
     arena_free(&ar);
 }
 
+static const Str selection_lib_src = S_("\npackage lib\ntype T float64\nconst C T = "
+                                        "3\nvar V T\nfunc F() {}\nfunc (T) M() {}\n");
+static const Str selection_main_src =
+    S_("\npackage main\nimport \"lib\"\n\ntype A struct {\n\t*B\n\tC\n}\n\ntype B "
+       "struct {\n\tb int\n}\n\nfunc (B) f(int)\n\ntype C struct {\n\tc int\n}\n\ntype "
+       "G[P any] struct {\n\tp P\n}\n\nfunc (G[P]) m(P) {}\n\nvar Inst G[int]\n\nfunc "
+       "(C) g()\nfunc (*C) h()\n\nfunc main() {\n\t// qualified identifiers\n\tvar _ "
+       "lib.T\n\t_ = lib.C\n\t_ = lib.F\n\t_ = lib.V\n\t_ = lib.T.M\n\n\t// "
+       "fields\n\t_ = A{}.B\n\t_ = new(A).B\n\n\t_ = A{}.C\n\t_ = new(A).C\n\n\t_ = "
+       "A{}.b\n\t_ = new(A).b\n\n\t_ = A{}.c\n\t_ = new(A).c\n\n\t_ = Inst.p\n\t_ = "
+       "G[string]{}.p\n\n\t// methods\n\t_ = A{}.f\n\t_ = new(A).f\n\t_ = A{}.g\n\t_ = "
+       "new(A).g\n\t_ = new(A).h\n\n\t_ = B{}.f\n\t_ = new(B).f\n\n\t_ = C{}.g\n\t_ = "
+       "new(C).g\n\t_ = new(C).h\n\t_ = Inst.m\n\n\t// method expressions\n\t_ = "
+       "A.f\n\t_ = (*A).f\n\t_ = B.f\n\t_ = (*B).f\n\t_ = G[string].m\n}");
+
+static const struct {
+    Str syntax;
+    Str want[2];
+} selection_want_out[] = {
+    {S_("lib.T.M"), {S_("method expr (lib.T) M(lib.T)"), S_(".[0]")}},
+
+    {S_("A{}.B"), {S_("field (main.A) B *main.B"), S_(".[0]")}},
+    {S_("new(A).B"), {S_("field (*main.A) B *main.B"), S_("->[0]")}},
+    {S_("A{}.C"), {S_("field (main.A) C main.C"), S_(".[1]")}},
+    {S_("new(A).C"), {S_("field (*main.A) C main.C"), S_("->[1]")}},
+    {S_("A{}.b"), {S_("field (main.A) b int"), S_("->[0 0]")}},
+    {S_("new(A).b"), {S_("field (*main.A) b int"), S_("->[0 0]")}},
+    {S_("A{}.c"), {S_("field (main.A) c int"), S_(".[1 0]")}},
+    {S_("new(A).c"), {S_("field (*main.A) c int"), S_("->[1 0]")}},
+    {S_("Inst.p"), {S_("field (main.G[int]) p int"), S_(".[0]")}},
+
+    {S_("A{}.f"), {S_("method (main.A) f(int)"), S_("->[0 0]")}},
+    {S_("new(A).f"), {S_("method (*main.A) f(int)"), S_("->[0 0]")}},
+    {S_("A{}.g"), {S_("method (main.A) g()"), S_(".[1 0]")}},
+    {S_("new(A).g"), {S_("method (*main.A) g()"), S_("->[1 0]")}},
+    {S_("new(A).h"),
+     {S_("method (*main.A) h()"),
+      S_("->[1 1]")}}, /* TODO(gri) should this report .[1 1] ? */
+    {S_("B{}.f"), {S_("method (main.B) f(int)"), S_(".[0]")}},
+    {S_("new(B).f"), {S_("method (*main.B) f(int)"), S_("->[0]")}},
+    {S_("C{}.g"), {S_("method (main.C) g()"), S_(".[0]")}},
+    {S_("new(C).g"), {S_("method (*main.C) g()"), S_("->[0]")}},
+    {S_("new(C).h"),
+     {S_("method (*main.C) h()"),
+      S_("->[1]")}}, /* TODO(gri) should this report .[1] ? */
+    {S_("Inst.m"), {S_("method (main.G[int]) m(int)"), S_(".[0]")}},
+
+    {S_("A.f"), {S_("method expr (main.A) f(main.A, int)"), S_("->[0 0]")}},
+    {S_("(*A).f"), {S_("method expr (*main.A) f(*main.A, int)"), S_("->[0 0]")}},
+    {S_("B.f"), {S_("method expr (main.B) f(main.B, int)"), S_(".[0]")}},
+    {S_("(*B).f"), {S_("method expr (*main.B) f(*main.B, int)"), S_("->[0]")}},
+    {S_("G[string].m"),
+     {S_("method expr (main.G[string]) m(main.G[string], string)"), S_(".[0]")}},
+    {S_("G[string]{}.p"), {S_("field (main.G[string]) p string"), S_(".[0]")}},
+};
+
+/* "[1 0]", the way %v prints an []int */
+static Str index_string(Alloc *a, Slice index) {
+    Slice parts = slice_nil(TYPE_STRING);
+    for (Int i = 0; i < index.len; i++) {
+        Str s = strconv_itoa(a, BURROW_AT(Int, index, i));
+        parts = slice_append(a, parts, &s, 1);
+    }
+    return fmt_sprintf_v(a, "[%s]", strings_join(a, parts, S(" ")));
+}
+
+/* makePkg for the tests that check one package after another, with imports
+ * importing what came before. */
+static TypesPackage *make_pkg(Alloc *a, TypesConfig *conf, TokenFileSet *fset,
+                              TypesInfo *info, Map *imports, Str path, Str src,
+                              Error *err) {
+    AstFile *f = must_parse(a, fset, src);
+    Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
+    TypesPackage *pkg = types_config_check(conf, a, path, fset, files, info, err);
+    map_set(imports, &path, &pkg);
+    return pkg;
+}
+
+static void TestSelection(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Map *selections = map_make(a, TYPE_UNSAFE_POINTER, TYPE_UNSAFE_POINTER, 0);
+
+    /* We need a specific fileset in this test below for positions.
+     * Cannot use typecheck helper. */
+    TokenFileSet *fset = token_new_file_set(a);
+    Map *imports = new_test_importer(a);
+    TypesConfig conf = {0};
+    conf.importer = test_importer(imports);
+    Str paths[2] = {S("lib"), S("main")};
+    Str srcs[2] = {selection_lib_src, selection_main_src};
+    for (Int i = 0; i < 2; i++) {
+        TypesInfo info = {0};
+        info.selections = selections;
+        Error err = BURROW_NO_ERROR;
+        (void)make_pkg(a, &conf, fset, &info, imports, paths[i], srcs[i], &err);
+        if (BURROW_FAILED(err))
+            testing_t_fatalf_v(t, "%s", error_text(err));
+    }
+
+    bool used[NELEM(selection_want_out)] = {0};
+    const void *k;
+    void *v;
+    for (MapIter it = map_iter(selections); map_next(&it, &k, &v);) {
+        AstNode e = *(AstNode const *)k;
+        TypesSelection *sel = *(TypesSelection **)v;
+        (void)types_selection_string(a, sel, TYPES_NO_QUALIFIER); /* must not panic */
+
+        Int start = token_file_set_position(fset, ast_node_pos(e)).offset;
+        Int end = token_file_set_position(fset, ast_node_end(e)).offset;
+        /* (all SelectorExprs are in main, not lib) */
+        Str syntax = str_from_bytes(selection_main_src.p + start, end - start);
+
+        Str direct = types_selection_indirect(sel) ? S("->") : S(".");
+        Str got[2] = {
+            types_selection_string(a, sel, TYPES_NO_QUALIFIER),
+            fmt_sprintf_v(a, "%s%s", direct,
+                          index_string(a, types_selection_index(sel))),
+        };
+        Str want[2] = {S(""), S("")};
+        for (Int i = 0; i < NELEM(selection_want_out); i++) {
+            if (!used[i] && str_eq(selection_want_out[i].syntax, syntax)) {
+                want[0] = selection_want_out[i].want[0];
+                want[1] = selection_want_out[i].want[1];
+                used[i] = true; /* delete(wantOut, syntax) */
+                break;
+            }
+        }
+        if (!str_eq(want[0], got[0]) || !str_eq(want[1], got[1]))
+            testing_t_errorf_v(t, "%s: got [%q %q]; want [%q %q]", syntax, got[0],
+                               got[1], want[0], want[1]);
+
+        /* We must explicitly assert properties of the
+         * Signature's receiver since it doesn't participate
+         * in Identical() or String(). */
+        TypesSignature *sig = types_as_signature(types_selection_type(a, sel));
+        if (types_selection_kind(sel) == TYPES_METHOD_VAL) {
+            TypesType got_recv =
+                types_object_type(types_object(types_signature_recv(sig)));
+            TypesType want_recv = types_selection_recv(sel);
+            if (!types_identical(got_recv, want_recv))
+                testing_t_errorf_v(t, "%s: Recv() = %s, want %s", syntax,
+                                   type_string(a, got_recv), type_string(a, want_recv));
+        } else if (sig != NULL && types_signature_recv(sig) != NULL) {
+            testing_t_errorf_v(
+                t, "%s: signature has receiver %s", type_string(a, types_type(sig)),
+                type_string(
+                    a, types_object_type(types_object(types_signature_recv(sig)))));
+        }
+    }
+    /* Assert that all wantOut entries were used exactly once. */
+    for (Int i = 0; i < NELEM(selection_want_out); i++) {
+        if (!used[i])
+            testing_t_errorf_v(t, "no ast.Selection found with syntax %q",
+                               selection_want_out[i].syntax);
+    }
+    arena_free(&ar);
+}
+
+static void log_error(void *env, const TypesError *e) {
+    TestingT *t = env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    testing_t_log_v(t, types_error_error(e, arena_allocator(&ar)));
+    arena_free(&ar);
+}
+
+/* check_in_order: makePkg for each of paths and srcs in turn, with errors
+ * logged through log_error. */
+static void check_in_order(TestingT *t, const Str *paths, const Str *srcs, Int n) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TokenFileSet *fset = token_new_file_set(a);
+    Map *imports = new_test_importer(a);
+    TypesConfig conf = {0};
+    conf.error = (TypesErrorFunc){log_error, t}; /* don't exit after first error */
+    conf.importer = test_importer(imports);
+    for (Int i = 0; i < n; i++) {
+        Error err = BURROW_NO_ERROR; /* errors logged via conf.Error */
+        (void)make_pkg(a, &conf, fset, NULL, imports, paths[i], srcs[i], &err);
+    }
+    arena_free(&ar);
+}
+
+static void TestIssue8518(TestingT *t) {
+    const Str paths[] = {S("a"), S("main")};
+    const Str srcs[] = {
+        S_("\npackage a\nimport \"missing\"\nconst C1 = foo\nconst C2 = missing.C\n"),
+        S_("\npackage main\nimport \"a\"\nvar _ = a.C1\nvar _ = a.C2\n"),
+    };
+    check_in_order(t, paths, srcs, 2); /* don't crash when type-checking main */
+}
+
+static void TestIssue59603(TestingT *t) {
+    const Str paths[] = {S("a"), S("main")};
+    const Str srcs[] = {
+        S_("\npackage a\nconst C = foo\n"),
+        S_("\npackage main\nimport \"a\"\nconst _ = a.C\n"),
+    };
+    check_in_order(t, paths, srcs, 2); /* don't crash when type-checking main */
+}
+
+/* Test for go.dev/issue/52715 */
+static void TestLookupFieldOrMethod_RecursiveGeneric(TestingT *t) {
+    (void)t;
+    Str src = S("\npackage pkg\n\ntype Tree[T any] struct {\n\t*Node[T]\n}\n\nfunc "
+                "(*Tree[R]) N(r R) R { return r }\n\ntype Node[T any] struct "
+                "{\n\t*Tree[T]\n}\n\ntype Instance = *Tree[int]\n");
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TokenFileSet *fset = token_new_file_set(a);
+    AstFile *f = must_parse(a, fset, src);
+    TypesPackage *pkg = types_new_package(a, S("pkg"), f->name->name);
+    TypesChecker *check = types_new_checker(a, NULL, fset, pkg, NULL);
+    Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
+    Error err = BURROW_NO_ERROR;
+    if (!types_checker_files(check, files, &err))
+        panic_str(error_text(err));
+
+    TypesType T =
+        types_object_type(types_scope_lookup(types_package_scope(pkg), S("Instance")));
+    /* verify that LookupFieldOrMethod terminates */
+    (void)types_lookup_field_or_method(a, T, false, pkg, S("M"), NULL, NULL);
+    arena_free(&ar);
+}
+
 /* fmt.Sprint of a list of strings, a Slice of Str. */
 static Str sprint_list(Alloc *a, Slice list) {
     Str parts[3] = {S("["), strings_join(a, list, S(" ")), S("]")};
@@ -2229,6 +2459,10 @@ static void TestFirstErrorInTypeSet(TestingT *t) {
     X(TestInitOrderInfo)                                                               \
     X(TestMultiFileInitOrder)                                                          \
     X(TestFiles)                                                                       \
+    X(TestSelection)                                                                   \
+    X(TestIssue8518)                                                                   \
+    X(TestIssue59603)                                                                  \
+    X(TestLookupFieldOrMethod_RecursiveGeneric)                                        \
     X(TestFirstErrorInTypeSet)
 
 TESTING_MAIN(TESTS)

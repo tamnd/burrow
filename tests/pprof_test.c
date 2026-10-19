@@ -462,7 +462,9 @@ static BURROW_NOINLINE int f2(void) {
     return 2;
 }
 
-#if defined(BURROW_OS_LINUX) || defined(BURROW_OS_NETBSD)
+#if defined(BURROW_OS_LINUX) || defined(BURROW_OS_NETBSD) || defined(BURROW_OS_COSMO)
+#define PROC_SELF_MAPS 1
+
 typedef struct MappingList {
     PfMapping *m;
     Int n;
@@ -485,18 +487,55 @@ static void collect_mapping(void *env, uint64_t lo, uint64_t hi, uint64_t offset
 }
 #endif
 
+#if defined(BURROW_OS_COSMO) ||                                                        \
+    (!defined(PROC_SELF_MAPS) && !defined(BURROW_OS_DARWIN) &&                         \
+     !defined(BURROW_OS_WINDOWS))
+/* The default case of testPCs. */
+static bool fake_pcs(uint64_t *addr1, uint64_t *addr2, PfMapping maps[2]) {
+#if defined(BURROW_OS_WASI)
+    /* Not in Go. A function pointer in wasm is an index into the function
+     * table, so f1 and f2 can be one apart and addr1+1 would be addr2. Two
+     * places in linear memory far enough apart stand in for them. */
+    static const char text[64] = {1};
+    (void)f1;
+    (void)f2;
+    *addr1 = (uint64_t)(uintptr_t)&text[0];
+    *addr2 = (uint64_t)(uintptr_t)&text[32];
+#else
+    *addr1 = (uint64_t)(uintptr_t)f1;
+    *addr2 = (uint64_t)(uintptr_t)f2;
+#endif
+    /* Fake mapping. Go's has HasFunctions true because two PCs from Go will be
+     * fully symbolized, which burrow's are not, having no file or line. */
+    memset(maps, 0, 2 * sizeof maps[0]);
+    maps[0].id = 1;
+    maps[1].id = 1;
+    return true;
+}
+#endif
+
 /* testPCs returns two PCs and two corresponding memory mappings to use in test
  * profiles. */
 static bool test_pcs(TestingT *t, Alloc *a, uint64_t *addr1, uint64_t *addr2,
                      PfMapping maps[2]) {
-#if defined(BURROW_OS_LINUX) || defined(BURROW_OS_NETBSD)
-    (void)f1;
-    (void)f2;
+#if defined(PROC_SELF_MAPS)
     /* Figure out two addresses from /proc/self/maps. */
     Error err;
     Slice mmap = os_read_file(a, S("/proc/self/maps"), &err);
-    if (BURROW_FAILED(err))
+    if (BURROW_FAILED(err)) {
+#if defined(BURROW_OS_COSMO)
+        /* Not in Go. A cosmo binary has the file when it runs on Linux and
+         * not elsewhere, and without it the builder fakes a mapping, so the
+         * test does too. */
+        return fake_pcs(addr1, addr2, maps);
+#else
         testing_t_fatalf_v(t, "%v", err);
+#endif
+    }
+#if !defined(BURROW_OS_COSMO)
+    (void)f1;
+    (void)f2;
+#endif
     MappingList l = {maps, 0};
     burrow__ppr_parse_proc_self_maps(a, mmap, collect_mapping, &l);
     if (l.n < 2) {
@@ -531,13 +570,7 @@ static bool test_pcs(TestingT *t, Alloc *a, uint64_t *addr1, uint64_t *addr2,
 #else
     (void)t;
     (void)a;
-    *addr1 = (uint64_t)(uintptr_t)f1;
-    *addr2 = (uint64_t)(uintptr_t)f2;
-    /* Fake mapping. Go's has HasFunctions true because two PCs from Go will be
-     * fully symbolized, which burrow's are not, having no file or line. */
-    memset(maps, 0, 2 * sizeof maps[0]);
-    maps[0].id = 1;
-    maps[1].id = 1;
+    return fake_pcs(addr1, addr2, maps);
 #endif
     return true;
 }
@@ -812,7 +845,18 @@ static BURROW_NOINLINE void add_there(PprofProfile *p, Int *v) {
     pprof_profile_add(p, BURROW_ANY(TYPE_INT, v), 0);
 }
 
+/* Whether this build can walk a stack at all, asked the way frames_test.c
+ * does, with a skip of one, since frame zero is written without a walk. */
+static bool have_walk(void) {
+    Uintptr buf[4];
+    Slice s = {buf, 4, 4, NULL};
+
+    return runtime_callers(1, s) > 0;
+}
+
 static void TestProfileWriteTo(TestingT *t) {
+    if (!have_walk())
+        testing_t_skip_v(t, "no stack walk here, so the two places look the same");
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);

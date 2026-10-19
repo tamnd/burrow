@@ -529,15 +529,6 @@ Error burrow__pf_decode_bool(PfBuffer *b, bool *x) {
 
 /* ----------------------------------------------------------------- encode */
 
-static const PfMessage pf_profile_msg;
-static const PfMessage pf_value_type_msg;
-static const PfMessage pf_sample_msg;
-static const PfMessage pf_label_msg;
-static const PfMessage pf_mapping_msg;
-static const PfMessage pf_location_msg;
-static const PfMessage pf_line_msg;
-static const PfMessage pf_function_msg;
-
 static int64_t pf_add_string(Alloc *a, Map *strings, Slice *table, Str s) {
     int32_t i;
     if (!map_get2(strings, &s, &i)) {
@@ -586,7 +577,11 @@ static void pf_pre_encode(PfProfile *p) {
         Slice keys = pf_sorted_keys(a, s->label);
         for (Int j = 0; j < keys.len; j++) {
             Str k = BURROW_AT(Str, keys, j);
-            Slice vs = burrow__pf_labels_get(s->label, k)->values;
+            /* The keys came from these labels, so this always finds one. */
+            const PfStrLabels *ls = burrow__pf_labels_get(s->label, k);
+            if (ls == NULL)
+                continue;
+            Slice vs = ls->values;
             for (Int n = 0; n < vs.len; n++) {
                 PfLabel l = {0};
                 l.key_x = pf_add_string(a, strings, &table, k);
@@ -597,7 +592,11 @@ static void pf_pre_encode(PfProfile *p) {
         Slice num_keys = pf_sorted_num_keys(a, s->num_label);
         for (Int j = 0; j < num_keys.len; j++) {
             Str k = BURROW_AT(Str, num_keys, j);
-            Slice vs = burrow__pf_num_labels_get(s->num_label, k)->values;
+            /* The keys came from these labels, so this always finds one. */
+            const PfNumLabels *ls = burrow__pf_num_labels_get(s->num_label, k);
+            if (ls == NULL)
+                continue;
+            Slice vs = ls->values;
             for (Int n = 0; n < vs.len; n++) {
                 PfLabel l = {0};
                 l.key_x = pf_add_string(a, strings, &table, k);
@@ -651,148 +650,6 @@ static void pf_pre_encode(PfProfile *p) {
     p->string_table = table;
     map_free(strings);
 }
-
-static void pf_profile_encode(PfBuffer *b, const void *m) {
-    const PfProfile *p = m;
-    for (Int i = 0; i < p->sample_type.len; i++)
-        burrow__pf_encode_message(b, 1, &pf_value_type_msg,
-                                  pf_ptr_at(p->sample_type, i));
-    for (Int i = 0; i < p->sample.len; i++)
-        burrow__pf_encode_message(b, 2, &pf_sample_msg, pf_ptr_at(p->sample, i));
-    for (Int i = 0; i < p->mapping.len; i++)
-        burrow__pf_encode_message(b, 3, &pf_mapping_msg, pf_ptr_at(p->mapping, i));
-    for (Int i = 0; i < p->location.len; i++)
-        burrow__pf_encode_message(b, 4, &pf_location_msg, pf_ptr_at(p->location, i));
-    for (Int i = 0; i < p->function.len; i++)
-        burrow__pf_encode_message(b, 5, &pf_function_msg, pf_ptr_at(p->function, i));
-    burrow__pf_encode_strings(b, 6, p->string_table);
-    burrow__pf_encode_int64_opt(b, 7, p->drop_frames_x);
-    burrow__pf_encode_int64_opt(b, 8, p->keep_frames_x);
-    burrow__pf_encode_int64_opt(b, 9, p->time_nanos);
-    burrow__pf_encode_int64_opt(b, 10, p->duration_nanos);
-    const PfValueType *pt = p->period_type;
-    if (pt != NULL && (pt->type_x != 0 || pt->unit_x != 0))
-        burrow__pf_encode_message(b, 11, &pf_value_type_msg, p->period_type);
-    burrow__pf_encode_int64_opt(b, 12, p->period);
-}
-
-/* repeated ValueType sample_type = 1 */
-static Error pf_profile_dec_sample_type(PfBuffer *b, void *m) {
-    PfValueType *x = pf_new_value_type(b->a);
-    PfProfile *pp = m;
-    pp->sample_type = pf_append_ptr(b->a, pp->sample_type, x);
-    return burrow__pf_decode_message(b, &pf_value_type_msg, x);
-}
-
-/* repeated Sample sample = 2 */
-static Error pf_profile_dec_sample(PfBuffer *b, void *m) {
-    PfSample *x = pf_new_sample(b->a);
-    PfProfile *pp = m;
-    pp->sample = pf_append_ptr(b->a, pp->sample, x);
-    return burrow__pf_decode_message(b, &pf_sample_msg, x);
-}
-
-/* repeated Mapping mapping = 3 */
-static Error pf_profile_dec_mapping(PfBuffer *b, void *m) {
-    PfMapping *x = PF_NEW(b->a, PfMapping);
-    PfProfile *pp = m;
-    pp->mapping = pf_append_ptr(b->a, pp->mapping, x);
-    return burrow__pf_decode_message(b, &pf_mapping_msg, x);
-}
-
-/* repeated Location location = 4 */
-static Error pf_profile_dec_location(PfBuffer *b, void *m) {
-    PfLocation *x = pf_new_location(b->a);
-    PfProfile *pp = m;
-    pp->location = pf_append_ptr(b->a, pp->location, x);
-    return burrow__pf_decode_message(b, &pf_location_msg, x);
-}
-
-/* repeated Function function = 5 */
-static Error pf_profile_dec_function(PfBuffer *b, void *m) {
-    PfFunction *x = PF_NEW(b->a, PfFunction);
-    PfProfile *pp = m;
-    pp->function = pf_append_ptr(b->a, pp->function, x);
-    return burrow__pf_decode_message(b, &pf_function_msg, x);
-}
-
-/* repeated string string_table = 6 */
-static Error pf_profile_dec_string_table(PfBuffer *b, void *m) {
-    PfProfile *pp = m;
-    Error err = burrow__pf_decode_strings(b, &pp->string_table);
-    if (BURROW_FAILED(err))
-        return err;
-    if (BURROW_AT(Str, pp->string_table, 0).len != 0)
-        return pf_err(PF_S("string_table[0] must be ''"));
-    return BURROW_NO_ERROR;
-}
-
-/* repeated int64 drop_frames = 7 */
-static Error pf_profile_dec_drop_frames(PfBuffer *b, void *m) {
-    return burrow__pf_decode_int64(b, &((PfProfile *)m)->drop_frames_x);
-}
-
-/* repeated int64 keep_frames = 8 */
-static Error pf_profile_dec_keep_frames(PfBuffer *b, void *m) {
-    return burrow__pf_decode_int64(b, &((PfProfile *)m)->keep_frames_x);
-}
-
-/* repeated int64 time_nanos = 9 */
-static Error pf_profile_dec_time_nanos(PfBuffer *b, void *m) {
-    return burrow__pf_decode_int64(b, &((PfProfile *)m)->time_nanos);
-}
-
-/* repeated int64 duration_nanos = 10 */
-static Error pf_profile_dec_duration_nanos(PfBuffer *b, void *m) {
-    return burrow__pf_decode_int64(b, &((PfProfile *)m)->duration_nanos);
-}
-
-/* optional string period_type = 11 */
-static Error pf_profile_dec_period_type(PfBuffer *b, void *m) {
-    PfValueType *x = pf_new_value_type(b->a);
-    PfProfile *pp = m;
-    pp->period_type = x;
-    return burrow__pf_decode_message(b, &pf_value_type_msg, x);
-}
-
-/* repeated int64 period = 12 */
-static Error pf_profile_dec_period(PfBuffer *b, void *m) {
-    return burrow__pf_decode_int64(b, &((PfProfile *)m)->period);
-}
-
-/* repeated int64 comment = 13 */
-static Error pf_profile_dec_comment(PfBuffer *b, void *m) {
-    return burrow__pf_decode_int64s(b, &((PfProfile *)m)->comment_x);
-}
-
-/* int64 defaultSampleType = 14 */
-static Error pf_profile_dec_default_sample_type(PfBuffer *b, void *m) {
-    return burrow__pf_decode_int64(b, &((PfProfile *)m)->default_sample_type_x);
-}
-
-static const PfDecoder pf_profile_decoder[] = {
-    NULL, /* 0 */
-    pf_profile_dec_sample_type,
-    pf_profile_dec_sample,
-    pf_profile_dec_mapping,
-    pf_profile_dec_location,
-    pf_profile_dec_function,
-    pf_profile_dec_string_table,
-    pf_profile_dec_drop_frames,
-    pf_profile_dec_keep_frames,
-    pf_profile_dec_time_nanos,
-    pf_profile_dec_duration_nanos,
-    pf_profile_dec_period_type,
-    pf_profile_dec_period,
-    pf_profile_dec_comment,
-    pf_profile_dec_default_sample_type,
-};
-
-static const PfMessage pf_profile_msg = {
-    pf_profile_decoder,
-    (Int)(sizeof pf_profile_decoder / sizeof pf_profile_decoder[0]),
-    pf_profile_encode,
-};
 
 static Str pf_get_string(Slice strings, int64_t *strng, Error *err) {
     if (BURROW_FAILED(*err))
@@ -934,6 +791,41 @@ static const PfMessage pf_value_type_msg = {
     pf_value_type_encode,
 };
 
+static void pf_label_encode(PfBuffer *b, const void *m) {
+    const PfLabel *p = m;
+    burrow__pf_encode_int64_opt(b, 1, p->key_x);
+    burrow__pf_encode_int64_opt(b, 2, p->str_x);
+    burrow__pf_encode_int64_opt(b, 3, p->num_x);
+}
+
+/* optional int64 key = 1 */
+static Error pf_label_dec_key(PfBuffer *b, void *m) {
+    return burrow__pf_decode_int64(b, &((PfLabel *)m)->key_x);
+}
+
+/* optional int64 str = 2 */
+static Error pf_label_dec_str(PfBuffer *b, void *m) {
+    return burrow__pf_decode_int64(b, &((PfLabel *)m)->str_x);
+}
+
+/* optional int64 num = 3 */
+static Error pf_label_dec_num(PfBuffer *b, void *m) {
+    return burrow__pf_decode_int64(b, &((PfLabel *)m)->num_x);
+}
+
+static const PfDecoder pf_label_decoder[] = {
+    NULL, /* 0 */
+    pf_label_dec_key,
+    pf_label_dec_str,
+    pf_label_dec_num,
+};
+
+static const PfMessage pf_label_msg = {
+    pf_label_decoder,
+    (Int)(sizeof pf_label_decoder / sizeof pf_label_decoder[0]),
+    pf_label_encode,
+};
+
 static void pf_sample_encode(PfBuffer *b, const void *m) {
     const PfSample *p = m;
     burrow__pf_encode_uint64s(b, 1, p->location_idx);
@@ -974,41 +866,6 @@ static const PfMessage pf_sample_msg = {
     pf_sample_decoder,
     (Int)(sizeof pf_sample_decoder / sizeof pf_sample_decoder[0]),
     pf_sample_encode,
-};
-
-static void pf_label_encode(PfBuffer *b, const void *m) {
-    const PfLabel *p = m;
-    burrow__pf_encode_int64_opt(b, 1, p->key_x);
-    burrow__pf_encode_int64_opt(b, 2, p->str_x);
-    burrow__pf_encode_int64_opt(b, 3, p->num_x);
-}
-
-/* optional int64 key = 1 */
-static Error pf_label_dec_key(PfBuffer *b, void *m) {
-    return burrow__pf_decode_int64(b, &((PfLabel *)m)->key_x);
-}
-
-/* optional int64 str = 2 */
-static Error pf_label_dec_str(PfBuffer *b, void *m) {
-    return burrow__pf_decode_int64(b, &((PfLabel *)m)->str_x);
-}
-
-/* optional int64 num = 3 */
-static Error pf_label_dec_num(PfBuffer *b, void *m) {
-    return burrow__pf_decode_int64(b, &((PfLabel *)m)->num_x);
-}
-
-static const PfDecoder pf_label_decoder[] = {
-    NULL, /* 0 */
-    pf_label_dec_key,
-    pf_label_dec_str,
-    pf_label_dec_num,
-};
-
-static const PfMessage pf_label_msg = {
-    pf_label_decoder,
-    (Int)(sizeof pf_label_decoder / sizeof pf_label_decoder[0]),
-    pf_label_encode,
 };
 
 static void pf_mapping_encode(PfBuffer *b, const void *m) {
@@ -1095,6 +952,34 @@ static const PfMessage pf_mapping_msg = {
     pf_mapping_encode,
 };
 
+static void pf_line_encode(PfBuffer *b, const void *m) {
+    const PfLine *p = m;
+    burrow__pf_encode_uint64_opt(b, 1, p->function_idx);
+    burrow__pf_encode_int64_opt(b, 2, p->line);
+}
+
+/* optional uint64 function_id = 1 */
+static Error pf_line_dec_function(PfBuffer *b, void *m) {
+    return burrow__pf_decode_uint64(b, &((PfLine *)m)->function_idx);
+}
+
+/* optional int64 line = 2 */
+static Error pf_line_dec_line(PfBuffer *b, void *m) {
+    return burrow__pf_decode_int64(b, &((PfLine *)m)->line);
+}
+
+static const PfDecoder pf_line_decoder[] = {
+    NULL, /* 0 */
+    pf_line_dec_function,
+    pf_line_dec_line,
+};
+
+static const PfMessage pf_line_msg = {
+    pf_line_decoder,
+    (Int)(sizeof pf_line_decoder / sizeof pf_line_decoder[0]),
+    pf_line_encode,
+};
+
 static void pf_location_encode(PfBuffer *b, const void *m) {
     const PfLocation *p = m;
     burrow__pf_encode_uint64_opt(b, 1, p->id);
@@ -1139,34 +1024,6 @@ static const PfMessage pf_location_msg = {
     pf_location_decoder,
     (Int)(sizeof pf_location_decoder / sizeof pf_location_decoder[0]),
     pf_location_encode,
-};
-
-static void pf_line_encode(PfBuffer *b, const void *m) {
-    const PfLine *p = m;
-    burrow__pf_encode_uint64_opt(b, 1, p->function_idx);
-    burrow__pf_encode_int64_opt(b, 2, p->line);
-}
-
-/* optional uint64 function_id = 1 */
-static Error pf_line_dec_function(PfBuffer *b, void *m) {
-    return burrow__pf_decode_uint64(b, &((PfLine *)m)->function_idx);
-}
-
-/* optional int64 line = 2 */
-static Error pf_line_dec_line(PfBuffer *b, void *m) {
-    return burrow__pf_decode_int64(b, &((PfLine *)m)->line);
-}
-
-static const PfDecoder pf_line_decoder[] = {
-    NULL, /* 0 */
-    pf_line_dec_function,
-    pf_line_dec_line,
-};
-
-static const PfMessage pf_line_msg = {
-    pf_line_decoder,
-    (Int)(sizeof pf_line_decoder / sizeof pf_line_decoder[0]),
-    pf_line_encode,
 };
 
 static void pf_function_encode(PfBuffer *b, const void *m) {
@@ -1216,6 +1073,148 @@ static const PfMessage pf_function_msg = {
     pf_function_decoder,
     (Int)(sizeof pf_function_decoder / sizeof pf_function_decoder[0]),
     pf_function_encode,
+};
+
+static void pf_profile_encode(PfBuffer *b, const void *m) {
+    const PfProfile *p = m;
+    for (Int i = 0; i < p->sample_type.len; i++)
+        burrow__pf_encode_message(b, 1, &pf_value_type_msg,
+                                  pf_ptr_at(p->sample_type, i));
+    for (Int i = 0; i < p->sample.len; i++)
+        burrow__pf_encode_message(b, 2, &pf_sample_msg, pf_ptr_at(p->sample, i));
+    for (Int i = 0; i < p->mapping.len; i++)
+        burrow__pf_encode_message(b, 3, &pf_mapping_msg, pf_ptr_at(p->mapping, i));
+    for (Int i = 0; i < p->location.len; i++)
+        burrow__pf_encode_message(b, 4, &pf_location_msg, pf_ptr_at(p->location, i));
+    for (Int i = 0; i < p->function.len; i++)
+        burrow__pf_encode_message(b, 5, &pf_function_msg, pf_ptr_at(p->function, i));
+    burrow__pf_encode_strings(b, 6, p->string_table);
+    burrow__pf_encode_int64_opt(b, 7, p->drop_frames_x);
+    burrow__pf_encode_int64_opt(b, 8, p->keep_frames_x);
+    burrow__pf_encode_int64_opt(b, 9, p->time_nanos);
+    burrow__pf_encode_int64_opt(b, 10, p->duration_nanos);
+    const PfValueType *pt = p->period_type;
+    if (pt != NULL && (pt->type_x != 0 || pt->unit_x != 0))
+        burrow__pf_encode_message(b, 11, &pf_value_type_msg, p->period_type);
+    burrow__pf_encode_int64_opt(b, 12, p->period);
+}
+
+/* repeated ValueType sample_type = 1 */
+static Error pf_profile_dec_sample_type(PfBuffer *b, void *m) {
+    PfValueType *x = pf_new_value_type(b->a);
+    PfProfile *pp = m;
+    pp->sample_type = pf_append_ptr(b->a, pp->sample_type, x);
+    return burrow__pf_decode_message(b, &pf_value_type_msg, x);
+}
+
+/* repeated Sample sample = 2 */
+static Error pf_profile_dec_sample(PfBuffer *b, void *m) {
+    PfSample *x = pf_new_sample(b->a);
+    PfProfile *pp = m;
+    pp->sample = pf_append_ptr(b->a, pp->sample, x);
+    return burrow__pf_decode_message(b, &pf_sample_msg, x);
+}
+
+/* repeated Mapping mapping = 3 */
+static Error pf_profile_dec_mapping(PfBuffer *b, void *m) {
+    PfMapping *x = PF_NEW(b->a, PfMapping);
+    PfProfile *pp = m;
+    pp->mapping = pf_append_ptr(b->a, pp->mapping, x);
+    return burrow__pf_decode_message(b, &pf_mapping_msg, x);
+}
+
+/* repeated Location location = 4 */
+static Error pf_profile_dec_location(PfBuffer *b, void *m) {
+    PfLocation *x = pf_new_location(b->a);
+    PfProfile *pp = m;
+    pp->location = pf_append_ptr(b->a, pp->location, x);
+    return burrow__pf_decode_message(b, &pf_location_msg, x);
+}
+
+/* repeated Function function = 5 */
+static Error pf_profile_dec_function(PfBuffer *b, void *m) {
+    PfFunction *x = PF_NEW(b->a, PfFunction);
+    PfProfile *pp = m;
+    pp->function = pf_append_ptr(b->a, pp->function, x);
+    return burrow__pf_decode_message(b, &pf_function_msg, x);
+}
+
+/* repeated string string_table = 6 */
+static Error pf_profile_dec_string_table(PfBuffer *b, void *m) {
+    PfProfile *pp = m;
+    Error err = burrow__pf_decode_strings(b, &pp->string_table);
+    if (BURROW_FAILED(err))
+        return err;
+    if (BURROW_AT(Str, pp->string_table, 0).len != 0)
+        return pf_err(PF_S("string_table[0] must be ''"));
+    return BURROW_NO_ERROR;
+}
+
+/* repeated int64 drop_frames = 7 */
+static Error pf_profile_dec_drop_frames(PfBuffer *b, void *m) {
+    return burrow__pf_decode_int64(b, &((PfProfile *)m)->drop_frames_x);
+}
+
+/* repeated int64 keep_frames = 8 */
+static Error pf_profile_dec_keep_frames(PfBuffer *b, void *m) {
+    return burrow__pf_decode_int64(b, &((PfProfile *)m)->keep_frames_x);
+}
+
+/* repeated int64 time_nanos = 9 */
+static Error pf_profile_dec_time_nanos(PfBuffer *b, void *m) {
+    return burrow__pf_decode_int64(b, &((PfProfile *)m)->time_nanos);
+}
+
+/* repeated int64 duration_nanos = 10 */
+static Error pf_profile_dec_duration_nanos(PfBuffer *b, void *m) {
+    return burrow__pf_decode_int64(b, &((PfProfile *)m)->duration_nanos);
+}
+
+/* optional string period_type = 11 */
+static Error pf_profile_dec_period_type(PfBuffer *b, void *m) {
+    PfValueType *x = pf_new_value_type(b->a);
+    PfProfile *pp = m;
+    pp->period_type = x;
+    return burrow__pf_decode_message(b, &pf_value_type_msg, x);
+}
+
+/* repeated int64 period = 12 */
+static Error pf_profile_dec_period(PfBuffer *b, void *m) {
+    return burrow__pf_decode_int64(b, &((PfProfile *)m)->period);
+}
+
+/* repeated int64 comment = 13 */
+static Error pf_profile_dec_comment(PfBuffer *b, void *m) {
+    return burrow__pf_decode_int64s(b, &((PfProfile *)m)->comment_x);
+}
+
+/* int64 defaultSampleType = 14 */
+static Error pf_profile_dec_default_sample_type(PfBuffer *b, void *m) {
+    return burrow__pf_decode_int64(b, &((PfProfile *)m)->default_sample_type_x);
+}
+
+static const PfDecoder pf_profile_decoder[] = {
+    NULL, /* 0 */
+    pf_profile_dec_sample_type,
+    pf_profile_dec_sample,
+    pf_profile_dec_mapping,
+    pf_profile_dec_location,
+    pf_profile_dec_function,
+    pf_profile_dec_string_table,
+    pf_profile_dec_drop_frames,
+    pf_profile_dec_keep_frames,
+    pf_profile_dec_time_nanos,
+    pf_profile_dec_duration_nanos,
+    pf_profile_dec_period_type,
+    pf_profile_dec_period,
+    pf_profile_dec_comment,
+    pf_profile_dec_default_sample_type,
+};
+
+static const PfMessage pf_profile_msg = {
+    pf_profile_decoder,
+    (Int)(sizeof pf_profile_decoder / sizeof pf_profile_decoder[0]),
+    pf_profile_encode,
 };
 
 /* ---------------------------------------------------------------- profile */

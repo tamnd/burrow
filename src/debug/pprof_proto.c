@@ -608,10 +608,12 @@ static void ppr_add_mapping_entry(PprBuilder *b, uint64_t lo, uint64_t hi,
     m->fake = fake;
 }
 
+#if !defined(BURROW_OS_WASI)
 static void ppr_add_mapping(void *env, uint64_t lo, uint64_t hi, uint64_t offset,
                             Str file, Str build_id) {
     ppr_add_mapping_entry((PprBuilder *)env, lo, hi, offset, file, build_id, false);
 }
+#endif
 
 /* ------------------------------------------------------------ the mappings */
 
@@ -903,9 +905,16 @@ static void ppr_pal_mapping(void *env, uint64_t lo, uint64_t hi, uint64_t offset
 
 /* readMapping reads the mappings of the running program into b.mem. macOS has
  * machVMInfo and Windows a module snapshot, both behind pal_text_mappings, and
- * everything else reads /proc/self/maps. */
+ * everything else reads /proc/self/maps.
+ *
+ * Not in Go: wasip1 always gets the fake entry. A wasm module's addresses are
+ * offsets into its own memory and tables, and a /proc/self/maps it can open
+ * belongs to the host, wasmtime for one, whose mappings say nothing about
+ * them. */
 static void ppr_read_mapping(PprBuilder *b) {
-#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_WINDOWS)
+#if defined(BURROW_OS_WASI)
+    ppr_add_mapping_entry(b, 0, 0, 0, BURROW_STR_EMPTY, BURROW_STR_EMPTY, true);
+#elif defined(BURROW_OS_DARWIN) || defined(BURROW_OS_WINDOWS)
     PprPalEnv env = {b->a, ppr_add_mapping, b};
     if (!pal_text_mappings(ppr_pal_mapping, &env)) {
         /* pprof expects a map entry, so fake one, when we haven't added

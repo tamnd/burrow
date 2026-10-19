@@ -106,6 +106,21 @@ _Static_assert(_Alignof(ucontext_t) <= 16,
  * side knows whose context to fill. */
 static BURROW_THREAD_LOCAL burrow__MContext *annotate_prev;
 
+/* Only ever touched through these two, and for the reason getm and setm give
+ * in sched.c. Where the write in asan_leave and the read in asan_enter end up
+ * inlined into one function, which is what the amalgamation does with a park,
+ * the compiler works the address of annotate_prev out once, before the switch.
+ * A goroutine that wakes up on another thread then reads the old thread's copy,
+ * and if that thread has exited since, the read is of freed memory. The macOS
+ * docs job caught it as a heap-use-after-free under ASan. */
+static BURROW_NOINLINE burrow__MContext *get_annotate_prev(void) {
+    return annotate_prev;
+}
+
+static BURROW_NOINLINE void set_annotate_prev(burrow__MContext *ctx) {
+    annotate_prev = ctx;
+}
+
 static void asan_make(burrow__MContext *ctx, void *stack, size_t size) {
     ctx->stack = stack;
     ctx->stack_size = size;
@@ -125,7 +140,7 @@ static void asan_attach(burrow__MContext *self) {
  * saved is what tells it to throw that fake stack away instead of keeping it
  * for a return that is not coming. */
 static void asan_leave(burrow__MContext *from, burrow__MContext *to, bool final) {
-    annotate_prev = from;
+    set_annotate_prev(from);
     __sanitizer_start_switch_fiber(final ? NULL : &from->fake_stack, to->stack,
                                    to->stack_size);
 }
@@ -140,12 +155,13 @@ static void asan_enter(burrow__MContext *self) {
     /* bottom and size describe the stack the thread has just left, so this is
      * where a thread's own context learns where its stack is. Once is enough,
      * and after that the answer is the one already stored. */
-    if (annotate_prev != NULL && annotate_prev->stack == NULL) {
+    burrow__MContext *prev = get_annotate_prev();
+    if (prev != NULL && prev->stack == NULL) {
         /* The cast drops a const the sanitizer put on for the caller's benefit.
          * It is the same address either way and nothing here writes through
          * it. */
-        annotate_prev->stack = (void *)(uintptr_t)bottom;
-        annotate_prev->stack_size = size;
+        prev->stack = (void *)(uintptr_t)bottom;
+        prev->stack_size = size;
     }
 }
 

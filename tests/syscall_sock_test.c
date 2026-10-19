@@ -629,6 +629,16 @@ static void TestAccept4Filter(TestingT *t) {
           j.jf == 3);
     Slice prog = {accept_all, 1, 1, NULL};
     err = syscall_attach_lsf(s, prog);
+    /* The GitHub Linux runners now answer EPERM here, on main as well as on
+     * branches. Refused is not the same as broken, so that one answer skips
+     * rather than fails. */
+    if (errno_of(err) == SYSCALL_EPERM) {
+        (void)syscall_close(s);
+        (void)syscall_close(c);
+        (void)syscall_close(l);
+        ARENA_END;
+        testing_t_skipf_v(t, "AttachLsf: %v", err);
+    }
     if (BURROW_FAILED(err))
         testing_t_fatalf_v(t, "AttachLsf: %v", err);
     /* The big endian CI job runs under qemu's user mode, where detaching

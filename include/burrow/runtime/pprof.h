@@ -25,9 +25,9 @@
  *     PprofLabelSet l = pprof_labels_v(a, 2, BURROW_S("worker"), BURROW_S("7"));
  *     pprof_do(a, ctx, l, BURROW_FN(PprofDoFunc, work, env));
  *
- * Go also has a set of profiles the runtime fills in, such as "goroutine",
- * "heap" and "mutex", and a CPU profiler. They are not here yet, so
- * pprof_lookup knows only the profiles made with pprof_new_profile.
+ * Of the profiles Go's runtime fills in, "goroutine" and "threadcreate" are
+ * here, and pprof_lookup says more. "heap", "allocs", "block", "mutex" and the
+ * CPU profiler are not here yet.
  *
  * The stacks are what runtime_callers gives and the names are what
  * runtime_func_for_pc gives, so a static function shows up under the nearest
@@ -156,7 +156,19 @@ typedef struct PprofProfile PprofProfile;
 BURROW_STATIC(ret) PprofProfile *pprof_new_profile(Str name);
 
 /* Lookup returns the profile with the given name, or NULL if no such profile
- * exists. */
+ * exists.
+ *
+ * The predefined profiles are:
+ *
+ *     goroutine    - stack traces of all current goroutines
+ *     threadcreate - stack traces that led to the creation of new OS threads
+ *
+ * A goroutine's stack in the goroutine profile is read from where it last
+ * stopped, on amd64 and arm64 outside Windows. Elsewhere, and for a goroutine
+ * that is still running after the profile has waited twenty milliseconds for it
+ * to stop, the stack is the function the goroutine was started with. The
+ * debug=2 form of the profile is runtime_stack with all set, which doesn't
+ * walk the other goroutines yet. */
 BURROW_STATIC(ret) PprofProfile *pprof_lookup(Str name);
 
 /* Profiles returns a slice of all the known profiles, sorted by name. The

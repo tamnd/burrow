@@ -106,6 +106,17 @@ typedef enum burrow__GStatus {
     BURROW_GDEAD = 5
 } burrow__GStatus;
 
+/* Go's _Gscan, added to a WAITING or RUNNABLE status by a goroutine profile
+ * while it reads that goroutine's stack. Nothing may start the goroutine or
+ * move it out of either state while the bit is there, so everything in the
+ * scheduler that does waits for it to go, as Go's casgstatus does. A goroutine
+ * that is running, dead or not yet started never has it. */
+#define BURROW_GSCAN 0x1000U
+
+/* How many return addresses the goroutine and thread creation profiles keep for
+ * each stack. Go's StackRecord holds the same 32. */
+#define BURROW_PROFILE_DEPTH 32
+
 /* What a P is doing. Go's names again, minus the one for the phase of garbage
  * collection where every P is stopped, since there is no collector here to stop
  * them.
@@ -151,6 +162,11 @@ struct burrow__G {
      * of a stuck one. */
     void (*entry)(void *);
     void *arg;
+
+    /* The address of the function the goroutine was started with, for a
+     * goroutine profile to report when it can't walk the stack. Go's g.startpc.
+     * Atomic, because the profile reads it while the goroutine runs. */
+    void *startpc;
 
     /* Monotonic and never reused, unlike Go's, which is also monotonic. Zero is
      * not a valid id, so a zeroed G is recognisably not a live one. */
@@ -443,6 +459,12 @@ struct burrow__M {
 
     /* Monotonic, and mostly for reading in a debugger. */
     int64_t id;
+
+    /* Where this M was started from, for the threadcreate profile. Go's
+     * m.createstack. Written under the scheduler lock before the M is counted,
+     * and never again. */
+    int32_t ncreatestack;
+    uintptr_t createstack[BURROW_PROFILE_DEPTH];
 };
 
 /* ------------------------------------------------------------------ the ring
@@ -635,6 +657,41 @@ typedef struct burrow__GInfo {
  * Writes at most max entries and puts the number that exist in total, so a
  * caller with a small buffer can say how many it left out. */
 int32_t burrow__allg_snapshot(burrow__GInfo *out, int32_t max, int32_t *total);
+
+/* One stack for runtime/pprof: a goroutine where it is stopped, with its id and
+ * its profiling labels, or the place a thread was started from. */
+typedef struct burrow__StackRecord {
+    uint64_t id;
+    BURROW_BORROWS(1) void *labels;
+    int32_t n;
+    uintptr_t pcs[BURROW_PROFILE_DEPTH];
+} burrow__StackRecord;
+
+typedef void (*burrow__StackRecordFn)(void *env, const burrow__StackRecord *r);
+
+/* Go's goroutineProfileWithLabels, minus the calling goroutine, which the caller
+ * can describe better itself. Calls fn once for every other goroutine that has
+ * started and not ended.
+ *
+ * A goroutine that is parked or waiting to run is held there while its stack is
+ * read, by setting BURROW_GSCAN on it, and let go before fn is called, so fn
+ * may take as long as it likes. Go stops the world for the goroutines that are
+ * running. burrow has no way to do that, so one running on another thread is
+ * asked to give way at its next safe point and given a few milliseconds to do
+ * it. One that is still running after that, which is usually one blocked in a
+ * system call, is reported with the function it was started with as its only
+ * frame. So is every goroutine where the saved context can't be walked, which
+ * is any build that doesn't use the amd64 or arm64 assembly switch, Windows
+ * among them. */
+void burrow__goroutine_profile(burrow__StackRecordFn fn, void *env);
+
+/* How many threads the scheduler has started, which is Go's
+ * ThreadCreateProfile(nil). */
+int32_t burrow__thread_count(void);
+
+/* Go's ThreadCreateProfile: calls fn once for each thread the scheduler has
+ * started, with the stack of the call that started it. */
+void burrow__thread_create_profile(burrow__StackRecordFn fn, void *env);
 
 /* Register the callback the system monitor makes roughly once a second, which
  * today is sync.Pool's sweep and nothing else.

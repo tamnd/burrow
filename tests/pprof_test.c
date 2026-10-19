@@ -24,6 +24,7 @@
 #include "burrow/slices.h"
 #include "burrow/strings.h"
 #include "burrow/symtab.h"
+#include "burrow/time.h"
 
 #include <string.h>
 
@@ -835,8 +836,8 @@ static void TestEmptyCallStack(TestingT *t) {
 }
 
 /* Not in Go. Go's tests write profiles with many stacks through the built-in
- * ones, which burrow doesn't have yet, so this does it with a profile of its
- * own: three values from two places, in both formats. */
+ * ones, most of which burrow doesn't have yet, so this does it with a profile
+ * of its own: three values from two places, in both formats. */
 static BURROW_NOINLINE void add_here(PprofProfile *p, Int *v) {
     pprof_profile_add(p, BURROW_ANY(TYPE_INT, v), 0);
 }
@@ -921,6 +922,221 @@ static void TestProfileWriteTo(TestingT *t) {
     arena_free(&ar);
 }
 
+/* Go's func1 to func4 are one line each, <-c. These also count their runs,
+ * each in a field of its own, so that a compiler can't fold them into one
+ * function and leave the profile one stack where Go has three, and so that the
+ * receive isn't a tail call that would leave each out of its own stack. Then
+ * they say they are done, so the test can wait for them before it frees the
+ * labels they hold. */
+typedef struct GoroutineCounts {
+    Chan *c;
+    SyncWaitGroup wg;
+    uint32_t ran[3];
+} GoroutineCounts;
+
+static BURROW_NOINLINE void func1(void *env) {
+    GoroutineCounts *g = (GoroutineCounts *)env;
+    (void)chan_recv(g->c, NULL);
+    sync_atomic_add_uint32(&g->ran[0], 1);
+    sync_wait_group_done(&g->wg);
+}
+
+static BURROW_NOINLINE void func2(void *env) {
+    GoroutineCounts *g = (GoroutineCounts *)env;
+    (void)chan_recv(g->c, NULL);
+    sync_atomic_add_uint32(&g->ran[1], 2);
+    sync_wait_group_done(&g->wg);
+}
+
+static BURROW_NOINLINE void func3(void *env) {
+    GoroutineCounts *g = (GoroutineCounts *)env;
+    (void)chan_recv(g->c, NULL);
+    sync_atomic_add_uint32(&g->ran[2], 3);
+    sync_wait_group_done(&g->wg);
+}
+
+static void start_counted(GoroutineCounts *g, Int n) {
+    for (Int i = 0; i < n; i++) {
+        void (*f)(void *) = func3;
+        if (i % 10 == 0)
+            f = func1;
+        else if (i % 2 == 0)
+            f = func2;
+        sync_wait_group_add(&g->wg, 1);
+        if (!go(BURROW_FN(Func, f, g)))
+            sync_wait_group_done(&g->wg);
+        /* Let goroutines block on channel */
+        for (int j = 0; j < 5; j++)
+            runtime_gosched();
+    }
+}
+
+static void start_counted_labelled(void *env, Context ctx) {
+    (void)ctx;
+    /* ... and again, with labels this time (just with fewer iterations to keep
+     * sorting deterministic). */
+    start_counted((GoroutineCounts *)env, 89);
+}
+
+static bool contains_in_order(Str s, const Str *all, Int n) {
+    for (Int i = 0; i < n; i++) {
+        Int at = strings_index(s, all[i]);
+        if (at < 0)
+            return false;
+        s = str_from_bytes(s.p + at + all[i].len, s.len - at - all[i].len);
+    }
+    return true;
+}
+
+/* One entry of Go's map[int64]map[string]string, with key NULL for a count
+ * that has no labels. */
+typedef struct CountLabel {
+    int64_t count;
+    const char *key;
+    const char *val;
+} CountLabel;
+
+static bool contains_counts_labels(PfProfile *prof, const CountLabel *want, Int nwant) {
+    Int m[16] = {0};
+    Int n[16] = {0};
+    for (Int i = 0; i < nwant; i++) {
+        m[i]++;
+        if (want[i].key != NULL)
+            n[i]++;
+    }
+    PfSample **ps = (PfSample **)prof->sample.p;
+    for (Int i = 0; i < prof->sample.len; i++) {
+        /* The count is the single value in the sample */
+        if (ps[i]->value.len != 1)
+            return false;
+        int64_t c = ((const int64_t *)ps[i]->value.p)[0];
+        for (Int j = 0; j < nwant; j++) {
+            if (want[j].count == c)
+                m[j]--;
+        }
+        PfStrLabels **ls = (PfStrLabels **)ps[i]->label.p;
+        for (Int k = 0; k < ps[i]->label.len; k++) {
+            const Str *vs = (const Str *)ls[k]->values.p;
+            for (Int v = 0; v < ls[k]->values.len; v++) {
+                Int j = 0;
+                while (j < nwant && !(want[j].count == c && want[j].key != NULL &&
+                                      str_eq(ls[k]->key, str_from_cstr(want[j].key)) &&
+                                      str_eq(vs[v], str_from_cstr(want[j].val))))
+                    j++;
+                if (j == nwant)
+                    return false;
+                n[j]--;
+            }
+        }
+    }
+    for (Int i = 0; i < nwant; i++) {
+        if (m[i] > 0 || n[i] != 0)
+            return false;
+    }
+    return true;
+}
+
+static void TestGoroutineCounts(TestingT *t) {
+    /* Setting GOMAXPROCS to 1 ensures we can force all goroutines to the
+     * desired blocking point. */
+    int procs = runtime_gomaxprocs(1);
+    int before = runtime_numgoroutine();
+
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    GoroutineCounts g;
+    memset(&g, 0, sizeof g);
+    g.c = chan_make(heap_allocator(), TYPE_INT, 0);
+    start_counted(&g, 100);
+    Context ctx = context_background();
+
+    PprofLabel label = {S("label"), S("value")};
+    PprofLabel self_label = {S("self-label"), S("self-value")};
+    pprof_do(a, ctx, pprof_labels_v(a, 2, label.key, label.value),
+             BURROW_FN(PprofDoFunc, start_counted_labelled, &g));
+
+    pprof_set_goroutine_labels(
+        pprof_with_labels(a, context_background(),
+                          pprof_labels_v(a, 2, self_label.key, self_label.value)));
+
+    /* Go also starts a finalizer that blocks with labels of its own, so that
+     * the profile has to find the finalizer goroutine. burrow has no
+     * finalizers, so the goroutine with count 1 is this one alone. */
+
+    BytesBuffer w = BYTES_BUFFER(a);
+    PprofProfile *goroutine_prof = pprof_lookup(S("goroutine"));
+    if (goroutine_prof == NULL)
+        testing_t_fatalf_v(t, "Lookup(\"goroutine\") = nil");
+
+    Str label_str =
+        fmt_sprintf_v(a, "\n# labels: %s",
+                      labels_text(a, slice_from(&label, 1, 1, TYPE_PPROF_LABEL)));
+    Str self_label_str =
+        fmt_sprintf_v(a, "\n# labels: %s",
+                      labels_text(a, slice_from(&self_label, 1, 1, TYPE_PPROF_LABEL)));
+    Str ordered_prefix[] = {
+        S("\n50 @ "), S("\n44 @"), label_str, S("\n40 @"), S("\n36 @"),    label_str,
+        S("\n10 @"),  S("\n9 @"),  label_str, S("\n1 @"),  self_label_str,
+    };
+    /* Not in Go: runtime_gomaxprocs can't take Ps away from a scheduler that
+     * is already running, so another P can steal a goroutine from above before
+     * it gets to the channel, and the yields don't wait for it. With Go's one P
+     * that can't happen. So this takes the profile again, for up to five
+     * seconds, until every goroutine is blocked. */
+    Str prof = {0};
+    for (int i = 0; i < 5000; i++) {
+        /* Check debug profile */
+        bytes_buffer_reset(&w);
+        (void)pprof_profile_write_to(goroutine_prof, bytes_buffer_as_io_writer(&w), 1);
+        prof = bytes_buffer_string(&w, a);
+        if (contains_in_order(prof, ordered_prefix, NELEM(ordered_prefix)))
+            break;
+        time_sleep(TIME_MILLISECOND);
+    }
+    if (!contains_in_order(prof, ordered_prefix, NELEM(ordered_prefix)))
+        testing_t_errorf_v(t, "expected sorted goroutine counts with Labels:\n%s",
+                           prof);
+
+    /* Check proto profile */
+    bytes_buffer_reset(&w);
+    (void)pprof_profile_write_to(goroutine_prof, bytes_buffer_as_io_writer(&w), 0);
+    Error err = BURROW_NO_ERROR;
+    PfProfile *p = burrow__pf_parse(a, bytes_buffer_as_io_reader(&w), &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "error parsing protobuf profile: %v", err);
+    err = burrow__pf_profile_check_valid(p);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "protobuf profile is invalid: %v", err);
+    const CountLabel expected_labels[] = {
+        {50, NULL, NULL},
+        {44, "label", "value"},
+        {40, NULL, NULL},
+        {36, "label", "value"},
+        {10, NULL, NULL},
+        {9, "label", "value"},
+        {1, "self-label", "self-value"},
+    };
+    if (!contains_counts_labels(p, expected_labels, NELEM(expected_labels)))
+        testing_t_errorf_v(t,
+                           "expected count profile to contain goroutines with counts "
+                           "and labels, got %d samples",
+                           p->sample.len);
+
+    chan_close(g.c);
+    /* Go sleeps here to let the goroutines exit. These say when they have. */
+    sync_wait_group_wait(&g.wg);
+    /* Not in Go: a goroutine that has said it is done still holds its labels
+     * until it exits, and they live in ar, which is freed below. Go's labels
+     * are collected once nothing uses them. */
+    for (int i = 0; i < 5000 && runtime_numgoroutine() > before; i++)
+        time_sleep(TIME_MILLISECOND);
+    pprof_set_goroutine_labels(context_background());
+    (void)runtime_gomaxprocs(procs);
+    chan_free(g.c);
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestContextLabels)                                                               \
     X(TestLabelMapStringer)                                                            \
@@ -931,6 +1147,7 @@ static void TestProfileWriteTo(TestingT *t) {
     X(TestProcSelfMaps)                                                                \
     X(TestEmptyStack)                                                                  \
     X(TestEmptyCallStack)                                                              \
-    X(TestProfileWriteTo)
+    X(TestProfileWriteTo)                                                              \
+    X(TestGoroutineCounts)
 
 TESTING_MAIN(TESTS)

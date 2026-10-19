@@ -101,6 +101,16 @@ extern "C" {
  * bounds of the stack it should be on, and every step has to move up it. */
 Int burrow__callers(void *from, Int skip, Uintptr *pcs, Int max);
 
+/* The return addresses of a goroutine that is not running, read from the
+ * context it saved when it stopped, which is `sp` from burrow__MContext. lo and
+ * hi are the bounds of its stack, and the walk stays inside them.
+ *
+ * The caller has to make sure the goroutine stays stopped for the length of the
+ * call, which is what BURROW_GSCAN in burrow/sched.h is for. Answers zero where
+ * the switch is not the amd64 or arm64 assembly one, or on Windows, since only
+ * that switch leaves a frame this knows how to read. */
+Int burrow__callers_saved(void *sp, void *lo, void *hi, Uintptr *pcs, Int max);
+
 /* How many frames burrow collects when it prints a trace of its own.
  *
  * Go stops at a hundred and says how many it dropped. Sixty four is the same

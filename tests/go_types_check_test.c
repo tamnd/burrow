@@ -19,9 +19,10 @@
  * The test files come from tests/go_types_check_test_gen.h, which
  * tools/gen-go-types-tests.sh writes from Go's testdata.
  *
- * Not here yet: a package that imports anything but unsafe (or C, with
- * -fakeImportC) is skipped, since burrow has no default importer yet. Not
- * here: TestManual, which reads files named on the command line.
+ * Not in Go: imports come from the source importer in go_types_importer.h,
+ * and with no go1.27 sources to import from, a package that imports anything but
+ * unsafe (or C, with -fakeImportC) is skipped. Not here: TestManual, which
+ * reads files named on the command line.
  *
  * Copyright 2011 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -29,6 +30,7 @@
  * in the LICENSE file. */
 
 #include "check.h"
+#include "go_types_importer.h"
 
 #include "burrow/burrow.h"
 #include "burrow/flag.h"
@@ -264,21 +266,8 @@ static void collect_error(void *env, const TypesError *err) {
     }
 }
 
-/* Not in Go: the importer for the tests, which knows unsafe and nothing else.
- * It stands in for Go's defaultImporter, which also gives unsafe this way;
- * packages that import anything else are skipped before they get here. */
-static TypesPackage *unsafe_import(void *self, Str path, Error *err) {
-    if (str_eq(path, S("unsafe")))
-        return types_unsafe();
-    *err = errors_new((Alloc *)self,
-                      fmt_sprintf_v((Alloc *)self, "can't find import: %q", path));
-    return NULL;
-}
-
-static const TypesImporterVT unsafe_importer_vt = {NULL, unsafe_import, NULL};
-
-/* Not in Go: whether a file imports a package no importer can give it. Go's
- * test has the default importer; burrow has none yet. */
+/* Not in Go: whether a file imports a package the importer cannot give it
+ * without Go's sources, when there are none to import from. */
 static bool needs_importer(Alloc *a, AstFile *file, bool fake_import_c, Str *path) {
     for (Int i = 0; i < file->imports.len; i++) {
         AstImportSpec *spec = BURROW_AT(AstImportSpec *, file->imports, i);
@@ -328,7 +317,7 @@ static void test_files(TestingT *t, Arena *ar, Slice filenames, Slice srcs,
     TypesConfig conf = {0};
     ErrEnv env = {a, &errlist};
     conf.error = (TypesErrorFunc){collect_error, &env};
-    conf.importer = (TypesImporter){&unsafe_importer_vt, a};
+    conf.importer = default_importer(fset);
 
     /* apply custom configuration */
     TypesStdSizes sz;
@@ -351,7 +340,7 @@ static void test_files(TestingT *t, Arena *ar, Slice filenames, Slice srcs,
     if (goexperiment.len != 0)
         testing_t_fatalf_v(t, "-goexperiment=%s is not supported", goexperiment);
 
-    for (Int i = 0; i < files.len; i++) {
+    for (Int i = 0; !have_source_importer() && i < files.len; i++) {
         Str path = S("");
         if (needs_importer(a, BURROW_AT(AstFile *, files, i), conf.fake_import_c,
                            &path)) {
@@ -360,8 +349,9 @@ static void test_files(TestingT *t, Arena *ar, Slice filenames, Slice srcs,
             if (n > 0)
                 memcpy(buf, path.p, (size_t)n);
             arena_free(ar);
-            testing_t_skipf_v(t, "imports %q, and burrow has no importer yet",
-                              str_from_bytes(buf, n));
+            testing_t_skipf_v(
+                t, "imports %q, and there are no go1.27 sources to import it from",
+                str_from_bytes(buf, n));
         }
     }
 

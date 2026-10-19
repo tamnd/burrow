@@ -270,9 +270,29 @@ static void TestFiles(TestingT *t) {
     arena_free(&ar);
 }
 
+/* Not in Go: with no error handler, the first error ends the check, and
+ * burrow ends it with a panic. The duplicate method is reported while the
+ * interface's type set is being computed, which keeps scratch memory of its
+ * own, and the leak checker in the sanitizer builds sees whether the panic
+ * frees it. */
+static void TestFirstErrorInTypeSet(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TypesConfig conf = {0};
+    Error err = BURROW_NO_ERROR;
+    (void)typecheck(a, S("package p; type I interface{ m(); m() }"), &conf, NULL, &err);
+    if (BURROW_OK(err))
+        testing_t_errorf_v(t, "no error");
+    else if (!strings_contains(error_text(err), S("duplicate method m")))
+        testing_t_errorf_v(t, "got %s; want duplicate method m", error_text(err));
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestInitOrderInfo)                                                               \
     X(TestMultiFileInitOrder)                                                          \
-    X(TestFiles)
+    X(TestFiles)                                                                       \
+    X(TestFirstErrorInTypeSet)
 
 TESTING_MAIN(TESTS)

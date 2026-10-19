@@ -19,6 +19,7 @@
 
 #include "burrow/bytes.h"
 #include "burrow/core.h"
+#include "burrow/defer.h"
 #include "burrow/func.h"
 #include "burrow/map.h"
 #include "burrow/mem/arena.h"
@@ -535,6 +536,10 @@ static void gt_add_method(GtMethodSet *ms, TokenPos pos, TypesFunc *m, bool expl
     }
 }
 
+static void gt_free_scratch(void *ar) {
+    arena_free((Arena *)ar);
+}
+
 /* computeInterfaceTypeSet may be called with check == NULL. */
 GtTypeSet *burrow__types_compute_interface_type_set(TypesChecker *check, TokenPos pos,
                                                     TypesInterface *ityp) {
@@ -567,129 +572,134 @@ GtTypeSet *burrow__types_compute_interface_type_set(TypesChecker *check, TokenPo
     ityp->tset = tset; /* TODO(gri) is this sufficient? */
 
     /* Not in Go: the scratch for the methods seen so far, and for the union
-     * sets when there is no checker to keep them. */
+     * sets when there is no checker to keep them. It is freed by a defer,
+     * since an error with no error handler bails out of the check with a
+     * panic, and that can start in here. */
     Arena ar;
     arena_init(&ar, NULL, 0);
-    Alloc *sa = arena_allocator(&ar);
-    Map *union_sets;
-    if (check != NULL) {
-        if (check->union_type_sets == NULL) {
-            check->union_type_sets =
-                map_make(check->a, TYPE_UNSAFE_POINTER, TYPE_UNSAFE_POINTER, 0);
-            if (check->union_type_sets == NULL)
+    BURROW_SCOPE {
+        BURROW_DEFER(gt_free_scratch, &ar);
+        Alloc *sa = arena_allocator(&ar);
+        Map *union_sets;
+        if (check != NULL) {
+            if (check->union_type_sets == NULL) {
+                check->union_type_sets =
+                    map_make(check->a, TYPE_UNSAFE_POINTER, TYPE_UNSAFE_POINTER, 0);
+                if (check->union_type_sets == NULL)
+                    burrow__types_oom();
+            }
+            union_sets = check->union_type_sets;
+        } else {
+            union_sets = map_make(sa, TYPE_UNSAFE_POINTER, TYPE_UNSAFE_POINTER, 0);
+            if (union_sets == NULL)
                 burrow__types_oom();
         }
-        union_sets = check->union_type_sets;
-    } else {
-        union_sets = map_make(sa, TYPE_UNSAFE_POINTER, TYPE_UNSAFE_POINTER, 0);
-        if (union_sets == NULL)
+
+        /* Methods of embedded interfaces are collected unchanged; i.e., the
+         * identity of a method I.m's Func Object of an interface I is the same
+         * as that of the method m in an interface that embeds interface I. On the
+         * other hand, if a method is embedded via multiple overlapping embedded
+         * interfaces, we don't provide a guarantee which "original m" got chosen
+         * for the embedding interface. See also go.dev/issue/34421.
+         *
+         * If we don't care to provide this identity guarantee anymore, instead of
+         * reusing the original method in embeddings, we can clone the method's
+         * Func Object and give it the position of a corresponding embedded
+         * interface. Then we can get rid of the mpos map below and simply use the
+         * cloned method's position. */
+        GtMethodSet ms = {check, a, {sa, NULL}, slice_nil(TYPE_UNSAFE_POINTER), NULL};
+        ms.mpos = map_make(sa, TYPE_UNSAFE_POINTER, TYPE_INT, 0);
+        if (ms.mpos == NULL)
             burrow__types_oom();
-    }
 
-    /* Methods of embedded interfaces are collected unchanged; i.e., the
-     * identity of a method I.m's Func Object of an interface I is the same
-     * as that of the method m in an interface that embeds interface I. On the
-     * other hand, if a method is embedded via multiple overlapping embedded
-     * interfaces, we don't provide a guarantee which "original m" got chosen
-     * for the embedding interface. See also go.dev/issue/34421.
-     *
-     * If we don't care to provide this identity guarantee anymore, instead of
-     * reusing the original method in embeddings, we can clone the method's
-     * Func Object and give it the position of a corresponding embedded
-     * interface. Then we can get rid of the mpos map below and simply use the
-     * cloned method's position. */
-    GtMethodSet ms = {check, a, {sa, NULL}, slice_nil(TYPE_UNSAFE_POINTER), NULL};
-    ms.mpos = map_make(sa, TYPE_UNSAFE_POINTER, TYPE_INT, 0);
-    if (ms.mpos == NULL)
-        burrow__types_oom();
-
-    for (Int i = 0; i < ityp->methods.len; i++) {
-        TypesFunc *m = GT_AT(ityp->methods, i, TypesFunc *);
-        gt_add_method(&ms, GT_OBJ(m)->pos, m, true);
-    }
-
-    /* collect embedded elements */
-    Slice all_terms = burrow__types_all_termlist();
-    bool all_comparable = false;
-    for (Int i = 0; i < ityp->embeddeds.len; i++) {
-        TypesType typ = GT_AT(ityp->embeddeds, i, TypesType);
-        /* The embedding position is nil for imported interfaces. We don't
-         * need to do version checks in those cases. */
-        TokenPos epos = TOKEN_NO_POS; /* embedding position */
-        if (ityp->embed_pos.len > i)
-            epos = GT_AT(ityp->embed_pos, i, TokenPos);
-        bool comparable = false;
-        Slice terms;
-        TypesType u = types_type_underlying(typ);
-        if (u != NULL && u->kind == TYPES_KIND_INTERFACE) {
-            /* For now we don't permit type parameters as constraints. */
-            burrow__types_assert(!burrow__types_is_type_param(typ));
-            GtTypeSet *ts = burrow__types_compute_interface_type_set(
-                check, epos, types_as_interface(u));
-            /* If typ is local, an error was already reported where typ is
-             * specified/defined. */
-            if (token_pos_is_valid(epos) && check != NULL &&
-                burrow__tc_is_imported_constraint(check, typ)) {
-                Str ts_typ = burrow__tc_ts(check, typ);
-                if (!GT_VERIFY_VERSIONF(check, burrow__tc_at_pos(epos),
-                                        burrow__tc_go1_18,
-                                        "embedding constraint interface %s", ts_typ))
-                    continue;
-            }
-            comparable = ts->comparable;
-            for (Int j = 0; j < ts->methods.len; j++) {
-                TypesFunc *m = GT_AT(ts->methods, j, TypesFunc *);
-                gt_add_method(&ms, epos, m, false); /* use embedding position pos
-                                                       rather than m.pos */
-            }
-            terms = ts->terms;
-        } else if (u != NULL && u->kind == TYPES_KIND_UNION) {
-            if (token_pos_is_valid(epos) && check != NULL) {
-                Str ts_u = burrow__tc_ts(check, u);
-                if (!GT_VERIFY_VERSIONF(check, burrow__tc_at_pos(epos),
-                                        burrow__tc_go1_18,
-                                        "embedding interface element %s", ts_u))
-                    continue;
-            }
-            GtTypeSet *ts = gt_compute_union_type_set(check, a, union_sets, epos,
-                                                      types_as_union(u));
-            if (ts == &gt_invalid_type_set)
-                continue; /* ignore invalid unions */
-            burrow__types_assert(!ts->comparable);
-            burrow__types_assert(ts->methods.len == 0);
-            terms = ts->terms;
-        } else {
-            if (!burrow__types_is_valid(u))
-                continue;
-            if (token_pos_is_valid(epos) && check != NULL) {
-                Str ts_typ = burrow__tc_ts(check, typ);
-                if (!GT_VERIFY_VERSIONF(check, burrow__tc_at_pos(epos),
-                                        burrow__tc_go1_18,
-                                        "embedding non-interface type %s", ts_typ))
-                    continue;
-            }
-            TypesTerm *t = burrow__types_alloc(a, sizeof *t, _Alignof(TypesTerm));
-            t->tilde = false;
-            t->typ = typ;
-            terms = burrow__types_ptrs_make(a, 1);
-            GT_TERM(terms, 0) = t;
+        for (Int i = 0; i < ityp->methods.len; i++) {
+            TypesFunc *m = GT_AT(ityp->methods, i, TypesFunc *);
+            gt_add_method(&ms, GT_OBJ(m)->pos, m, true);
         }
-        /* The type set of an interface is the intersection of the type sets
-         * of all its elements. Due to language restrictions, only embedded
-         * interfaces can add methods, they are handled separately. Here we
-         * only need to intersect the term lists and comparable bits. */
-        all_terms = gt_intersect_term_lists(a, all_terms, all_comparable, terms,
-                                            comparable, &all_comparable);
-    }
-    Slice all_methods = ms.all_methods;
-    arena_free(&ar);
 
-    tset->comparable = all_comparable;
-    if (all_methods.len != 0) {
-        burrow__types_sort_methods(all_methods);
-        tset->methods = all_methods;
+        /* collect embedded elements */
+        Slice all_terms = burrow__types_all_termlist();
+        bool all_comparable = false;
+        for (Int i = 0; i < ityp->embeddeds.len; i++) {
+            TypesType typ = GT_AT(ityp->embeddeds, i, TypesType);
+            /* The embedding position is nil for imported interfaces. We don't
+             * need to do version checks in those cases. */
+            TokenPos epos = TOKEN_NO_POS; /* embedding position */
+            if (ityp->embed_pos.len > i)
+                epos = GT_AT(ityp->embed_pos, i, TokenPos);
+            bool comparable = false;
+            Slice terms;
+            TypesType u = types_type_underlying(typ);
+            if (u != NULL && u->kind == TYPES_KIND_INTERFACE) {
+                /* For now we don't permit type parameters as constraints. */
+                burrow__types_assert(!burrow__types_is_type_param(typ));
+                GtTypeSet *ts = burrow__types_compute_interface_type_set(
+                    check, epos, types_as_interface(u));
+                /* If typ is local, an error was already reported where typ is
+                 * specified/defined. */
+                if (token_pos_is_valid(epos) && check != NULL &&
+                    burrow__tc_is_imported_constraint(check, typ)) {
+                    Str ts_typ = burrow__tc_ts(check, typ);
+                    if (!GT_VERIFY_VERSIONF(
+                            check, burrow__tc_at_pos(epos), burrow__tc_go1_18,
+                            "embedding constraint interface %s", ts_typ))
+                        continue;
+                }
+                comparable = ts->comparable;
+                for (Int j = 0; j < ts->methods.len; j++) {
+                    TypesFunc *m = GT_AT(ts->methods, j, TypesFunc *);
+                    gt_add_method(&ms, epos, m, false); /* use embedding position pos
+                                                           rather than m.pos */
+                }
+                terms = ts->terms;
+            } else if (u != NULL && u->kind == TYPES_KIND_UNION) {
+                if (token_pos_is_valid(epos) && check != NULL) {
+                    Str ts_u = burrow__tc_ts(check, u);
+                    if (!GT_VERIFY_VERSIONF(check, burrow__tc_at_pos(epos),
+                                            burrow__tc_go1_18,
+                                            "embedding interface element %s", ts_u))
+                        continue;
+                }
+                GtTypeSet *ts = gt_compute_union_type_set(check, a, union_sets, epos,
+                                                          types_as_union(u));
+                if (ts == &gt_invalid_type_set)
+                    continue; /* ignore invalid unions */
+                burrow__types_assert(!ts->comparable);
+                burrow__types_assert(ts->methods.len == 0);
+                terms = ts->terms;
+            } else {
+                if (!burrow__types_is_valid(u))
+                    continue;
+                if (token_pos_is_valid(epos) && check != NULL) {
+                    Str ts_typ = burrow__tc_ts(check, typ);
+                    if (!GT_VERIFY_VERSIONF(check, burrow__tc_at_pos(epos),
+                                            burrow__tc_go1_18,
+                                            "embedding non-interface type %s", ts_typ))
+                        continue;
+                }
+                TypesTerm *t = burrow__types_alloc(a, sizeof *t, _Alignof(TypesTerm));
+                t->tilde = false;
+                t->typ = typ;
+                terms = burrow__types_ptrs_make(a, 1);
+                GT_TERM(terms, 0) = t;
+            }
+            /* The type set of an interface is the intersection of the type sets
+             * of all its elements. Due to language restrictions, only embedded
+             * interfaces can add methods, they are handled separately. Here we
+             * only need to intersect the term lists and comparable bits. */
+            all_terms = gt_intersect_term_lists(a, all_terms, all_comparable, terms,
+                                                comparable, &all_comparable);
+        }
+        Slice all_methods = ms.all_methods;
+
+        tset->comparable = all_comparable;
+        if (all_methods.len != 0) {
+            burrow__types_sort_methods(all_methods);
+            tset->methods = all_methods;
+        }
+        tset->terms = all_terms;
     }
-    tset->terms = all_terms;
+    BURROW_SCOPE_END;
     return tset;
 }
 

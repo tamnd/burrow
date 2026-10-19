@@ -303,6 +303,11 @@ TypesPackage *burrow__srcimporter_import_from(burrow__SrcImporter *p, Str path,
     if (str_eq(bp->import_path, GSI_S("unsafe")))
         return types_unsafe();
 
+    /* Not in Go: the import path can be the caller's path, which may not live
+     * as long as the importer, and it is kept as the key and the package's
+     * path. */
+    bp->import_path = str_clone(p->a, bp->import_path);
+
     /* no need to re-import if the package was imported completely before */
     void *importing = &p->importing;
     TypesPackage **found = map_get(p->packages, &bp->import_path);

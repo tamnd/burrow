@@ -15,6 +15,7 @@
 #include "burrow/error.h"
 #include "burrow/io.h"
 #include "burrow/mem.h"
+#include "burrow/mprof.h"
 #include "burrow/runtime.h"
 #include "burrow/runtime/pprof.h"
 #include "burrow/slice.h"
@@ -56,6 +57,7 @@ enum {
     PPR_TAG_PROFILE_PERIOD_TYPE = 11,
     PPR_TAG_PROFILE_PERIOD = 12,
     PPR_TAG_SAMPLE_LABEL = 3,
+    PPR_TAG_PROFILE_DEFAULT_SAMPLE_TYPE = 14,
 };
 
 /* A profileBuilder writes a profile incrementally from a stream of profile
@@ -89,6 +91,21 @@ BURROW_OWNS(ret) Slice burrow__ppr_append_locs_for_stack(PprBuilder *b, Slice lo
                                                          Slice stk);
 void burrow__ppr_sample(PprBuilder *b, Slice values, Slice locs,
                         const PprLabelMap *labels);
+
+/* writeHeapProto writes the current heap profile in protobuf format to w. p is
+ * n records. */
+Error burrow__ppr_write_heap_proto(IoWriter w, const burrow__MemProfileRecord *p, Int n,
+                                   int64_t rate, Str default_sample_type);
+
+/* scaleHeapSample adjusts the data from a heap Sample to account for its
+ * probability of appearing in the collected data. */
+void burrow__ppr_scale_heap_sample(int64_t count, int64_t avg_size, int64_t rate,
+                                   int64_t *objects, int64_t *bytes);
+
+/* Whether the function named name is one of the allocator's own, which a heap
+ * profile leaves out at the start of a stack, as Go's leaves out the runtime's.
+ * Not in Go. */
+bool burrow__ppr_alloc_frame(Str name);
 
 /* What parseProcSelfMaps and the mapping readers report, one executable
  * mapping at a time. */

@@ -5,6 +5,8 @@
 #include "burrow/mem/heap.h"
 
 #include "burrow/atomic.h"
+#include "burrow/mprof.h"
+#include "burrow/platform.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -64,57 +66,25 @@ static void heap_raw_free(void *p, size_t align) {
 #endif
 }
 
-/* What testing reads for a benchmark's allocs/op and B/op, Go's Mallocs and
- * TotalAlloc. Off unless a benchmark run turned it on, so the common path pays
- * one relaxed load and a branch that always goes the same way. On, it is two
- * atomic adds per allocation, which a benchmark that cares about allocations
- * is measuring anyway. A realloc counts as one allocation of the new size,
- * which is what growing a slice costs in Go. */
-static uint32_t heap_counting;
-static uint64_t heap_count_allocs;
-static uint64_t heap_count_bytes;
-
-static void heap_note(void *p, size_t size) {
-    if (p == NULL || burrow__atomic_load_relaxed_u32(&heap_counting) == 0)
-        return;
-    burrow__atomic_add_u64(&heap_count_allocs, 1);
-    burrow__atomic_add_u64(&heap_count_bytes, (uint64_t)size);
-}
-
-void burrow__heap_count(bool on) {
-    burrow__atomic_store_relaxed_u32(&heap_counting, on ? 1U : 0U);
-}
-
-void burrow__heap_counts(uint64_t *allocs, uint64_t *bytes) {
-    *allocs = burrow__atomic_load_u64(&heap_count_allocs);
-    *bytes = burrow__atomic_load_u64(&heap_count_bytes);
-}
-
-static void *heap_alloc(void *self, size_t size, size_t align) {
+static void *heap_plain_alloc(void *self, size_t size, size_t align) {
     (void)self;
     if (!heap_align_ok(align) || size == 0)
         return NULL;
-    void *p = heap_raw(size, align);
-    heap_note(p, size);
-    return p;
+    return heap_raw(size, align);
 }
 
 /* calloc rather than malloc plus memset, because a good allocator serving a
  * large request gets pages from the kernel that are already zero and calloc is
  * how it gets to tell us that. Over aligned requests have no calloc to use. */
-static void *heap_alloc_zeroed(void *self, size_t size, size_t align) {
+static void *heap_plain_alloc_zeroed(void *self, size_t size, size_t align) {
     (void)self;
     if (!heap_align_ok(align) || size == 0)
         return NULL;
-    void *p;
-    if (align <= BURROW_ALIGN_MAX) {
-        p = calloc(1, size);
-    } else {
-        p = heap_raw(size, align);
-        if (p != NULL)
-            memset(p, 0, size);
-    }
-    heap_note(p, size);
+    if (align <= BURROW_ALIGN_MAX)
+        return calloc(1, size);
+    void *p = heap_raw(size, align);
+    if (p != NULL)
+        memset(p, 0, size);
     return p;
 }
 
@@ -135,23 +105,19 @@ static void *heap_realloc_aligned(void *p, size_t old, size_t nsz, size_t align)
 #endif
 }
 
-static void *heap_realloc(void *self, void *p, size_t old, size_t nsz, size_t align) {
+static void *heap_plain_realloc(void *self, void *p, size_t old, size_t nsz,
+                                size_t align) {
     (void)self;
     if (!heap_align_ok(align) || nsz == 0)
         return NULL;
-    void *q;
     if (p == NULL)
-        q = heap_raw(nsz, align);
-    else if (align <= BURROW_ALIGN_MAX)
-        q = realloc(p, nsz);
-    else
-        q = heap_realloc_aligned(p, old, nsz, align);
-    if (p == NULL || nsz > old)
-        heap_note(q, nsz);
-    return q;
+        return heap_raw(nsz, align);
+    if (align <= BURROW_ALIGN_MAX)
+        return realloc(p, nsz);
+    return heap_realloc_aligned(p, old, nsz, align);
 }
 
-static void heap_free(void *self, void *p, size_t size, size_t align) {
+static void heap_plain_free(void *self, void *p, size_t size, size_t align) {
     (void)self;
     (void)size;
     if (p == NULL)
@@ -159,8 +125,143 @@ static void heap_free(void *self, void *p, size_t size, size_t align) {
     heap_raw_free(p, heap_align_ok(align) ? align : 1);
 }
 
+/* The same allocator with nothing counted and nothing sampled, for the heap
+ * profiler's own tables. */
+static const AllocVT heap_plain_vt = {
+    heap_plain_alloc,
+    heap_plain_alloc_zeroed,
+    heap_plain_realloc,
+    heap_plain_free,
+    NULL,
+    NULL,
+};
+
+static Alloc heap_plain_singleton = {.vt = &heap_plain_vt, .self = NULL};
+
+Alloc *burrow__heap_unprofiled(void) {
+    return &heap_plain_singleton;
+}
+
+/* What testing reads for a benchmark's allocs/op and B/op, Go's Mallocs and
+ * TotalAlloc. Off unless a benchmark run turned it on, so the common path pays
+ * one relaxed load and a branch that always goes the same way. On, it is two
+ * atomic adds per allocation, which a benchmark that cares about allocations
+ * is measuring anyway. A realloc counts as one allocation of the new size,
+ * which is what growing a slice costs in Go. */
+static uint32_t heap_counting;
+static uint64_t heap_count_allocs;
+static uint64_t heap_count_bytes;
+
+static void heap_count(void *p, size_t size) {
+    if (p == NULL || burrow__atomic_load_relaxed_u32(&heap_counting) == 0)
+        return;
+    burrow__atomic_add_u64(&heap_count_allocs, 1);
+    burrow__atomic_add_u64(&heap_count_bytes, (uint64_t)size);
+}
+
+void burrow__heap_count(bool on) {
+    burrow__atomic_store_relaxed_u32(&heap_counting, on ? 1U : 0U);
+}
+
+void burrow__heap_counts(uint64_t *allocs, uint64_t *bytes) {
+    *allocs = burrow__atomic_load_u64(&heap_count_allocs);
+    *bytes = burrow__atomic_load_u64(&heap_count_bytes);
+}
+
+/* The heap profile's sampling, which is Go's mcache.nextSample and
+ * mcache.memProfRate. Go keeps them per P and this keeps them per thread,
+ * which is the same thing for the question they answer: how many more bytes
+ * this allocator may hand out before the next one is sampled. busy is set
+ * while the profiler is recording, so that nothing it does is sampled in
+ * turn. */
+typedef struct HeapSampler {
+    int64_t next;
+    Int rate;
+    bool ready;
+    bool busy;
+} HeapSampler;
+
+static BURROW_THREAD_LOCAL HeapSampler heap_sampler;
+
+/* profilealloc, and the first sample of a thread, which Go draws when it makes
+ * the mcache. A function of its own and never inlined, so that the stack the
+ * profile keeps starts here. */
+BURROW_NOINLINE void burrow__heap_sample(void *p, size_t size) {
+    HeapSampler *s = &heap_sampler;
+    Int rate = runtime_mem_profile_rate();
+    if (s->busy)
+        return;
+    if (!s->ready) {
+        s->ready = true;
+        s->next = burrow__mprof_next_sample(rate) - (int64_t)size;
+        if (s->next >= 0 && rate == s->rate)
+            return;
+    }
+    s->rate = rate;
+    s->next = burrow__mprof_next_sample(rate);
+    s->busy = true;
+    burrow__mprof_malloc(p, size);
+    s->busy = false;
+}
+
+/* Every allocation passes through here, so the common case is a subtraction
+ * and a compare.
+ *
+ * Not in Go: this and the three functions after it are global, like
+ * burrow__heap_sample, only so that burrow's symbol table names them. They are
+ * on the stack of every sampled allocation, and the profile leaves them off the
+ * top of it by name. A static function would be named after whichever global
+ * the compiler happened to put before it. */
+void burrow__heap_note(void *p, size_t size) {
+    if (p == NULL)
+        return;
+    HeapSampler *s = &heap_sampler;
+    s->next -= (int64_t)size;
+    if (s->next < 0 || s->rate != runtime_mem_profile_rate())
+        burrow__heap_sample(p, size);
+}
+
+void *burrow__heap_alloc(void *self, size_t size, size_t align) {
+    void *p = heap_plain_alloc(self, size, align);
+    heap_count(p, size);
+    burrow__heap_note(p, size);
+    return p;
+}
+
+void *burrow__heap_alloc_zeroed(void *self, size_t size, size_t align) {
+    void *p = heap_plain_alloc_zeroed(self, size, align);
+    heap_count(p, size);
+    burrow__heap_note(p, size);
+    return p;
+}
+
+/* For the profile a realloc is a free of the old block and an allocation of
+ * the new one, which is what growing a slice is in Go. The free is counted
+ * first, because once realloc has moved the block another thread may be handed
+ * the old address and sample it. */
+void *burrow__heap_realloc(void *self, void *p, size_t old, size_t nsz, size_t align) {
+    if (p != NULL && nsz != 0 && heap_align_ok(align) && burrow__mprof_maybe_sampled(p))
+        burrow__mprof_free(p);
+    void *q = heap_plain_realloc(self, p, old, nsz, align);
+    if (p == NULL || nsz > old)
+        heap_count(q, nsz);
+    burrow__heap_note(q, nsz);
+    return q;
+}
+
+static void heap_free(void *self, void *p, size_t size, size_t align) {
+    if (p != NULL && burrow__mprof_maybe_sampled(p))
+        burrow__mprof_free(p);
+    heap_plain_free(self, p, size, align);
+}
+
 static const AllocVT heap_vt = {
-    heap_alloc, heap_alloc_zeroed, heap_realloc, heap_free, NULL, NULL,
+    burrow__heap_alloc,
+    burrow__heap_alloc_zeroed,
+    burrow__heap_realloc,
+    heap_free,
+    NULL,
+    NULL,
 };
 
 static Alloc heap_singleton = {.vt = &heap_vt, .self = NULL};

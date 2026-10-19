@@ -1,5 +1,6 @@
 /* Derived from Go's src/runtime/pprof: label_test.go, runtime_test.go,
- * proto_test.go and pprof_test.go. Go source: go1.27.1.
+ * proto_test.go, pprof_test.go, protomem_test.go and mprof_test.go. Go source:
+ * go1.27.1.
  *
  * Copyright 2016 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -20,8 +21,10 @@
 #include "burrow/mcontext.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
+#include "burrow/mprof.h"
 #include "burrow/os.h"
 #include "burrow/proc.h"
+#include "burrow/regexp.h"
 #include "burrow/runtime.h"
 #include "burrow/runtime/pprof.h"
 #include "burrow/sched.h"
@@ -380,13 +383,36 @@ typedef struct WantLocation {
     uint64_t address;
 } WantLocation;
 
+/* value has one entry for each sample type, location ends at the first id of
+ * 0, and bytes is the "bytes" num label, or 0 for none. */
 typedef struct WantSample {
-    int64_t value[2];
-    WantLocation location[2];
+    int64_t value[4];
+    WantLocation location[3];
+    int64_t bytes;
 } WantSample;
 
+static Int want_locations(const WantSample *w) {
+    Int n = 0;
+    while (n < 3 && w->location[n].id != 0)
+        n++;
+    return n;
+}
+
+static bool num_label_ok(const PfSample *s, int64_t bytes) {
+    if (bytes == 0)
+        return s->num_label.len == 0;
+    if (s->num_label.len != 1)
+        return false;
+    const PfNumLabels *l = ((PfNumLabels *const *)s->num_label.p)[0];
+    return str_eq(l->key, S("bytes")) && l->values.len == 1 &&
+           ((const int64_t *)l->values.p)[0] == bytes;
+}
+
+/* sample_type is nst type and unit pairs. */
 static void check_profile(TestingT *t, PfProfile *p, int64_t period, Str period_type,
-                          Str period_unit, const WantSample *samples, Int nsamples) {
+                          Str period_unit, const Str *sample_type, Int nst,
+                          const WantSample *samples, Int nsamples,
+                          Str default_sample_type) {
     testing_t_helper(t);
 
     if (p->period != period)
@@ -395,14 +421,15 @@ static void check_profile(TestingT *t, PfProfile *p, int64_t period, Str period_
         testing_t_errorf_v(t, "p.PeriodType = %v\nwant = %s %s",
                            BURROW_ANY_OF(p->period_type), period_type, period_unit);
     PfValueType **st = (PfValueType **)p->sample_type.p;
-    if (p->sample_type.len != 2 || !value_type_eq(st[0], S("samples"), S("count")) ||
-        !value_type_eq(st[1], S("cpu"), S("nanoseconds")))
-        testing_t_errorf_v(
-            t, "p.SampleType has %d types\nwant = samples/count cpu/nanoseconds",
-            p->sample_type.len);
-    if (p->default_sample_type.len != 0)
-        testing_t_errorf_v(t,
-                           "p.DefaultSampleType = %s\nwant = ", p->default_sample_type);
+    bool st_ok = p->sample_type.len == nst;
+    for (Int i = 0; st_ok && i < nst; i++)
+        st_ok = value_type_eq(st[i], sample_type[2 * i], sample_type[2 * i + 1]);
+    if (!st_ok)
+        testing_t_errorf_v(t, "p.SampleType has %d types, want %d", p->sample_type.len,
+                           nst);
+    if (!str_eq(default_sample_type, p->default_sample_type))
+        testing_t_errorf_v(t, "p.DefaultSampleType = %v\nwant = %v",
+                           p->default_sample_type, default_sample_type);
     /* Line info is not in the expected samples, so it isn't compared. */
     if (p->sample.len != nsamples)
         testing_t_fatalf_v(t, "p.Sample has %d samples, want %d", p->sample.len,
@@ -412,11 +439,13 @@ static void check_profile(TestingT *t, PfProfile *p, int64_t period, Str period_
         const PfSample *s = ps[i];
         const WantSample *w = &samples[i];
         const int64_t *v = (const int64_t *)s->value.p;
-        bool ok = s->value.len == 2 && v[0] == w->value[0] && v[1] == w->value[1] &&
-                  s->location.len == 2 && s->label.len == 0 && s->num_label.len == 0 &&
-                  s->num_unit.len == 0;
+        Int nloc = want_locations(w);
+        bool ok = s->value.len == nst && s->location.len == nloc && s->label.len == 0 &&
+                  num_label_ok(s, w->bytes) && s->num_unit.len == 0;
+        for (Int j = 0; ok && j < nst; j++)
+            ok = v[j] == w->value[j];
         PfLocation **locs = (PfLocation **)s->location.p;
-        for (Int j = 0; ok && j < 2; j++) {
+        for (Int j = 0; ok && j < nloc; j++) {
             const PfLocation *l = locs[j];
             ok = l->id == w->location[j].id && l->address == w->location[j].address &&
                  !l->is_folded && mapping_eq(l->mapping, w->location[j].mapping);
@@ -428,6 +457,13 @@ static void check_profile(TestingT *t, PfProfile *p, int64_t period, Str period_
                                w->location[1].address);
     }
 }
+
+static const Str cpu_sample_type[] = {
+    BURROW_S_INIT("samples"),
+    BURROW_S_INIT("count"),
+    BURROW_S_INIT("cpu"),
+    BURROW_S_INIT("nanoseconds"),
+};
 
 static void TestConvertCPUProfileNoSamples(TestingT *t) {
     Arena ar;
@@ -452,7 +488,8 @@ static void TestConvertCPUProfileNoSamples(TestingT *t) {
         testing_t_fatalf_v(t, "profile.Parse: %v", err);
 
     /* Expected PeriodType and SampleType. */
-    check_profile(t, p, 2000 * 1000, S("cpu"), S("nanoseconds"), NULL, 0);
+    check_profile(t, p, 2000 * 1000, S("cpu"), S("nanoseconds"), cpu_sample_type, 2,
+                  NULL, 0, S(""));
     arena_free(&ar);
 }
 
@@ -604,10 +641,11 @@ static void TestConvertCPUProfile(TestingT *t) {
         testing_t_fatalf_v(t, "translating profile: %v", err);
     int64_t period = 2000 * 1000;
     const WantSample samples[] = {
-        {{20, 20 * 2000 * 1000}, {{1, &maps[0], addr1}, {2, &maps[0], addr1 + 1}}},
-        {{40, 40 * 2000 * 1000}, {{3, &maps[1], addr2}, {4, &maps[1], addr2 + 1}}},
+        {{20, 20 * 2000 * 1000}, {{1, &maps[0], addr1}, {2, &maps[0], addr1 + 1}}, 0},
+        {{40, 40 * 2000 * 1000}, {{3, &maps[1], addr2}, {4, &maps[1], addr2 + 1}}, 0},
     };
-    check_profile(t, p, period, S("cpu"), S("nanoseconds"), samples, NELEM(samples));
+    check_profile(t, p, period, S("cpu"), S("nanoseconds"), cpu_sample_type, 2, samples,
+                  NELEM(samples), S(""));
     arena_free(&ar);
 }
 
@@ -1630,6 +1668,307 @@ static void TestCPUProfileLabel(TestingT *t) {
     arena_free(&ar);
 }
 
+/* ------------------------------------------------------------ protomem */
+
+typedef struct ConvertMemEnv {
+    const burrow__MemProfileRecord *rec;
+    Int nrec;
+    int64_t rate;
+    const WantSample *samples;
+    Int nsamples;
+    Str default_sample_type;
+} ConvertMemEnv;
+
+static const Str mem_sample_type[] = {
+    BURROW_S_INIT("alloc_objects"), BURROW_S_INIT("count"),
+    BURROW_S_INIT("alloc_space"),   BURROW_S_INIT("bytes"),
+    BURROW_S_INIT("inuse_objects"), BURROW_S_INIT("count"),
+    BURROW_S_INIT("inuse_space"),   BURROW_S_INIT("bytes"),
+};
+
+static void convert_mem_profile(void *env, TestingT *t) {
+    const ConvertMemEnv *e = (const ConvertMemEnv *)env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+
+    BytesBuffer buf = BYTES_BUFFER(a);
+    Error err = burrow__ppr_write_heap_proto(bytes_buffer_as_io_writer(&buf), e->rec,
+                                             e->nrec, e->rate, e->default_sample_type);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "writing profile: %v", err);
+
+    PfProfile *p = burrow__pf_parse(a, bytes_buffer_as_io_reader(&buf), &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "profile.Parse: %v", err);
+
+    check_profile(t, p, e->rate, S("space"), S("bytes"), mem_sample_type, 4, e->samples,
+                  e->nsamples, e->default_sample_type);
+    arena_free(&ar);
+}
+
+static void TestConvertMemProfile(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+
+    uint64_t addr1, addr2;
+    PfMapping maps[2];
+    if (!test_pcs(t, a, &addr1, &addr2, maps)) {
+        arena_free(&ar);
+        return;
+    }
+    const PfMapping *map1 = &maps[0], *map2 = &maps[1];
+
+    /* MemProfileRecord stacks are return PCs, so add one to the addresses
+     * recorded in the "profile". The proto profile locations are call PCs, so
+     * conversion will subtract one from these and get back to addr1 and
+     * addr2. */
+    Uintptr a1 = (Uintptr)addr1 + 1, a2 = (Uintptr)addr2 + 1;
+    int64_t rate = 512 * 1024;
+    const Uintptr stk0[] = {a1, a2};
+    const Uintptr stk1[] = {a2 + 1, a2 + 2};
+    const Uintptr stk2[] = {a1 + 1, a1 + 2, a2 + 3};
+    const burrow__MemProfileRecord rec[] = {
+        {.object_size = 1024,
+         .alloc_objects = 4,
+         .free_objects = 1,
+         .stack = stk0,
+         .nstack = 2},
+        {.object_size = 512 * 1024,
+         .alloc_objects = 1,
+         .free_objects = 0,
+         .stack = stk1,
+         .nstack = 2},
+        {.object_size = 512 * 1024,
+         .alloc_objects = 1,
+         .free_objects = 1,
+         .stack = stk2,
+         .nstack = 3},
+    };
+
+    const WantSample samples[] = {
+        {
+            .value = {2050, 2099200, 1537, 1574400},
+            .location = {{1, map1, addr1}, {2, map2, addr2}},
+            .bytes = 1024,
+        },
+        {
+            .value = {1, 829411, 1, 829411},
+            .location = {{3, map2, addr2 + 1}, {4, map2, addr2 + 2}},
+            .bytes = 512 * 1024,
+        },
+        {
+            .value = {1, 829411, 0, 0},
+            .location = {{5, map1, addr1 + 1},
+                         {6, map1, addr1 + 2},
+                         {7, map2, addr2 + 3}},
+            .bytes = 512 * 1024,
+        },
+    };
+    static const struct {
+        const char *name;
+        const char *default_sample_type;
+    } tcs[] = {
+        {"heap", ""},
+        {"allocs", "alloc_space"},
+    };
+    for (size_t i = 0; i < NELEM(tcs); i++) {
+        ConvertMemEnv e = {
+            rec,     NELEM(rec),     rate,
+            samples, NELEM(samples), str_from_cstr(tcs[i].default_sample_type)};
+        testing_t_run(t, str_from_cstr(tcs[i].name),
+                      BURROW_FN(TestingTFunc, convert_mem_profile, &e));
+    }
+    arena_free(&ar);
+}
+
+/* -------------------------------------------------------------- mprof */
+
+/* Not in Go. memSink is where Go's allocations go to be dropped, and the
+ * collector frees what it held. Here what it held is freed when it is
+ * replaced. */
+static void *mem_sink;
+static size_t mem_sink_size;
+
+static void mem_sink_set(void *p, size_t size) {
+    if (mem_sink != NULL)
+        mem_free(heap_allocator(), mem_sink, mem_sink_size, 1);
+    mem_sink = p;
+    mem_sink_size = size;
+}
+
+static void *mem_sink_alloc(void *p) {
+    if (p == NULL)
+        panic_str(S("out of memory"));
+    return p;
+}
+
+BURROW_NOINLINE static void allocate_transient_1m(void) {
+    for (int i = 0; i < 1024; i++)
+        mem_sink_set(mem_sink_alloc(mem_alloc(heap_allocator(), 1024, 1)), 1024);
+}
+
+BURROW_NOINLINE static void allocate_transient_2m(void) {
+    mem_sink_set(mem_sink_alloc(mem_alloc(heap_allocator(), 2 << 20, 1)), 2 << 20);
+}
+
+static inline void allocate_transient_2m_inline(void) {
+    mem_sink_set(mem_sink_alloc(mem_alloc(heap_allocator(), 2 << 20, 1)), 2 << 20);
+}
+
+typedef struct Obj32 {
+    struct Obj32 *link;
+    Byte pad[32 - sizeof(Uintptr)];
+} Obj32;
+
+static Obj32 *persistent_mem_sink;
+
+BURROW_NOINLINE static void allocate_persistent_1k(void) {
+    for (int i = 0; i < 32; i++) {
+        /* Can't use slice because that will introduce implicit allocations. */
+        Obj32 *obj = (Obj32 *)mem_sink_alloc(BURROW_NEW(heap_allocator(), Obj32));
+        obj->link = persistent_mem_sink;
+        persistent_mem_sink = obj;
+    }
+}
+
+static int memory_profiler_run = 0;
+
+/* What Go's test looks for, with the stacks left out. The functions in a test
+ * have no names here, so a record is told by its counts instead, and the
+ * frame printed first has no name, which says the allocator's own frames were
+ * hidden. */
+typedef struct MemProfilerTest {
+    int64_t value[4]; /* objects and bytes allocated, and in use */
+    Str legacy;
+} MemProfilerTest;
+
+typedef struct MemProfilerEnv {
+    const MemProfilerTest *tests;
+    Int n;
+} MemProfilerEnv;
+
+static void memory_profiler_debug1(void *env, TestingT *t) {
+    const MemProfilerEnv *e = (const MemProfilerEnv *)env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    BytesBuffer buf = BYTES_BUFFER(a);
+    Error err = pprof_profile_write_to(pprof_lookup(S("heap")),
+                                       bytes_buffer_as_io_writer(&buf), 1);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "failed to write heap profile: %v", err);
+
+    for (Int i = 0; i < e->n; i++) {
+        if (!regexp_match(regexp_must_compile(a, e->tests[i].legacy),
+                          bytes_buffer_bytes(&buf)))
+            testing_t_fatalf_v(t, "The entry did not match:\n%v\n\nProfile:\n%v\n",
+                               e->tests[i].legacy, bytes_buffer_string(&buf, a));
+    }
+    arena_free(&ar);
+}
+
+static bool contains_sample(PfProfile *p, const int64_t value[4]) {
+    PfSample **ps = (PfSample **)p->sample.p;
+    for (Int i = 0; i < p->sample.len; i++) {
+        const PfSample *s = ps[i];
+        const int64_t *v = (const int64_t *)s->value.p;
+        if (s->value.len != 4 || s->location.len == 0 ||
+            memcmp(v, value, 4 * sizeof(int64_t)) != 0)
+            continue;
+        const PfLocation *l = ((PfLocation *const *)s->location.p)[0];
+        if (location_name(l).len == 0)
+            return true;
+    }
+    return false;
+}
+
+static void memory_profiler_proto(void *env, TestingT *t) {
+    const MemProfilerEnv *e = (const MemProfilerEnv *)env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    BytesBuffer buf = BYTES_BUFFER(a);
+    Error err = pprof_profile_write_to(pprof_lookup(S("heap")),
+                                       bytes_buffer_as_io_writer(&buf), 0);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "failed to write heap profile: %v", err);
+    PfProfile *p = burrow__pf_parse(a, bytes_buffer_as_io_reader(&buf), &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "failed to parse heap profile: %v", err);
+
+    for (Int i = 0; i < e->n; i++) {
+        if (!contains_sample(p, e->tests[i].value))
+            testing_t_fatalf_v(t, "No matching stack entry for %v\n\nProfile:\n%s\n",
+                               e->tests[i].legacy, burrow__pf_profile_string(p, a));
+    }
+    arena_free(&ar);
+}
+
+static void restore_mem_profile_rate(void *env) {
+    runtime_set_mem_profile_rate(*(const Int *)env);
+}
+
+static void TestMemoryProfiler(TestingT *t) {
+    /* Not in Go. Every record is matched by its stack, and on a system where
+     * runtime_callers cannot walk the stack, wasip1 among them, they all have
+     * the same empty one. */
+    Uintptr pcs[4];
+    if (runtime_callers(1, slice_from(pcs, 4, 4, TYPE_UINTPTR)) == 0) {
+        testing_t_skip_v(t, "no stacks to tell the allocations apart by");
+        return;
+    }
+
+    /* Disable sampling, otherwise it's difficult to assert anything. */
+    static Int old_rate;
+    old_rate = runtime_mem_profile_rate();
+    runtime_set_mem_profile_rate(1);
+    testing_t_cleanup(t, BURROW_FN(Func, restore_mem_profile_rate, &old_rate));
+
+    /* Allocate a meg to ensure that mcache.nextSample is updated to 1. */
+    for (int i = 0; i < 1024; i++)
+        mem_sink_set(mem_sink_alloc(mem_alloc(heap_allocator(), 1024, 1)), 1024);
+
+    /* Do the interesting allocations. */
+    allocate_transient_1m();
+    allocate_transient_2m();
+    allocate_transient_2m_inline();
+    allocate_persistent_1k();
+    /* Go's allocateReflect calls a function through reflect.Call, which has
+     * nothing like it here, so it is left out. */
+    mem_sink_set(NULL, 0);
+
+    memory_profiler_run++;
+    int64_t r = memory_profiler_run;
+
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    const MemProfilerTest tests[] = {
+        {
+            {32 * r, 1024 * r, 32 * r, 1024 * r},
+            fmt_sprintf_v(a, "%v: %v \\[%v: %v\\] @( 0x[0-9,a-f]+)+\n#\t0x[0-9,a-f]+\n",
+                          32 * r, 1024 * r, 32 * r, 1024 * r),
+        },
+        {
+            {(1 << 10) * r, (1 << 20) * r, 0, 0},
+            fmt_sprintf_v(a, "0: 0 \\[%v: %v\\] @( 0x[0-9,a-f]+)+\n#\t0x[0-9,a-f]+\n",
+                          (1 << 10) * r, (1 << 20) * r),
+        },
+        {
+            {r, (2 << 20) * r, 0, 0},
+            fmt_sprintf_v(a, "0: 0 \\[%v: %v\\] @( 0x[0-9,a-f]+)+\n#\t0x[0-9,a-f]+\n",
+                          r, (2 << 20) * r),
+        },
+    };
+    MemProfilerEnv e = {tests, NELEM(tests)};
+
+    testing_t_run(t, S("debug=1"), BURROW_FN(TestingTFunc, memory_profiler_debug1, &e));
+    testing_t_run(t, S("proto"), BURROW_FN(TestingTFunc, memory_profiler_proto, &e));
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestContextLabels)                                                               \
     X(TestLabelMapStringer)                                                            \
@@ -1646,6 +1985,8 @@ static void TestCPUProfileLabel(TestingT *t) {
     X(TestCPUProfileMultithreaded)                                                     \
     X(TestGoroutineSwitch)                                                             \
     X(TestMathBigDivide)                                                               \
-    X(TestCPUProfileLabel)
+    X(TestCPUProfileLabel)                                                             \
+    X(TestConvertMemProfile)                                                           \
+    X(TestMemoryProfiler)
 
 TESTING_MAIN(TESTS)

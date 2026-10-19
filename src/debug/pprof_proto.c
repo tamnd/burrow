@@ -1,9 +1,9 @@
 /* runtime/pprof: the builder that writes a profile as profile.proto, and the
  * mappings of the running program that go in it.
  *
- * Derived from Go's src/runtime/pprof: proto.go, protobuf.go, map.go, elf.go,
- * pe.go, proto_other.go, proto_darwin.go and proto_windows.go. Go source:
- * go1.27.1.
+ * Derived from Go's src/runtime/pprof: proto.go, protobuf.go, protomem.go,
+ * map.go, elf.go, pe.go, proto_other.go, proto_darwin.go and proto_windows.go.
+ * Go source: go1.27.1.
  *
  * burrow has no inlining information and no file or line for a frame, so
  * Go's pcDeck never merges two addresses here and every location is one
@@ -24,6 +24,7 @@
 #include "burrow/fmt.h"
 #include "burrow/io.h"
 #include "burrow/map.h"
+#include "burrow/math.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
@@ -34,6 +35,7 @@
 #include "burrow/runtime.h"
 #include "burrow/slice.h"
 #include "burrow/strconv.h"
+#include "burrow/strings.h"
 #include "burrow/time.h"
 #include "burrow/type.h"
 
@@ -1178,4 +1180,125 @@ Error burrow__ppr_build(PprBuilder *b) {
         err = gzip_writer_close(b->zw);
     burrow__ppr_builder_free(b);
     return err;
+}
+
+/* ---------------------------------------------------------------- protomem */
+
+bool burrow__ppr_alloc_frame(Str name) {
+    /* Go's runtime functions, which is what Go hides. */
+    if (strings_has_prefix(name, BURROW_S("runtime.")) ||
+        strings_has_prefix(name, BURROW_S("internal/runtime/")))
+        return true;
+    /* Not in Go: burrow's allocator, which is where a sampled stack starts.
+     * See burrow/mem/heap.h for why the functions in heap.c are global. */
+    static const Str alloc[] = {
+        BURROW_S_INIT("burrow__heap_sample"),
+        BURROW_S_INIT("burrow__heap_note"),
+        BURROW_S_INIT("burrow__heap_alloc"),
+        BURROW_S_INIT("burrow__heap_alloc_zeroed"),
+        BURROW_S_INIT("burrow__heap_realloc"),
+        BURROW_S_INIT("mem_alloc"),
+        BURROW_S_INIT("mem_alloc_nozero"),
+        BURROW_S_INIT("mem_alloc_array"),
+        BURROW_S_INIT("mem_realloc"),
+    };
+    for (size_t i = 0; i < sizeof alloc / sizeof alloc[0]; i++)
+        if (str_eq(name, alloc[i]))
+            return true;
+    return false;
+}
+
+/* writeHeapProto writes the current heap profile in protobuf format to w. */
+Error burrow__ppr_write_heap_proto(IoWriter w, const burrow__MemProfileRecord *p, Int n,
+                                   int64_t rate, Str default_sample_type) {
+    PprBuilder *b = burrow__ppr_new_builder(w);
+    burrow__ppr_value_type(b, PPR_TAG_PROFILE_PERIOD_TYPE, BURROW_S("space"),
+                           BURROW_S("bytes"));
+    ppr_pb_int64_opt(&b->pb, PPR_TAG_PROFILE_PERIOD, rate);
+    burrow__ppr_value_type(b, PPR_TAG_PROFILE_SAMPLE_TYPE, BURROW_S("alloc_objects"),
+                           BURROW_S("count"));
+    burrow__ppr_value_type(b, PPR_TAG_PROFILE_SAMPLE_TYPE, BURROW_S("alloc_space"),
+                           BURROW_S("bytes"));
+    burrow__ppr_value_type(b, PPR_TAG_PROFILE_SAMPLE_TYPE, BURROW_S("inuse_objects"),
+                           BURROW_S("count"));
+    burrow__ppr_value_type(b, PPR_TAG_PROFILE_SAMPLE_TYPE, BURROW_S("inuse_space"),
+                           BURROW_S("bytes"));
+    if (default_sample_type.len != 0)
+        ppr_pb_int64_opt(&b->pb, PPR_TAG_PROFILE_DEFAULT_SAMPLE_TYPE,
+                         ppr_string_index(b, default_sample_type));
+
+    int64_t values[4] = {0, 0, 0, 0};
+    Slice locs = slice_nil(TYPE_UINT64);
+    for (Int ri = 0; ri < n; ri++) {
+        const burrow__MemProfileRecord *r = &p[ri];
+        bool hide_runtime = true;
+        for (int tries = 0; tries < 2; tries++) {
+            const Uintptr *stk = r->stack;
+            Int nstk = r->nstack;
+            /* For heap profiles, all stack addresses are return PCs, which is
+             * what appendLocsForStack expects. */
+            if (hide_runtime) {
+                for (Int i = 0; i < nstk; i++) {
+                    RuntimeFunc f;
+                    if (runtime_func_for_pc(stk[i], &f) &&
+                        burrow__ppr_alloc_frame(f.name))
+                        continue;
+                    /* Found non-runtime. Show any runtime uses above it. */
+                    stk += i;
+                    nstk -= i;
+                    break;
+                }
+            }
+            locs = burrow__ppr_append_locs_for_stack(
+                b, slice_sub(locs, 0, 0),
+                slice_from((void *)(uintptr_t)stk, nstk, nstk, TYPE_UINTPTR));
+            if (locs.len > 0)
+                break;
+            hide_runtime = false; /* try again, and show all frames next time. */
+        }
+
+        burrow__ppr_scale_heap_sample(r->alloc_objects, r->object_size, rate,
+                                      &values[0], &values[1]);
+        burrow__ppr_scale_heap_sample(r->alloc_objects - r->free_objects,
+                                      r->object_size, rate, &values[2], &values[3]);
+        Int start = ppr_pb_start_message(&b->pb);
+        ppr_pb_int64s(&b->pb, PPR_TAG_SAMPLE_VALUE, values, 4);
+        ppr_pb_uint64s(&b->pb, PPR_TAG_SAMPLE_LOCATION, (const uint64_t *)locs.p,
+                       locs.len);
+        ppr_pb_label(b, PPR_TAG_SAMPLE_LABEL, BURROW_S("bytes"), BURROW_S(""),
+                     r->object_size);
+        ppr_pb_end_message(&b->pb, PPR_TAG_PROFILE_SAMPLE, start);
+        ppr_flush(b);
+    }
+    return burrow__ppr_build(b);
+}
+
+/* scaleHeapSample adjusts the data from a heap Sample to account for its
+ * probability of appearing in the collected data. heap profiles are a sampling
+ * of the memory allocations requests in a program. We estimate the unsampled
+ * value by dividing each collected sample by its probability of appearing in
+ * the profile. heap profiles rely on a poisson process to determine which
+ * samples to collect, based on the desired average collection rate R. The
+ * probability of a sample of size S to appear in that profile is
+ * 1-exp(-S/R). */
+void burrow__ppr_scale_heap_sample(int64_t count, int64_t avg_size, int64_t rate,
+                                   int64_t *objects, int64_t *bytes) {
+    if (count == 0 || avg_size == 0) {
+        *objects = 0;
+        *bytes = 0;
+        return;
+    }
+
+    if (rate <= 1) {
+        /* if rate==1 all samples were collected so no adjustment is needed. if
+         * rate<1 treat as unknown and skip scaling. */
+        *objects = count;
+        *bytes = count * avg_size;
+        return;
+    }
+
+    double scale = 1 / (1 - math_exp(-(double)avg_size / (double)rate));
+
+    *objects = (int64_t)((double)count * scale);
+    *bytes = (int64_t)((double)(count * avg_size) * scale);
 }

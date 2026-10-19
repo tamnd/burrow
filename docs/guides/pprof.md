@@ -1,6 +1,6 @@
 # Profiling
 
-`burrow/runtime/pprof.h` is Go's `runtime/pprof`. So far it has profiling labels, profiles of your own, the goroutine and threadcreate profiles, the CPU profile, and the writer for the profile format that `go tool pprof` reads. The heap, allocs, block and mutex profiles are not ported yet.
+`burrow/runtime/pprof.h` is Go's `runtime/pprof`. So far it has profiling labels, profiles of your own, the goroutine, threadcreate, heap and allocs profiles, the CPU profile, and the writer for the profile format that `go tool pprof` reads. The block and mutex profiles are not ported yet.
 
 ## Labels
 
@@ -152,3 +152,52 @@ cpu profile written: true
 A real program would write to a file from `os_create` and give the file to `go tool pprof`. A second `pprof_start_cpu_profile` while one is running returns an error, as in Go.
 
 The samples come from SIGPROF, sent by setitimer's ITIMER_PROF timer. The handler is installed the first time a profile starts and stays installed, so a program with its own SIGPROF handler loses it. Each sample is the stack of the goroutine the signal interrupted, walked from where it stopped. That walk needs frame pointers, and it works on amd64, arm64 and 386. On other machines the handler can't read where the thread stopped, so every sample is a single frame, `burrow__prof_system`. A sample taken while a thread was in the scheduler, or on a thread that runs no goroutine, has the address it stopped at and `burrow__prof_system` or `burrow__prof_external_code` under it, the way Go uses `runtime._System` and `runtime._ExternalCode`. Windows and wasip1 have no SIGPROF, so a profile there is written with no samples in it. Names come from burrow's symbol table, which covers the library and not your program, so `go tool pprof` shows your own functions as addresses.
+
+## The heap profile
+
+"heap" has the allocations made from `heap_allocator` that are still in use, and "allocs" has every one made since the program started. They are the same profile, sampled the same way, and differ only in which numbers `go tool pprof` shows first. One allocation in every `runtime_mem_profile_rate` bytes is sampled, 512 KiB by default. The rate should be set once, as early as the program can, since the tools take it to have been the same all along. This example sets it to 1 at the top of `main`, to keep every allocation:
+
+<!-- example: ../examples/pprof/pprof.c#rate -->
+```c
+runtime_set_mem_profile_rate(1);
+```
+
+Then it makes sixty-four buffers from one place and writes the heap profile in its text form, debug 1:
+
+<!-- example: ../examples/pprof/pprof.c#heap -->
+```c
+/* Sixty-four buffers that stay in use, made at one place in the program. */
+static void *buffers[64];
+
+static void fill(void) {
+    for (int i = 0; i < 64; i++)
+        buffers[i] = mem_alloc(heap_allocator(), 4096, 1);
+}
+
+static bool profile_heap(Alloc *a) {
+    fill();
+    StringsBuilder b = STRINGS_BUILDER(a);
+    Error err = pprof_profile_write_to(pprof_lookup(BURROW_S("heap")),
+                                       strings_builder_as_io_writer(&b), 1);
+    if (BURROW_FAILED(err))
+        return false;
+    Str text = strings_builder_string(&b);
+    fmt_printf_v("%s\n", strings_cut(text, BURROW_S(": "), NULL, NULL));
+    fmt_printf_v("buffers in the profile: %t\n",
+                 strings_contains(text, BURROW_S("\n64: 262144 [64: 262144] @")));
+    for (int i = 0; i < 64; i++)
+        mem_free(heap_allocator(), buffers[i], 4096, 1);
+    return true;
+}
+```
+
+That prints:
+
+```text
+heap profile
+buffers in the profile: true
+```
+
+In the text form each record is a line of in-use objects and bytes, then the allocated objects and bytes in brackets, then the stack, so the buffers are a record that starts `64: 262144 [64: 262144] @`. With debug 0 the profile is the gzipped protocol buffer that `go tool pprof` reads, and `pprof_write_heap_profile` writes it in one call.
+
+Go hears about a free when its collector sweeps the object, so its heap profile is as of the last collection. Here a free is a call to `mem_free` and is counted as it happens, so the profile is as of the moment it is written. Memory from an arena is profiled when the arena takes a block from the heap, and the stack is the one that made the arena grow. Frames inside the allocator are left off the top of every stack, as Go leaves off its runtime.

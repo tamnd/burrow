@@ -25,9 +25,9 @@
  *     PprofLabelSet l = pprof_labels_v(a, 2, BURROW_S("worker"), BURROW_S("7"));
  *     pprof_do(a, ctx, l, BURROW_FN(PprofDoFunc, work, env));
  *
- * Of the profiles Go's runtime fills in, "goroutine" and "threadcreate" are
- * here, and pprof_lookup says more, and so is the CPU profiler, which
- * pprof_start_cpu_profile starts. "heap", "allocs", "block" and "mutex" are not
+ * Of the profiles Go's runtime fills in, "goroutine", "threadcreate", "heap"
+ * and "allocs" are here, and pprof_lookup says more, and so is the CPU
+ * profiler, which pprof_start_cpu_profile starts. "block" and "mutex" are not
  * here yet.
  *
  * The stacks are what runtime_callers gives and the names are what
@@ -162,7 +162,15 @@ BURROW_STATIC(ret) PprofProfile *pprof_new_profile(Str name);
  * The predefined profiles are:
  *
  *     goroutine    - stack traces of all current goroutines
+ *     heap         - a sampling of memory allocations of live objects
+ *     allocs       - a sampling of all past memory allocations
  *     threadcreate - stack traces that led to the creation of new OS threads
+ *
+ * The heap and allocs profiles are the same profile, which burrow/mprof.h
+ * describes, and differ only in which of its values the pprof tool shows
+ * first: memory in use for heap and memory allocated for allocs. Go's are as
+ * of the last garbage collection. Here they are as of now, since a free is
+ * counted when mem_free is called.
  *
  * A goroutine's stack in the goroutine profile is read from where it last
  * stopped, on amd64 and arm64 outside Windows. Elsewhere, and for a goroutine
@@ -227,6 +235,10 @@ void pprof_profile_remove(PprofProfile *p, Any value);
  * goroutine stacks in the same form that a Go program uses when dying due to
  * an unrecovered panic. */
 BURROW_STATIC(ret) Error pprof_profile_write_to(PprofProfile *p, IoWriter w, Int debug);
+
+/* WriteHeapProfile is shorthand for Lookup("heap").WriteTo(w, 0). It is
+ * preserved for backwards compatibility. */
+BURROW_STATIC(ret) Error pprof_write_heap_profile(IoWriter w);
 
 /* StartCPUProfile enables CPU profiling for the current process. While
  * profiling, the profile will be buffered and written to w.

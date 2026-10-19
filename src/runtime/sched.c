@@ -253,6 +253,24 @@ burrow__G *burrow__curg(void) {
     return getm() != NULL ? getm()->curg : NULL;
 }
 
+/* Where the labels go on a thread with no goroutine. */
+static BURROW_THREAD_LOCAL void *thread_prof_labels;
+
+void burrow__set_prof_label(void *labels) {
+    burrow__M *m = getm();
+    if (m != NULL && m->curg != NULL)
+        m->curg->labels = labels;
+    else
+        thread_prof_labels = labels;
+}
+
+void *burrow__get_prof_label(void) {
+    burrow__M *m = getm();
+    if (m != NULL && m->curg != NULL)
+        return m->curg->labels;
+    return thread_prof_labels;
+}
+
 /* Go's dit_setEnabled and dit_setDisabled. A thread that is not running a
  * goroutine has nothing to remember the mode on but the bit itself. */
 bool burrow__dit_set_enabled(void) {
@@ -2171,6 +2189,7 @@ static bool go_start(Func fn, size_t stack_bytes, burrow__Bubble *bubble, bool b
     newg->coro = NULL;
     newg->bubble = bubble;
     newg->dit_wanted = m != NULL && m->curg != NULL && m->curg->dit_wanted;
+    newg->labels = m != NULL && m->curg != NULL ? m->curg->labels : NULL;
     burrow__atomic_store_release_u32(&newg->bubbleblocked, 0);
 
     if (!make_context(newg, stack_bytes)) {
@@ -2266,6 +2285,7 @@ bool burrow__newcoro(burrow__Coro *c, void (*f)(burrow__Coro *c, void *env),
     newg->coro = c;
     newg->bubble = m->curg->bubble;
     newg->dit_wanted = m->curg->dit_wanted;
+    newg->labels = m->curg->labels;
     burrow__atomic_store_release_u32(&newg->bubbleblocked, 0);
 
     if (!make_context(newg, BURROW_GOROUTINE_STACK)) {
@@ -2605,6 +2625,7 @@ void runtime_main(Func fn) {
     mg->entry = fn.f;
     mg->arg = fn.env;
     mg->dit_wanted = false;
+    mg->labels = NULL;
 
     if (!make_context(mg, BURROW_GOROUTINE_STACK))
         runtime_throw(BURROW_S("runtime_main: cannot make the main goroutine"));

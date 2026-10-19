@@ -1,0 +1,692 @@
+/* runtime/pprof: profiling labels, and the Profile type with the count
+ * profiles it writes.
+ *
+ * Derived from Go's src/runtime/pprof: label.go, runtime.go and pprof.go. Go
+ * source: go1.27.1.
+ *
+ * Copyright 2016 The Go Authors. All rights reserved.
+ * Copyright 2026 The burrow Authors. All rights reserved.
+ * Use of this source code is governed by a BSD-style licence that can be found
+ * in the LICENSE file. */
+
+#include "pprof_internal.h"
+
+#include "burrow/context.h"
+#include "burrow/core.h"
+#include "burrow/declare.h"
+#include "burrow/defer.h"
+#include "burrow/error.h"
+#include "burrow/fmt.h"
+#include "burrow/iface.h"
+#include "burrow/io.h"
+#include "burrow/map.h"
+#include "burrow/mem.h"
+#include "burrow/mem/arena.h"
+#include "burrow/mem/heap.h"
+#include "burrow/panic.h"
+#include "burrow/runtime.h"
+#include "burrow/sched.h"
+#include "burrow/slice.h"
+#include "burrow/slices.h"
+#include "burrow/strings.h"
+#include "burrow/sync.h"
+#include "burrow/text/tabwriter.h"
+#include "burrow/type.h"
+
+#include <stdarg.h>
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
+#define S_(lit) BURROW_S(lit)
+
+static BURROW_NORETURN void ppr_out_of_memory(void) {
+    panic_str(S_("runtime/pprof: out of memory"));
+}
+
+/* ----------------------------------------------------------------- labels */
+
+#define PPROF_LABEL_FIELDS(F, T)                                                       \
+    F(T, Str, key, Key, "")                                                            \
+    F(T, Str, value, Value, "")
+BURROW_STRUCT_AS_DEFINE(PprofLabel, PPROF_LABEL_FIELDS);
+
+/* labelContextKey is the type of contextKeys used for profiler labels. */
+static const Type ppr_label_key_desc = {
+    {(const Byte *)"labelContextKey", 15},
+    {(const Byte *)"runtime/pprof", 13},
+    KIND_INT,
+    (uint32_t)sizeof(Int),
+    (uint16_t)_Alignof(Int),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0x70706c6bU, /* "pplk" */
+    NULL,
+};
+
+static const Int ppr_label_key_value = 0;
+
+static const Any ppr_label_key = {&ppr_label_key_desc,
+                                  (void *)(uintptr_t)&ppr_label_key_value};
+
+/* What the context holds under the key: a *labelMap. The Any points at the
+ * PprLabelMap itself, and its type is this one so that nobody else's value can
+ * be mistaken for it. */
+static const Type ppr_label_map_desc = {
+    {(const Byte *)"labelMap", 8},
+    {(const Byte *)"runtime/pprof", 13},
+    KIND_STRUCT,
+    (uint32_t)sizeof(PprLabelMap),
+    (uint16_t)_Alignof(PprLabelMap),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
+static const PprLabelMap *ppr_context_labels(Context ctx) {
+    Any v = context_value(ctx, ppr_label_key);
+    if (v.t != &ppr_label_map_desc)
+        return NULL;
+    return (const PprLabelMap *)v.data;
+}
+
+/* labelValue: the labels on ctx, as a list that is empty when there are
+ * none. */
+static Slice ppr_label_value(Context ctx) {
+    const PprLabelMap *labels = ppr_context_labels(ctx);
+    if (labels == NULL)
+        return slice_nil(TYPE_PPROF_LABEL);
+    return labels->list;
+}
+
+static int ppr_compare_strs(void *env, const void *a, const void *b) {
+    (void)env;
+    return (int)strings_compare(*(const Str *)a, *(const Str *)b);
+}
+
+/* String satisfies Stringer and returns key, value pairs in a consistent
+ * order. */
+Str burrow__ppr_label_map_string(const PprLabelMap *l, Alloc *a) {
+    if (l == NULL)
+        return BURROW_STR_EMPTY;
+    Slice key_vals = slice_make(a, TYPE_STRING, 0, l->list.len);
+    if (l->list.len > 0 && key_vals.p == NULL)
+        ppr_out_of_memory();
+    const PprofLabel *list = (const PprofLabel *)l->list.p;
+    for (Int i = 0; i < l->list.len; i++) {
+        Str kv = fmt_sprintf_v(a, "%q:%q", list[i].key, list[i].value);
+        key_vals = slice_append(a, key_vals, &kv, 1);
+    }
+    slices_sort_func(key_vals, BURROW_FN(SlicesCmpFunc, ppr_compare_strs, NULL));
+    StringsBuilder b = STRINGS_BUILDER(a);
+    strings_builder_write_byte(&b, '{');
+    strings_builder_write_string(&b, strings_join(a, key_vals, S_(", ")), NULL);
+    strings_builder_write_byte(&b, '}');
+    return strings_builder_string(&b);
+}
+
+static Slice ppr_append_label(Alloc *a, Slice list, const PprofLabel *l) {
+    Int n = list.len;
+    list = slice_append(a, list, l, 1);
+    if (list.len != n + 1)
+        ppr_out_of_memory();
+    return list;
+}
+
+static Slice ppr_merge_label_sets(Alloc *a, Slice left, Slice right) {
+    if (left.len == 0)
+        return right;
+    if (right.len == 0)
+        return left;
+    const PprofLabel *l_list = (const PprofLabel *)left.p;
+    const PprofLabel *r_list = (const PprofLabel *)right.p;
+    Int l = 0, r = 0;
+    Slice result = slice_make(a, TYPE_PPROF_LABEL, 0, right.len);
+    if (result.p == NULL)
+        ppr_out_of_memory();
+    while (l < left.len && r < right.len) {
+        Int c = strings_compare(l_list[l].key, r_list[r].key);
+        if (c < 0) { /* left key < right key */
+            result = ppr_append_label(a, result, &l_list[l]);
+            l++;
+        } else if (c > 0) { /* right key < left key */
+            result = ppr_append_label(a, result, &r_list[r]);
+            r++;
+        } else { /* keys are equal, right value overwrites left value */
+            result = ppr_append_label(a, result, &r_list[r]);
+            l++;
+            r++;
+        }
+    }
+    /* Append the remaining elements */
+    for (; l < left.len; l++)
+        result = ppr_append_label(a, result, &l_list[l]);
+    for (; r < right.len; r++)
+        result = ppr_append_label(a, result, &r_list[r]);
+    return result;
+}
+
+Context pprof_with_labels(Alloc *a, Context ctx, PprofLabelSet labels) {
+    Slice parent = ppr_label_value(ctx);
+    PprLabelMap *m =
+        (PprLabelMap *)mem_alloc(a, sizeof(PprLabelMap), _Alignof(PprLabelMap));
+    if (m == NULL)
+        ppr_out_of_memory();
+    m->list = ppr_merge_label_sets(a, parent, labels.list);
+    Context out =
+        context_with_value(a, ctx, ppr_label_key, BURROW_ANY(&ppr_label_map_desc, m));
+    if (out.vt == NULL)
+        ppr_out_of_memory();
+    return out;
+}
+
+static int ppr_compare_label_keys(void *env, const void *a, const void *b) {
+    (void)env;
+    return (int)strings_compare(((const PprofLabel *)a)->key,
+                                ((const PprofLabel *)b)->key);
+}
+
+PprofLabelSet pprof_labels(Alloc *a, Slice args) {
+    if (args.len % 2 != 0)
+        panic_str(S_("uneven number of arguments to pprof.Labels"));
+    const Str *s = (const Str *)args.p;
+    Slice list = slice_make(a, TYPE_PPROF_LABEL, 0, args.len / 2);
+    if (args.len > 0 && list.p == NULL)
+        ppr_out_of_memory();
+    bool sorted_no_dupes = true;
+    for (Int i = 0; i + 1 < args.len; i += 2) {
+        PprofLabel l = {s[i], s[i + 1]};
+        list = ppr_append_label(a, list, &l);
+        sorted_no_dupes =
+            sorted_no_dupes && (i < 2 || strings_compare(s[i], s[i - 2]) > 0);
+    }
+    if (!sorted_no_dupes) {
+        /* slow path: keys are unsorted, contain duplicates, or both */
+        slices_sort_stable_func(list,
+                                BURROW_FN(SlicesCmpFunc, ppr_compare_label_keys, NULL));
+        PprofLabel *l = (PprofLabel *)list.p;
+        Int n = 0;
+        for (Int i = 0; i < list.len; i++) {
+            if (i == 0 || !str_eq(l[i].key, l[i - 1].key))
+                l[n++] = l[i];
+            else
+                l[n - 1] = l[i];
+        }
+        list = slice_sub(list, 0, n);
+    }
+    return (PprofLabelSet){list};
+}
+
+PprofLabelSet pprof_labels_v(Alloc *a, int n, ...) {
+    Str stack[16];
+    Str *args = stack;
+    if (n < 0)
+        n = 0;
+    if ((size_t)n > sizeof stack / sizeof stack[0]) {
+        args = (Str *)mem_alloc_array(a, (size_t)n, sizeof(Str), _Alignof(Str));
+        if (args == NULL)
+            ppr_out_of_memory();
+    }
+    va_list ap;
+    va_start(ap, n);
+    for (int i = 0; i < n; i++)
+        args[i] = va_arg(ap, Str);
+    va_end(ap);
+    PprofLabelSet set = pprof_labels(a, slice_from(args, n, n, TYPE_STRING));
+    if (args != stack)
+        mem_free(a, args, (size_t)n * sizeof(Str), _Alignof(Str));
+    return set;
+}
+
+bool pprof_label(Context ctx, Str key, Str *value) {
+    Slice ctx_labels = ppr_label_value(ctx);
+    const PprofLabel *l = (const PprofLabel *)ctx_labels.p;
+    for (Int i = 0; i < ctx_labels.len; i++) {
+        if (str_eq(l[i].key, key)) {
+            if (value != NULL)
+                *value = l[i].value;
+            return true;
+        }
+    }
+    if (value != NULL)
+        *value = BURROW_STR_EMPTY;
+    return false;
+}
+
+void pprof_for_labels(Context ctx, PprofLabelFunc f) {
+    Slice ctx_labels = ppr_label_value(ctx);
+    const PprofLabel *l = (const PprofLabel *)ctx_labels.p;
+    for (Int i = 0; i < ctx_labels.len; i++) {
+        if (!f.f(f.env, l[i].key, l[i].value))
+            break;
+    }
+}
+
+void pprof_set_goroutine_labels(Context ctx) {
+    burrow__set_prof_label((void *)(uintptr_t)ppr_context_labels(ctx));
+}
+
+static void ppr_restore_labels(void *env) {
+    pprof_set_goroutine_labels(*(const Context *)env);
+}
+
+void pprof_do(Alloc *a, Context ctx, PprofLabelSet labels, PprofDoFunc f) {
+    Context parent = ctx;
+    BURROW_SCOPE {
+        BURROW_DEFER(ppr_restore_labels, &parent);
+        Context with = pprof_with_labels(a, parent, labels);
+        pprof_set_goroutine_labels(with);
+        f.f(f.env, with);
+    }
+    BURROW_SCOPE_END;
+}
+
+/* --------------------------------------------------------------- profiles */
+
+/* The stack Add recorded for one value, and the copy of the value that is the
+ * key it is under, so that Remove can give both back. */
+typedef struct PprStack {
+    Any key;
+    Int n;
+    Uintptr pc[32];
+} PprStack;
+
+struct PprofProfile {
+    Str name;
+    SyncMutex mu;
+    Map *m; /* of Any to PprStack pointers */
+    Int (*count)(void);
+    Error (*write)(IoWriter w, Int debug);
+};
+
+/* profiles records all registered profiles. */
+static SyncMutex ppr_profiles_mu;
+static Map *ppr_profiles; /* of Str to PprofProfile pointers */
+
+static void ppr_lock_profiles(void) {
+    sync_mutex_lock(&ppr_profiles_mu);
+    if (ppr_profiles == NULL) {
+        ppr_profiles = map_make(heap_allocator(), TYPE_STRING, TYPE_UNSAFE_POINTER, 0);
+        if (ppr_profiles == NULL) {
+            sync_mutex_unlock(&ppr_profiles_mu);
+            ppr_out_of_memory();
+        }
+    }
+}
+
+static void ppr_unlock_profiles(void) {
+    sync_mutex_unlock(&ppr_profiles_mu);
+}
+
+static BURROW_NORETURN void ppr_panic_name(const char *msg, Str name) {
+    Str text = fmt_sprintf_v(heap_allocator(), "%s%s", msg, name);
+    panic_str(text);
+}
+
+PprofProfile *pprof_new_profile(Str name) {
+    ppr_lock_profiles();
+    if (name.len == 0) {
+        ppr_unlock_profiles();
+        panic_str(S_("pprof: NewProfile with empty name"));
+    }
+    if (map_get(ppr_profiles, &name) != NULL) {
+        ppr_unlock_profiles();
+        ppr_panic_name("pprof: NewProfile name already in use: ", name);
+    }
+    Alloc *heap = heap_allocator();
+    PprofProfile *p =
+        (PprofProfile *)mem_alloc(heap, sizeof(PprofProfile), _Alignof(PprofProfile));
+    Str copy = str_clone(heap, name);
+    Map *m = map_make(heap, TYPE_ANY, TYPE_UNSAFE_POINTER, 0);
+    if (p == NULL || copy.len == 0 || m == NULL) {
+        ppr_unlock_profiles();
+        ppr_out_of_memory();
+    }
+    p->name = copy;
+    p->m = m;
+    void *pv = p;
+    if (!map_set(ppr_profiles, &p->name, &pv)) {
+        ppr_unlock_profiles();
+        ppr_out_of_memory();
+    }
+    ppr_unlock_profiles();
+    return p;
+}
+
+PprofProfile *pprof_lookup(Str name) {
+    ppr_lock_profiles();
+    void **p = (void **)map_get(ppr_profiles, &name);
+    PprofProfile *out = p != NULL ? (PprofProfile *)*p : NULL;
+    ppr_unlock_profiles();
+    return out;
+}
+
+static int ppr_compare_profiles(void *env, const void *a, const void *b) {
+    (void)env;
+    return (int)strings_compare((*(PprofProfile *const *)a)->name,
+                                (*(PprofProfile *const *)b)->name);
+}
+
+Slice pprof_profiles(Alloc *a) {
+    ppr_lock_profiles();
+    Slice all = slice_make(a, TYPE_UNSAFE_POINTER, 0, map_len(ppr_profiles));
+    MapIter it = map_iter(ppr_profiles);
+    const void *k;
+    void *v;
+    while (map_next(&it, &k, &v)) {
+        Int n = all.len;
+        all = slice_append(a, all, v, 1);
+        if (all.len != n + 1) {
+            ppr_unlock_profiles();
+            ppr_out_of_memory();
+        }
+    }
+    ppr_unlock_profiles();
+
+    slices_sort_func(all, BURROW_FN(SlicesCmpFunc, ppr_compare_profiles, NULL));
+    return all;
+}
+
+Str pprof_profile_name(const PprofProfile *p) {
+    return p->name;
+}
+
+Int pprof_profile_count(PprofProfile *p) {
+    sync_mutex_lock(&p->mu);
+    Int n = p->count != NULL ? p->count() : map_len(p->m);
+    sync_mutex_unlock(&p->mu);
+    return n;
+}
+
+static void ppr_free_stack(PprStack *s) {
+    Alloc *heap = heap_allocator();
+    if (s->key.t != NULL && s->key.data != NULL)
+        mem_free(heap, s->key.data, s->key.t->size, s->key.t->align);
+    mem_free(heap, s, sizeof(PprStack), _Alignof(PprStack));
+}
+
+void pprof_profile_add(PprofProfile *p, Any value, Int skip) {
+    if (p->name.len == 0)
+        panic_str(S_("pprof: use of uninitialized Profile"));
+    if (p->write != NULL)
+        ppr_panic_name("pprof: Add called on built-in Profile ", p->name);
+
+    Alloc *heap = heap_allocator();
+    PprStack *stk = (PprStack *)mem_alloc(heap, sizeof(PprStack), _Alignof(PprStack));
+    if (stk == NULL)
+        ppr_out_of_memory();
+    stk->n = runtime_callers(skip + 1, slice_from(stk->pc, 32, 32, TYPE_UINTPTR));
+    if (stk->n == 0) {
+        /* The value for skip is too large, and there's no stack trace to
+         * record. */
+        stk->pc[0] = (Uintptr)burrow__pprof_lost_profile_event;
+        stk->n = 1;
+    }
+    /* A nil value, typed or not, has nothing to copy and is its own key. */
+    stk->key = value.data != NULL ? any_box(heap, value) : value;
+    if (stk->key.t != value.t) {
+        mem_free(heap, stk, sizeof(PprStack), _Alignof(PprStack));
+        ppr_out_of_memory();
+    }
+
+    sync_mutex_lock(&p->mu);
+    if (map_get(p->m, &stk->key) != NULL) {
+        sync_mutex_unlock(&p->mu);
+        ppr_free_stack(stk);
+        panic_str(S_("pprof: Profile.Add of duplicate value"));
+    }
+    void *sv = stk;
+    bool ok = map_set(p->m, &stk->key, &sv);
+    sync_mutex_unlock(&p->mu);
+    if (!ok) {
+        ppr_free_stack(stk);
+        ppr_out_of_memory();
+    }
+}
+
+void pprof_profile_remove(PprofProfile *p, Any value) {
+    sync_mutex_lock(&p->mu);
+    void **sv = (void **)map_get(p->m, &value);
+    PprStack *stk = sv != NULL ? (PprStack *)*sv : NULL;
+    if (stk != NULL)
+        map_del(p->m, &value);
+    sync_mutex_unlock(&p->mu);
+    if (stk != NULL)
+        ppr_free_stack(stk);
+}
+
+/* printStackRecord prints the function + source line information for a single
+ * stack trace.
+ *
+ * Go's CallersFrames leaves out an address it has no function for, and only
+ * prints the line with no name when there is nothing at all. burrow has no
+ * name for anything outside its own symbol table, which is most of a C
+ * program, so such a frame is printed as that line rather than dropped. */
+static void ppr_print_stack_record(IoWriter w, Slice stk, bool all_frames) {
+    bool show = all_frames;
+    const Uintptr *pcs = (const Uintptr *)stk.p;
+    Int n = stk.len > 0 ? stk.len : 1;
+    for (Int i = 0; i < n; i++) {
+        RuntimeFrame frame;
+        if (stk.len > 0)
+            burrow__ppr_frame(pcs[i], &frame);
+        else
+            memset(&frame, 0, sizeof frame);
+        Str name = frame.function;
+        if (name.len == 0) {
+            show = true;
+            fmt_fprintf_v(w, "#\t%#x\n", frame.pc);
+        } else if (!str_eq(name, S_("runtime.goexit")) &&
+                   (show || !(strings_has_prefix(name, S_("runtime.")) ||
+                              strings_has_prefix(name, S_("internal/runtime/"))))) {
+            /* Hide runtime.goexit and any runtime functions at the beginning.
+             * This is useful mainly for allocation traces. */
+            show = true;
+            fmt_fprintf_v(w, "#\t%#x\t%s+%#x\t%s:%d\n", frame.pc, name,
+                          frame.pc - frame.entry, frame.file, frame.line);
+        }
+    }
+    if (!show) {
+        /* We didn't print anything; do it again, and this time include runtime
+         * functions. */
+        ppr_print_stack_record(w, stk, true);
+        return;
+    }
+    fmt_fprintf_v(w, "\n");
+}
+
+typedef struct PprKeyOrder {
+    Map *count;
+} PprKeyOrder;
+
+static Int ppr_count_of(Map *count, const Str *key) {
+    const Int *c = (const Int *)map_get(count, key);
+    return c != NULL ? *c : 0;
+}
+
+/* keysByCount sorts keys with higher counts first, breaking ties by key string
+ * order. */
+static int ppr_compare_keys(void *env, const void *a, const void *b) {
+    const PprKeyOrder *o = (const PprKeyOrder *)env;
+    const Str *ki = (const Str *)a;
+    const Str *kj = (const Str *)b;
+    Int ci = ppr_count_of(o->count, ki);
+    Int cj = ppr_count_of(o->count, kj);
+    if (ci != cj)
+        return ci > cj ? -1 : 1;
+    return (int)strings_compare(*ki, *kj);
+}
+
+/* printCountProfile prints a countProfile at the specified debug level. The
+ * profile will be in compressed proto format unless debug is nonzero.
+ *
+ * Go's countProfile is an interface. Here it is n stacks, each a slice of
+ * Uintptr, and labels, which is NULL or n label maps that may each be
+ * NULL. */
+static Error ppr_print_count_profile(Alloc *a, IoWriter w, Int debug, Str name,
+                                     const Slice *stacks,
+                                     const PprLabelMap *const *labels, Int n) {
+    /* Build count of each stack. */
+    StringsBuilder buf = STRINGS_BUILDER(a);
+    IoWriter bw = strings_builder_as_io_writer(&buf);
+    Map *count = map_make(a, TYPE_STRING, TYPE_INT, n);
+    Map *index = map_make(a, TYPE_STRING, TYPE_INT, n);
+    Slice keys = slice_make(a, TYPE_STRING, 0, n);
+    if (count == NULL || index == NULL || (n > 0 && keys.p == NULL))
+        ppr_out_of_memory();
+    for (Int i = 0; i < n; i++) {
+        strings_builder_reset(&buf);
+        fmt_fprintf_v(bw, "@");
+        const Uintptr *pcs = (const Uintptr *)stacks[i].p;
+        for (Int j = 0; j < stacks[i].len; j++)
+            fmt_fprintf_v(bw, " %#x", pcs[j]);
+        if (labels != NULL && labels[i] != NULL) {
+            strings_builder_write_string(&buf, S_("\n# labels: "), NULL);
+            strings_builder_write_string(
+                &buf, burrow__ppr_label_map_string(labels[i], a), NULL);
+        }
+        Str k = str_clone(a, strings_builder_string(&buf));
+        if (k.len == 0)
+            ppr_out_of_memory();
+        Int c = ppr_count_of(count, &k);
+        if (c == 0) {
+            if (!map_set(index, &k, &i))
+                ppr_out_of_memory();
+            Int nk = keys.len;
+            keys = slice_append(a, keys, &k, 1);
+            if (keys.len != nk + 1)
+                ppr_out_of_memory();
+        }
+        c++;
+        if (!map_set(count, &k, &c))
+            ppr_out_of_memory();
+    }
+
+    PprKeyOrder order = {count};
+    slices_sort_func(keys, BURROW_FN(SlicesCmpFunc, ppr_compare_keys, &order));
+    const Str *key = (const Str *)keys.p;
+
+    if (debug > 0) {
+        /* Print debug profile in legacy format */
+        TabwriterWriter *tw = tabwriter_new_writer(a, w, 1, 8, 1, '\t', 0);
+        if (tw == NULL)
+            ppr_out_of_memory();
+        IoWriter tww = tabwriter_writer_as_io_writer(tw);
+        fmt_fprintf_v(tww, "%s profile: total %d\n", name, n);
+        for (Int i = 0; i < keys.len; i++) {
+            fmt_fprintf_v(tww, "%d %s\n", ppr_count_of(count, &key[i]), key[i]);
+            Int idx = *(const Int *)map_get(index, &key[i]);
+            ppr_print_stack_record(tww, stacks[idx], false);
+        }
+        Error err = tabwriter_writer_flush(tw);
+        tabwriter_writer_free(tw);
+        return err;
+    }
+
+    /* Output profile in protobuf form. */
+    PprBuilder *b = burrow__ppr_new_builder(w);
+    burrow__ppr_value_type(b, PPR_TAG_PROFILE_PERIOD_TYPE, name, S_("count"));
+    burrow__ppr_int64_opt(b, PPR_TAG_PROFILE_PERIOD, 1);
+    burrow__ppr_value_type(b, PPR_TAG_PROFILE_SAMPLE_TYPE, name, S_("count"));
+
+    int64_t values[1] = {0};
+    Slice locs = slice_nil(TYPE_UINT64);
+    for (Int i = 0; i < keys.len; i++) {
+        values[0] = (int64_t)ppr_count_of(count, &key[i]);
+        Int idx = *(const Int *)map_get(index, &key[i]);
+        /* For count profiles, all stack addresses are return PCs, which is
+         * what appendLocsForStack expects. */
+        locs = burrow__ppr_append_locs_for_stack(b, slice_sub(locs, 0, 0), stacks[idx]);
+        burrow__ppr_sample(b, slice_from(values, 1, 1, TYPE_INT64), locs,
+                           labels != NULL ? labels[idx] : NULL);
+    }
+    return burrow__ppr_build(b);
+}
+
+/* Orders pointers to stacks, as slices.Compare orders the stacks. */
+static int ppr_compare_stacks(void *env, const void *a, const void *b) {
+    (void)env;
+    const Slice *x = *(const Slice *const *)a;
+    const Slice *y = *(const Slice *const *)b;
+    const Uintptr *xp = (const Uintptr *)x->p;
+    const Uintptr *yp = (const Uintptr *)y->p;
+    for (Int i = 0; i < x->len && i < y->len; i++) {
+        if (xp[i] != yp[i])
+            return xp[i] < yp[i] ? -1 : 1;
+    }
+    if (x->len != y->len)
+        return x->len < y->len ? -1 : 1;
+    return 0;
+}
+
+static void ppr_free_arena(void *env) {
+    arena_free((Arena *)env);
+}
+
+Error pprof_profile_write_to(PprofProfile *p, IoWriter w, Int debug) {
+    if (p->name.len == 0)
+        panic_str(S_("pprof: use of zero Profile"));
+    if (p->write != NULL)
+        return p->write(w, debug);
+
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    BURROW_SCOPE {
+        BURROW_DEFER(ppr_free_arena, &ar);
+
+        /* Obtain consistent snapshot under lock; then process without lock. */
+        sync_mutex_lock(&p->mu);
+        Int n = map_len(p->m);
+        size_t cap = (size_t)(n > 0 ? n : 1);
+        Slice *all = (Slice *)mem_alloc_array(a, cap, sizeof(Slice), _Alignof(Slice));
+        Slice **order =
+            (Slice **)mem_alloc_array(a, cap, sizeof(Slice *), _Alignof(Slice *));
+        Uintptr *pcs =
+            (Uintptr *)mem_alloc_array(a, cap * 32, sizeof(Uintptr), _Alignof(Uintptr));
+        if (all == NULL || order == NULL || pcs == NULL) {
+            sync_mutex_unlock(&p->mu);
+            ppr_out_of_memory();
+        }
+        Int i = 0;
+        MapIter it = map_iter(p->m);
+        const void *k;
+        void *v;
+        while (map_next(&it, &k, &v)) {
+            const PprStack *stk = *(PprStack *const *)v;
+            Uintptr *dst = pcs + i * 32;
+            memcpy(dst, stk->pc, (size_t)stk->n * sizeof(Uintptr));
+            all[i] = slice_from(dst, stk->n, stk->n, TYPE_UINTPTR);
+            order[i] = &all[i];
+            i++;
+        }
+        sync_mutex_unlock(&p->mu);
+
+        /* Map order is non-deterministic; make output deterministic. */
+        slices_sort_func(slice_from(order, n, n, TYPE_UNSAFE_POINTER),
+                         BURROW_FN(SlicesCmpFunc, ppr_compare_stacks, NULL));
+        Slice *sorted =
+            (Slice *)mem_alloc_array(a, cap, sizeof(Slice), _Alignof(Slice));
+        if (sorted == NULL)
+            ppr_out_of_memory();
+        for (Int j = 0; j < n; j++)
+            sorted[j] = *order[j];
+
+        err = ppr_print_count_profile(a, w, debug, p->name, sorted, NULL, n);
+    }
+    BURROW_SCOPE_END;
+    return err;
+}

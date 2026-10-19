@@ -16,6 +16,10 @@
  * standard library's packages are found under $GOROOT/src, so GOROOT has to be
  * set, as build_default explains.
  *
+ * "gc" reads the export data the compiler wrote instead of checking the
+ * source. It needs the go command to say where that data is, unless a lookup
+ * is given, as importer_for_compiler explains.
+ *
  * Go marks most of this package deprecated, because it predates modules.
  * It is still the simplest way to get the standard library's types, and that
  * is what it is here for.
@@ -50,15 +54,26 @@ extern "C" {
  * matching package is found. */
 BURROW_FUNC(ImporterLookup, IoReadCloser, Alloc *a, Str path, Error *err);
 
-/* ForCompiler: an importer for the compiler named. "source" imports directly
- * from the source, and may fail for a package whose exported API is not
+/* ForCompiler: an importer for the compiler named. "gc" imports from the
+ * export data the gc compiler writes, and "source" imports directly from the
+ * source. The source importer may fail for a package whose exported API is not
  * entirely defined in pure Go source code, since the type checker cannot see
- * what cgo defines. The source importer finds packages itself, so lookup has
- * to be nil for it, and a lookup with "source" panics, as in Go.
+ * what cgo defines. It finds packages itself, so lookup has to be nil for it,
+ * and a lookup with "source" panics, as in Go.
  *
- * Go also has "gc" and "gccgo", which read the export data of installed
- * packages. Those are not here yet, and for them, as for any compiler that is
- * not supported, the result is the zero TypesImporter, Go's nil. */
+ * With "gc", lookup is called each time the importer needs to resolve an
+ * import path, and gives a reader for the archive the compiler wrote for it.
+ * The importer can then only be used with canonical import paths, not
+ * relative or absolute ones, since turning paths into canonical ones is left
+ * to the caller. Go deprecates a nil lookup but still allows it, and so does
+ * this: the importer then asks go/build where the package is and runs
+ * "go list -export" to find the export data of a standard library package,
+ * which needs the go command under GOROOT/bin. Export data that is not well
+ * formed panics, as in Go.
+ *
+ * Go also has "gccgo", which reads the export data of gccgo. It is not here
+ * yet, and for it, as for any compiler that is not supported, the result is
+ * the zero TypesImporter, Go's nil. */
 BURROW_OWNS(ret) TypesImporter importer_for_compiler(Alloc *a, TokenFileSet *fset,
                                                      Str compiler,
                                                      ImporterLookup lookup);

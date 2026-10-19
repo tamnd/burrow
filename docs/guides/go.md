@@ -1840,4 +1840,4 @@ var n int
 
 The importer keeps every package it checks, so `example/shapes` is checked once however many files import it. For the standard library, set `GOROOT` and the packages are found under `$GOROOT/src`, as `build_default` explains. The first import of something like `fmt` takes a while, since everything `fmt` imports is checked too. A package that uses cgo is run through `go tool cgo` first, so that needs the `go` command, as it does in Go.
 
-Go also has the `"gc"` and `"gccgo"` importers, which read the export data the compilers write instead of the source. They are not here yet, and `importer_for_compiler` gives back the zero `TypesImporter` for them, which is Go's nil.
+`"gc"` reads the export data the compiler wrote instead of checking the source. Given a lookup, it calls it for each import path to get a reader for that package's archive. Without one it runs `go list -export` to find the data, so it needs the `go` command under `$GOROOT/bin`. Go also has `"gccgo"`, which is not here yet, and `importer_for_compiler` gives back the zero `TypesImporter` for it, which is Go's nil.

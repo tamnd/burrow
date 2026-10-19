@@ -14,6 +14,7 @@
 #include "burrow/fmt.h"
 #include "burrow/go/ast.h"
 #include "burrow/go/constant.h"
+#include "burrow/go/importer.h"
 #include "burrow/go/parser.h"
 #include "burrow/go/token.h"
 #include "burrow/go/types.h"
@@ -2232,6 +2233,385 @@ static void TestLookupFieldOrMethod_RecursiveGeneric(TestingT *t) {
     arena_free(&ar);
 }
 
+static const struct {
+    Str src;
+    bool want;
+} identical_tests[] = {
+    {S_("var X int; var Y int"), true},
+    {S_("var X int; var Y string"), false},
+
+    /* TODO: add more tests for complex types. */
+
+    /* Named types. */
+    {S_("type X int; type Y int"), false},
+
+    /* Aliases. */
+    {S_("type X = int; type Y = int"), true},
+
+    /* Functions. */
+    {S_("func X(int) string { return \"\" }; func Y(int) string { return \"\" }"),
+     true},
+    {S_("func X() string { return \"\" }; func Y(int) string { return \"\" }"), false},
+    {S_("func X(int) string { return \"\" }; func Y(int) {}"), false},
+
+    /* Generic functions. Type parameters should be considered identical modulo */
+    /* renaming. See also go.dev/issue/49722. */
+    {S_("func X[P ~int](){}; func Y[Q ~int]() {}"), true},
+    {S_("func X[P1 any, P2 ~*P1](){}; func Y[Q1 any, Q2 ~*Q1]() {}"), true},
+    {S_("func X[P1 any, P2 ~[]P1](){}; func Y[Q1 any, Q2 ~*Q1]() {}"), false},
+    {S_("func X[P ~int](P){}; func Y[Q ~int](Q) {}"), true},
+    {S_("func X[P ~string](P){}; func Y[Q ~int](Q) {}"), false},
+    {S_("func X[P ~int]([]P){}; func Y[Q ~int]([]Q) {}"), true},
+};
+
+static void TestIdentical(TestingT *t) {
+    /* For each test, we compare the types of objects X and Y in the source. */
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    for (Int i = 0; i < NELEM(identical_tests); i++) {
+        TypesPackage *pkg = must_typecheck(
+            a, fmt_sprintf_v(a, "package p;%s", identical_tests[i].src), NULL, NULL);
+        TypesObject X = types_scope_lookup(types_package_scope(pkg), S("X"));
+        TypesObject Y = types_scope_lookup(types_package_scope(pkg), S("Y"));
+        if (X == NULL || Y == NULL)
+            testing_t_fatal_v(t, "test must declare both X and Y");
+        bool got = types_identical(types_object_type(X), types_object_type(Y));
+        if (got != identical_tests[i].want)
+            testing_t_errorf_v(t, "Identical(%s, %s) = %t, want %t",
+                               type_string(a, types_object_type(X)),
+                               type_string(a, types_object_type(Y)), got,
+                               identical_tests[i].want);
+    }
+    arena_free(&ar);
+}
+
+/* Type.String for %v, with <nil> for NULL. */
+static Str type_string_or_nil(Alloc *a, TypesType t) {
+    return t != NULL ? type_string(a, t) : S("<nil>");
+}
+
+static void TestIdentical_issue15173(TestingT *t) {
+    /* Identical should allow nil arguments and be symmetric. */
+    TypesType int_ = types_type(types_typ[TYPES_INT]);
+    const struct {
+        TypesType x, y;
+        bool want;
+    } tests[] = {
+        {int_, int_, true},
+        {int_, NULL, false},
+        {NULL, int_, false},
+        {NULL, NULL, true},
+    };
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    for (Int i = 0; i < NELEM(tests); i++) {
+        bool got = types_identical(tests[i].x, tests[i].y);
+        if (got != tests[i].want)
+            testing_t_errorf_v(t, "Identical(%v, %v) = %t",
+                               type_string_or_nil(a, tests[i].x),
+                               type_string_or_nil(a, tests[i].y), got);
+    }
+    arena_free(&ar);
+}
+
+static TypesTuple *one_param(Alloc *a, TypesBasicKind kind) {
+    TypesVar *v =
+        types_new_param(a, TOKEN_NO_POS, NULL, S(""), types_type(types_typ[kind]));
+    return types_new_tuple(a, slice_append(a, slice_nil(TYPE_UNSAFE_POINTER), &v, 1));
+}
+
+static void TestIssue61737(TestingT *t) {
+    /* This test verifies that it is possible to construct invalid interfaces
+     * containing duplicate methods using the go/types API.
+     *
+     * It must be possible for importers to construct such invalid interfaces.
+     * Previously, this panicked. */
+    (void)t;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Slice none = slice_nil(TYPE_UNSAFE_POINTER);
+    TypesSignature *sig1 = types_new_signature_type(
+        a, NULL, none, none, one_param(a, TYPES_INT), NULL, false);
+    TypesSignature *sig2 = types_new_signature_type(
+        a, NULL, none, none, one_param(a, TYPES_STRING), NULL, false);
+
+    TypesFunc *methods[] = {
+        types_new_func(a, TOKEN_NO_POS, NULL, S("M"), sig1),
+        types_new_func(a, TOKEN_NO_POS, NULL, S("M"), sig2),
+    };
+    TypesFunc *embedded_methods[] = {
+        types_new_func(a, TOKEN_NO_POS, NULL, S("M"), sig2),
+    };
+    TypesInterface *embedded =
+        types_new_interface_type(a, slice_append(a, none, embedded_methods, 1), none);
+    TypesType embeddeds[] = {types_type(embedded)};
+    TypesInterface *iface = types_new_interface_type(
+        a, slice_append(a, none, methods, 2), slice_append(a, none, embeddeds, 1));
+    (void)types_interface_complete(iface);
+    arena_free(&ar);
+}
+
+static void TestNewAlias_Issue65455(TestingT *t) {
+    (void)t;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TypesTypeName *obj = types_new_type_name(a, TOKEN_NO_POS, NULL, S("A"), NULL);
+    TypesAlias *alias = types_new_alias(a, obj, types_type(types_typ[TYPES_INT]));
+    (void)types_type_underlying(types_type(alias)); /* must not panic */
+    arena_free(&ar);
+}
+
+static void TestIssue15305(TestingT *t) {
+    Str src = S("package p; func f() int16; var _ = f(undef)");
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TokenFileSet *fset = token_new_file_set(a);
+    AstFile *f = must_parse(a, fset, src);
+    TypesConfig conf = {0};
+    conf.error = (TypesErrorFunc){collect_all, NULL}; /* allow errors */
+    TypesInfo info = {0};
+    info.types = new_types_map(a);
+    Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
+    Error err = BURROW_NO_ERROR;
+    (void)types_config_check(&conf, a, S("p"), fset, files, &info,
+                             &err); /* ignore result */
+    const void *k;
+    void *v;
+    for (MapIter it = map_iter(info.types); map_next(&it, &k, &v);) {
+        if ((*(AstExpr const *)k)->kind == AST_KIND_CALL_EXPR) {
+            TypesType typ = ((const TypesTypeAndValue *)v)->type;
+            if (typ != types_type(types_typ[TYPES_INT16]))
+                testing_t_errorf_v(t, "CallExpr has type %v, want int16",
+                                   type_string_or_nil(a, typ));
+            arena_free(&ar);
+            return;
+        }
+    }
+    testing_t_errorf_v(t, "CallExpr has no type");
+    arena_free(&ar);
+}
+
+static const struct {
+    Str lit, typ;
+} composite_lit_tests[] = {
+    {S_("[16]byte{}"), S_("[16]byte")},
+    {S_("[...]byte{}"), S_("[0]byte")},                /* test for go.dev/issue/14092 */
+    {S_("[...]int{1, 2, 3}"), S_("[3]int")},           /* test for go.dev/issue/14092 */
+    {S_("[...]int{90: 0, 98: 1, 2}"), S_("[100]int")}, /* test for go.dev/issue/14092 */
+    {S_("[]int{}"), S_("[]int")},
+    {S_("map[string]bool{\"foo\": true}"), S_("map[string]bool")},
+    {S_("struct{}{}"), S_("struct{}")},
+    {S_("struct{x, y int; z complex128}{}"), S_("struct{x int; y int; z complex128}")},
+};
+
+static void cmptype(TestingT *t, Alloc *a, Map *types, Str lit, AstExpr x, Str want) {
+    TypesTypeAndValue tv;
+    if (!map_get2(types, &x, &tv)) {
+        testing_t_errorf_v(t, "%s: no Types entry found", lit);
+        return;
+    }
+    if (tv.type == NULL) {
+        testing_t_errorf_v(t, "%s: type is nil", lit);
+        return;
+    }
+    Str got = type_string(a, tv.type);
+    if (!str_eq(got, want))
+        testing_t_errorf_v(t, "%s: got %v, want %s", lit, got, want);
+}
+
+/* TestCompositeLitTypes verifies that Info.Types registers the correct
+ * types for composite literal expressions and composite literal type
+ * expressions. */
+static void TestCompositeLitTypes(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    for (Int i = 0; i < NELEM(composite_lit_tests); i++) {
+        Str lit = composite_lit_tests[i].lit;
+        TokenFileSet *fset = token_new_file_set(a);
+        AstFile *f =
+            must_parse(a, fset, fmt_sprintf_v(a, "package p%d; var _ = %s", i, lit));
+        Map *types = new_types_map(a);
+        TypesInfo info = {0};
+        info.types = types;
+        TypesConfig conf = {0};
+        Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
+        Error err = BURROW_NO_ERROR;
+        (void)types_config_check(&conf, a, S("p"), fset, files, &info, &err);
+        if (BURROW_FAILED(err))
+            testing_t_fatalf_v(t, "%s: %v", lit, error_text(err));
+
+        /* test type of composite literal expression */
+        AstGenDecl *gen = (AstGenDecl *)BURROW_AT(AstDecl, f->decls, 0);
+        AstValueSpec *spec = (AstValueSpec *)BURROW_AT(AstSpec, gen->specs, 0);
+        AstExpr rhs = BURROW_AT(AstExpr, spec->values, 0);
+        cmptype(t, a, types, lit, rhs, composite_lit_tests[i].typ);
+
+        /* test type of composite literal type expression */
+        cmptype(t, a, types, lit, ((AstCompositeLit *)rhs)->type,
+                composite_lit_tests[i].typ);
+    }
+    arena_free(&ar);
+}
+
+/* TestObjectParents verifies that objects have parent scopes or not
+ * as specified by the Object interface. */
+static void TestObjectParents(TestingT *t) {
+    Str src = S("\npackage p\n\nconst C = 0\n\ntype T1 struct {\n\ta, b "
+                "int\n\tT2\n}\n\ntype T2 interface {\n\tim1()\n\tim2()\n}\n\nfunc (T1) "
+                "m1() {}\nfunc (*T1) m2() {}\n\nfunc f(x int) { y := x; print(y) }\n");
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TokenFileSet *fset = token_new_file_set(a);
+    AstFile *f = must_parse(a, fset, src);
+    TypesInfo info = {0};
+    info.defs = new_objects_map(a);
+    TypesConfig conf = {0};
+    Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
+    Error err = BURROW_NO_ERROR;
+    (void)types_config_check(&conf, a, S("p"), fset, files, &info, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "%s", error_text(err));
+
+    const void *k;
+    void *v;
+    for (MapIter it = map_iter(info.defs); map_next(&it, &k, &v);) {
+        const AstIdent *ident = *(AstIdent *const *)k;
+        TypesObject obj = *(TypesObject *)v;
+        if (obj == NULL) {
+            /* only package names and implicit vars have a nil object
+             * (in this test we only need to handle the package name) */
+            if (!str_eq(ident->name, S("p")))
+                testing_t_errorf_v(t, "%v has nil object", ident->name);
+            continue;
+        }
+
+        /* struct fields, type-associated and interface methods
+         * have no parent scope */
+        bool want_parent = true;
+        if (types_as_var(obj) != NULL) {
+            if (types_var_is_field(types_as_var(obj)))
+                want_parent = false;
+        } else if (types_as_func(obj) != NULL) {
+            if (types_signature_recv(types_func_signature(types_as_func(obj))) != NULL)
+                want_parent = false; /* method */
+        }
+
+        bool got_parent = types_object_parent(obj) != NULL;
+        if (got_parent && !want_parent)
+            testing_t_errorf_v(t, "%v: want no parent, got %s", ident->name,
+                               types_scope_string(a, types_object_parent(obj)));
+        else if (!got_parent && want_parent)
+            testing_t_errorf_v(t, "%v: no parent found", ident->name);
+    }
+    arena_free(&ar);
+}
+
+typedef struct {
+    TestingT *t;
+    Str compiler;
+    Int errcount;
+} FailedImportEnv;
+
+static void failed_import_error(void *penv, const TypesError *e) {
+    FailedImportEnv *env = penv;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Str msg = types_error_error(e, arena_allocator(&ar));
+    /* we should only see the import error */
+    if (env->errcount > 0 || !strings_contains(msg, S("could not import")))
+        testing_t_errorf_v(env->t, "for %s importer, got unexpected error: %v",
+                           env->compiler, msg);
+    env->errcount++;
+    arena_free(&ar);
+}
+
+/* TestFailedImport tests that we don't get follow-on errors
+ * elsewhere in a package due to failing to import a package.
+ *
+ * Not in Go: importer_for has no gc or gccgo importer yet and gives the zero
+ * TypesImporter for them, so for those two the import fails because no
+ * importer is installed rather than because the package is missing. */
+static void TestFailedImport(TestingT *t) {
+    if (!have_source_importer())
+        testing_t_skip_v(t, "no go1.27 sources for the source importer");
+
+    Str src = S("\npackage p\n\nimport foo "
+                "\"go/types/thisdirectorymustnotexistotherwisethistestmayfail/foo\" // "
+                "should only see an error here\n\nconst c = foo.C\ntype T = foo.T\nvar "
+                "v T = c\nfunc f(x T) T { return foo.F(x) }\n");
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TokenFileSet *fset = token_new_file_set(a);
+    AstFile *f = must_parse(a, fset, src);
+    Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
+
+    /* type-check using all possible importers */
+    const Str compilers[] = {S("gc"), S("gccgo"), S("source")};
+    for (Int i = 0; i < NELEM(compilers); i++) {
+        Str compiler = compilers[i];
+        FailedImportEnv env = {t, compiler, 0};
+        TypesConfig conf = {0};
+        conf.error = (TypesErrorFunc){failed_import_error, &env};
+        conf.importer = importer_for(a, compiler, (ImporterLookup){0});
+
+        TypesInfo info = {0};
+        info.uses = new_objects_map(a);
+        Error err = BURROW_NO_ERROR;
+        TypesPackage *pkg =
+            types_config_check(&conf, a, S("p"), fset, files, &info, &err);
+        if (pkg == NULL) {
+            testing_t_errorf_v(
+                t, "for %s importer, type-checking failed to return a package",
+                compiler);
+            continue;
+        }
+
+        Slice imports = types_package_imports(pkg);
+        if (imports.len != 1) {
+            testing_t_errorf_v(t, "for %s importer, got %d imports, want 1", compiler,
+                               imports.len);
+            continue;
+        }
+        TypesPackage *imp = BURROW_AT(TypesPackage *, imports, 0);
+        if (!str_eq(types_package_name(imp), S("foo"))) {
+            testing_t_errorf_v(t, "for %s importer, got %q, want \"foo\"", compiler,
+                               types_package_name(imp));
+            continue;
+        }
+
+        /* verify that all uses of foo refer to the imported package foo (imp) */
+        const void *k;
+        void *v;
+        for (MapIter it = map_iter(info.uses); map_next(&it, &k, &v);) {
+            const AstIdent *ident = *(AstIdent *const *)k;
+            if (!str_eq(ident->name, S("foo")))
+                continue;
+            TypesObject obj = *(TypesObject *)v;
+            TypesPkgName *pn = obj != NULL ? types_as_pkg_name(obj) : NULL;
+            if (pn != NULL) {
+                if (types_pkg_name_imported(pn) != imp)
+                    testing_t_errorf_v(
+                        t, "%s resolved to %v; want %v", ident->name,
+                        types_package_string(a, types_pkg_name_imported(pn)),
+                        types_package_string(a, imp));
+            } else {
+                testing_t_errorf_v(t, "%s resolved to %v; want package name",
+                                   ident->name,
+                                   obj != NULL ? object_string(a, obj) : S("<nil>"));
+            }
+        }
+    }
+    arena_free(&ar);
+}
+
 /* fmt.Sprint of a list of strings, a Slice of Str. */
 static Str sprint_list(Alloc *a, Slice list) {
     Str parts[3] = {S("["), strings_join(a, list, S(" ")), S("]")};
@@ -2463,6 +2843,14 @@ static void TestFirstErrorInTypeSet(TestingT *t) {
     X(TestIssue8518)                                                                   \
     X(TestIssue59603)                                                                  \
     X(TestLookupFieldOrMethod_RecursiveGeneric)                                        \
+    X(TestIdentical)                                                                   \
+    X(TestIdentical_issue15173)                                                        \
+    X(TestIssue61737)                                                                  \
+    X(TestNewAlias_Issue65455)                                                         \
+    X(TestIssue15305)                                                                  \
+    X(TestCompositeLitTypes)                                                           \
+    X(TestObjectParents)                                                               \
+    X(TestFailedImport)                                                                \
     X(TestFirstErrorInTypeSet)
 
 TESTING_MAIN(TESTS)

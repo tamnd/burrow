@@ -23,51 +23,6 @@
 #define S(lit) BURROW_S(lit)
 #define NELEM(x) ((Int)(sizeof(x) / sizeof((x)[0])))
 
-/* pkgFilenames from stdlib_test.go: the Go files of the package in dir, with
- * its test files if include_test.
- *
- * Not in Go: dir is a directory under GOROOT/src rather than one relative to
- * the test's own. */
-static Slice pkg_filenames(Alloc *a, Str dir, bool include_test, Error *err) {
-    BuildContext ctxt = build_default(a);
-    ctxt.goroot = gtt_find_goroot(a);
-    ctxt.cgo_enabled = false;
-    BuildPackage *pkg = build_context_import_dir(&ctxt, a, dir, 0, err);
-    if (BURROW_FAILED(*err))
-        return slice_nil(TYPE_STRING);
-    Slice filenames = slice_nil(TYPE_STRING);
-    for (Int i = 0; i < pkg->go_files.len; i++) {
-        Str name = filepath_join_v(a, 2, pkg->dir, BURROW_AT(Str, pkg->go_files, i));
-        filenames = slice_append(a, filenames, &name, 1);
-    }
-    if (include_test) {
-        for (Int i = 0; i < pkg->test_go_files.len; i++) {
-            Str name =
-                filepath_join_v(a, 2, pkg->dir, BURROW_AT(Str, pkg->test_go_files, i));
-            filenames = slice_append(a, filenames, &name, 1);
-        }
-    }
-    return filenames;
-}
-
-static Slice pkg_files(Alloc *a, TokenFileSet *fset, Str path, Error *err) {
-    Slice filenames = pkg_filenames(a, path, true, err); /* from stdlib_test.go */
-    if (BURROW_FAILED(*err))
-        return slice_nil(TYPE_AST_FILE_PTR);
-
-    Slice files = slice_nil(TYPE_AST_FILE_PTR);
-    for (Int i = 0; i < filenames.len; i++) {
-        AstFile *file =
-            parser_parse_file(a, fset, BURROW_AT(Str, filenames, i), (Any){NULL, NULL},
-                              PARSER_SKIP_OBJECT_RESOLUTION, err);
-        if (BURROW_FAILED(*err))
-            return slice_nil(TYPE_AST_FILE_PTR);
-        files = slice_append(a, files, &file, 1);
-    }
-
-    return files;
-}
-
 /* Not in Go: the directory of the package with import path p in GOROOT/src. */
 static Str goroot_src(Alloc *a, Str p) {
     return filepath_join_v(a, 3, gtt_find_goroot(a), S("src"), p);

@@ -90,6 +90,7 @@ static void example_scope(IoWriter w) {
     Regexp *rx = regexp_must_compile(a, S(" 0x[a-fA-F\\d]*"));
     fmt_fprintln_v(
         w, regexp_replace_all_string(rx, a, strings_builder_string(&buf), S("")));
+    regexp_free(rx);
     arena_free(&ar);
 }
 

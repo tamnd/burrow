@@ -195,6 +195,7 @@ static void TestScopeLookupParent(TestingT *t) {
                                    name, got, want);
         }
     }
+    regexp_free(rx);
 
     /* Check that for each referring identifier, a lookup of its name on the
      * innermost enclosing scope returns the correct object. */

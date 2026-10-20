@@ -908,4 +908,137 @@ bool burrow__tls_new_session_ticket_msg_unmarshal(TlsNewSessionTicketMsg *m,
 Slice burrow__tls_hello_request_msg_marshal(Alloc *a, Error *err);
 bool burrow__tls_hello_request_msg_unmarshal(Slice data);
 
+/* ---------------------------------------------------------------- config */
+
+/* roleClient and roleServer are meant to call supportedVersions and parents
+ * with more readability at the callsite. */
+#define TLS_ROLE_CLIENT true
+#define TLS_ROLE_SERVER false
+
+/* ticketKeyLifetime is how long a ticket key remains valid and can be used to
+ * resume a client connection. ticketKeyRotation is how often the server
+ * should rotate the session ticket key that is used for new tickets. */
+#define TLS_TICKET_KEY_LIFETIME (7 * (24 * TIME_HOUR))
+#define TLS_TICKET_KEY_ROTATION (24 * TIME_HOUR)
+
+/* maxSessionTicketLifetime is the maximum allowed lifetime of a TLS 1.3
+ * session ticket, and the lifetime we set for all tickets we send. */
+#define TLS_MAX_SESSION_TICKET_LIFETIME (7 * (24 * TIME_HOUR))
+
+/* ticketKey is the internal representation of a session ticket key. */
+typedef struct TlsTicketKey {
+    Byte aes_key[16];
+    Byte hmac_key[16];
+    /* created is the time at which this ticket key was created. See
+     * Config.ticketKeys. */
+    Time created;
+} TlsTicketKey;
+
+/* A []ticketKey that a Config and its clones share. Go's slices of them are
+ * never written to after they are made, and these are not either. A count of
+ * references stands in for the garbage collector: a config holds one for each
+ * of its two lists, and so does whoever burrow__tls_config_ticket_keys gave
+ * one to. */
+typedef struct burrow__TlsTicketKeys {
+    int32_t refs;
+    Int len;
+    Int cap;
+    Alloc *a;
+    TlsTicketKey keys[];
+} TlsTicketKeys;
+
+/* Gives back one reference to k. Nothing for NULL. */
+void burrow__tls_ticket_keys_release(TlsTicketKeys *k);
+
+/* ticketKeyFromBytes converts from the external representation of a session
+ * ticket key to a ticketKey. Externally, session ticket keys are 32 random
+ * bytes and this function expands that into sufficient name and key material. */
+TlsTicketKey burrow__tls_config_ticket_key_from_bytes(const TlsConfig *c,
+                                                      const Byte b[32]);
+
+/* ticketKeys returns the ticketKeys for this connection. If configForClient
+ * has explicitly set keys, those will be returned. Otherwise, the keys on c
+ * will be used and may be rotated if auto-managed. During rotation, any
+ * expired session ticket keys are deleted from c.sessionTicketKeys. If the
+ * session ticket key that is currently encrypting tickets (ie. the first
+ * ticketKey in c.sessionTicketKeys) is not fresh, then a new session ticket key
+ * will be created and prepended to c.sessionTicketKeys.
+ *
+ * NULL when session tickets are disabled. Otherwise a reference the caller
+ * gives back with burrow__tls_ticket_keys_release, or NULL with
+ * burrow_err_out_of_memory in *err. */
+TlsTicketKeys *burrow__tls_config_ticket_keys(TlsConfig *c,
+                                              TlsConfig *config_for_client, Error *err);
+
+/* c.rand() and c.time(): the reader and clock c has, or crypto/rand and
+ * time_now. */
+IoReader burrow__tls_config_rand(const TlsConfig *c);
+Time burrow__tls_config_time(const TlsConfig *c);
+
+/* cipherSuites and supportedCipherSuites, a []uint16 from a. */
+Slice burrow__tls_config_cipher_suites(const TlsConfig *c, Alloc *a,
+                                       bool aes_gcm_preferred);
+Slice burrow__tls_config_supported_cipher_suites(const TlsConfig *c, Alloc *a);
+
+/* supportedVersions returns the list of supported TLS versions, sorted from
+ * highest to lowest (and hence also in preference order). Into out, with the
+ * count. c can be NULL. */
+Int burrow__tls_config_supported_versions(const TlsConfig *c, bool is_client,
+                                          bool is_quic, uint16_t out[4]);
+
+/* maxSupportedVersion, zero when there is none. */
+uint16_t burrow__tls_config_max_supported_version(const TlsConfig *c, bool is_client,
+                                                  bool is_quic);
+
+/* supportedVersionsFromMax returns a list of supported versions derived from a
+ * legacy maximum version value. Note that only versions supported by this
+ * library are returned. Any newer peer will use supportedVersions anyway. Into
+ * out, with the count. */
+Int burrow__tls_supported_versions_from_max(uint16_t max_version, uint16_t out[4]);
+
+/* curvePreferences, into out, with the count. */
+Int burrow__tls_config_curve_preferences(const TlsConfig *c, uint16_t version,
+                                         TlsCurveID out[8]);
+
+/* supportsCurve. c can be NULL. */
+bool burrow__tls_config_supports_curve(const TlsConfig *c, uint16_t version,
+                                       TlsCurveID x);
+
+/* mutualVersion returns the protocol version to use given the advertised
+ * versions of the peer, a []uint16. The highest supported version is
+ * preferred. False when there is none. */
+bool burrow__tls_config_mutual_version(const TlsConfig *c, bool is_client, bool is_quic,
+                                       Slice peer_versions, uint16_t *out);
+
+extern const Error burrow__tls_err_no_certificates;
+
+/* getCertificate returns the best certificate for the given ClientHelloInfo,
+ * defaulting to the first element of c.Certificates. */
+TlsCertificate *burrow__tls_config_get_certificate(TlsConfig *c,
+                                                   TlsClientHelloInfo *client_hello,
+                                                   Error *err);
+
+/* leaf returns the parsed leaf certificate, either from c.Leaf or by parsing
+ * the corresponding c.Certificate[0], which is made from a. */
+X509Certificate *burrow__tls_certificate_leaf(const TlsCertificate *c, Alloc *a,
+                                              Error *err);
+
+#define TLS_KEY_LOG_LABEL_TLS12 "CLIENT_RANDOM"
+#define TLS_KEY_LOG_LABEL_CLIENT_HANDSHAKE "CLIENT_HANDSHAKE_TRAFFIC_SECRET"
+#define TLS_KEY_LOG_LABEL_SERVER_HANDSHAKE "SERVER_HANDSHAKE_TRAFFIC_SECRET"
+#define TLS_KEY_LOG_LABEL_CLIENT_TRAFFIC "CLIENT_TRAFFIC_SECRET_0"
+#define TLS_KEY_LOG_LABEL_SERVER_TRAFFIC "SERVER_TRAFFIC_SECRET_0"
+
+/* writeKeyLog: label, client_random and secret as one line of the NSS key log
+ * format, to c->key_log_writer when there is one. */
+Error burrow__tls_config_write_key_log(const TlsConfig *c, Str label,
+                                       Slice client_random, Slice secret);
+
+/* supportsECDHE returns whether ECDHE key exchanges can be used with this
+ * pre-TLS 1.3 client. supported_curves is a []CurveID and supported_points a
+ * []uint8. */
+bool burrow__tls_supports_ecdhe(const TlsConfig *c, uint16_t version,
+                                Slice supported_curves, Slice supported_points,
+                                Error *err);
+
 #endif /* BURROW_SRC_CRYPTO_TLS_INTERNAL_H */

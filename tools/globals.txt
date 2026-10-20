@@ -490,3 +490,4 @@ global	src/text/template_parse_node.c	burrow__parse_text_format_q	package-vars	G
 global	src/html/template_escape.c	hte_debug_flags	godebug	The htmlmetacontenturlescape setting, read from GODEBUG on first use. Relaxed atomic loads and stores only, and two racing first loads store the same value. burrow__ht_godebug_set changes it for the tests, as t.Setenv does in Go.
 global	src/runtime/exectrace.c	burrow__trace_gen	exec-trace	Go's trace.gen. Atomic. Written only with adv_lock held, read by every hook without a lock.
 global	src/runtime/exectrace.c	trace	exec-trace	Go's trace. Each part is under the lock its comment names: ctl, adv_lock, trace.lock, tt_lock, or the lock of the thread or table it belongs to.
+global	src/crypto/tls_config.c	tcfg_writer_mutex	package-vars	writerMutex, which every KeyLogWriter write goes through. A SyncMutex, so it is safe to share.

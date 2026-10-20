@@ -24,12 +24,16 @@
 #include "burrow/crypto/tls.h"
 #include "burrow/crypto/x509.h"
 #include "burrow/encoding/pem.h"
+#include "burrow/map.h"
 #include "burrow/math/big.h"
+#include "burrow/mem/heap.h"
+#include "burrow/os.h"
 #include "burrow/panic.h"
 #include "burrow/strings.h"
 #include "tls_test_gen.h"
 
 #include <stdint.h>
+#include <string.h>
 
 /* testingKey, from a. */
 static Slice testing_key(Alloc *a, Slice s) {
@@ -473,10 +477,755 @@ static void TestX509KeyPairPopulateCertificate(TestingT *t) {
     arena_free(&ar);
 }
 
+/* The bits of TestCloneFuncFields, one for each callback of a Config. */
+static void set_bit(void *env, int bit) {
+    *(int *)env |= 1 << bit;
+}
+
+static Time clone_time(void *env) {
+    set_bit(env, 0);
+    return (Time){0};
+}
+
+static TlsCertificate *clone_get_certificate(void *env, TlsClientHelloInfo *chi,
+                                             Error *err) {
+    (void)chi;
+    (void)err;
+    set_bit(env, 1);
+    return NULL;
+}
+
+static TlsCertificate *
+clone_get_client_certificate(void *env, TlsCertificateRequestInfo *cri, Error *err) {
+    (void)cri;
+    (void)err;
+    set_bit(env, 2);
+    return NULL;
+}
+
+static TlsConfig *clone_get_config_for_client(void *env, TlsClientHelloInfo *chi,
+                                              Error *err) {
+    (void)chi;
+    (void)err;
+    set_bit(env, 3);
+    return NULL;
+}
+
+static Error clone_verify_peer_certificate(void *env, Slice raw_certs,
+                                           Slice verified_chains) {
+    (void)raw_certs;
+    (void)verified_chains;
+    set_bit(env, 4);
+    return BURROW_NO_ERROR;
+}
+
+static Error clone_verify_connection(void *env, const TlsConnectionState *cs) {
+    (void)cs;
+    set_bit(env, 5);
+    return BURROW_NO_ERROR;
+}
+
+static struct TlsSessionState *clone_unwrap_session(void *env, Slice identity,
+                                                    const TlsConnectionState *cs,
+                                                    Error *err) {
+    (void)identity;
+    (void)cs;
+    (void)err;
+    set_bit(env, 6);
+    return NULL;
+}
+
+static Slice clone_wrap_session(void *env, Alloc *a, const TlsConnectionState *cs,
+                                struct TlsSessionState *ss, Error *err) {
+    (void)a;
+    (void)cs;
+    (void)ss;
+    (void)err;
+    set_bit(env, 7);
+    return slice_nil(TYPE_BYTE);
+}
+
+static Error clone_ech_rejection_verify(void *env, const TlsConnectionState *cs) {
+    (void)cs;
+    set_bit(env, 8);
+    return BURROW_NO_ERROR;
+}
+
+static Slice clone_get_ech_keys(void *env, TlsClientHelloInfo *chi, Error *err) {
+    (void)chi;
+    (void)err;
+    set_bit(env, 9);
+    return slice_nil(TYPE_TLS_ENCRYPTED_CLIENT_HELLO_KEY);
+}
+
+static void TestCloneFuncFields(TestingT *t) {
+    enum { expected_count = 10 };
+    int called = 0;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+
+    TlsConfig c1 = {0};
+    c1.time = (TlsTimeFunc){clone_time, &called};
+    c1.get_certificate = (TlsGetCertificateFunc){clone_get_certificate, &called};
+    c1.get_client_certificate =
+        (TlsGetClientCertificateFunc){clone_get_client_certificate, &called};
+    c1.get_config_for_client =
+        (TlsGetConfigForClientFunc){clone_get_config_for_client, &called};
+    c1.verify_peer_certificate =
+        (TlsVerifyPeerCertificateFunc){clone_verify_peer_certificate, &called};
+    c1.verify_connection = (TlsVerifyConnectionFunc){clone_verify_connection, &called};
+    c1.unwrap_session = (TlsUnwrapSessionFunc){clone_unwrap_session, &called};
+    c1.wrap_session = (TlsWrapSessionFunc){clone_wrap_session, &called};
+    c1.encrypted_client_hello_rejection_verify =
+        (TlsVerifyConnectionFunc){clone_ech_rejection_verify, &called};
+    c1.get_encrypted_client_hello_keys =
+        (TlsGetEncryptedClientHelloKeysFunc){clone_get_ech_keys, &called};
+
+    TlsConfig *c2 = tls_config_clone(&c1, a);
+    if (c2 == NULL)
+        testing_t_fatal_v(t, "Clone: out of memory");
+
+    TlsConnectionState cs = {0};
+    Error err = BURROW_NO_ERROR;
+    c2->time.f(c2->time.env);
+    c2->get_certificate.f(c2->get_certificate.env, NULL, &err);
+    c2->get_client_certificate.f(c2->get_client_certificate.env, NULL, &err);
+    c2->get_config_for_client.f(c2->get_config_for_client.env, NULL, &err);
+    c2->verify_peer_certificate.f(c2->verify_peer_certificate.env,
+                                  slice_nil(TYPE_BYTES), slice_nil(TYPE_BYTES));
+    c2->verify_connection.f(c2->verify_connection.env, &cs);
+    c2->unwrap_session.f(c2->unwrap_session.env, slice_nil(TYPE_BYTE), &cs, &err);
+    c2->wrap_session.f(c2->wrap_session.env, a, &cs, NULL, &err);
+    c2->encrypted_client_hello_rejection_verify.f(
+        c2->encrypted_client_hello_rejection_verify.env, &cs);
+    c2->get_encrypted_client_hello_keys.f(c2->get_encrypted_client_hello_keys.env, NULL,
+                                          &err);
+
+    if (called != (1 << expected_count) - 1)
+        testing_t_fatalf_v(t, "expected %d calls but saw calls %b", expected_count,
+                           called);
+    tls_config_release(c2);
+    arena_free(&ar);
+}
+
+/* Not in Go: a list of one key, the []ticketKey{c.ticketKeyFromBytes(key)} of
+ * TestCloneNonFuncFields. The configs that hold it let go of it. */
+static TlsTicketKeys *one_ticket_key(TlsConfig *c) {
+    Alloc *heap = heap_allocator();
+    TlsTicketKeys *k = mem_alloc(heap, sizeof(TlsTicketKeys) + sizeof(TlsTicketKey),
+                                 _Alignof(TlsTicketKeys));
+    if (k == NULL)
+        panic_str(BURROW_S("one_ticket_key: out of memory"));
+    k->refs = 1;
+    k->len = 1;
+    k->cap = 1;
+    k->a = heap;
+    k->keys[0] = burrow__tls_config_ticket_key_from_bytes(c, c->session_ticket_key);
+    return k;
+}
+
+/* There is no reflect to walk the fields of a Config here, so every field the
+ * Go test sets is set by name, and compared by name after the Clone. A field
+ * added to Config needs adding to both lists. The ticket key lists are
+ * compared by pointer, as a clone shares them. The mutex is not compared. */
+static void TestCloneNonFuncFields(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig c1 = {0};
+
+    c1.rand = os_file_as_io_reader(os_stdin);
+    static Byte b[] = {'b'};
+    TlsCertificate *cert = BURROW_NEW(a, TlsCertificate);
+    cert->certificate = slice_make(a, TYPE_BYTES, 1, 1);
+    BURROW_AT(Slice, cert->certificate, 0) = slice_from(b, 1, 1, TYPE_BYTE);
+    c1.certificates = slice_from(cert, 1, 1, TYPE_TLS_CERTIFICATE);
+    c1.name_to_certificate = map_make(a, TYPE_STRING, TYPE_TLS_CERTIFICATE_PTR, 0);
+    Str name = BURROW_S("a");
+    TlsCertificate *nil_cert = NULL;
+    map_set(c1.name_to_certificate, &name, &nil_cert);
+    c1.root_cas = x509_new_cert_pool(a);
+    c1.client_cas = x509_new_cert_pool(a);
+    c1.client_session_cache = tls_new_lru_client_session_cache(a, 10);
+    c1.key_log_writer = os_file_as_io_writer(os_stdout);
+    static Str protos[] = {BURROW_S_INIT("a"), BURROW_S_INIT("b")};
+    c1.next_protos = slice_from(protos, 2, 2, TYPE_STRING);
+    c1.server_name = BURROW_S("b");
+    c1.client_auth = TLS_VERIFY_CLIENT_CERT_IF_GIVEN;
+    c1.insecure_skip_verify = true;
+    c1.session_tickets_disabled = true;
+    c1.dynamic_record_sizing_disabled = true;
+    c1.prefer_server_cipher_suites = true;
+    c1.min_version = TLS_VERSION_TLS12;
+    c1.max_version = TLS_VERSION_TLS12;
+    memset(c1.session_ticket_key, 0, sizeof(c1.session_ticket_key));
+    static uint16_t suites[] = {1, 2};
+    c1.cipher_suites = slice_from(suites, 2, 2, TYPE_UINT16);
+    static TlsCurveID curves[] = {TLS_CURVE_P256};
+    c1.curve_preferences = slice_from(curves, 1, 1, TYPE_UINT16);
+    c1.renegotiation = TLS_RENEGOTIATE_ONCE_AS_CLIENT;
+    static Byte x[] = {'x'};
+    c1.encrypted_client_hello_config_list = slice_from(x, 1, 1, TYPE_BYTE);
+    static Byte one[] = {1};
+    TlsEncryptedClientHelloKey *ech_key = BURROW_NEW(a, TlsEncryptedClientHelloKey);
+    ech_key->config = slice_from(one, 1, 1, TYPE_BYTE);
+    ech_key->private_key = slice_from(one, 1, 1, TYPE_BYTE);
+    c1.encrypted_client_hello_keys =
+        slice_from(ech_key, 1, 1, TYPE_TLS_ENCRYPTED_CLIENT_HELLO_KEY);
+    c1.a = a;
+
+    /* Set the unexported fields related to session ticket keys, which are
+     * copied with Clone(). */
+    c1.auto_session_ticket_keys = one_ticket_key(&c1);
+    c1.session_ticket_keys = one_ticket_key(&c1);
+
+    TlsConfig *c2 = tls_config_clone(&c1, a);
+    if (c2 == NULL)
+        testing_t_fatal_v(t, "Clone: out of memory");
+#define SAME(f) (memcmp(&c1.f, &c2->f, sizeof(c1.f)) == 0)
+    bool same =
+        SAME(rand) && SAME(certificates) && SAME(name_to_certificate) &&
+        SAME(root_cas) && SAME(next_protos) && SAME(server_name) && SAME(client_auth) &&
+        SAME(client_cas) && SAME(cipher_suites) && SAME(client_session_cache) &&
+        SAME(curve_preferences) && SAME(renegotiation) && SAME(key_log_writer) &&
+        SAME(encrypted_client_hello_config_list) && SAME(encrypted_client_hello_keys) &&
+        SAME(a) && SAME(session_ticket_key) && SAME(min_version) && SAME(max_version) &&
+        SAME(insecure_skip_verify) && SAME(prefer_server_cipher_suites) &&
+        SAME(session_tickets_disabled) && SAME(dynamic_record_sizing_disabled) &&
+        SAME(session_ticket_keys) && SAME(auto_session_ticket_keys);
+#undef SAME
+    if (!same)
+        testing_t_errorf_v(t, "clone failed to copy a field");
+    tls_config_release(c2);
+    tls_config_release(&c1);
+    arena_free(&ar);
+}
+
+static void TestCloneNilConfig(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    TlsConfig *config = NULL;
+    TlsConfig *cc = tls_config_clone(config, arena_allocator(&ar));
+    if (cc != NULL)
+        testing_t_fatalf_v(t, "Clone with nil should return nil, got: %p", (void *)cc);
+    arena_free(&ar);
+}
+
+/* Issue 28744: Ensure that we don't modify memory that Config doesn't own such
+ * as Certificates.
+ *
+ * testConfigServer is not here yet, so the config is a zero one. Nothing of
+ * it but Certificates is looked at. */
+static void TestBuildNameToCertificate_doesntModifyCertificates(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsCertificate want[2] = {
+        parse_test_cert(a, test_rsa2048_cert_pem, test_rsa2048_key_pem),
+        parse_test_cert(a, test_sni_cert_pem, test_sni_key_pem),
+    };
+    TlsCertificate certs[2];
+    memcpy(certs, want, sizeof(certs));
+    TlsConfig config = {0};
+    config.certificates = slice_from(certs, 2, 2, TYPE_TLS_CERTIFICATE);
+
+    Error err = tls_config_build_name_to_certificate(&config, a);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    if (config.certificates.p != certs || config.certificates.len != 2 ||
+        memcmp(certs, want, sizeof(certs)) != 0)
+        testing_t_fatalf_v(t, "Certificates were mutated by BuildNameToCertificate");
+    arena_free(&ar);
+}
+
+enum {
+    SC_RSA2048,
+    SC_ECDSA_P256,
+    SC_ED25519,
+    SC_MLDSA44,
+    SC_MLDSA65,
+    SC_MLDSA87,
+    SC_PKCS1, /* pkcs1Cert */
+};
+
+/* The configs of the cases, SC_CONFIG_NONE for a nil one. */
+enum {
+    SC_CONFIG_NONE = -1,
+    SC_CONFIG_RSA_TLS12, /* RSA_WITH_AES_128_GCM_SHA256, MaxVersion 1.2 */
+    SC_CONFIG_RSA,       /* RSA_WITH_AES_128_GCM_SHA256 */
+    SC_CONFIG_TLS10,     /* MinVersion 1.0 */
+};
+
+/* A case of TestClientHelloInfo_SupportsCertificate. A count of 0 is a nil
+ * slice, except for curves, where -1 is the nil one and 0 the empty one. */
+typedef struct SupportsCertificateTest {
+    int c;
+    const char *server_name;
+    int ncipher_suites;
+    uint16_t cipher_suites[1];
+    int ncurves;
+    TlsCurveID curves[1];
+    int npoints;
+    uint8_t points[1];
+    int nschemes;
+    TlsSignatureScheme schemes[2];
+    int nversions;
+    uint16_t versions[2];
+    int config;
+    const char *want_err;
+} SupportsCertificateTest;
+
+#define SC_RSA_GCM TLS_TLS_RSA_WITH_AES_128_GCM_SHA256
+#define SC_ECDSA_GCM TLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256
+#define SC_UNCOMPRESSED TLS_POINT_FORMAT_UNCOMPRESSED
+
+static const SupportsCertificateTest supports_certificate_tests[] = {
+    {SC_RSA2048,
+     "test.golang.example",
+     0,
+     {0},
+     -1,
+     {0},
+     0,
+     {0},
+     1,
+     {TLS_PSS_WITH_SHA256},
+     1,
+     {TLS_VERSION_TLS13},
+     SC_CONFIG_NONE,
+     ""},
+    {SC_ECDSA_P256,
+     NULL,
+     0,
+     {0},
+     -1,
+     {0},
+     0,
+     {0},
+     2,
+     {TLS_PSS_WITH_SHA256, TLS_ECDSA_WITH_P256_AND_SHA256},
+     2,
+     {TLS_VERSION_TLS13, TLS_VERSION_TLS12},
+     SC_CONFIG_NONE,
+     ""},
+    {SC_RSA2048,
+     "example.com",
+     0,
+     {0},
+     -1,
+     {0},
+     0,
+     {0},
+     1,
+     {TLS_PSS_WITH_SHA256},
+     1,
+     {TLS_VERSION_TLS13},
+     SC_CONFIG_NONE,
+     "not valid for requested server name"},
+    {SC_ECDSA_P256,
+     NULL,
+     0,
+     {0},
+     -1,
+     {0},
+     0,
+     {0},
+     1,
+     {TLS_ECDSA_WITH_P384_AND_SHA384},
+     1,
+     {TLS_VERSION_TLS13},
+     SC_CONFIG_NONE,
+     "signature algorithms"},
+    {SC_PKCS1,
+     NULL,
+     0,
+     {0},
+     -1,
+     {0},
+     0,
+     {0},
+     2,
+     {TLS_PSS_WITH_SHA256, TLS_ECDSA_WITH_P256_AND_SHA256},
+     1,
+     {TLS_VERSION_TLS13},
+     SC_CONFIG_NONE,
+     "signature algorithms"},
+
+    {SC_RSA2048,
+     NULL,
+     1,
+     {SC_RSA_GCM},
+     -1,
+     {0},
+     0,
+     {0},
+     1,
+     {TLS_PKCS1_WITH_SHA1},
+     2,
+     {TLS_VERSION_TLS13, TLS_VERSION_TLS12},
+     SC_CONFIG_NONE,
+     "signature algorithms"},
+    /* Check that mutual version selection works. */
+    {SC_RSA2048,
+     NULL,
+     1,
+     {SC_RSA_GCM},
+     -1,
+     {0},
+     0,
+     {0},
+     1,
+     {TLS_PKCS1_WITH_SHA1},
+     2,
+     {TLS_VERSION_TLS13, TLS_VERSION_TLS12},
+     SC_CONFIG_RSA_TLS12,
+     ""},
+
+    {SC_ECDSA_P256,
+     NULL,
+     1,
+     {SC_ECDSA_GCM},
+     1,
+     {TLS_CURVE_P256},
+     1,
+     {SC_UNCOMPRESSED},
+     1,
+     {TLS_ECDSA_WITH_P256_AND_SHA256},
+     1,
+     {TLS_VERSION_TLS12},
+     SC_CONFIG_NONE,
+     ""},
+    /* TLS 1.2 does not restrict curves based on the SignatureScheme. */
+    {SC_ECDSA_P256,
+     NULL,
+     1,
+     {SC_ECDSA_GCM},
+     1,
+     {TLS_CURVE_P256},
+     1,
+     {SC_UNCOMPRESSED},
+     1,
+     {TLS_ECDSA_WITH_P384_AND_SHA384},
+     1,
+     {TLS_VERSION_TLS12},
+     SC_CONFIG_NONE,
+     ""},
+    /* TLS 1.2 comes with default signature schemes. */
+    {SC_ECDSA_P256,
+     NULL,
+     1,
+     {SC_ECDSA_GCM},
+     1,
+     {TLS_CURVE_P256},
+     1,
+     {SC_UNCOMPRESSED},
+     0,
+     {0},
+     1,
+     {TLS_VERSION_TLS12},
+     SC_CONFIG_NONE,
+     ""},
+    {SC_ECDSA_P256,
+     NULL,
+     1,
+     {SC_RSA_GCM},
+     1,
+     {TLS_CURVE_P256},
+     1,
+     {SC_UNCOMPRESSED},
+     1,
+     {TLS_ECDSA_WITH_P256_AND_SHA256},
+     1,
+     {TLS_VERSION_TLS12},
+     SC_CONFIG_NONE,
+     "cipher suite"},
+    {SC_ECDSA_P256,
+     NULL,
+     1,
+     {SC_ECDSA_GCM},
+     1,
+     {TLS_CURVE_P256},
+     1,
+     {SC_UNCOMPRESSED},
+     1,
+     {TLS_ECDSA_WITH_P256_AND_SHA256},
+     1,
+     {TLS_VERSION_TLS12},
+     SC_CONFIG_RSA,
+     "cipher suite"},
+    {SC_ECDSA_P256,
+     NULL,
+     1,
+     {SC_ECDSA_GCM},
+     1,
+     {TLS_CURVE_P384},
+     1,
+     {SC_UNCOMPRESSED},
+     1,
+     {TLS_ECDSA_WITH_P256_AND_SHA256},
+     1,
+     {TLS_VERSION_TLS12},
+     SC_CONFIG_NONE,
+     "certificate curve"},
+    {SC_ECDSA_P256,
+     NULL,
+     1,
+     {SC_ECDSA_GCM},
+     1,
+     {TLS_CURVE_P256},
+     1,
+     {1},
+     1,
+     {TLS_ECDSA_WITH_P256_AND_SHA256},
+     1,
+     {TLS_VERSION_TLS12},
+     SC_CONFIG_NONE,
+     "only incompatible point formats"},
+    {SC_ECDSA_P256,
+     NULL,
+     1,
+     {SC_ECDSA_GCM},
+     1,
+     {TLS_CURVE_P256},
+     1,
+     {SC_UNCOMPRESSED},
+     1,
+     {TLS_PSS_WITH_SHA256},
+     1,
+     {TLS_VERSION_TLS12},
+     SC_CONFIG_NONE,
+     "signature algorithms"},
+
+    {SC_ED25519,
+     NULL,
+     1,
+     {SC_ECDSA_GCM},
+     1,
+     {TLS_CURVE_P256},
+     1,
+     {SC_UNCOMPRESSED},
+     1,
+     {TLS_ED25519},
+     1,
+     {TLS_VERSION_TLS12},
+     SC_CONFIG_NONE,
+     ""},
+    {SC_ED25519,
+     NULL,
+     1,
+     {SC_ECDSA_GCM},
+     1,
+     {TLS_CURVE_P256},
+     1,
+     {SC_UNCOMPRESSED},
+     1,
+     {TLS_ED25519},
+     1,
+     {TLS_VERSION_TLS10},
+     SC_CONFIG_TLS10,
+     "doesn't support Ed25519"},
+    {SC_ED25519,
+     NULL,
+     1,
+     {SC_ECDSA_GCM},
+     0,
+     {0},
+     1,
+     {SC_UNCOMPRESSED},
+     1,
+     {TLS_ED25519},
+     1,
+     {TLS_VERSION_TLS12},
+     SC_CONFIG_NONE,
+     "doesn't support ECDHE"},
+
+    {SC_RSA2048,
+     NULL,
+     1,
+     {TLS_TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA},
+     1,
+     {TLS_CURVE_P256},
+     1,
+     {SC_UNCOMPRESSED},
+     0,
+     {0},
+     1,
+     {TLS_VERSION_TLS10},
+     SC_CONFIG_TLS10,
+     ""},
+    /* static RSA fallback */
+    {SC_RSA2048,
+     NULL,
+     1,
+     {SC_RSA_GCM},
+     -1,
+     {0},
+     0,
+     {0},
+     0,
+     {0},
+     1,
+     {TLS_VERSION_TLS12},
+     SC_CONFIG_RSA,
+     ""},
+
+    {SC_MLDSA44,
+     NULL,
+     0,
+     {0},
+     -1,
+     {0},
+     0,
+     {0},
+     1,
+     {TLS_MLDSA44},
+     1,
+     {TLS_VERSION_TLS13},
+     SC_CONFIG_NONE,
+     ""},
+    {SC_MLDSA65,
+     NULL,
+     0,
+     {0},
+     -1,
+     {0},
+     0,
+     {0},
+     1,
+     {TLS_MLDSA65},
+     1,
+     {TLS_VERSION_TLS13},
+     SC_CONFIG_NONE,
+     ""},
+    {SC_MLDSA87,
+     NULL,
+     0,
+     {0},
+     -1,
+     {0},
+     0,
+     {0},
+     1,
+     {TLS_MLDSA87},
+     1,
+     {TLS_VERSION_TLS13},
+     SC_CONFIG_NONE,
+     ""},
+    {SC_MLDSA44,
+     NULL,
+     1,
+     {SC_ECDSA_GCM},
+     1,
+     {TLS_CURVE_P256},
+     1,
+     {SC_UNCOMPRESSED},
+     0,
+     {0},
+     1,
+     {TLS_VERSION_TLS12},
+     SC_CONFIG_NONE,
+     "doesn't support ML-DSA"},
+};
+
+/* Not in Go: a Slice of the n elements at p, or a nil one when n is negative,
+ * or 0 when zero_is_nil. */
+static Slice sc_slice(const void *p, int n, bool zero_is_nil, const Type *elem) {
+    if (n < 0 || (n == 0 && zero_is_nil))
+        return slice_nil(elem);
+    return slice_from((void *)(uintptr_t)p, n, n, elem);
+}
+
+static void TestClientHelloInfo_SupportsCertificate(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+
+    static const TlsSignatureScheme pkcs1_algs[] = {TLS_PKCS1_WITH_SHA1,
+                                                    TLS_PKCS1_WITH_SHA256};
+    TlsCertificate certs[7];
+    certs[SC_RSA2048] = parse_test_cert(a, test_rsa2048_cert_pem, test_rsa2048_key_pem);
+    certs[SC_ECDSA_P256] =
+        parse_test_cert(a, test_ecdsap256_cert_pem, test_ecdsap256_key_pem);
+    certs[SC_ED25519] = parse_test_cert(a, test_ed25519_cert_pem, test_ed25519_key_pem);
+    certs[SC_MLDSA44] = parse_test_cert(a, test_mldsa44_cert_pem, test_mldsa44_key_pem);
+    certs[SC_MLDSA65] = parse_test_cert(a, test_mldsa65_cert_pem, test_mldsa65_key_pem);
+    certs[SC_MLDSA87] = parse_test_cert(a, test_mldsa87_cert_pem, test_mldsa87_key_pem);
+    certs[SC_PKCS1] = certs[SC_RSA2048];
+    certs[SC_PKCS1].supported_signature_algorithms =
+        slice_from((void *)(uintptr_t)pkcs1_algs, 2, 2, TYPE_UINT16);
+
+    static uint16_t rsa_suites[] = {TLS_TLS_RSA_WITH_AES_128_GCM_SHA256};
+    TlsConfig configs[3];
+    memset(configs, 0, sizeof(configs));
+    configs[SC_CONFIG_RSA_TLS12].cipher_suites =
+        slice_from(rsa_suites, 1, 1, TYPE_UINT16);
+    configs[SC_CONFIG_RSA_TLS12].max_version = TLS_VERSION_TLS12;
+    configs[SC_CONFIG_RSA].cipher_suites = slice_from(rsa_suites, 1, 1, TYPE_UINT16);
+    configs[SC_CONFIG_TLS10].min_version = TLS_VERSION_TLS10;
+
+    for (Int i = 0; i < (Int)(sizeof(supports_certificate_tests) /
+                              sizeof(supports_certificate_tests[0]));
+         i++) {
+        const SupportsCertificateTest *tt = &supports_certificate_tests[i];
+        TlsClientHelloInfo chi = {0};
+        chi.server_name =
+            tt->server_name != NULL ? str_from_cstr(tt->server_name) : BURROW_STR_EMPTY;
+        chi.cipher_suites =
+            sc_slice(tt->cipher_suites, tt->ncipher_suites, true, TYPE_UINT16);
+        chi.supported_curves = sc_slice(tt->curves, tt->ncurves, false, TYPE_UINT16);
+        chi.supported_points = sc_slice(tt->points, tt->npoints, true, TYPE_BYTE);
+        chi.signature_schemes = sc_slice(tt->schemes, tt->nschemes, true, TYPE_UINT16);
+        chi.supported_versions =
+            sc_slice(tt->versions, tt->nversions, true, TYPE_UINT16);
+        if (tt->config != SC_CONFIG_NONE)
+            chi.config = &configs[tt->config];
+
+        Error err = tls_client_hello_info_supports_certificate(&chi, &certs[tt->c]);
+        bool want_err = tt->want_err[0] != '\0';
+        if (!want_err && BURROW_FAILED(err))
+            testing_t_errorf_v(t, "%d: unexpected error: %v", i, err);
+        else if (want_err && !BURROW_FAILED(err))
+            testing_t_errorf_v(t, "%d: unexpected success", i);
+        else if (want_err &&
+                 !strings_contains(error_text(err), str_from_cstr(tt->want_err)))
+            testing_t_errorf_v(t, "%d: got error %q, expected %q", i, err,
+                               str_from_cstr(tt->want_err));
+    }
+    arena_free(&ar);
+}
+
+static void TestKeyLogWriterErr(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    OsFile *f = NULL; /* typed nil */
+    TlsConfig config = {0};
+    config.key_log_writer = os_file_as_io_writer(f);
+    Error err = burrow__tls_config_write_key_log(&config, BURROW_S("CLIENT_RANDOM"),
+                                                 slice_make(a, TYPE_BYTE, 32, 32),
+                                                 slice_make(a, TYPE_BYTE, 48, 48));
+    if (!BURROW_FAILED(err))
+        testing_t_fatal_v(t, "writeKeyLog: expected error, got nil");
+
+    if (!errors_is(err, os_err_invalid))
+        testing_t_errorf_v(t, "got %v, want %v", err, os_err_invalid);
+    if (!strings_contains(error_text(err), BURROW_S("KeyLogWriter")))
+        testing_t_errorf_v(t, "got %q, want %q", error_text(err),
+                           BURROW_S("KeyLogWriter"));
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestX509KeyPair)                                                                 \
     X(TestCipherSuites)                                                                \
     X(TestVersionName)                                                                 \
-    X(TestX509KeyPairPopulateCertificate)
+    X(TestX509KeyPairPopulateCertificate)                                              \
+    X(TestCloneFuncFields)                                                             \
+    X(TestCloneNonFuncFields)                                                          \
+    X(TestCloneNilConfig)                                                              \
+    X(TestBuildNameToCertificate_doesntModifyCertificates)                             \
+    X(TestClientHelloInfo_SupportsCertificate)                                         \
+    X(TestKeyLogWriterErr)
 
 TESTING_MAIN(TESTS)

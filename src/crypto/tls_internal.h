@@ -1065,6 +1065,16 @@ TlsTicketKey burrow__tls_config_ticket_key_from_bytes(const TlsConfig *c,
 TlsTicketKeys *burrow__tls_config_ticket_keys(TlsConfig *c,
                                               TlsConfig *config_for_client, Error *err);
 
+/* encryptTicket seals state with the first of ticket_keys, as AES-CTR with a
+ * random IV and an HMAC-SHA256 over both. The ticket is made from a. */
+Slice burrow__tls_config_encrypt_ticket(TlsConfig *c, Alloc *a, Slice state,
+                                        const TlsTicketKeys *ticket_keys, Error *err);
+
+/* decryptTicket: the state in encrypted, from a, or a nil slice when none of
+ * ticket_keys opens it or a is out of memory. */
+Slice burrow__tls_config_decrypt_ticket(TlsConfig *c, Alloc *a, Slice encrypted,
+                                        const TlsTicketKeys *ticket_keys);
+
 /* c.rand() and c.time(): the reader and clock c has, or crypto/rand and
  * time_now. */
 IoReader burrow__tls_config_rand(const TlsConfig *c);
@@ -1414,5 +1424,18 @@ Error burrow__tls_conn_set_read_traffic_secret(TlsConn *c, const TlsSuiteTLS13 *
 Error burrow__tls_conn_set_write_traffic_secret(TlsConn *c, const TlsSuiteTLS13 *suite,
                                                 TlsQuicEncryptionLevel level,
                                                 Slice secret);
+
+/* clientSessionCacheKey returns a key used to cache sessionTickets that could
+ * be used to resume previously negotiated TLS sessions with a server.
+ *
+ * Not in Go: a remote address is written out in a. */
+Str burrow__tls_conn_client_session_cache_key(TlsConn *c, Alloc *a);
+
+/* sessionState returns a partially filled-out SessionState with information
+ * from the current connection.
+ *
+ * Not in Go: the session is from a and has its own copies of everything,
+ * certificates parsed again from their bytes included, so it can outlive c. */
+TlsSessionState *burrow__tls_conn_session_state(TlsConn *c, Alloc *a, Error *err);
 
 #endif /* BURROW_SRC_CRYPTO_TLS_INTERNAL_H */

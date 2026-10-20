@@ -1,13 +1,13 @@
 /* Derived from Go's src/crypto/tls/handshake_messages_test.go.
  * Go source: go1.27.1.
  *
- * Go's tests table ends with a SessionState, which comes with ticket.go and is
- * not here yet. Go builds the random messages with testing/quick, which calls
- * each type's Generate method; here a table of functions does the same job,
+ * Go builds the random messages with testing/quick, which calls each type's
+ * Generate method; here a table of functions does the same job,
  * with the Generate bodies ported line for line. reflect.DeepEqual becomes an
  * equal function per message that tells a nil slice from an empty one the way
  * DeepEqual does, and the failure messages print the bytes only, since C has
- * no %#v.
+ * no %#v. A SessionState's certificates are compared by their bytes, which is
+ * what DeepEqual comes to for two parses of the same certificate.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -15,6 +15,7 @@
  * in the LICENSE file. */
 
 #include "check.h"
+#include "tls_test_gen.h"
 
 #include "../src/crypto/tls_internal.h"
 #include "burrow/burrow.h"
@@ -46,6 +47,7 @@ typedef union TestMsg {
     TlsNewSessionTicketMsgTLS13 new_session_ticket_tls13;
     TlsCertificateRequestMsgTLS13 certificate_request_tls13;
     TlsCertificateMsgTLS13 certificate_tls13;
+    TlsSessionState *session_state;
 } TestMsg;
 
 /* One entry of Go's tests table: the value the entry starts out as, the
@@ -263,6 +265,43 @@ static bool eq_certificate_tls13(const TestMsg *mx, const TestMsg *my) {
                          cy->signed_certificate_timestamps) &&
            cx->leaf == cy->leaf && x->ocsp_stapling == y->ocsp_stapling &&
            x->scts == y->scts;
+}
+
+static bool eq_certs(Slice x, Slice y) {
+    if (slice_is_nil(x) != slice_is_nil(y) || x.len != y.len)
+        return false;
+    for (Int i = 0; i < x.len; i++) {
+        if (!bytes_equal(BURROW_AT(X509Certificate *, x, i)->raw,
+                         BURROW_AT(X509Certificate *, y, i)->raw))
+            return false;
+    }
+    return true;
+}
+
+static bool eq_chains(Slice x, Slice y) {
+    if (slice_is_nil(x) != slice_is_nil(y) || x.len != y.len)
+        return false;
+    for (Int i = 0; i < x.len; i++) {
+        if (!eq_certs(BURROW_AT(Slice, x, i), BURROW_AT(Slice, y, i)))
+            return false;
+    }
+    return true;
+}
+
+static bool eq_session_state(const TestMsg *mx, const TestMsg *my) {
+    const TlsSessionState *x = mx->session_state, *y = my->session_state;
+    return eq_bytes_list(x->extra, y->extra) && x->early_data == y->early_data &&
+           x->version == y->version && x->is_client == y->is_client &&
+           x->cipher_suite == y->cipher_suite && x->created_at == y->created_at &&
+           eq_bytes(x->secret, y->secret) &&
+           x->ext_master_secret == y->ext_master_secret &&
+           eq_certs(x->peer_certificates, y->peer_certificates) &&
+           eq_bytes(x->ocsp_response, y->ocsp_response) &&
+           eq_bytes_list(x->scts, y->scts) &&
+           eq_chains(x->verified_chains, y->verified_chains) &&
+           str_eq(x->alpn_protocol, y->alpn_protocol) && x->use_by == y->use_by &&
+           x->age_add == y->age_add && eq_bytes(x->ticket, y->ticket) &&
+           x->curve_id == y->curve_id;
 }
 
 /* -------------------------------------------------------------- Generate */
@@ -580,6 +619,77 @@ static void generate_certificate_tls13(TestMsg *mm, MathRandRand *rand, Alloc *a
     }
 }
 
+/* sessionTestCerts. Go parses them once, in init. Here each Generate parses
+ * its own, from a. */
+static Slice session_test_certs(Alloc *a) {
+    Slice certs = make_n(a, TYPE_X509_CERTIFICATE_PTR, 2);
+    BURROW_AT(X509Certificate *, certs, 0) =
+        parse_test_cert(a, test_rsa2048_cert_pem, test_rsa2048_key_pem).leaf;
+    BURROW_AT(X509Certificate *, certs, 1) =
+        parse_test_cert(a, test_root_cert_pem, test_root_key_pem).leaf;
+    return certs;
+}
+
+static void generate_session_state(TestMsg *mm, MathRandRand *rand, Alloc *a) {
+    TlsSessionState *s = BURROW_NEW(a, TlsSessionState);
+    if (s == NULL)
+        panic_str(BURROW_S("generate_session_state: out of memory"));
+    s->extra = slice_nil(TYPE_BYTES);
+    s->scts = slice_nil(TYPE_BYTES);
+    s->verified_chains = slice_nil(TYPE_X509_CERTIFICATE_CHAIN);
+    mm->session_state = s;
+    bool is_tls13 = intn(rand, 10) > 5;
+    if (is_tls13)
+        s->version = TLS_VERSION_TLS13;
+    else
+        s->version = (uint16_t)intn(rand, TLS_VERSION_TLS13);
+    s->is_client = intn(rand, 10) > 5;
+    s->cipher_suite = (uint16_t)intn(rand, UINT16_MAX);
+    s->created_at = (uint64_t)math_rand_rand_int63(rand);
+    s->secret = random_bytes(intn(rand, 100) + 1, rand, a);
+    for (Int n = intn(rand, 3), i = 0; i < n; i++) {
+        Slice extra = random_bytes(intn(rand, 100), rand, a);
+        append_one(a, &s->extra, &extra, sizeof(extra));
+    }
+    if (intn(rand, 10) > 5)
+        s->early_data = true;
+    if (intn(rand, 10) > 5)
+        s->ext_master_secret = true;
+    if (s->is_client || intn(rand, 10) > 5) {
+        Slice session_certs = session_test_certs(a);
+        if (intn(rand, 10) > 5)
+            s->peer_certificates = session_certs;
+        else
+            s->peer_certificates = slice_sub(session_certs, 0, 1);
+    }
+    if (intn(rand, 10) > 5 && !slice_is_nil(s->peer_certificates))
+        s->ocsp_response = random_bytes(intn(rand, 100) + 1, rand, a);
+    if (intn(rand, 10) > 5 && !slice_is_nil(s->peer_certificates)) {
+        for (Int i = 0; i < intn(rand, 2) + 1; i++) {
+            Slice sct = random_bytes(intn(rand, 500) + 1, rand, a);
+            append_one(a, &s->scts, &sct, sizeof(sct));
+        }
+    }
+    if (s->peer_certificates.len > 0) {
+        for (Int i = 0; i < intn(rand, 3); i++) {
+            Slice chain = s->peer_certificates;
+            if (intn(rand, 10) <= 5)
+                chain = slice_sub(s->peer_certificates, 0, 1);
+            append_one(a, &s->verified_chains, &chain, sizeof(chain));
+        }
+    }
+    if (intn(rand, 10) > 5 && s->early_data)
+        s->alpn_protocol = random_string(intn(rand, 10), rand, a);
+    if (is_tls13) {
+        if (s->is_client) {
+            s->use_by = (uint64_t)math_rand_rand_int63(rand);
+            s->age_add = (uint32_t)(math_rand_rand_int63(rand) & UINT32_MAX);
+        }
+    } else {
+        s->curve_id = (TlsCurveID)(intn(rand, 30000) + 1);
+    }
+}
+
 /* ------------------------------------------------- the handshakeMessages */
 
 static void init_client_hello(TestMsg *m) {
@@ -642,6 +752,10 @@ static void init_certificate_request_tls13(TestMsg *m) {
 
 static void init_certificate_tls13(TestMsg *m) {
     m->certificate_tls13 = burrow__tls_certificate_msg_tls13_zero();
+}
+
+static void init_session_state(TestMsg *m) {
+    m->session_state = NULL;
 }
 
 static Slice marshal_client_hello(const TestMsg *m, Alloc *a, Error *err) {
@@ -781,6 +895,19 @@ static bool unmarshal_certificate_tls13(TestMsg *m, Alloc *a, Slice data) {
     return burrow__tls_certificate_msg_tls13_unmarshal(&m->certificate_tls13, a, data);
 }
 
+static Slice marshal_session_state(const TestMsg *m, Alloc *a, Error *err) {
+    return tls_session_state_bytes(m->session_state, a, err);
+}
+
+static bool unmarshal_session_state(TestMsg *m, Alloc *a, Slice data) {
+    Error err = BURROW_NO_ERROR;
+    TlsSessionState *ss = tls_parse_session_state(a, data, &err);
+    if (BURROW_FAILED(err))
+        return false;
+    m->session_state = ss;
+    return true;
+}
+
 #define MSG_KIND(name, f)                                                              \
     {name, init_##f, generate_##f, marshal_##f, unmarshal_##f, eq_##f}
 
@@ -801,6 +928,7 @@ static const MsgKind tests[] = {
     MSG_KIND("*tls.newSessionTicketMsgTLS13", new_session_ticket_tls13),
     MSG_KIND("*tls.certificateRequestMsgTLS13", certificate_request_tls13),
     MSG_KIND("*tls.certificateMsgTLS13", certificate_tls13),
+    MSG_KIND("*tls.SessionState", session_state),
 };
 
 static Slice must_marshal(TestingT *t, const MsgKind *k, const TestMsg *msg, Alloc *a) {

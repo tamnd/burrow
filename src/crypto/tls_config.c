@@ -962,9 +962,11 @@ static void tcfg_lru_free_key(TcfgLruSessionCache *c, TcfgLruEntry *e) {
     e->key = BURROW_STR_EMPTY;
 }
 
-/* Takes entry i out of the list and the map and puts it on the free list. */
-static void tcfg_lru_remove(TcfgLruSessionCache *c, Int i) {
+/* Takes entry i out of the list and the map and puts it on the free list. The
+ * session it held is what the caller releases, after unlocking. */
+static TlsClientSessionState *tcfg_lru_remove(TcfgLruSessionCache *c, Int i) {
     TcfgLruEntry *e = &c->entries[i];
+    TlsClientSessionState *old = e->state;
     tcfg_lru_unlink(c, i);
     map_del(c->m, &e->key);
     tcfg_lru_free_key(c, e);
@@ -972,24 +974,35 @@ static void tcfg_lru_remove(TcfgLruSessionCache *c, Int i) {
     e->next = c->free;
     c->free = i;
     c->len--;
+    return old;
 }
 
 /* Put adds the provided (sessionKey, cs) pair to the cache. If cs is nil, the
- * entry corresponding to sessionKey is removed from the cache instead. */
+ * entry corresponding to sessionKey is removed from the cache instead.
+ *
+ * The cache takes a reference to cs and releases the one to whatever cs puts
+ * out, once the mutex is unlocked, since that can free a session. */
 static void tcfg_lru_put(void *self, Str session_key, TlsClientSessionState *cs) {
     TcfgLruSessionCache *c = self;
+    TlsClientSessionState *old = NULL;
     sync_mutex_lock(&c->mu);
 
     Int *elem = map_get(c->m, &session_key);
     if (elem != NULL) {
         Int i = *elem;
         if (cs == NULL) {
-            tcfg_lru_remove(c, i);
+            old = tcfg_lru_remove(c, i);
         } else {
-            c->entries[i].state = cs;
+            old = c->entries[i].state;
+            c->entries[i].state = tls_client_session_state_retain(cs);
             tcfg_lru_unlink(c, i);
             tcfg_lru_push_front(c, i);
         }
+        sync_mutex_unlock(&c->mu);
+        tls_client_session_state_release(old);
+        return;
+    }
+    if (cs == NULL) {
         sync_mutex_unlock(&c->mu);
         return;
     }
@@ -997,34 +1010,37 @@ static void tcfg_lru_put(void *self, Str session_key, TlsClientSessionState *cs)
     /* Here the oldest entry gives up its place when the cache is full, as Go
      * reuses it. */
     if (c->len == c->capacity)
-        tcfg_lru_remove(c, c->back);
+        old = tcfg_lru_remove(c, c->back);
 
     Str key = str_clone(c->a, session_key);
     if (key.len != session_key.len) {
         /* Out of memory: the session is not cached, which a cache may do. */
         sync_mutex_unlock(&c->mu);
+        tls_client_session_state_release(old);
         return;
     }
     Int i = c->free;
     TcfgLruEntry *e = &c->entries[i];
     c->free = e->next;
     e->key = key;
-    e->state = cs;
     if (!map_set(c->m, &e->key, &i)) {
         tcfg_lru_free_key(c, e);
-        e->state = NULL;
         e->next = c->free;
         c->free = i;
         sync_mutex_unlock(&c->mu);
+        tls_client_session_state_release(old);
         return;
     }
+    e->state = tls_client_session_state_retain(cs);
     tcfg_lru_push_front(c, i);
     c->len++;
     sync_mutex_unlock(&c->mu);
+    tls_client_session_state_release(old);
 }
 
 /* Get returns the ClientSessionState value associated with a given key. It
- * returns (nil, false) if no value is found. */
+ * returns (nil, false) if no value is found. The caller gets a reference of
+ * its own. */
 static TlsClientSessionState *tcfg_lru_get(void *self, Str session_key, bool *ok) {
     TcfgLruSessionCache *c = self;
     sync_mutex_lock(&c->mu);
@@ -1033,7 +1049,8 @@ static TlsClientSessionState *tcfg_lru_get(void *self, Str session_key, bool *ok
         Int i = *elem;
         tcfg_lru_unlink(c, i);
         tcfg_lru_push_front(c, i);
-        TlsClientSessionState *state = c->entries[i].state;
+        TlsClientSessionState *state =
+            tls_client_session_state_retain(c->entries[i].state);
         sync_mutex_unlock(&c->mu);
         *ok = true;
         return state;
@@ -1078,4 +1095,16 @@ TlsClientSessionCache tls_new_lru_client_session_cache(Alloc *a, Int capacity) {
     out.vt = &tcfg_lru_session_cache_vt;
     out.data = c;
     return out;
+}
+
+void tls_lru_client_session_cache_free(TlsClientSessionCache cache) {
+    if (cache.vt != &tcfg_lru_session_cache_vt)
+        return;
+    TcfgLruSessionCache *c = cache.data;
+    while (c->front >= 0)
+        tls_client_session_state_release(tcfg_lru_remove(c, c->front));
+    map_free(c->m);
+    mem_free(c->a, c->entries, (size_t)c->capacity * sizeof(TcfgLruEntry),
+             _Alignof(TcfgLruEntry));
+    mem_free(c->a, c, sizeof(*c), _Alignof(TcfgLruSessionCache));
 }

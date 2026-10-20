@@ -22,6 +22,7 @@
 #include "burrow/bytes.h"
 #include "burrow/context.h"
 #include "burrow/core.h"
+#include "burrow/crypto.h"
 #include "burrow/crypto/cipher.h"
 #include "burrow/crypto/subtle.h"
 #include "burrow/crypto/x509.h"
@@ -1557,9 +1558,21 @@ static Error thc_handle_renegotiation(TlsConn *c) {
     return ret;
 }
 
-/* handleNewSessionTicket, from handshake_client_tls13.go. Not in Go yet: a
- * ticket that passes every check is dropped, as it is with no cache, because
- * the session it makes comes with ticket.go. */
+Str burrow__tls_conn_client_session_cache_key(TlsConn *c, Alloc *a) {
+    if (c->config->server_name.len > 0)
+        return c->config->server_name;
+    if (c->conn.vt != NULL) {
+        NetAddr addr = c->conn.vt->remote_addr(c->conn.data);
+        return addr.vt->string(addr.data, a);
+    }
+    return BURROW_STR_EMPTY;
+}
+
+/* handleNewSessionTicket, from handshake_client_tls13.go. The QUIC checks come
+ * with quic.go.
+ *
+ * Not in Go: with no memory for the session, the ticket is dropped, which a
+ * client is free to do, and the connection goes on. */
 static Error thc_handle_new_session_ticket(TlsConn *c,
                                            const TlsNewSessionTicketMsgTLS13 *msg) {
     if (!c->is_client) {
@@ -1589,6 +1602,48 @@ static Error thc_handle_new_session_ticket(TlsConn *c,
         burrow__tls_cipher_suite_tls13_by_id(c->cipher_suite);
     if (cipher_suite == NULL || c->resumption_secret.p == NULL)
         return burrow__tls_conn_send_alert(c, TLS_ALERT_INTERNAL_ERROR);
+
+    Arena tmp;
+    arena_init(&tmp, heap_allocator(), 0);
+    Alloc *ta = arena_allocator(&tmp);
+    Slice psk = burrow__tls13_expand_label(
+        ta, burrow__tls_suite13_hash_new(cipher_suite), c->resumption_secret,
+        BURROW_S("resumption"), msg->nonce, crypto_hash_size(cipher_suite->hash));
+    if (psk.p == NULL) {
+        arena_free(&tmp);
+        return BURROW_NO_ERROR;
+    }
+
+    /* Not in Go: the session outlives c in the cache, so it comes from the
+     * config's allocator, which any goroutine can use. */
+    Alloc *sa = c->config->a != NULL ? c->config->a : heap_allocator();
+    Error err = BURROW_NO_ERROR;
+    TlsSessionState *session = burrow__tls_conn_session_state(c, sa, &err);
+    if (session == NULL) {
+        arena_free(&tmp);
+        return BURROW_NO_ERROR;
+    }
+    session->secret = bytes_clone(tls_session_state_allocator(session), psk);
+    if (session->secret.p == NULL) {
+        tls_session_state_free(session);
+        arena_free(&tmp);
+        return BURROW_NO_ERROR;
+    }
+    session->use_by =
+        (uint64_t)time_unix(time_add(burrow__tls_config_time(c->config), lifetime));
+    session->age_add = msg->age_add;
+    /* RFC 9001, Section 4.6.1. Only for QUIC, which is not here yet. */
+    session->early_data = false;
+    TlsClientSessionState *cs = tls_new_resumption_state(msg->label, session, &err);
+    if (cs == NULL) {
+        arena_free(&tmp);
+        return BURROW_NO_ERROR;
+    }
+    Str cache_key = burrow__tls_conn_client_session_cache_key(c, ta);
+    if (cache_key.len > 0)
+        tls_client_session_cache_put(c->config->client_session_cache, cache_key, cs);
+    tls_client_session_state_release(cs);
+    arena_free(&tmp);
 
     return BURROW_NO_ERROR;
 }

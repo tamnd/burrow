@@ -282,6 +282,11 @@ bool burrow__tls_disabled_cipher_suite(uint16_t id);
 /* hasAESGCMHardwareSupport */
 bool burrow__tls_has_aes_gcm_hardware_support(void);
 
+/* Not in Go: hasAESGCMHardwareSupport is a variable there, which tests set. Here
+ * tests set this to 0 or 1 to say what it gives, and back to -1 to leave it to
+ * the CPU again. Only tests set it, while nothing else is running. */
+extern int burrow__tls_aes_gcm_hardware_override;
+
 /* isAESGCMPreferred returns whether we have hardware support for AES-GCM, and
  * the first known cipher in the peer's preference list, n IDs at ciphers, is
  * an AES-GCM cipher, implying the peer also has hardware support for it. */

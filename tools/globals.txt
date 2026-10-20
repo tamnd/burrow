@@ -33,6 +33,7 @@ category	fatal-handler	Where an unrecoverable runtime failure goes before the pr
 category	rand	The generator behind map iteration order and hash seeding.
 category	atomic-lock-table	The spin locks that stand in for 64 bit atomics on machines that do not have them.
 category	cpu-profile	The CPU profiler's log and the timer behind it. The timer is one per process, setitimer's ITIMER_PROF, so the log it feeds is one per process too, as Go's cpuprof is.
+category	heap-profile	The heap profile's rate, its buckets and its table of sampled allocations. Go keeps the same ones at package level in the runtime, and they are process wide because memory allocated on one thread may be freed on another.
 category	sema-table	The wait queues behind sync, keyed on the address of the counter being waited on, which is what makes them one per process by definition.
 category	futex	The wait queues that stand in for a futex on the platforms that have no such call, keyed on the address being waited on, which is what makes them one per process by definition.
 category	reclaim	The epoch and the handover lists behind lock free reading. One epoch per process is the whole idea, since a reader on any thread has to be able to hold any of them back.
@@ -68,6 +69,8 @@ global	src/go/types_predicates.c	gt_invalid_type_set	tables	The type set of a un
 global	src/go/types_type.c	gt_last_id	package-vars	Go's lastID, the counter that numbers type parameters. Only ever changed with an atomic add.
 global	src/debug/pprof.c	ppr_goroutine_profile	package-vars	Go's goroutineProfile, a built-in profile. Its count and write functions never change and its mutex is the only part written, by pprof_profile_count.
 global	src/debug/pprof.c	ppr_threadcreate_profile	package-vars	Go's threadcreateProfile, a built-in profile. Its count and write functions never change and its mutex is the only part written, by pprof_profile_count.
+global	src/debug/pprof.c	ppr_heap_profile	package-vars	Go's heapProfile, a built-in profile. Its count and write functions never change and its mutex is the only part written, by pprof_profile_count.
+global	src/debug/pprof.c	ppr_allocs_profile	package-vars	Go's allocsProfile, a built-in profile. Its count and write functions never change and its mutex is the only part written, by pprof_profile_count.
 global	src/debug/pprof.c	ppr_profiles	package-vars	Go's profiles.m, every profile NewProfile has made, by name. Made on first use and only read or written with ppr_profiles_mu held.
 global	src/debug/pprof.c	ppr_profiles_mu	package-vars	Go's profiles.mu, the lock for ppr_profiles. Zero is an unlocked mutex, so it needs no setting up.
 global	src/debug/pprof.c	ppr_cpu	package-vars	Go's cpu, whether a CPU profile is running and the channel its writer says it is done on. Only read or written with ppr_cpu.mu held, which pprof_stop_cpu_profile holds until the writer has said so.
@@ -87,6 +90,8 @@ global	src/mem/heap.c	heap_singleton	allocator	Immutable except through mem_set_
 global	src/mem/heap.c	heap_counting	allocator	Relaxed atomic. testing turns it on before a benchmark run and off after, and an allocation that races the switch is counted or not, which moves allocs/op by at most one.
 global	src/mem/heap.c	heap_count_allocs	allocator	Atomic adds, and only ever goes up. A benchmark reads it before and after and subtracts.
 global	src/mem/heap.c	heap_count_bytes	allocator	The same as heap_count_allocs.
+global	src/mem/heap.c	heap_plain_singleton	allocator	Never written. It is only ever read, by the heap profiler.
+global	src/mem/heap.c	heap_sampler	heap-profile	Thread local. It is how many bytes this thread may allocate before its next sample, and only its own thread touches it.
 global	src/mem/gc.c	gc_singleton	allocator	The same as heap_singleton. One collector in a process means one object.
 global	src/mem/gc.c	gc_started	allocator	Written once by the first gc_allocator call, which the header requires to come from the main thread before any others exist.
 global	src/mem/mem.c	mem_forget_fn	weak	Written once by the first weak_make, under weak's lock, before mem_forget_on is set with a release store. Only read after an acquire load of mem_forget_on sees it set.
@@ -120,6 +125,8 @@ global	src/runtime/cpuprof.c	cpuprof	cpu-profile	Go's cpuprof. on and log are on
 global	src/runtime/cpuprof.c	prof_signal_lock	cpu-profile	Go's prof.signalLock, a spin lock taken with a compare and swap by the SIGPROF handler and by whoever changes the rate. The rate changer blocks SIGPROF on its own thread first, so a handler never spins on a lock its own thread holds.
 global	src/runtime/cpuprof.c	prof_hz	cpu-profile	Go's prof.hz, the rate the profile runs at, or zero. Written with a release store while prof_signal_lock is held and read with relaxed loads by the handler, which checks it again under the lock before it writes.
 global	src/runtime/cpuprof.c	prof_handler_installed	cpu-profile	Whether the SIGPROF handler is in, set by a compare and swap the first time a rate is set and never cleared, except when the install fails.
+global	src/runtime/mprof.c	mprof	heap-profile	The buckets and the sampled pointers, read and written with its lock held, as Go's are with profInsertLock and profMemActiveLock. The filter is the exception: it is published once with a release store and its counters are read without the lock by every free, with relaxed loads, which is enough because a pointer is only freed after whoever allocated it has handed it over.
+global	src/runtime/mprof.c	mprof_rate	heap-profile	Go's MemProfileRate. Relaxed atomic loads and stores. Every allocation reads it to see whether its thread's next sample was drawn for another rate.
 global	src/runtime/sema.c	semtable	sema-table	251 roots, each with its own lock and each holding the waiters for every address that hashed to it. A waiter is on exactly one root and every read and write of a root happens under that root's lock, except the waiter count, which is atomic so that an uncontended release can skip the lock entirely.
 global	src/runtime/sched.c	sched	scheduler	The scheduler itself, which is one per process because a second one would be a second set of threads fighting the first over the same cores. Every field is either under sched.lock or an atomic, and the comment on each one says which.
 global	src/runtime/sched.c	allp	scheduler	The Ps, a fixed array rather than an allocation so that the scheduler has nothing underneath it that can fail. A P is owned by at most one M at a time and that ownership is what makes its ring safe to touch.

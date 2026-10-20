@@ -38,6 +38,26 @@ BURROW_STATIC(ret) Alloc *heap_allocator(void);
 void burrow__heap_count(bool on);
 void burrow__heap_counts(uint64_t *allocs, uint64_t *bytes);
 
+/* heap_allocator without the counting above and without the heap profile's
+ * sampling, for the profiler's own tables, which must not be sampled while
+ * they are being written. */
+BURROW_STATIC(ret) Alloc *burrow__heap_unprofiled(void);
+
+/* The heap profile's slow path, where an allocation that is due to be sampled
+ * goes. Internal to heap.c, and declared here only because it is not static,
+ * so that the profile's stacks can tell it by name. */
+void burrow__heap_sample(void *p, size_t size);
+
+/* The rest of the way down from mem_alloc to burrow__heap_sample: heap_allocator's
+ * alloc, alloc_zeroed and realloc, and the check every allocation makes for
+ * whether it is due to be sampled. Internal to heap.c and global for the same
+ * reason. */
+void burrow__heap_note(void *p, size_t size);
+BURROW_OWNS(ret) void *burrow__heap_alloc(void *self, size_t size, size_t align);
+BURROW_OWNS(ret) void *burrow__heap_alloc_zeroed(void *self, size_t size, size_t align);
+BURROW_OWNS(ret) void *burrow__heap_realloc(void *self, void *p, size_t old, size_t nsz,
+                                            size_t align);
+
 #ifdef __cplusplus
 }
 #endif

@@ -166,6 +166,7 @@
 #include "burrow/mime.h"
 #include "burrow/mime/multipart.h"
 #include "burrow/mime/quotedprintable.h"
+#include "burrow/mprof.h"
 #include "burrow/mstats.h"
 #include "burrow/net.h"
 #include "burrow/net/http.h"

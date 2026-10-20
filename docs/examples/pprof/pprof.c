@@ -69,7 +69,36 @@ static void profile_cpu(void *env) {
 }
 // doc: end
 
+// doc: heap
+/* Sixty-four buffers that stay in use, made at one place in the program. */
+static void *buffers[64];
+
+static void fill(void) {
+    for (int i = 0; i < 64; i++)
+        buffers[i] = mem_alloc(heap_allocator(), 4096, 1);
+}
+
+static bool profile_heap(Alloc *a) {
+    fill();
+    StringsBuilder b = STRINGS_BUILDER(a);
+    Error err = pprof_profile_write_to(pprof_lookup(BURROW_S("heap")),
+                                       strings_builder_as_io_writer(&b), 1);
+    if (BURROW_FAILED(err))
+        return false;
+    Str text = strings_builder_string(&b);
+    fmt_printf_v("%s\n", strings_cut(text, BURROW_S(": "), NULL, NULL));
+    fmt_printf_v("buffers in the profile: %t\n",
+                 strings_contains(text, BURROW_S("\n64: 262144 [64: 262144] @")));
+    for (int i = 0; i < 64; i++)
+        mem_free(heap_allocator(), buffers[i], 4096, 1);
+    return true;
+}
+// doc: end
+
 int main(void) {
+    // doc: rate
+    runtime_set_mem_profile_rate(1);
+    // doc: end
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
@@ -103,6 +132,8 @@ int main(void) {
     runtime_main(BURROW_FN(Func, look, a));
     // doc: end
     runtime_main(BURROW_FN(Func, profile_cpu, a));
+    if (!profile_heap(a))
+        return 1;
     arena_free(&ar);
     return 0;
 }
@@ -113,4 +144,6 @@ example.com/conns has 2
 example.com/conns profile: total 2
 goroutine profile: total 4
 cpu profile written: true
+heap profile
+buffers in the profile: true
 */

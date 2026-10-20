@@ -1,8 +1,8 @@
 /* runtime/pprof: profiling labels, and the Profile type with the count
  * profiles it writes.
  *
- * Derived from Go's src/runtime/pprof: label.go, runtime.go and pprof.go. Go
- * source: go1.27.1.
+ * Derived from Go's src/runtime/pprof: label.go, runtime.go, pprof.go,
+ * pprof_rusage.go and pprof_norusage.go. Go source: go1.27.1.
  *
  * Copyright 2016 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -24,6 +24,8 @@
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
+#include "burrow/mprof.h"
+#include "burrow/mstats.h"
 #include "burrow/panic.h"
 #include "burrow/proc.h"
 #include "burrow/profbuf.h"
@@ -33,6 +35,7 @@
 #include "burrow/slices.h"
 #include "burrow/strings.h"
 #include "burrow/sync.h"
+#include "burrow/syscall.h"
 #include "burrow/text/tabwriter.h"
 #include "burrow/time.h"
 #include "burrow/trace.h"
@@ -324,6 +327,9 @@ static Int ppr_count_goroutine(void);
 static Error ppr_write_goroutine(IoWriter w, Int debug);
 static Int ppr_count_thread_create(void);
 static Error ppr_write_thread_create(IoWriter w, Int debug);
+static Int ppr_count_heap(void);
+static Error ppr_write_heap(IoWriter w, Int debug);
+static Error ppr_write_alloc(IoWriter w, Int debug);
 
 static PprofProfile ppr_goroutine_profile = {
     .name = BURROW_S_INIT("goroutine"),
@@ -337,11 +343,24 @@ static PprofProfile ppr_threadcreate_profile = {
     .write = ppr_write_thread_create,
 };
 
+static PprofProfile ppr_heap_profile = {
+    .name = BURROW_S_INIT("heap"),
+    .count = ppr_count_heap,
+    .write = ppr_write_heap,
+};
+
+static PprofProfile ppr_allocs_profile = {
+    .name = BURROW_S_INIT("allocs"),
+    .count = ppr_count_heap, /* identical to heap profile */
+    .write = ppr_write_alloc,
+};
+
 static void ppr_lock_profiles(void) {
     sync_mutex_lock(&ppr_profiles_mu);
     if (ppr_profiles == NULL) {
         /* Initial built-in profiles. */
-        PprofProfile *builtin[] = {&ppr_goroutine_profile, &ppr_threadcreate_profile};
+        PprofProfile *builtin[] = {&ppr_goroutine_profile, &ppr_threadcreate_profile,
+                                   &ppr_heap_profile, &ppr_allocs_profile};
         Map *m = map_make(heap_allocator(), TYPE_STRING, TYPE_UNSAFE_POINTER, 0);
         bool ok = m != NULL;
         for (size_t i = 0; ok && i < sizeof builtin / sizeof builtin[0]; i++) {
@@ -520,8 +539,7 @@ static void ppr_print_stack_record(IoWriter w, Slice stk, bool all_frames) {
             show = true;
             fmt_fprintf_v(w, "#\t%#x\n", frame.pc);
         } else if (!str_eq(name, S_("runtime.goexit")) &&
-                   (show || !(strings_has_prefix(name, S_("runtime.")) ||
-                              strings_has_prefix(name, S_("internal/runtime/"))))) {
+                   (show || !burrow__ppr_alloc_frame(name))) {
             /* Hide runtime.goexit and any runtime functions at the beginning.
              * This is useful mainly for allocation traces. */
             show = true;
@@ -796,6 +814,234 @@ static void ppr_fetch_thread_create(PprRecords *rs) {
 static Error ppr_write_thread_create(IoWriter w, Int debug) {
     return ppr_write_runtime_profile(w, debug, S_("threadcreate"),
                                      ppr_fetch_thread_create);
+}
+
+/* countHeap returns the number of records in the heap profile. */
+static Int ppr_count_heap(void) {
+    return runtime_mem_profile(NULL, 0, true, NULL);
+}
+
+/* The records pprof_memProfileInternal copies out, into room made for them
+ * before, as the copying is done under the profile's lock. */
+typedef struct PprMemRecords {
+    burrow__MemProfileRecord *r;
+    Int n;
+} PprMemRecords;
+
+static void ppr_collect_mem(void *env, const burrow__MemProfileRecord *r) {
+    PprMemRecords *rs = (PprMemRecords *)env;
+    rs->r[rs->n++] = *r;
+}
+
+static int64_t ppr_in_use_bytes(const burrow__MemProfileRecord *r) {
+    return (r->alloc_objects - r->free_objects) * r->object_size;
+}
+
+static int ppr_compare_in_use(void *env, const void *a, const void *b) {
+    (void)env;
+    int64_t x = ppr_in_use_bytes(*(const burrow__MemProfileRecord *const *)a);
+    int64_t y = ppr_in_use_bytes(*(const burrow__MemProfileRecord *const *)b);
+    return x < y ? -1 : x > y ? 1 : 0;
+}
+
+/* addMaxRSS. Go has it on unix and Windows. Here it is on the systems whose
+ * getrusage burrow's syscall has. */
+static void ppr_add_max_rss(IoWriter w) {
+#if defined(BURROW_OS_LINUX) || defined(BURROW_OS_FREEBSD) ||                          \
+    defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
+#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
+    Uintptr rss_to_bytes = 1;
+#else
+    Uintptr rss_to_bytes = 1024;
+#endif
+    /* Zeroed first because the call goes straight to the kernel, so
+     * MemorySanitizer never sees it fill the struct in. */
+    SyscallRusage rusage = {0};
+    Error err = syscall_getrusage(SYSCALL_RUSAGE_SELF, &rusage);
+    if (BURROW_OK(err))
+        fmt_fprintf_v(w, "# MaxRSS = %d\n", (Uintptr)rusage.maxrss * rss_to_bytes);
+#else
+    (void)w;
+#endif
+}
+
+/* Go prints an array with %d as its elements in brackets. */
+static void ppr_print_pauses(IoWriter w, const char *name,
+                             const RuntimeMemStatsPauses *p) {
+    fmt_fprintf_v(w, "# %s = [", name);
+    for (size_t i = 0; i < sizeof p->v / sizeof p->v[0]; i++)
+        fmt_fprintf_v(w, i == 0 ? "%d" : " %d", p->v[i]);
+    fmt_fprintf_v(w, "]\n");
+}
+
+/* The debug != 0 half of writeHeapInternal. */
+static Error ppr_write_heap_text(Alloc *a, IoWriter w,
+                                 const burrow__MemProfileRecord *p, Int n,
+                                 const RuntimeMemStats *s) {
+    size_t cap = (size_t)(n > 0 ? n : 1);
+    const burrow__MemProfileRecord **order =
+        (const burrow__MemProfileRecord **)mem_alloc_array(
+            a, cap, sizeof(burrow__MemProfileRecord *),
+            _Alignof(burrow__MemProfileRecord *));
+    if (order == NULL)
+        ppr_out_of_memory();
+    for (Int i = 0; i < n; i++)
+        order[i] = &p[i];
+    slices_sort_func(slice_from(order, n, n, TYPE_UNSAFE_POINTER),
+                     BURROW_FN(SlicesCmpFunc, ppr_compare_in_use, NULL));
+
+    TabwriterWriter *tw = tabwriter_new_writer(a, w, 1, 8, 1, '\t', 0);
+    if (tw == NULL)
+        ppr_out_of_memory();
+    w = tabwriter_writer_as_io_writer(tw);
+
+    int64_t alloc_bytes = 0, alloc_objects = 0, free_bytes = 0, free_objects = 0;
+    for (Int i = 0; i < n; i++) {
+        const burrow__MemProfileRecord *r = &p[i];
+        alloc_bytes += r->alloc_objects * r->object_size;
+        alloc_objects += r->alloc_objects;
+        free_bytes += r->free_objects * r->object_size;
+        free_objects += r->free_objects;
+    }
+
+    /* Technically the rate is MemProfileRate not 2*MemProfileRate, but
+     * early versions of the C++ heap profiler reported 2*MemProfileRate,
+     * so that's what pprof has come to expect. */
+    Int rate = 2 * runtime_mem_profile_rate();
+
+    /* pprof reads a profile with alloc == inuse as being a "2-column"
+     * profile (objects and bytes, not distinguishing alloc from inuse),
+     * but then such a profile can't be merged using pprof *.prof with
+     * other 4-column profiles where alloc != inuse. The easiest way to
+     * avoid this bug is to adjust allocBytes so it's never == inuseBytes.
+     * pprof doesn't use these header values anymore except for checking
+     * equality. */
+    int64_t in_use_bytes = alloc_bytes - free_bytes;
+    if (in_use_bytes == alloc_bytes)
+        alloc_bytes++;
+
+    fmt_fprintf_v(w, "heap profile: %d: %d [%d: %d] @ heap/%d\n",
+                  alloc_objects - free_objects, in_use_bytes, alloc_objects,
+                  alloc_bytes, rate);
+
+    for (Int i = 0; i < n; i++) {
+        const burrow__MemProfileRecord *r = order[i];
+        fmt_fprintf_v(w, "%d: %d [%d: %d] @", r->alloc_objects - r->free_objects,
+                      ppr_in_use_bytes(r), r->alloc_objects,
+                      r->alloc_objects * r->object_size);
+        for (Int j = 0; j < r->nstack; j++)
+            fmt_fprintf_v(w, " %#x", r->stack[j]);
+        fmt_fprintf_v(w, "\n");
+        ppr_print_stack_record(
+            w,
+            slice_from((void *)(uintptr_t)r->stack, r->nstack, r->nstack, TYPE_UINTPTR),
+            false);
+    }
+
+    /* Print memstats information too. Pprof will ignore, but useful for
+     * people */
+    fmt_fprintf_v(w, "\n# runtime.MemStats\n");
+    fmt_fprintf_v(w, "# Alloc = %d\n", s->alloc);
+    fmt_fprintf_v(w, "# TotalAlloc = %d\n", s->total_alloc);
+    fmt_fprintf_v(w, "# Sys = %d\n", s->sys);
+    fmt_fprintf_v(w, "# Lookups = %d\n", s->lookups);
+    fmt_fprintf_v(w, "# Mallocs = %d\n", s->mallocs);
+    fmt_fprintf_v(w, "# Frees = %d\n", s->frees);
+
+    fmt_fprintf_v(w, "# HeapAlloc = %d\n", s->heap_alloc);
+    fmt_fprintf_v(w, "# HeapSys = %d\n", s->heap_sys);
+    fmt_fprintf_v(w, "# HeapIdle = %d\n", s->heap_idle);
+    fmt_fprintf_v(w, "# HeapInuse = %d\n", s->heap_inuse);
+    fmt_fprintf_v(w, "# HeapReleased = %d\n", s->heap_released);
+    fmt_fprintf_v(w, "# HeapObjects = %d\n", s->heap_objects);
+
+    fmt_fprintf_v(w, "# Stack = %d / %d\n", s->stack_inuse, s->stack_sys);
+    fmt_fprintf_v(w, "# MSpan = %d / %d\n", s->m_span_inuse, s->m_span_sys);
+    fmt_fprintf_v(w, "# MCache = %d / %d\n", s->m_cache_inuse, s->m_cache_sys);
+    fmt_fprintf_v(w, "# BuckHashSys = %d\n", s->buck_hash_sys);
+    fmt_fprintf_v(w, "# GCSys = %d\n", s->gc_sys);
+    fmt_fprintf_v(w, "# OtherSys = %d\n", s->other_sys);
+
+    fmt_fprintf_v(w, "# NextGC = %d\n", s->next_gc);
+    fmt_fprintf_v(w, "# LastGC = %d\n", s->last_gc);
+    ppr_print_pauses(w, "PauseNs", &s->pause_ns);
+    ppr_print_pauses(w, "PauseEnd", &s->pause_end);
+    fmt_fprintf_v(w, "# NumGC = %d\n", s->num_gc);
+    fmt_fprintf_v(w, "# NumForcedGC = %d\n", s->num_forced_gc);
+    fmt_fprintf_v(w, "# GCCPUFraction = %v\n", s->gccpu_fraction);
+    fmt_fprintf_v(w, "# DebugGC = %v\n", s->debug_gc);
+
+    /* Also flush out MaxRSS on supported platforms. */
+    ppr_add_max_rss(w);
+
+    Error err = tabwriter_writer_flush(tw);
+    tabwriter_writer_free(tw);
+    return err;
+}
+
+static Error ppr_write_heap_internal(IoWriter w, Int debug, Str default_sample_type) {
+    RuntimeMemStats mem_stats;
+    if (debug != 0) {
+        /* Read mem stats first, so that our other allocations do not appear in
+         * the statistics. */
+        runtime_read_mem_stats(&mem_stats);
+    }
+
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    BURROW_SCOPE {
+        BURROW_DEFER(ppr_free_arena, &ar);
+
+        /* Find out how many records there are (the call
+         * pprof_memProfileInternal(nil, true) below), allocate that many
+         * records, and get the data. There's a race, more records might be
+         * added between the two calls, so allocate a few extra records for
+         * safety and also try again if we're very unlucky. The loop should
+         * only execute one iteration in the common case. */
+        PprMemRecords rs = {NULL, 0};
+        bool ok;
+        Int n = burrow__mem_profile(0, true, ppr_collect_mem, &rs, &ok);
+        for (;;) {
+            /* Allocate room for a slightly bigger profile, in case a few more
+             * entries have been added since the call to MemProfile. */
+            rs.r = (burrow__MemProfileRecord *)mem_alloc_array(
+                a, (size_t)(n + 50), sizeof(burrow__MemProfileRecord),
+                _Alignof(burrow__MemProfileRecord));
+            if (rs.r == NULL)
+                ppr_out_of_memory();
+            rs.n = 0;
+            n = burrow__mem_profile(n + 50, true, ppr_collect_mem, &rs, &ok);
+            if (ok)
+                break;
+            /* Profile grew; try again. */
+        }
+        const burrow__MemProfileRecord *p = rs.r;
+
+        if (debug == 0)
+            err = burrow__ppr_write_heap_proto(w, p, n, runtime_mem_profile_rate(),
+                                               default_sample_type);
+        else
+            err = ppr_write_heap_text(a, w, p, n, &mem_stats);
+    }
+    BURROW_SCOPE_END;
+    return err;
+}
+
+Error pprof_write_heap_profile(IoWriter w) {
+    return ppr_write_heap(w, 0);
+}
+
+/* writeHeap writes the current runtime heap profile to w. */
+static Error ppr_write_heap(IoWriter w, Int debug) {
+    return ppr_write_heap_internal(w, debug, S_(""));
+}
+
+/* writeAlloc writes the current runtime heap profile to w with the total
+ * allocation space as the default sample type. */
+static Error ppr_write_alloc(IoWriter w, Int debug) {
+    return ppr_write_heap_internal(w, debug, S_("alloc_space"));
 }
 
 /* countGoroutine returns the number of goroutines. */

@@ -1355,6 +1355,106 @@ BURROW_OWNS(ret) TlsConn *tls_server(Alloc *a, NetConn conn, TlsConfig *config);
  * NULL when a is out of memory. */
 BURROW_OWNS(ret) TlsConn *tls_client(Alloc *a, NetConn conn, TlsConfig *config);
 
+/* NewListener creates a Listener which accepts connections from an inner
+ * Listener and wraps each connection with Server. The configuration config
+ * must be non-nil and must include at least one certificate or else set
+ * GetCertificate.
+ *
+ * Not in Go: the listener and the Conns it accepts come from a, which has to
+ * be one any goroutine can use at once. Each Conn it accepts owns the
+ * connection under it, and tls_conn_free(tls_conn_from_net_conn(c)) gives back
+ * both; net_conn_free only closes it. config has to outlive the listener and
+ * its Conns, and inner the listener. tls_listener_free gives the listener
+ * back. A nil listener when a is out of memory. */
+BURROW_OWNS(ret) NetListener tls_new_listener(Alloc *a, NetListener inner,
+                                              TlsConfig *config);
+
+/* Listen creates a TLS listener accepting connections on the given network
+ * address using net.Listen. The configuration config must be non-nil and must
+ * include at least one certificate or else set GetCertificate.
+ *
+ * Not in Go: as tls_new_listener, with the listener net_listen makes in a,
+ * which tls_listener_free gives back as well. */
+BURROW_OWNS(ret) NetListener tls_listen(Alloc *a, Str network, Str laddr,
+                                        TlsConfig *config, Error *err);
+
+/* Not in Go: closes l, a listener from tls_new_listener or tls_listen, and
+ * gives it back, with the listener under it when tls_listen made that one.
+ * The Conns it accepted are not touched. The nil listener does nothing. */
+void tls_listener_free(NetListener l);
+
+/* DialWithDialer connects to the given network address using dialer.Dial and
+ * then initiates a TLS handshake, returning the resulting TLS connection. Any
+ * timeout or deadline given in the dialer apply to connection and TLS
+ * handshake as a whole.
+ *
+ * DialWithDialer interprets a nil configuration as equivalent to the zero
+ * configuration; see the documentation of Config for the defaults.
+ *
+ * DialWithDialer uses context.Background internally; to specify the context,
+ * use Dialer.DialContext with NetDialer set to the desired dialer.
+ *
+ * Not in Go: a NULL dialer is the zero net.Dialer. The Conn and the connection
+ * under it come from a, which has to be one any goroutine can use at once.
+ * The Conn owns that connection and, when config has no ServerName, the copy
+ * of config the dial makes to set it, and tls_conn_free gives back all of
+ * them. config has to outlive the Conn. Call it from a goroutine, as the
+ * context it runs the handshake under needs one. */
+BURROW_OWNS(ret) TlsConn *tls_dial_with_dialer(Alloc *a, const NetDialer *dialer,
+                                               Str network, Str addr, TlsConfig *config,
+                                               Error *err);
+
+/* Dial connects to the given network address using net.Dial and then
+ * initiates a TLS handshake, returning the resulting TLS connection. Dial
+ * interprets a nil configuration as equivalent to the zero configuration; see
+ * the documentation of Config for the defaults.
+ *
+ * Not in Go: as tls_dial_with_dialer with the zero net.Dialer. */
+BURROW_OWNS(ret) TlsConn *tls_dial(Alloc *a, Str network, Str addr, TlsConfig *config,
+                                   Error *err);
+
+/* Dialer dials TLS connections given a configuration and a Dialer for the
+ * underlying connection. */
+typedef struct TlsDialer {
+    /* NetDialer is the optional dialer to use for the TLS connections'
+     * underlying TCP connections. A nil NetDialer is equivalent to the
+     * net.Dialer zero value. */
+    NetDialer *net_dialer;
+
+    /* Config is the TLS configuration to use for new connections. A nil
+     * configuration is equivalent to the zero configuration; see the
+     * documentation of Config for the defaults. */
+    TlsConfig *config;
+} TlsDialer;
+
+/* Dial connects to the given network address and initiates a TLS handshake,
+ * returning the resulting TLS connection.
+ *
+ * The returned Conn, if any, will always be of type *Conn.
+ *
+ * Dial uses context.Background internally; to specify the context, use
+ * Dialer.DialContext.
+ *
+ * Not in Go: a NULL d is the zero Dialer. What it gives is a Conn from
+ * tls_dial_with_dialer as a net.Conn, and tls_conn_from_net_conn gives the
+ * Conn back to free. */
+BURROW_OWNS(ret) NetConn tls_dialer_dial(const TlsDialer *d, Alloc *a, Str network,
+                                         Str addr, Error *err);
+
+/* DialContext connects to the given network address and initiates a TLS
+ * handshake, returning the resulting TLS connection.
+ *
+ * The provided Context must be non-nil. If the context expires before the
+ * connection is complete, an error is returned. Once successfully connected,
+ * any expiration of the context will not affect the connection.
+ *
+ * The returned Conn, if any, will always be of type *Conn.
+ *
+ * Not in Go: as tls_dialer_dial. */
+BURROW_OWNS(ret) NetConn tls_dialer_dial_context(const TlsDialer *d, Alloc *a,
+                                                 Context ctx, Str network, Str addr,
+                                                 Error *err);
+
 /* LocalAddr returns the local network address. */
 NetAddr tls_conn_local_addr(TlsConn *c);
 
@@ -1454,10 +1554,15 @@ BURROW_BORROWS(ret, c) Error tls_conn_verify_hostname(TlsConn *c, Str host);
  * one. */
 NetConn tls_conn_as_net_conn(TlsConn *c);
 
+/* Not in Go: the Conn in c when c is one tls_conn_as_net_conn made, which is
+ * what Go's c.(*tls.Conn) gives, and NULL for any other connection. */
+BURROW_BORROWS(ret) TlsConn *tls_conn_from_net_conn(NetConn c);
+
 /* Not in Go: gives c back to the allocator it came from, with everything it
  * kept. It does not close or free the connection underneath, which is the
- * caller's. Close c first, and free it once no goroutine is in a call on it
- * or will make one. NULL does nothing. */
+ * caller's, except for a Conn from a listener or a dial, which owns it and
+ * gives it back with net_conn_free. Close c first, and free it once no
+ * goroutine is in a call on it or will make one. NULL does nothing. */
 void tls_conn_free(TlsConn *c);
 
 #ifdef __cplusplus

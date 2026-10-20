@@ -1,5 +1,5 @@
-/* crypto/tls: tls.go, Server, Client and the loading of a certificate and its
- * key from PEM.
+/* crypto/tls: tls.go, Server, Client, the listener, the dials and the loading
+ * of a certificate and its key from PEM.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -8,6 +8,7 @@
 
 #include "burrow/crypto/tls.h"
 
+#include "burrow/context.h"
 #include "burrow/core.h"
 #include "burrow/crypto.h"
 #include "burrow/crypto/ecdsa.h"
@@ -18,14 +19,20 @@
 #include "burrow/encoding/pem.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
+#include "burrow/mem.h"
+#include "burrow/mem/heap.h"
+#include "burrow/net.h"
 #include "burrow/os.h"
 #include "burrow/slice.h"
 #include "burrow/strings.h"
+#include "burrow/time.h"
 #include "burrow/type.h"
 
 #include "tls_internal.h"
 
 #include <stdbool.h>
+#include <stdint.h>
+#include <string.h>
 
 TlsConn *tls_server(Alloc *a, NetConn conn, TlsConfig *config) {
     return burrow__tls_conn_new(a, conn, config, TLS_ROLE_SERVER,
@@ -35,6 +42,284 @@ TlsConn *tls_server(Alloc *a, NetConn conn, TlsConfig *config) {
 TlsConn *tls_client(Alloc *a, NetConn conn, TlsConfig *config) {
     return burrow__tls_conn_new(a, conn, config, TLS_ROLE_CLIENT,
                                 burrow__tls_client_handshake);
+}
+
+/* A listener implements a network listener (net.Listener) for TLS
+ * connections. */
+typedef struct TlsListener {
+    NetListener listener;
+    TlsConfig *config;
+
+    /* Not in Go: where the listener and its Conns come from, and whether
+     * tls_listener_free gives back the listener under it too. */
+    Alloc *a;
+    bool owns_inner;
+} TlsListener;
+
+/* Accept waits for and returns the next incoming TLS connection. The returned
+ * connection is of type *Conn. */
+static NetConn tls_listener_accept(void *self, Error *err) {
+    TlsListener *l = (TlsListener *)self;
+    Error e = BURROW_NO_ERROR;
+    NetConn c = l->listener.vt->accept(l->listener.data, &e);
+    if (BURROW_FAILED(e)) {
+        BURROW_OUT(err, e);
+        return (NetConn){NULL, NULL};
+    }
+    TlsConn *tc = tls_server(l->a, c, l->config);
+    if (tc == NULL) {
+        net_conn_free(c);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return (NetConn){NULL, NULL};
+    }
+    tc->owns_conn = true;
+    return tls_conn_as_net_conn(tc);
+}
+
+static Error tls_listener_close(void *self) {
+    TlsListener *l = (TlsListener *)self;
+    return l->listener.vt->closer.close(l->listener.data);
+}
+
+static NetAddr tls_listener_addr(void *self) {
+    TlsListener *l = (TlsListener *)self;
+    return l->listener.vt->addr(l->listener.data);
+}
+
+static const Type tls_listener_desc = {
+    BURROW_S_INIT("listener"),
+    BURROW_S_INIT("crypto/tls"),
+    KIND_STRUCT,
+    (uint32_t)sizeof(TlsListener),
+    (uint16_t)_Alignof(TlsListener),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0x746c6c6eU, /* "tlln" */
+    NULL,
+};
+
+static const NetListenerVT tls_listener_vt = {
+    {&tls_listener_desc, tls_listener_close},
+    tls_listener_accept,
+    tls_listener_addr,
+};
+
+NetListener tls_new_listener(Alloc *a, NetListener inner, TlsConfig *config) {
+    TlsListener *l = BURROW_NEW(a, TlsListener);
+    if (l == NULL)
+        return (NetListener){NULL, NULL};
+    l->listener = inner;
+    l->config = config;
+    l->a = a;
+    return (NetListener){&tls_listener_vt, l};
+}
+
+BURROW_SENTINEL_ERROR(tls_err_listen_config,
+                      "tls: neither Certificates, GetCertificate, "
+                      "nor GetConfigForClient set in Config");
+
+NetListener tls_listen(Alloc *a, Str network, Str laddr, TlsConfig *config,
+                       Error *err) {
+    /* If this condition changes, consider updating http.Server.ServeTLS too. */
+    if (config == NULL ||
+        (config->certificates.len == 0 && config->get_certificate.f == NULL &&
+         config->get_config_for_client.f == NULL)) {
+        BURROW_OUT(err, tls_err_listen_config);
+        return (NetListener){NULL, NULL};
+    }
+    Error e = BURROW_NO_ERROR;
+    NetListener l = net_listen(a, network, laddr, &e);
+    if (BURROW_FAILED(e)) {
+        BURROW_OUT(err, e);
+        return (NetListener){NULL, NULL};
+    }
+    NetListener tl = tls_new_listener(a, l, config);
+    if (tl.vt == NULL) {
+        net_listener_free(l);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return tl;
+    }
+    ((TlsListener *)tl.data)->owns_inner = true;
+    return tl;
+}
+
+void tls_listener_free(NetListener l) {
+    if (l.vt == NULL)
+        return;
+    TlsListener *tl = (TlsListener *)l.data;
+    if (tl->owns_inner)
+        net_listener_free(tl->listener);
+    else
+        (void)tl->listener.vt->closer.close(tl->listener.data);
+    mem_free(tl->a, tl, sizeof *tl, _Alignof(TlsListener));
+}
+
+/* Not in Go: now + d on the monotonic clock, without going past either end. */
+static int64_t tls_mono_add(int64_t now, int64_t d) {
+    if (d > 0 && now > INT64_MAX - d)
+        return INT64_MAX;
+    if (d < 0 && now < INT64_MIN - d)
+        return INT64_MIN;
+    return now + d;
+}
+
+/* Not in Go: the contexts dial puts over the caller's, and their cancels,
+ * which Go defers. */
+typedef struct TlsDialCtx {
+    Context timeout_ctx;
+    Context deadline_ctx;
+    ContextCancelFunc cancel1;
+    ContextCancelFunc cancel2;
+} TlsDialCtx;
+
+static void tls_dial_ctx_end(TlsDialCtx *dc) {
+    if (!BURROW_CONTEXT_IS_NIL(dc->deadline_ctx)) {
+        BURROW_CALLF0(dc->cancel2);
+        context_release(dc->deadline_ctx);
+    }
+    if (!BURROW_CONTEXT_IS_NIL(dc->timeout_ctx)) {
+        BURROW_CALLF0(dc->cancel1);
+        context_release(dc->timeout_ctx);
+    }
+}
+
+/* Not in Go: gives back the copy of the config dial made and the name in it,
+ * when it doesn't get as far as a Conn to hand them to. */
+static void tls_dial_drop(Alloc *a, TlsConfig *owned, Str owned_name) {
+    if (owned != NULL) {
+        tls_config_release(owned);
+        mem_free(a, owned, sizeof *owned, _Alignof(TlsConfig));
+    }
+    if (owned_name.len > 0)
+        mem_free(a, (void *)(uintptr_t)owned_name.p, (size_t)owned_name.len, 1);
+}
+
+static TlsConn *tls_dial_ctx(Alloc *a, Context ctx, const NetDialer *net_dialer,
+                             Str network, Str addr, TlsConfig *config, Error *err) {
+    TlsDialCtx dc;
+    memset(&dc, 0, sizeof dc);
+    if (net_dialer->timeout != 0) {
+        dc.timeout_ctx = context_with_timeout(heap_allocator(), ctx,
+                                              net_dialer->timeout, &dc.cancel1);
+        if (BURROW_CONTEXT_IS_NIL(dc.timeout_ctx)) {
+            BURROW_OUT(err, burrow_err_out_of_memory);
+            return NULL;
+        }
+        ctx = dc.timeout_ctx;
+    }
+
+    if (!time_is_zero(net_dialer->deadline)) {
+        int64_t when =
+            tls_mono_add(burrow_nanotime(), time_sub(net_dialer->deadline, time_now()));
+        dc.deadline_ctx =
+            context_with_deadline(heap_allocator(), ctx, when, &dc.cancel2);
+        if (BURROW_CONTEXT_IS_NIL(dc.deadline_ctx)) {
+            tls_dial_ctx_end(&dc);
+            BURROW_OUT(err, burrow_err_out_of_memory);
+            return NULL;
+        }
+        ctx = dc.deadline_ctx;
+    }
+
+    Error e = BURROW_NO_ERROR;
+    NetConn raw_conn = net_dialer_dial_context(net_dialer, a, ctx, network, addr, &e);
+    if (BURROW_FAILED(e)) {
+        tls_dial_ctx_end(&dc);
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+
+    Int colon_pos = strings_last_index(addr, BURROW_S(":"));
+    if (colon_pos == -1)
+        colon_pos = addr.len;
+    Str hostname = {addr.p, colon_pos};
+
+    if (config == NULL)
+        config = burrow__tls_default_config();
+    /* If no ServerName is set, infer the ServerName from the hostname we're
+     * connecting to. */
+    TlsConfig *owned = NULL;
+    Str owned_name = BURROW_STR_EMPTY;
+    if (config->server_name.len == 0) {
+        /* Make a copy to avoid polluting argument or default. */
+        owned = tls_config_clone(config, a);
+        owned_name = str_clone(a, hostname);
+        if (owned == NULL || owned_name.len != hostname.len) {
+            tls_dial_drop(a, owned, owned_name);
+            net_conn_free(raw_conn);
+            tls_dial_ctx_end(&dc);
+            BURROW_OUT(err, burrow_err_out_of_memory);
+            return NULL;
+        }
+        owned->server_name = owned_name;
+        config = owned;
+    }
+
+    TlsConn *conn = tls_client(a, raw_conn, config);
+    if (conn == NULL) {
+        tls_dial_drop(a, owned, owned_name);
+        net_conn_free(raw_conn);
+        tls_dial_ctx_end(&dc);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    conn->owns_conn = true;
+    conn->owned_config = owned;
+    conn->owned_server_name = owned_name;
+    e = tls_conn_handshake_context(conn, ctx);
+    if (BURROW_FAILED(e)) {
+        (void)raw_conn.vt->closer.close(raw_conn.data);
+        /* Not in Go: the error belongs to conn, so it is copied out first. */
+        e = error_retain(error_allocator(), e);
+        tls_conn_free(conn);
+        tls_dial_ctx_end(&dc);
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    tls_dial_ctx_end(&dc);
+    return conn;
+}
+
+TlsConn *tls_dial_with_dialer(Alloc *a, const NetDialer *dialer, Str network, Str addr,
+                              TlsConfig *config, Error *err) {
+    NetDialer zero;
+    if (dialer == NULL) {
+        memset(&zero, 0, sizeof zero);
+        dialer = &zero;
+    }
+    return tls_dial_ctx(a, context_background(), dialer, network, addr, config, err);
+}
+
+TlsConn *tls_dial(Alloc *a, Str network, Str addr, TlsConfig *config, Error *err) {
+    return tls_dial_with_dialer(a, NULL, network, addr, config, err);
+}
+
+NetConn tls_dialer_dial(const TlsDialer *d, Alloc *a, Str network, Str addr,
+                        Error *err) {
+    return tls_dialer_dial_context(d, a, context_background(), network, addr, err);
+}
+
+NetConn tls_dialer_dial_context(const TlsDialer *d, Alloc *a, Context ctx, Str network,
+                                Str addr, Error *err) {
+    NetDialer zero;
+    memset(&zero, 0, sizeof zero);
+    const NetDialer *net_dialer = &zero;
+    TlsConfig *config = NULL;
+    if (d != NULL) {
+        if (d->net_dialer != NULL)
+            net_dialer = d->net_dialer;
+        config = d->config;
+    }
+    TlsConn *c = tls_dial_ctx(a, ctx, net_dialer, network, addr, config, err);
+    if (c == NULL)
+        /* Don't return c (a typed nil) in an interface. */
+        return (NetConn){NULL, NULL};
+    return tls_conn_as_net_conn(c);
 }
 
 static Error tls_key_pair_error(const char *msg) {

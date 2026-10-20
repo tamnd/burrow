@@ -1536,6 +1536,13 @@ struct TlsConn {
      * verified_chains, ocsp_response and scts point into after a resumption.
      * tls_conn_free frees it. */
     TlsSessionState *server_session;
+
+    /* Not in Go: what a Conn from a listener or a dial owns, which
+     * tls_conn_free gives back with it: the connection under it, and the
+     * copy of the config a dial made to set ServerName, with the name. */
+    bool owns_conn;
+    TlsConfig *owned_config;
+    Str owned_server_name;
 };
 
 /* Not in Go. What Client and Server share: a Conn over conn that runs fn as
@@ -1552,6 +1559,10 @@ Error burrow__tls_conn_read_change_cipher_spec(TlsConn *c);
  * sendAlert takes it. */
 Error burrow__tls_conn_send_alert_locked(TlsConn *c, uint8_t err);
 Error burrow__tls_conn_send_alert(TlsConn *c, uint8_t err);
+
+/* errShutdown and errEarlyCloseWrite, which the tests compare with. */
+extern const Error burrow__tls_err_shutdown;
+extern const Error burrow__tls_err_early_close_write;
 
 /* maxPayloadSizeForWrite returns the maximum TLS payload size to use for the
  * next application data record. */

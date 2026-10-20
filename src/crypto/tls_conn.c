@@ -736,8 +736,8 @@ BURROW_SENTINEL_ERROR(thc_err_unknown_renegotiation,
 BURROW_SENTINEL_ERROR(thc_err_hand_not_empty,
                       "tls: handshake buffer not empty before setting read traffic "
                       "secret");
-BURROW_SENTINEL_ERROR(thc_err_shutdown, "tls: protocol is shutdown");
-BURROW_SENTINEL_ERROR(thc_err_early_close_write,
+BURROW_SENTINEL_ERROR(burrow__tls_err_shutdown, "tls: protocol is shutdown");
+BURROW_SENTINEL_ERROR(burrow__tls_err_early_close_write,
                       "tls: CloseWrite called before handshake complete");
 BURROW_SENTINEL_ERROR(thc_err_no_result,
                       "tls: internal error: handshake should have had a result");
@@ -807,6 +807,15 @@ void tls_conn_free(TlsConn *c) {
         tls_session_state_free(c->server_session);
     arena_free(&c->state);
     arena_free(&c->out_bufs);
+    if (c->owns_conn)
+        net_conn_free(c->conn);
+    if (c->owned_config != NULL) {
+        tls_config_release(c->owned_config);
+        mem_free(c->a, c->owned_config, sizeof *c->owned_config, _Alignof(TlsConfig));
+    }
+    if (c->owned_server_name.len > 0)
+        mem_free(c->a, (void *)(uintptr_t)c->owned_server_name.p,
+                 (size_t)c->owned_server_name.len, 1);
     mem_free(c->a, c, sizeof *c, _Alignof(TlsConn));
 }
 
@@ -1441,7 +1450,7 @@ static Int thc_write_locked_app(TlsConn *c, Slice b, Error *err) {
     }
 
     if (c->close_notify_sent) {
-        BURROW_OUT(err, thc_err_shutdown);
+        BURROW_OUT(err, burrow__tls_err_shutdown);
         return 0;
     }
 
@@ -1862,7 +1871,7 @@ Error tls_conn_close(TlsConn *c) {
 
 Error tls_conn_close_write(TlsConn *c) {
     if (!sync_atomic_bool_load(&c->is_handshake_complete))
-        return thc_err_early_close_write;
+        return burrow__tls_err_early_close_write;
 
     return thc_close_notify(c);
 }
@@ -2141,4 +2150,8 @@ static const NetConnVT thc_net_conn_vt = {
 
 NetConn tls_conn_as_net_conn(TlsConn *c) {
     return (NetConn){&thc_net_conn_vt, c};
+}
+
+TlsConn *tls_conn_from_net_conn(NetConn c) {
+    return c.vt == &thc_net_conn_vt ? (TlsConn *)c.data : NULL;
 }

@@ -1,6 +1,7 @@
-/* crypto/tls: handshake_server_test.go, the tests that need no TLS 1.3 server
- * and no recorded handshakes. The others come with handshake_server_tls13.go
- * and the testdata they replay.
+/* crypto/tls: handshake_server_test.go, the tests that need no recorded
+ * handshakes, with testHandshake from handshake_test.go that many of them run
+ * on. The tests that replay testdata come with it, and the rest of the tests
+ * that need none come in later changes.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -9,6 +10,7 @@
 
 #include "check.h"
 
+#include "../src/crypto/rsa_internal.h"
 #include "../src/crypto/tls_internal.h"
 #include "burrow/burrow.h"
 #include "burrow/crypto/tls.h"
@@ -135,8 +137,6 @@ static void client_job_free(ClientJob *j) {
     arena_free(&j->ar);
 }
 
-/* Not in Go: the TLS 1.3 half of testClientHelloFailure comes with
- * handshake_server_tls13.go. */
 static void test_client_hello_failure(TestingT *t, TlsConfig *server_config,
                                       const TlsHandshakeMsg *m,
                                       const char *expected_sub_str) {
@@ -153,23 +153,42 @@ static void test_client_hello_failure(TestingT *t, TlsConfig *server_config,
 
     Context ctx = context_background();
     TlsConn *conn = tls_server(heap_allocator(), s, server_config);
-    if (conn == NULL)
+    if (conn == NULL) {
         testing_t_fatal_v(t, "out of memory");
+        return;
+    }
     TlsHandshakeMsg *ch = NULL;
     Error err = burrow__tls_conn_read_client_hello(conn, ctx, a, &ch);
-    TlsServerHandshakeState hs;
-    memset(&hs, 0, sizeof hs);
-    hs.c = conn;
-    hs.ctx = ctx;
-    hs.master_secret = slice_nil(TYPE_BYTE);
-    hs.a = a;
-    if (!BURROW_FAILED(err)) {
-        hs.client_hello_msg = ch;
-        hs.client_hello = &ch->client_hello;
-        err = burrow__tls_server_handshake_state_process_client_hello(&hs);
+    if (conn->vers == TLS_VERSION_TLS13) {
+        TlsServerHandshakeStateTLS13 hs;
+        memset(&hs, 0, sizeof hs);
+        hs.c = conn;
+        hs.ctx = ctx;
+        hs.a = a;
+        if (!BURROW_FAILED(err)) {
+            hs.client_hello_msg = ch;
+            hs.client_hello = &ch->client_hello;
+            err = burrow__tls_server_handshake_state_tls13_process_client_hello(&hs);
+        }
+        if (!BURROW_FAILED(err))
+            err = burrow__tls_server_handshake_state_tls13_check_for_resumption(&hs);
+        if (!BURROW_FAILED(err))
+            err = burrow__tls_server_handshake_state_tls13_pick_certificate(&hs);
+    } else {
+        TlsServerHandshakeState hs;
+        memset(&hs, 0, sizeof hs);
+        hs.c = conn;
+        hs.ctx = ctx;
+        hs.master_secret = slice_nil(TYPE_BYTE);
+        hs.a = a;
+        if (!BURROW_FAILED(err)) {
+            hs.client_hello_msg = ch;
+            hs.client_hello = &ch->client_hello;
+            err = burrow__tls_server_handshake_state_process_client_hello(&hs);
+        }
+        if (!BURROW_FAILED(err))
+            err = burrow__tls_server_handshake_state_pick_cipher_suite(&hs);
     }
-    if (!BURROW_FAILED(err))
-        err = burrow__tls_server_handshake_state_pick_cipher_suite(&hs);
     (void)s.vt->closer.close(s.data);
     sync_wait_group_wait(&wg);
     if (BURROW_FAILED(job.write_err))
@@ -655,6 +674,620 @@ static void TestClose(TestingT *t) {
     arena_free(&ar);
 }
 
+/* Not in Go: the goroutine testHandshake starts for the client side. The
+ * error it ends with is kept in ar. */
+typedef struct HandshakeClient {
+    TestingT *t;
+    NetConn c;
+    TlsConfig *client_config;
+    TlsConfig *server_config;
+    TlsConn *cli;
+    TlsConnectionState client_state;
+    Error err;
+    Arena ar;
+} HandshakeClient;
+
+static const char sentinel[] = "SENTINEL\n";
+
+static void handshake_client(void *env) {
+    HandshakeClient *j = (HandshakeClient *)env;
+    Alloc *a = arena_allocator(&j->ar);
+    j->cli = tls_client(heap_allocator(), j->c, j->client_config);
+    if (j->cli == NULL) {
+        j->err = burrow_err_out_of_memory;
+        (void)j->c.vt->closer.close(j->c.data);
+        return;
+    }
+    Error err = tls_conn_handshake(j->cli);
+    if (BURROW_FAILED(err)) {
+        j->err = error_retain(a, fmt_errorf_v("client: %v", err));
+        (void)j->c.vt->closer.close(j->c.data);
+        return;
+    }
+    j->client_state = tls_conn_connection_state(j->cli);
+    Slice buf =
+        io_read_all(a, net_conn_as_io_reader(tls_conn_as_net_conn(j->cli)), &err);
+    if (BURROW_FAILED(err)) {
+        if (j->server_config->client_auth != TLS_NO_CLIENT_CERT &&
+            j->client_state.version == TLS_VERSION_TLS13) {
+            /* In TLS 1.3, client certificates are sent after the server's
+             * handshake has completed, and the client only learns about it
+             * reading the alert after the handshake. */
+            j->err = error_retain(a, fmt_errorf_v("client (from Read): %v", err));
+            (void)j->c.vt->closer.close(j->c.data);
+            return;
+        }
+        testing_t_errorf_v(j->t, "failed to call cli.Read: %v", err);
+    }
+    Str got = {(const Byte *)buf.p, buf.len};
+    if (!str_eq(got, str_from_cstr(sentinel)))
+        testing_t_errorf_v(j->t, "read %q from TLS connection, but expected %q", got,
+                           str_from_cstr(sentinel));
+    /* We discard the error because after ReadAll returns the server must have
+     * already closed the connection. Sending data (the closeNotify alert) can
+     * cause a reset, that will make Close return an error. */
+    (void)tls_conn_close(j->cli);
+}
+
+/* Not in Go: what testHandshake returns. The states and err can point into the
+ * Conns, so handshake_free gives everything back once the test is done with
+ * them. */
+typedef struct Handshake {
+    TlsConnectionState server_state;
+    TlsConnectionState client_state;
+    Error err;
+
+    TlsConn *server;
+    HandshakeClient client;
+    NetConn c;
+    Arena ar;
+} Handshake;
+
+static void test_handshake(TestingT *t, TlsConfig *client_config,
+                           TlsConfig *server_config, Handshake *h) {
+    memset(h, 0, sizeof *h);
+    arena_init(&h->ar, NULL, 0);
+    Alloc *a = arena_allocator(&h->ar);
+    NetConn c, s;
+    net_pipe(a, &c, &s);
+    h->c = c;
+    HandshakeClient *j = &h->client;
+    j->t = t;
+    j->c = c;
+    j->client_config = client_config;
+    j->server_config = server_config;
+    arena_init(&j->ar, NULL, 0);
+    SyncWaitGroup wg = {0};
+    sync_wait_group_go(&wg, BURROW_FN(Func, handshake_client, j));
+    h->server = tls_server(heap_allocator(), s, server_config);
+    if (h->server == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    Error err = tls_conn_handshake(h->server);
+    if (!BURROW_FAILED(err)) {
+        h->server_state = tls_conn_connection_state(h->server);
+        Error werr = BURROW_NO_ERROR;
+        Int n = (Int)strlen(sentinel);
+        (void)tls_conn_write(
+            h->server, slice_from((Byte *)(uintptr_t)sentinel, n, n, TYPE_BYTE), &werr);
+        if (BURROW_FAILED(werr))
+            testing_t_errorf_v(t, "failed to call server.Write: %v", werr);
+        Error cerr = tls_conn_close(h->server);
+        if (BURROW_FAILED(cerr))
+            testing_t_errorf_v(t, "failed to call server.Close: %v", cerr);
+    } else {
+        err = fmt_errorf_v("server: %v", err);
+        (void)s.vt->closer.close(s.data);
+    }
+    sync_wait_group_wait(&wg);
+    h->client_state = j->client_state;
+    h->err = errors_join_v(a, 2, err, j->err);
+}
+
+static void handshake_free(Handshake *h) {
+    tls_conn_free(h->server);
+    tls_conn_free(h->client.cli);
+    net_pipe_free(h->c);
+    arena_free(&h->client.ar);
+    arena_free(&h->ar);
+}
+
+static void TestVersion(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig test_server = test_config_server(a);
+    TlsConfig server_config;
+    memset(&server_config, 0, sizeof server_config);
+    server_config.certificates = test_server.certificates;
+    server_config.max_version = TLS_VERSION_TLS13;
+    TlsConfig client_config;
+    memset(&client_config, 0, sizeof client_config);
+    client_config.insecure_skip_verify = true;
+    client_config.min_version = TLS_VERSION_TLS12;
+    Handshake h;
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_fatalf_v(t, "handshake failed: %s", error_text(h.err));
+    if (h.server_state.version != TLS_VERSION_TLS13)
+        testing_t_fatalf_v(t, "incorrect version %x, should be %x",
+                           h.server_state.version, TLS_VERSION_TLS11);
+    handshake_free(&h);
+
+    client_config.min_version = 0;
+    server_config.max_version = TLS_VERSION_TLS11;
+    test_handshake(t, &client_config, &server_config, &h);
+    if (!BURROW_FAILED(h.err))
+        testing_t_fatalf_v(t, "expected failure to connect with TLS 1.0/1.1");
+    handshake_free(&h);
+
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    tls_config_release(&test_server);
+    arena_free(&ar);
+}
+
+/* Not in Go: the GetConfigForClient of TestCipherSuitePreference. */
+static TlsConfig *suite_preference_config(void *env, TlsClientHelloInfo *chi,
+                                          Error *err) {
+    (void)err;
+    TestingT *t = (TestingT *)env;
+    if (((const uint16_t *)chi->cipher_suites.p)[0] !=
+        TLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256)
+        testing_t_error_v(t, "the advertised order should not depend on "
+                             "Config.CipherSuites");
+    if (chi->cipher_suites.len != 2 + 3)
+        testing_t_error_v(t, "the advertised TLS 1.2 suites should be filtered by "
+                             "Config.CipherSuites");
+    return NULL;
+}
+
+static void TestCipherSuitePreference(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig test_server = test_config_server(a);
+    uint16_t server_suites[3] = {TLS_TLS_RSA_WITH_RC4_128_SHA,
+                                 TLS_TLS_AES_128_GCM_SHA256,
+                                 TLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256};
+    TlsConfig server_config;
+    memset(&server_config, 0, sizeof server_config);
+    server_config.cipher_suites = slice_from(server_suites, 3, 3, TYPE_UINT16);
+    server_config.certificates = test_server.certificates;
+    server_config.max_version = TLS_VERSION_TLS12;
+    server_config.get_config_for_client =
+        (TlsGetConfigForClientFunc){suite_preference_config, t};
+    uint16_t client_suites[2] = {TLS_TLS_RSA_WITH_AES_128_CBC_SHA,
+                                 TLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256};
+    TlsConfig client_config;
+    memset(&client_config, 0, sizeof client_config);
+    client_config.cipher_suites = slice_from(client_suites, 2, 2, TYPE_UINT16);
+    client_config.insecure_skip_verify = true;
+    Handshake h;
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_fatalf_v(t, "handshake failed: %s", error_text(h.err));
+    if (h.server_state.cipher_suite != TLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256)
+        testing_t_error_v(t, "the preference order should not depend on "
+                             "Config.CipherSuites");
+    handshake_free(&h);
+
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    tls_config_release(&test_server);
+    arena_free(&ar);
+}
+
+/* Not in Go: []byte(s) for a C string s. */
+static Slice bytes_of(const char *s) {
+    Int n = (Int)strlen(s);
+    return slice_from((Byte *)(uintptr_t)s, n, n, TYPE_BYTE);
+}
+
+static void test_sct_handshake(TestingT *t, uint16_t version) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Slice expected = slice_make(a, TYPE_BYTES, 2, 2);
+    ((Slice *)expected.p)[0] = bytes_of("certificate");
+    ((Slice *)expected.p)[1] = bytes_of("transparency");
+    TlsCertificate cert =
+        parse_test_cert(a, test_rsa2048_cert_pem, test_rsa2048_key_pem);
+    cert.signed_certificate_timestamps = expected;
+    TlsConfig server_config;
+    memset(&server_config, 0, sizeof server_config);
+    server_config.certificates = slice_from(&cert, 1, 1, TYPE_TLS_CERTIFICATE);
+    server_config.max_version = version;
+    TlsConfig client_config;
+    memset(&client_config, 0, sizeof client_config);
+    client_config.insecure_skip_verify = true;
+    Handshake h;
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_fatalf_v(t, "handshake failed: %s", error_text(h.err));
+    Slice actual = h.client_state.signed_certificate_timestamps;
+    if (actual.len != expected.len)
+        testing_t_fatalf_v(t, "got %d scts, want %d", actual.len, expected.len);
+    for (Int i = 0; i < expected.len; i++) {
+        Slice sct = ((const Slice *)expected.p)[i];
+        Slice got = ((const Slice *)actual.p)[i];
+        if (!bytes_equal(sct, got))
+            testing_t_fatalf_v(t, "SCT #%d was %x, but expected %x", i, got, sct);
+    }
+    handshake_free(&h);
+
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    arena_free(&ar);
+}
+
+static void sct_handshake_tls12(void *env, TestingT *t) {
+    (void)env;
+    test_sct_handshake(t, TLS_VERSION_TLS12);
+}
+
+static void sct_handshake_tls13(void *env, TestingT *t) {
+    (void)env;
+    test_sct_handshake(t, TLS_VERSION_TLS13);
+}
+
+static void TestSCTHandshake(TestingT *t) {
+    testing_t_run(t, BURROW_S("TLSv12"),
+                  BURROW_FN(TestingTFunc, sct_handshake_tls12, NULL));
+    testing_t_run(t, BURROW_S("TLSv13"),
+                  BURROW_FN(TestingTFunc, sct_handshake_tls13, NULL));
+}
+
+static void test_cross_version_resume(TestingT *t, uint16_t version) {
+    (void)version;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    uint16_t suites[1] = {TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256};
+    TlsCertificate cert =
+        parse_test_cert(a, test_rsa2048_cert_pem, test_rsa2048_key_pem);
+    TlsConfig server_config;
+    memset(&server_config, 0, sizeof server_config);
+    server_config.cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    server_config.certificates = slice_from(&cert, 1, 1, TYPE_TLS_CERTIFICATE);
+    server_config.time = (TlsTimeFunc){test_time, NULL};
+    TlsConfig client_config;
+    memset(&client_config, 0, sizeof client_config);
+    client_config.cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    client_config.insecure_skip_verify = true;
+    client_config.client_session_cache =
+        tls_new_lru_client_session_cache(heap_allocator(), 1);
+    if (client_config.client_session_cache.vt == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    client_config.server_name = BURROW_S("servername");
+    client_config.min_version = TLS_VERSION_TLS12;
+    client_config.time = (TlsTimeFunc){test_time, NULL};
+
+    /* Establish a session at TLS 1.3. */
+    client_config.max_version = TLS_VERSION_TLS13;
+    Handshake h;
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_fatalf_v(t, "handshake failed: %s", error_text(h.err));
+    handshake_free(&h);
+
+    /* The client session cache now contains a TLS 1.3 session. */
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_fatalf_v(t, "handshake failed: %s", error_text(h.err));
+    if (!h.server_state.did_resume)
+        testing_t_fatalf_v(t, "handshake did not resume at the same version");
+    handshake_free(&h);
+
+    /* Test that the server will decline to resume at a lower version. */
+    client_config.max_version = TLS_VERSION_TLS12;
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_fatalf_v(t, "handshake failed: %s", error_text(h.err));
+    if (h.server_state.did_resume)
+        testing_t_fatalf_v(t, "handshake resumed at a lower version");
+    handshake_free(&h);
+
+    /* The client session cache now contains a TLS 1.2 session. */
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_fatalf_v(t, "handshake failed: %s", error_text(h.err));
+    if (!h.server_state.did_resume)
+        testing_t_fatalf_v(t, "handshake did not resume at the same version");
+    handshake_free(&h);
+
+    /* Test that the server will decline to resume at a higher version. */
+    client_config.max_version = TLS_VERSION_TLS13;
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_fatalf_v(t, "handshake failed: %s", error_text(h.err));
+    if (h.server_state.did_resume)
+        testing_t_fatalf_v(t, "handshake resumed at a higher version");
+    handshake_free(&h);
+
+    tls_lru_client_session_cache_free(client_config.client_session_cache);
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    arena_free(&ar);
+}
+
+static void cross_version_resume_tls12(void *env, TestingT *t) {
+    (void)env;
+    test_cross_version_resume(t, TLS_VERSION_TLS12);
+}
+
+static void cross_version_resume_tls13(void *env, TestingT *t) {
+    (void)env;
+    test_cross_version_resume(t, TLS_VERSION_TLS13);
+}
+
+static void TestCrossVersionResume(TestingT *t) {
+    testing_t_run(t, BURROW_S("TLSv12"),
+                  BURROW_FN(TestingTFunc, cross_version_resume_tls12, NULL));
+    testing_t_run(t, BURROW_S("TLSv13"),
+                  BURROW_FN(TestingTFunc, cross_version_resume_tls13, NULL));
+}
+
+/* Not in Go: the GetCertificate of TestHandshakeServerGetCertificateExtensions,
+ * with what it checks in env. */
+typedef struct CertificateExtensions {
+    TestingT *t;
+    Slice expected_extensions;
+    SyncAtomicInt32 *called;
+} CertificateExtensions;
+
+static const char get_certificate_extensions_err[] =
+    "TestHandshakeServerGetCertificateExtensions error";
+
+static TlsCertificate *get_certificate_extensions(void *env, TlsClientHelloInfo *chi,
+                                                  Error *err) {
+    CertificateExtensions *e = (CertificateExtensions *)env;
+    if (!slices_equal(e->expected_extensions, chi->extensions))
+        testing_t_errorf_v(e->t,
+                           "expected extensions on ClientHelloInfo (%v) to match "
+                           "clientHelloMsg (%v)",
+                           e->expected_extensions, chi->extensions);
+    (void)sync_atomic_int32_add(e->called, 1);
+
+    BURROW_OUT(err, errors_new(error_allocator(),
+                               str_from_cstr(get_certificate_extensions_err)));
+    return NULL;
+}
+
+/* Not in Go: a subtest of TestHandshakeServerGetCertificateExtensions, for the
+ * version in env. */
+typedef struct GetCertificateExtensionsCase {
+    uint16_t vers;
+    SyncAtomicInt32 *called;
+} GetCertificateExtensionsCase;
+
+static void get_certificate_extensions_case(void *env, TestingT *t) {
+    const GetCertificateExtensionsCase *tc = (const GetCertificateExtensionsCase *)env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    EcdhPrivateKey *pk =
+        ecdh_curve_generate_key(ecdh_p256(), a, crypto_rand_reader, &err);
+    if (pk == NULL)
+        testing_t_fatal_v(t, "%v", err);
+    static uint16_t suites[1] = {TLS_TLS_AES_128_GCM_SHA256};
+    static Byte compression[1] = {TLS_COMPRESSION_NONE};
+    static uint16_t schemes[1] = {TLS_ECDSA_WITH_P256_AND_SHA256};
+    static uint16_t versions[1] = {TLS_VERSION_TLS13};
+    TlsKeyShare ks = {TLS_CURVE_P256,
+                      ecdh_public_key_bytes(ecdh_private_key_public_key(pk), a)};
+    TlsHandshakeMsg m = client_hello(a, tc->vers);
+    m.client_hello.cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    m.client_hello.compression_methods = slice_from(compression, 1, 1, TYPE_BYTE);
+    m.client_hello.server_name = BURROW_S("test");
+    m.client_hello.key_shares = slice_from(&ks, 1, 1, &burrow__tls_key_share_type);
+    m.client_hello.supported_curves = slice_from(curves_p256, 1, 1, TYPE_UINT16);
+    m.client_hello.supported_signature_algorithms =
+        slice_from(schemes, 1, 1, TYPE_UINT16);
+
+    /* the clientHelloMsg initialized just above is serialized with two
+     * extensions: server_name(0) and application_layer_protocol_negotiation(16) */
+    uint16_t extensions[5] = {TLS_EXTENSION_SERVER_NAME, TLS_EXTENSION_SUPPORTED_CURVES,
+                              TLS_EXTENSION_SIGNATURE_ALGORITHMS,
+                              TLS_EXTENSION_KEY_SHARE};
+    Slice expected_extensions = slice_from(extensions, 4, 5, TYPE_UINT16);
+
+    if (tc->vers == TLS_VERSION_TLS13) {
+        m.client_hello.supported_versions = slice_from(versions, 1, 1, TYPE_UINT16);
+        extensions[4] = TLS_EXTENSION_SUPPORTED_VERSIONS;
+        expected_extensions.len = 5;
+    }
+
+    /* Go's TLS client presents extensions in the ClientHello sorted by extension
+     * ID */
+    slices_sort(expected_extensions);
+
+    TlsConfig server_config = test_config_server(a);
+    CertificateExtensions env2 = {t, expected_extensions, tc->called};
+    server_config.get_certificate =
+        (TlsGetCertificateFunc){get_certificate_extensions, &env2};
+    test_client_hello_failure(t, &server_config, &m, get_certificate_extensions_err);
+    tls_config_release(&server_config);
+    arena_free(&ar);
+}
+
+static void TestHandshakeServerGetCertificateExtensions(TestingT *t) {
+    /* ensure the test condition inside our GetCertificate callback is actually
+     * invoked */
+    SyncAtomicInt32 called = {0};
+
+    static const uint16_t test_versions[2] = {TLS_VERSION_TLS12, TLS_VERSION_TLS13};
+    for (int i = 0; i < 2; i++) {
+        GetCertificateExtensionsCase tc = {test_versions[i], &called};
+        Str name =
+            fmt_sprintf_v(error_allocator(), "TLS version %04x", test_versions[i]);
+        testing_t_run(t, name,
+                      BURROW_FN(TestingTFunc, get_certificate_extensions_case, &tc));
+    }
+
+    if (sync_atomic_int32_load(&called) != 2)
+        testing_t_error_v(t, "expected our GetCertificate test to be called twice");
+}
+
+/* Not in Go: the GetCertificate of TestHandshakeServerSNIGetCertificateError
+ * and TestHandshakeServerEmptyCertificates, which fails with the message in
+ * env. */
+static TlsCertificate *get_certificate_error(void *env, TlsClientHelloInfo *chi,
+                                             Error *err) {
+    (void)chi;
+    BURROW_OUT(err, errors_new(error_allocator(), str_from_cstr((const char *)env)));
+    return NULL;
+}
+
+/* TestHandshakeServerSNIGetCertificateError tests to make sure that errors in
+ * GetCertificate result in a tls alert. */
+static void TestHandshakeServerSNIGetCertificateError(TestingT *t) {
+    static char err_msg[] = "TestHandshakeServerSNIGetCertificateError error";
+
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig server_config = test_config_server(a);
+    server_config.get_certificate =
+        (TlsGetCertificateFunc){get_certificate_error, err_msg};
+
+    static uint16_t suites[1] = {TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256};
+    static Byte compression[1] = {TLS_COMPRESSION_NONE};
+    TlsHandshakeMsg m = client_hello(a, TLS_VERSION_TLS12);
+    m.client_hello.cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    m.client_hello.compression_methods = slice_from(compression, 1, 1, TYPE_BYTE);
+    m.client_hello.server_name = BURROW_S("test");
+    test_client_hello_failure(t, &server_config, &m, err_msg);
+    tls_config_release(&server_config);
+    arena_free(&ar);
+}
+
+/* TestHandshakeServerEmptyCertificates tests that GetCertificates is called in
+ * the case that Certificates is empty, even without SNI. */
+static void TestHandshakeServerEmptyCertificates(TestingT *t) {
+    static char err_msg[] = "TestHandshakeServerEmptyCertificates error";
+
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig server_config = test_config_server(a);
+    server_config.get_certificate =
+        (TlsGetCertificateFunc){get_certificate_error, err_msg};
+    server_config.certificates = slice_nil(TYPE_TLS_CERTIFICATE);
+
+    static uint16_t suites[1] = {TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256};
+    static Byte compression[1] = {TLS_COMPRESSION_NONE};
+    TlsHandshakeMsg m = client_hello(a, TLS_VERSION_TLS12);
+    m.client_hello.cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    m.client_hello.compression_methods = slice_from(compression, 1, 1, TYPE_BYTE);
+    test_client_hello_failure(t, &server_config, &m, err_msg);
+
+    /* With an empty Certificates and a nil GetCertificate, the server should
+     * always return a “no certificates” error. */
+    server_config.get_certificate = (TlsGetCertificateFunc){NULL, NULL};
+
+    m = client_hello(a, TLS_VERSION_TLS12);
+    m.client_hello.cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    m.client_hello.compression_methods = slice_from(compression, 1, 1, TYPE_BYTE);
+    test_client_hello_failure(t, &server_config, &m, "no certificates");
+    tls_config_release(&server_config);
+    arena_free(&ar);
+}
+
+static void expect_error(TestingT *t, Error err, const char *sub) {
+    if (!BURROW_FAILED(err))
+        testing_t_errorf_v(t, "expected error %q, got nil", str_from_cstr(sub));
+    else if (!strings_contains(error_text(err), str_from_cstr(sub)))
+        testing_t_errorf_v(t, "expected error %q, got %q", str_from_cstr(sub),
+                           error_text(err));
+}
+
+/* Not in Go: the goroutine of TestKeyTooSmallForRSAPSS. */
+typedef struct KeyTooSmallServer {
+    TestingT *t;
+    NetConn conn;
+    TlsConfig *config;
+} KeyTooSmallServer;
+
+static void key_too_small_server(void *env) {
+    KeyTooSmallServer *j = (KeyTooSmallServer *)env;
+    TlsConn *server = tls_server(heap_allocator(), j->conn, j->config);
+    if (server == NULL) {
+        testing_t_error_v(j->t, "out of memory");
+        (void)j->conn.vt->closer.close(j->conn.data);
+        return;
+    }
+    Error err = tls_conn_handshake(server);
+    expect_error(j->t, err, "key size too small");
+    (void)j->conn.vt->closer.close(j->conn.data);
+    tls_conn_free(server);
+}
+
+static void TestKeyTooSmallForRSAPSS(TestingT *t) {
+    burrow__rsa_godebug_set("rsa1024min=0");
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    NetConn client_conn, server_conn;
+    net_pipe(a, &client_conn, &server_conn);
+    TlsConfig client_config = test_config_client(a);
+    TlsConn *client = tls_client(heap_allocator(), client_conn, &client_config);
+    if (client == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    TlsConfig config = test_config_server(a);
+    TlsCertificate rsa512 =
+        parse_test_cert(a, test_rsa512_cert_pem, test_rsa512_key_pem);
+    config.certificates = slice_from(&rsa512, 1, 1, TYPE_TLS_CERTIFICATE);
+    config.min_version = TLS_VERSION_TLS13;
+    KeyTooSmallServer job = {t, server_conn, &config};
+    SyncWaitGroup done = {0};
+    sync_wait_group_go(&done, BURROW_FN(Func, key_too_small_server, &job));
+    Error err = tls_conn_handshake(client);
+    expect_error(t, err, "handshake failure");
+    sync_wait_group_wait(&done);
+
+    tls_conn_free(client);
+    net_pipe_free(client_conn);
+    tls_config_release(&config);
+    tls_config_release(&client_config);
+    arena_free(&ar);
+    burrow__rsa_godebug_set(NULL);
+}
+
+static void TestMultipleCertificates(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    uint16_t suites[1] = {TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256};
+    TlsConfig client_config = test_config_client(a);
+    client_config.cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    client_config.max_version = TLS_VERSION_TLS12;
+
+    TlsConfig server_config = test_config_server(a);
+    Slice certs = slice_make(a, TYPE_TLS_CERTIFICATE, 2, 2);
+    ((TlsCertificate *)certs.p)[0] =
+        parse_test_cert(a, test_ecdsap256_cert_pem, test_ecdsap256_key_pem);
+    ((TlsCertificate *)certs.p)[1] =
+        parse_test_cert(a, test_rsa2048_cert_pem, test_rsa2048_key_pem);
+    server_config.certificates = certs;
+
+    Handshake h;
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_fatal_v(t, "%v", h.err);
+    X509PublicKeyAlgorithm got =
+        (*(X509Certificate *const *)h.client_state.peer_certificates.p)
+            ->public_key_algorithm;
+    if (got != X509_RSA)
+        testing_t_errorf_v(t, "expected RSA certificate, got %v",
+                           x509_public_key_algorithm_string(got, a));
+    handshake_free(&h);
+
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestSimpleError)                                                                 \
     X(TestRejectBadProtocolVersion)                                                    \
@@ -668,6 +1301,15 @@ static void TestClose(TestingT *t) {
     X(TestTLS12OnlyCipherSuites)                                                       \
     X(TestTLSPointFormats)                                                             \
     X(TestAlertForwarding)                                                             \
-    X(TestClose)
+    X(TestClose)                                                                       \
+    X(TestVersion)                                                                     \
+    X(TestCipherSuitePreference)                                                       \
+    X(TestSCTHandshake)                                                                \
+    X(TestCrossVersionResume)                                                          \
+    X(TestHandshakeServerGetCertificateExtensions)                                     \
+    X(TestHandshakeServerSNIGetCertificateError)                                       \
+    X(TestHandshakeServerEmptyCertificates)                                            \
+    X(TestKeyTooSmallForRSAPSS)                                                        \
+    X(TestMultipleCertificates)
 
 TESTING_MAIN(TESTS)

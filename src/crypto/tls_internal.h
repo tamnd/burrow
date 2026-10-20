@@ -198,6 +198,10 @@ void burrow__tls_godebug_set(const char *value);
 /* Whether GODEBUG has tlssha1=1. */
 bool burrow__tls_godebug_sha1(void);
 
+/* Not in Go: whether GODEBUG has tlsmaxrsasize set to a number, which goes in
+ * *max. */
+bool burrow__tls_godebug_max_rsa_size(Int *max);
+
 /* --------------------------------------------------------- cipher suites */
 
 #define TLS_SUITE_ECDHE (1 << 0)
@@ -505,6 +509,10 @@ typedef struct TlsFinishedHash {
 
     /* Where the buffer grows from. */
     Alloc *a;
+
+    /* Not in Go: set when the buffer could not grow, so the handshake can
+     * report running out of memory instead of signing what it has. */
+    bool oom;
 } TlsFinishedHash;
 
 /* newFinishedHash. False when a is out of memory. */
@@ -527,6 +535,11 @@ Slice burrow__tls_finished_hash_for_client_certificate(const TlsFinishedHash *h,
  * entirety of the handshake messages. */
 void burrow__tls_finished_hash_discard_handshake_buffer(TlsFinishedHash *h);
 
+/* Not in Go: h as the io.Writer that &hs.finishedHash is, for the transcript
+ * of readHandshake and writeHandshakeRecord. A write the buffer has no room
+ * for sets h->oom. */
+IoWriter burrow__tls_finished_hash_writer(TlsFinishedHash *h);
+
 /* noEKMBecauseRenegotiation and noEKMBecauseNoEMS. */
 extern const Error burrow__tls_err_no_ekm_renegotiation;
 extern const Error burrow__tls_err_no_ekm_no_ems;
@@ -545,6 +558,10 @@ typedef struct TlsEkmMaster {
  * nil. */
 Slice burrow__tls_ekm_from_master_secret(const TlsEkmMaster *m, Alloc *a, Str label,
                                          Slice context, Int length, Error *err);
+
+/* Not in Go: ekmFromMasterSecret as the closure Conn.ekm holds, over a copy of
+ * m and its slices made in a. A zero TlsEkmFunc when a is out of memory. */
+TlsEkmFunc burrow__tls_ekm_func(Alloc *a, const TlsEkmMaster *m);
 
 /* ---------------------------------------------------- TLS 1.3 key schedule */
 
@@ -1491,6 +1508,11 @@ struct TlsConn {
     Alloc *a;
     Arena state;
     Arena out_bufs;
+
+    /* Not in Go: the reference to the session a client resumed, which
+     * peer_certificates, verified_chains and ocsp_response point into after
+     * a resumption. tls_conn_free gives it back. */
+    TlsClientSessionState *resumed_session;
 };
 
 /* Not in Go. What Client and Server share: a Conn over conn that runs fn as
@@ -1561,11 +1583,53 @@ Error burrow__tls_conn_set_write_traffic_secret(TlsConn *c, const TlsSuiteTLS13 
  * Not in Go: a remote address is written out in a. */
 Str burrow__tls_conn_client_session_cache_key(TlsConn *c, Alloc *a);
 
+/* connectionStateLocked, with handshake_mutex held. */
+TlsConnectionState burrow__tls_conn_connection_state_locked(TlsConn *c);
+
 /* sessionState returns a partially filled-out SessionState with information
  * from the current connection.
  *
  * Not in Go: the session is from a and has its own copies of everything,
  * certificates parsed again from their bytes included, so it can outlive c. */
 TlsSessionState *burrow__tls_conn_session_state(TlsConn *c, Alloc *a, Error *err);
+
+/* --------------------------------------------------------- client handshake */
+
+/* defaultConfig, the Config a Conn made with none uses. */
+BURROW_BORROWS(ret) TlsConfig *burrow__tls_default_config(void);
+
+/* clientHandshake, the handshakeFn of a Conn that Client makes. */
+Error burrow__tls_client_handshake(TlsConn *c, Context ctx);
+
+/* checkALPN ensure that the server's choice of ALPN protocol is compatible
+ * with the protocols that we advertised in the ClientHello. client_protos is a
+ * []string. */
+BURROW_STATIC(ret) Error burrow__tls_check_alpn(Slice client_protos, Str server_proto,
+                                                bool quic);
+
+/* hostnameInSNI converts name into an appropriate hostname for SNI. Literal IP
+ * addresses and absolute FQDNs are not permitted as SNI values. See RFC 6066,
+ * Section 3.
+ *
+ * Not in Go: the result is a view of name. */
+BURROW_BORROWS(ret, name) Str burrow__tls_hostname_in_sni(Str name);
+
+/* verifyServerCertificate parses and verifies the provided chain, setting
+ * c.verifiedChains and c.peerCertificates or sending the appropriate alert.
+ * certificates is a [][]byte. handshake_mutex has to be held. */
+Error burrow__tls_conn_verify_server_certificate(TlsConn *c, Slice certificates);
+
+/* fipsAllowedChains returns chains that are allowed to be used in a TLS
+ * connection based on the current fips140tls enforcement setting. burrow has
+ * no FIPS 140-3 mode, so the chains come back as they are. */
+BURROW_BORROWS(ret, chains) Slice burrow__tls_fips_allowed_chains(Slice chains,
+                                                                  Error *err);
+
+/* anyValidVerifiedChain reports if at least one of the chains in
+ * verifiedChains is valid, as indicated by none of the certificates being
+ * expired and the root being in opts.Roots (or in the system root pool if
+ * opts.Roots is nil). If verifiedChains is empty, it returns false. */
+bool burrow__tls_any_valid_verified_chain(Slice verified_chains,
+                                          X509VerifyOptions opts);
 
 #endif /* BURROW_SRC_CRYPTO_TLS_INTERNAL_H */

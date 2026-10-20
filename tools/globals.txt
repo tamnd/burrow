@@ -460,7 +460,8 @@ global	src/crypto/ecdsa.c	ecdsa_curves	tables	The four FIPS curves with their or
 global	src/crypto/ecdsa.c	ecdsa_once	tables	A SyncOnce, which is the synchronisation for ecdsa_curves.
 global	src/crypto/rsa.c	rsa_debug_flags	godebug	The rsa1024min setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/crypto/x509.c	x509_debug_flags	godebug	The x509rsacrt setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
-global	src/crypto/tls.c	tls_debug_flags	godebug	The tlsmlkem and tlssecpmlkem settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
+global	src/crypto/tls.c	tls_debug_flags	godebug	The tlsmlkem, tlssecpmlkem, tlssha1 and tlsmaxrsasize settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
+global	src/crypto/tls.c	tls_debug_max_rsa	godebug	The number tlsmaxrsasize is set to, stored before tls_debug_flags is stored with release ordering and read after it is loaded with acquire ordering. Two racing first loads store the same value.
 global	src/crypto/x509_verify.c	x509_roots_once	package-vars	A SyncOnce, the sync.Once of root.go that loads the system roots on first use.
 global	src/crypto/x509_verify.c	x509_roots_mu	package-vars	The SyncRWMutex of root.go, which guards the four globals below it.
 global	src/crypto/x509_verify.c	x509_system_roots	package-vars	systemRoots, the shared system pool. Written under x509_roots_mu only.
@@ -490,4 +491,5 @@ global	src/text/template_parse_node.c	burrow__parse_text_format_q	package-vars	G
 global	src/html/template_escape.c	hte_debug_flags	godebug	The htmlmetacontenturlescape setting, read from GODEBUG on first use. Relaxed atomic loads and stores only, and two racing first loads store the same value. burrow__ht_godebug_set changes it for the tests, as t.Setenv does in Go.
 global	src/runtime/exectrace.c	burrow__trace_gen	exec-trace	Go's trace.gen. Atomic. Written only with adv_lock held, read by every hook without a lock.
 global	src/runtime/exectrace.c	trace	exec-trace	Go's trace. Each part is under the lock its comment names: ctl, adv_lock, trace.lock, tt_lock, or the lock of the thread or table it belongs to.
+global	src/crypto/tls_config.c	tcfg_empty_config	package-vars	emptyConfig, the Config a Conn with none uses. Only its mutex and the lazily made ticket keys change, both under that mutex.
 global	src/crypto/tls_config.c	tcfg_writer_mutex	package-vars	writerMutex, which every KeyLogWriter write goes through. A SyncMutex, so it is safe to share.

@@ -17,6 +17,7 @@
 #include "burrow/fmt.h"
 #include "burrow/mem.h"
 #include "burrow/pal.h"
+#include "burrow/strconv.h"
 #include "burrow/type.h"
 
 #include "tls_internal.h"
@@ -426,9 +427,13 @@ enum {
     TLS_DEBUG_MLKEM_OFF = 1 << 1,      /* tlsmlkem=0 */
     TLS_DEBUG_SECP_MLKEM_OFF = 1 << 2, /* tlssecpmlkem=0 */
     TLS_DEBUG_SHA1_ON = 1 << 3,        /* tlssha1=1 */
+    TLS_DEBUG_MAX_RSA_SET = 1 << 4,    /* tlsmaxrsasize=N */
 };
 
 static uint32_t tls_debug_flags;
+
+/* The N of tlsmaxrsasize=N, stored before tls_debug_flags says it is there. */
+static uint64_t tls_debug_max_rsa;
 
 /* Whether GODEBUG in env has key=value, the last one counting when key is
  * there twice. */
@@ -447,7 +452,25 @@ static bool tls_godebug_is(const char *env, const char *key, const char *value) 
     return is;
 }
 
-/* The flags a GODEBUG value sets. */
+/* The value of key in GODEBUG in env, the last one counting when key is there
+ * twice. Empty when it is not there. */
+static Str tls_godebug_value(const char *env, const char *key) {
+    size_t kl = strlen(key);
+    Str v = BURROW_STR_EMPTY;
+    const char *p = env;
+    while (*p != '\0') {
+        const char *end = strchr(p, ',');
+        if (end == NULL)
+            end = p + strlen(p);
+        if ((size_t)(end - p) > kl && memcmp(p, key, kl) == 0 && p[kl] == '=')
+            v = str_from_bytes(p + kl + 1, (Int)(end - p) - (Int)kl - 1);
+        p = *end == ',' ? end + 1 : end;
+    }
+    return v;
+}
+
+/* The flags a GODEBUG value sets. The number tlsmaxrsasize has, when it has
+ * one, is stored first. */
 static uint32_t tls_debug_parse(const char *value) {
     uint32_t f = TLS_DEBUG_KNOWN;
     if (tls_godebug_is(value, "tlsmlkem", "0"))
@@ -456,11 +479,22 @@ static uint32_t tls_debug_parse(const char *value) {
         f |= TLS_DEBUG_SECP_MLKEM_OFF;
     if (tls_godebug_is(value, "tlssha1", "1"))
         f |= TLS_DEBUG_SHA1_ON;
+    Str max = tls_godebug_value(value, "tlsmaxrsasize");
+    if (max.len > 0) {
+        ArenaMark mark = error_mark();
+        Error err = BURROW_NO_ERROR;
+        Int n = strconv_atoi(max, &err);
+        error_release(mark);
+        if (BURROW_OK(err)) {
+            burrow__atomic_store_relaxed_u64(&tls_debug_max_rsa, (uint64_t)n);
+            f |= TLS_DEBUG_MAX_RSA_SET;
+        }
+    }
     return f;
 }
 
 static uint32_t tls_debug_load(void) {
-    uint32_t f = burrow__atomic_load_relaxed_u32(&tls_debug_flags);
+    uint32_t f = burrow__atomic_load_acquire_u32(&tls_debug_flags);
     if ((f & TLS_DEBUG_KNOWN) != 0)
         return f;
     f = TLS_DEBUG_KNOWN;
@@ -470,7 +504,7 @@ static uint32_t tls_debug_load(void) {
             break;
         }
     }
-    burrow__atomic_store_relaxed_u32(&tls_debug_flags, f);
+    burrow__atomic_store_release_u32(&tls_debug_flags, f);
     return f;
 }
 
@@ -478,8 +512,15 @@ bool burrow__tls_godebug_sha1(void) {
     return (tls_debug_load() & TLS_DEBUG_SHA1_ON) != 0;
 }
 
+bool burrow__tls_godebug_max_rsa_size(Int *max) {
+    if ((tls_debug_load() & TLS_DEBUG_MAX_RSA_SET) == 0)
+        return false;
+    *max = (Int)burrow__atomic_load_relaxed_u64(&tls_debug_max_rsa);
+    return true;
+}
+
 void burrow__tls_godebug_set(const char *value) {
-    burrow__atomic_store_relaxed_u32(&tls_debug_flags,
+    burrow__atomic_store_release_u32(&tls_debug_flags,
                                      value != NULL ? tls_debug_parse(value) : 0);
 }
 

@@ -1,5 +1,6 @@
 /* crypto/tls: the Config half of common.go, with its session ticket keys, the
- * LRU client session cache, and supportsECDHE from handshake_server.go.
+ * LRU client session cache, CertificateVerificationError and the chain checks
+ * the client handshake makes, and supportsECDHE from handshake_server.go.
  *
  * Go's ticket key lists are slices the garbage collector frees once the last
  * config or connection lets go of them. Here a list carries a count of
@@ -565,8 +566,12 @@ TlsCertificate *burrow__tls_config_get_certificate(TlsConfig *c,
     return &certs[0];
 }
 
-/* emptyConfig, for a ClientHelloInfo with no Config. */
-static const TlsConfig tcfg_empty_config = {0};
+/* emptyConfig, for a ClientHelloInfo with no Config and for a Conn with none. */
+static TlsConfig tcfg_empty_config = {0};
+
+TlsConfig *burrow__tls_default_config(void) {
+    return &tcfg_empty_config;
+}
 
 static bool tcfg_curve_is(EllipticCurve c, EllipticCurve want) {
     return c.vt == want.vt && c.data == want.data;
@@ -1107,4 +1112,133 @@ void tls_lru_client_session_cache_free(TlsClientSessionCache cache) {
     mem_free(c->a, c->entries, (size_t)c->capacity * sizeof(TcfgLruEntry),
              _Alignof(TcfgLruEntry));
     mem_free(c->a, c, sizeof(*c), _Alignof(TcfgLruSessionCache));
+}
+
+/* CertificateVerificationError as an Error. The error first, so the data
+ * pointer is a pointer to it and errors_as hands it straight back. */
+typedef struct TcfgVerificationBox {
+    TlsCertificateVerificationError e;
+    Str text;
+} TcfgVerificationBox;
+
+static const Type tcfg_verification_error_desc = {
+    BURROW_S_INIT("CertificateVerificationError"),
+    BURROW_S_INIT("crypto/tls"),
+    KIND_STRUCT,
+    (uint32_t)sizeof(TlsCertificateVerificationError),
+    (uint16_t)_Alignof(TlsCertificateVerificationError),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0x746c6376U, /* "tlcv" */
+    NULL,
+};
+
+const Type *const TYPE_TLS_CERTIFICATE_VERIFICATION_ERROR =
+    &tcfg_verification_error_desc;
+
+static Str tcfg_cve_message(const void *self) {
+    return ((const TcfgVerificationBox *)self)->text;
+}
+
+static Error tcfg_cve_unwrap(const void *self) {
+    return ((const TcfgVerificationBox *)self)->e.err;
+}
+
+static Error tcfg_cve_clone(const void *self, Alloc *a) {
+    return tls_certificate_verification_error_as_error(
+        &((const TcfgVerificationBox *)self)->e, a);
+}
+
+static const ErrorVT tcfg_cve_vt = {
+    .self_type = &tcfg_verification_error_desc,
+    .message = tcfg_cve_message,
+    .unwrap = tcfg_cve_unwrap,
+    .clone = tcfg_cve_clone,
+};
+
+Str tls_certificate_verification_error_error(const TlsCertificateVerificationError *e,
+                                             Alloc *a) {
+    return fmt_sprintf_v(a, "tls: failed to verify certificate: %v", e->err);
+}
+
+Error tls_certificate_verification_error_as_error(
+    const TlsCertificateVerificationError *e, Alloc *a) {
+    TcfgVerificationBox *b = BURROW_NEW(a, TcfgVerificationBox);
+    if (b == NULL)
+        return burrow_err_out_of_memory;
+    b->e = *e;
+    b->e.err = error_retain(a, e->err);
+    b->text = tls_certificate_verification_error_error(e, a);
+    if (b->text.p == NULL)
+        return burrow_err_out_of_memory;
+    return (Error){&tcfg_cve_vt, b};
+}
+
+Slice burrow__tls_fips_allowed_chains(Slice chains, Error *err) {
+    (void)err;
+    return chains;
+}
+
+/* Whether some certificate in chain is outside its validity period at now. */
+static bool tcfg_chain_expired(const X509CertificateChain *chain, Time now) {
+    X509Certificate *const *certs = chain->p;
+    for (Int i = 0; i < chain->len; i++) {
+        if (time_before(now, certs[i]->not_before) ||
+            time_after(now, certs[i]->not_after))
+            return true;
+    }
+    return false;
+}
+
+/* Whether cert verifies with opts. The chains are made in a scratch arena and
+ * thrown away. */
+static bool tcfg_verifies(const X509Certificate *cert, X509VerifyOptions opts) {
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Error err = BURROW_NO_ERROR;
+    (void)x509_certificate_verify(cert, arena_allocator(&ar), opts, &err);
+    arena_free(&ar);
+    return BURROW_OK(err);
+}
+
+bool burrow__tls_any_valid_verified_chain(Slice verified_chains,
+                                          X509VerifyOptions opts) {
+    const X509CertificateChain *chains = verified_chains.p;
+    for (Int i = 0; i < verified_chains.len; i++) {
+        const X509CertificateChain *chain = &chains[i];
+        if (chain->len == 0)
+            continue;
+        if (tcfg_chain_expired(chain, opts.current_time))
+            continue;
+        X509Certificate *const *certs = chain->p;
+        /* Since we already validated the chain, we only care that it is rooted
+         * in a CA in opts.Roots. On platforms where we control chain validation
+         * (e.g. not Windows or macOS) this is a simple lookup in the CertPool
+         * internal hash map, which we can simulate by running Verify on the
+         * root. On other platforms, we have to do full verification again,
+         * because EKU handling might differ. We will want to replace this with
+         * CertPool.Contains if/once that is available. See go.dev/issue/77376. */
+#if defined(_WIN32) || defined(__APPLE__)
+        X509CertPool *intermediates = x509_new_cert_pool(heap_allocator());
+        if (intermediates == NULL)
+            continue;
+        Int end = chain->len - 1 > 1 ? chain->len - 1 : 1;
+        for (Int j = 1; j < end; j++)
+            x509_cert_pool_add_cert(intermediates, certs[j]);
+        opts.intermediates = intermediates;
+        bool ok = tcfg_verifies(certs[0], opts);
+        x509_cert_pool_free(intermediates);
+        if (ok)
+            return true;
+#else
+        if (tcfg_verifies(certs[chain->len - 1], opts))
+            return true;
+#endif
+    }
+    return false;
 }

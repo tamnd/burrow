@@ -1,8 +1,8 @@
 /* crypto/tls: handshake_server.go, the server side of a TLS 1.0–1.2 handshake
  * and the reading of the ClientHello every server handshake starts with.
  *
- * The TLS 1.3 server handshake is in tls_handshake_server_tls13.c. QUIC comes
- * with quic.go, and Encrypted Client Hello is in tls_ech.c.
+ * The TLS 1.3 server handshake is in tls_handshake_server_tls13.c, QUIC is in
+ * tls_quic.c, and Encrypted Client Hello is in tls_ech.c.
  *
  * As on the client, what the handshake only needs while it runs is made in a
  * scratch arena that goes when it ends, and what the Conn keeps afterwards is
@@ -286,7 +286,7 @@ Error burrow__tls_conn_read_client_hello(TlsConn *c, Context ctx, Alloc *a,
         Int n = burrow__tls_supported_versions_from_max(client_hello->vers, from_max);
         client_versions = slice_from(from_max, n, n, TYPE_UINT16);
     }
-    if (!burrow__tls_config_mutual_version(c->config, TLS_ROLE_SERVER, false,
+    if (!burrow__tls_config_mutual_version(c->config, TLS_ROLE_SERVER, c->quic != NULL,
                                            client_versions, &c->vers)) {
         (void)burrow__tls_conn_send_alert(c, TLS_ALERT_PROTOCOL_VERSION);
         return fmt_errorf_v("tls: client offered only unsupported versions: %x",
@@ -383,8 +383,8 @@ Error burrow__tls_server_handshake_state_process_client_hello(
      *
      * Go also sets them when testingOnlyForceDowngradeCanary is, which comes
      * with the tests that set it. */
-    uint16_t max_vers =
-        burrow__tls_config_max_supported_version(c->config, TLS_ROLE_SERVER, false);
+    uint16_t max_vers = burrow__tls_config_max_supported_version(
+        c->config, TLS_ROLE_SERVER, c->quic != NULL);
     if (max_vers >= TLS_VERSION_TLS12 && c->vers < max_vers) {
         Byte *canary = (Byte *)server_random.p + 24;
         if (c->vers == TLS_VERSION_TLS12)
@@ -546,8 +546,9 @@ Error burrow__tls_server_handshake_state_pick_cipher_suite(
     for (Int i = 0; i < noffered; i++) {
         if (offered[i] == TLS_TLS_FALLBACK_SCSV) {
             /* The client is doing a fallback connection. See RFC 7507. */
-            if (hs->client_hello->vers < burrow__tls_config_max_supported_version(
-                                             c->config, TLS_ROLE_SERVER, false)) {
+            if (hs->client_hello->vers <
+                burrow__tls_config_max_supported_version(c->config, TLS_ROLE_SERVER,
+                                                         c->quic != NULL)) {
                 (void)burrow__tls_conn_send_alert(c, TLS_ALERT_INAPPROPRIATE_FALLBACK);
                 return tsv_err_fallback;
             }
@@ -1383,7 +1384,9 @@ burrow__tls_client_hello_info(Alloc *a, Context ctx, TlsConn *c,
             memcpy(supported_versions.p, from_max, (size_t)n * sizeof from_max[0]);
     }
 
-    /* QUIC's clientHelloInfoConn comes with quic.go. */
+    NetConn conn = c->conn;
+    if (c->quic != NULL)
+        conn = c->quic->client_hello_info_conn;
     chi->cipher_suites = client_hello->cipher_suites;
     chi->server_name = client_hello->server_name;
     chi->supported_curves = client_hello->supported_curves;
@@ -1392,10 +1395,10 @@ burrow__tls_client_hello_info(Alloc *a, Context ctx, TlsConn *c,
     chi->supported_protos = client_hello->alpn_protocols;
     chi->supported_versions = supported_versions;
     chi->extensions = client_hello->extensions;
-    chi->conn = c->conn;
+    chi->conn = conn;
     chi->hello_retry_request = c->did_hrr;
     chi->config = c->config;
-    chi->is_quic = false;
+    chi->is_quic = c->quic != NULL;
     chi->ctx = ctx;
     return chi;
 }

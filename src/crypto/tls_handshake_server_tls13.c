@@ -1,10 +1,6 @@
 /* crypto/tls: handshake_server_tls13.go, the server side of a TLS 1.3
  * handshake. It starts once readClientHello has picked TLS 1.3.
  *
- * QUIC comes with quic.go. Until then there is never a QUIC connection here,
- * and the parts of Go's code that only run with one are left out, with a note
- * where they would go.
- *
  * As in tls_handshake_server.c, what only lasts the handshake is made in its
  * scratch arena, and what the Conn keeps is copied into the Conn's own.
  *
@@ -54,6 +50,12 @@ BURROW_SENTINEL_ERROR(ts13_err_compression,
 BURROW_SENTINEL_ERROR(ts13_err_renegotiation, "tls: initial handshake had non-empty "
                                               "renegotiation extension");
 BURROW_SENTINEL_ERROR(ts13_err_early_data, "tls: client sent unexpected early data");
+BURROW_SENTINEL_ERROR(ts13_err_early_data_no_psk,
+                      "tls: early_data without pre_shared_key");
+BURROW_SENTINEL_ERROR(ts13_err_quic_old_version,
+                      "tls: client offered TLS version older than TLS 1.3");
+BURROW_SENTINEL_ERROR(ts13_err_quic_no_params, "tls: client did not send a "
+                                               "quic_transport_parameters extension");
 BURROW_SENTINEL_ERROR(ts13_err_no_key_exchange, "tls: no key exchanges supported by "
                                                 "both client and server");
 BURROW_SENTINEL_ERROR(ts13_err_curve_accepted, "tls: internal error: supportsCurve "
@@ -301,7 +303,7 @@ Error burrow__tls_server_handshake_state_tls13_process_client_hello(
              * attacker could defeat this by adding an arbitrary high version
              * otherwise. */
             if (c->vers < burrow__tls_config_max_supported_version(
-                              c->config, TLS_ROLE_SERVER, false)) {
+                              c->config, TLS_ROLE_SERVER, c->quic != NULL)) {
                 (void)burrow__tls_conn_send_alert(c, TLS_ALERT_INAPPROPRIATE_FALLBACK);
                 return ts13_err_fallback;
             }
@@ -331,8 +333,12 @@ Error burrow__tls_server_handshake_state_tls13_process_client_hello(
         return ts13_err_renegotiation;
     }
 
-    /* The early data a QUIC client may send comes with quic.go. */
-    if (hs->client_hello->early_data) {
+    if (hs->client_hello->early_data && c->quic != NULL) {
+        if (hs->client_hello->psk_identities.len == 0) {
+            (void)burrow__tls_conn_send_alert(c, TLS_ALERT_ILLEGAL_PARAMETER);
+            return ts13_err_early_data_no_psk;
+        }
+    } else if (hs->client_hello->early_data) {
         /* See RFC 8446, Section 4.2.10 for the complicated behavior required
          * here. The scenario is that a different server at our address offered
          * to accept early data in the past, which we can't handle. For now,
@@ -396,7 +402,7 @@ Error burrow__tls_server_handshake_state_tls13_process_client_hello(
 
     Str selected_proto = BURROW_STR_EMPTY;
     err = burrow__tls_negotiate_alpn(c->config->next_protos,
-                                     hs->client_hello->alpn_protocols, false,
+                                     hs->client_hello->alpn_protocols, c->quic != NULL,
                                      &selected_proto);
     if (BURROW_FAILED(err)) {
         (void)burrow__tls_conn_send_alert(c, TLS_ALERT_NO_APPLICATION_PROTOCOL);
@@ -405,11 +411,31 @@ Error burrow__tls_server_handshake_state_tls13_process_client_hello(
     if (!burrow__tls_clone_str(ts13_keep(c), selected_proto, &c->client_protocol))
         return burrow_err_out_of_memory;
 
-    /* The checks a QUIC connection makes, and the transport parameters it
-     * keeps, come with quic.go. */
-    if (!slice_is_nil(hs->client_hello->quic_transport_parameters)) {
-        (void)burrow__tls_conn_send_alert(c, TLS_ALERT_UNSUPPORTED_EXTENSION);
-        return ts13_err_quic_params;
+    if (c->quic != NULL) {
+        /* RFC 9001 Section 4.2: Clients MUST NOT offer TLS versions older than
+         * 1.3. */
+        const uint16_t *versions = hs->client_hello->supported_versions.p;
+        for (Int i = 0; i < hs->client_hello->supported_versions.len; i++) {
+            if (versions[i] < TLS_VERSION_TLS13) {
+                (void)burrow__tls_conn_send_alert(c, TLS_ALERT_PROTOCOL_VERSION);
+                return ts13_err_quic_old_version;
+            }
+        }
+        /* RFC 9001 Section 8.2. */
+        if (slice_is_nil(hs->client_hello->quic_transport_parameters)) {
+            (void)burrow__tls_conn_send_alert(c, TLS_ALERT_MISSING_EXTENSION);
+            return ts13_err_quic_no_params;
+        }
+        /* Not in Go: the event can run out of memory. */
+        err = burrow__tls_conn_quic_set_transport_parameters(
+            c, hs->client_hello->quic_transport_parameters);
+        if (BURROW_FAILED(err))
+            return err;
+    } else {
+        if (!slice_is_nil(hs->client_hello->quic_transport_parameters)) {
+            (void)burrow__tls_conn_send_alert(c, TLS_ALERT_UNSUPPORTED_EXTENSION);
+            return ts13_err_quic_params;
+        }
     }
 
     if (!burrow__tls_clone_str(ts13_keep(c), hs->client_hello->server_name,
@@ -494,8 +520,6 @@ static bool ts13_can_resume(TlsServerHandshakeStateTLS13 *hs,
         c->config->client_auth >= TLS_VERIFY_CLIENT_CERT_IF_GIVEN &&
         !burrow__tls_any_valid_verified_chain(session_state->verified_chains, opts))
         return false;
-
-    /* The session events of a QUIC connection come with quic.go. */
     return true;
 }
 
@@ -538,7 +562,24 @@ static Error ts13_check_psk_binder(TlsServerHandshakeStateTLS13 *hs,
         return ts13_err_psk_binder;
     }
 
-    /* Accepting early data is only for QUIC, and comes with quic.go. */
+    if (c->quic != NULL && hs->client_hello->early_data && i == 0 &&
+        session_state->early_data && session_state->cipher_suite == hs->suite->id &&
+        str_eq(session_state->alpn_protocol, c->client_protocol)) {
+        hs->early_data = true;
+
+        Hash hello_transcript = burrow__tls_suite13_hash_new(hs->suite)(a);
+        err = burrow__tls_transcript_msg(hs->client_hello_msg,
+                                         hash_as_io_writer(hello_transcript), a);
+        if (BURROW_FAILED(err))
+            return err;
+        Slice early_traffic_secret =
+            burrow__tls13_early_secret_client_early_traffic_secret(&hs->early_secret, a,
+                                                                   hello_transcript);
+        err = burrow__tls_conn_quic_set_read_secret(
+            c, TLS_QUIC_ENCRYPTION_LEVEL_EARLY, hs->suite->id, early_traffic_secret);
+        if (BURROW_FAILED(err))
+            return err;
+    }
     return BURROW_NO_ERROR;
 }
 
@@ -611,6 +652,14 @@ Error burrow__tls_server_handshake_state_tls13_check_for_resumption(
         if (!ts13_can_resume(hs, session_state)) {
             tls_session_state_free(session_state);
             continue;
+        }
+
+        if (c->quic != NULL && c->quic->enable_session_events) {
+            err = burrow__tls_conn_quic_resume_session(c, session_state);
+            if (BURROW_FAILED(err)) {
+                tls_session_state_free(session_state);
+                return err;
+            }
         }
 
         err = ts13_check_psk_binder(hs, session_state, i);
@@ -689,7 +738,8 @@ Error burrow__tls_server_handshake_state_tls13_pick_certificate(
  * with middleboxes that didn't implement TLS correctly. See RFC 8446, Appendix
  * D.4. */
 static Error ts13_send_dummy_change_cipher_spec(TlsServerHandshakeStateTLS13 *hs) {
-    /* QUIC comes with quic.go. */
+    if (hs->c->quic != NULL)
+        return BURROW_NO_ERROR;
     if (hs->sent_dummy_ccs)
         return BURROW_NO_ERROR;
     hs->sent_dummy_ccs = true;
@@ -1071,7 +1121,17 @@ static Error ts13_establish_handshake_keys(TlsServerHandshakeStateTLS13 *hs) {
     if (BURROW_FAILED(err))
         return err;
 
-    /* Handing the secrets to QUIC comes with quic.go. */
+    if (c->quic != NULL) {
+        /* Not in Go: the event can run out of memory. */
+        err = burrow__tls_conn_quic_set_write_secret(
+            c, TLS_QUIC_ENCRYPTION_LEVEL_HANDSHAKE, hs->suite->id, server_secret);
+        if (BURROW_FAILED(err))
+            return err;
+        err = burrow__tls_conn_quic_set_read_secret(
+            c, TLS_QUIC_ENCRYPTION_LEVEL_HANDSHAKE, hs->suite->id, client_secret);
+        if (BURROW_FAILED(err))
+            return err;
+    }
 
     return ts13_write_key_logs(
         hs, BURROW_S(TLS_KEY_LOG_LABEL_CLIENT_HANDSHAKE), client_secret,
@@ -1110,7 +1170,14 @@ static Error ts13_send_server_parameters(TlsServerHandshakeStateTLS13 *hs) {
     TlsEncryptedExtensionsMsg *encrypted_extensions = &msg.encrypted_extensions;
     encrypted_extensions->alpn_protocol = c->client_protocol;
 
-    /* The QUIC transport parameters and early data come with quic.go. */
+    if (c->quic != NULL) {
+        Error e = BURROW_NO_ERROR;
+        Slice p = burrow__tls_conn_quic_get_transport_parameters(c, &e);
+        if (BURROW_FAILED(e))
+            return e;
+        encrypted_extensions->quic_transport_parameters = p;
+        encrypted_extensions->early_data = hs->early_data;
+    }
 
     if (!c->did_resume && hs->client_hello->server_name.len != 0)
         encrypted_extensions->server_name_ack = true;
@@ -1288,7 +1355,13 @@ static Error ts13_send_server_finished(TlsServerHandshakeStateTLS13 *hs) {
     if (BURROW_FAILED(err))
         return err;
 
-    /* Handing the secret to QUIC comes with quic.go. */
+    if (c->quic != NULL) {
+        /* Not in Go: the event can run out of memory. */
+        err = burrow__tls_conn_quic_set_write_secret(
+            c, TLS_QUIC_ENCRYPTION_LEVEL_APPLICATION, hs->suite->id, server_secret);
+        if (BURROW_FAILED(err))
+            return err;
+    }
 
     err = ts13_write_key_logs(
         hs, BURROW_S(TLS_KEY_LOG_LABEL_CLIENT_TRAFFIC), hs->traffic_secret,
@@ -1314,8 +1387,9 @@ static bool ts13_should_send_session_tickets(const TlsServerHandshakeStateTLS13 
     if (hs->c->config->session_tickets_disabled)
         return false;
 
-    /* QUIC tickets are sent by QUICConn.SendSessionTicket, not automatically.
-     * QUIC comes with quic.go. */
+    /* QUIC tickets are sent by QUICConn.SendSessionTicket, not automatically. */
+    if (hs->c->quic != NULL)
+        return false;
 
     /* Don't send tickets the client wouldn't use. See RFC 8446, Section 4.2.9. */
     const Byte *modes = hs->client_hello->psk_modes.p;

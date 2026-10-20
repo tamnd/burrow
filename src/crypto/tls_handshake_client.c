@@ -1,8 +1,8 @@
 /* crypto/tls: handshake_client.go, the client side of a TLS 1.0–1.2 handshake
  * and the ClientHello every client handshake starts with.
  *
- * The TLS 1.3 handshake is in tls_handshake_client_tls13.c. QUIC comes with
- * quic.go, and Encrypted Client Hello is in tls_ech.c.
+ * The TLS 1.3 handshake is in tls_handshake_client_tls13.c, QUIC is in
+ * tls_quic.c, and Encrypted Client Hello is in tls_ech.c.
  *
  * Everything the handshake only needs while it runs is made in a scratch
  * arena that goes when it ends. What the Conn keeps afterwards, the server's
@@ -227,8 +227,8 @@ static Error tcl_make_client_hello(TlsConn *c, Alloc *a, TclHello *out) {
         return tcl_err_next_protos_large;
 
     uint16_t versions[4];
-    Int nversions =
-        burrow__tls_config_supported_versions(config, TLS_ROLE_CLIENT, false, versions);
+    Int nversions = burrow__tls_config_supported_versions(config, TLS_ROLE_CLIENT,
+                                                          c->quic != NULL, versions);
     if (nversions == 0)
         return tcl_err_no_versions;
     /* Since supportedVersions is sorted in descending order, the first element
@@ -300,10 +300,12 @@ static Error tcl_make_client_hello(TlsConn *c, Alloc *a, TclHello *out) {
      * a compatibility measure (see RFC 8446, Section 4.1.2).
      *
      * The session ID is not set for QUIC connections (see RFC 9001, Section
-     * 8.4). Those come with quic.go. */
-    hello->session_id = tcl_random(a, config, 32, &err);
-    if (BURROW_FAILED(err))
-        return err;
+     * 8.4). */
+    if (c->quic == NULL) {
+        hello->session_id = tcl_random(a, config, 32, &err);
+        if (BURROW_FAILED(err))
+            return err;
+    }
 
     if (max_version >= TLS_VERSION_TLS12) {
         hello->supported_signature_algorithms =
@@ -352,7 +354,12 @@ static Error tcl_make_client_hello(TlsConn *c, Alloc *a, TclHello *out) {
             hello->key_shares.len = 1;
     }
 
-    /* The QUIC transport parameters come with quic.go. */
+    if (c->quic != NULL) {
+        Slice p = burrow__tls_conn_quic_get_transport_parameters(c, &err);
+        if (BURROW_FAILED(err))
+            return err;
+        hello->quic_transport_parameters = p;
+    }
 
     if (!slice_is_nil(config->encrypted_client_hello_config_list)) {
         if (config->min_version != 0 && config->min_version < TLS_VERSION_TLS13)
@@ -574,7 +581,24 @@ static Error tcl_load_session(TlsConn *c, Alloc *a, TlsClientHelloMsg *hello,
     if (!cipher_suite_ok)
         return tcl_no_session(l, cs);
 
-    /* The QUIC session events and 0-RTT come with quic.go. */
+    if (c->quic != NULL) {
+        if (c->quic->enable_session_events)
+            (void)burrow__tls_conn_quic_resume_session(c, session);
+
+        /* For 0-RTT, the cipher suite has to match exactly, and we need to be
+         * offering the same ALPN. */
+        if (session->early_data && burrow__tls_mutual_cipher_suite_tls13(
+                                       hello->cipher_suites.p, hello->cipher_suites.len,
+                                       session->cipher_suite) != NULL) {
+            const Str *alpns = hello->alpn_protocols.p;
+            for (Int i = 0; i < hello->alpn_protocols.len; i++) {
+                if (str_eq(alpns[i], session->alpn_protocol)) {
+                    hello->early_data = true;
+                    break;
+                }
+            }
+        }
+    }
 
     /* Set the pre_shared_key extension. See RFC 8446, Section 4.2.11.1. */
     Duration ticket_age =
@@ -624,7 +648,7 @@ static Error tcl_pick_tls_version(TlsConn *c, const TlsServerHelloMsg *server_he
         peer_version = server_hello->supported_version;
 
     uint16_t vers = 0;
-    if (!burrow__tls_config_mutual_version(c->config, TLS_ROLE_CLIENT, false,
+    if (!burrow__tls_config_mutual_version(c->config, TLS_ROLE_CLIENT, c->quic != NULL,
                                            slice_from(&peer_version, 1, 1, TYPE_UINT16),
                                            &vers)) {
         (void)burrow__tls_conn_send_alert(c, TLS_ALERT_PROTOCOL_VERSION);
@@ -689,7 +713,26 @@ static Error tcl_client_handshake_with(TlsConn *c, Context ctx, Alloc *a, TclHel
     if (BURROW_FAILED(err))
         return err;
 
-    /* hello.earlyData is only set for QUIC, which comes with quic.go. */
+    if (hello->early_data) {
+        const TlsSuiteTLS13 *suite =
+            burrow__tls_cipher_suite_tls13_by_id(l->session->cipher_suite);
+        Hash transcript = burrow__tls_suite13_hash_new(suite)(a);
+        const TlsHandshakeMsg *transcript_hello = &h->msg;
+        if (ech != NULL)
+            transcript_hello = ech->inner_hello_msg;
+        err = burrow__tls_transcript_msg(transcript_hello,
+                                         hash_as_io_writer(transcript), a);
+        if (BURROW_FAILED(err))
+            return err;
+        Slice early_traffic_secret =
+            burrow__tls13_early_secret_client_early_traffic_secret(&l->early_secret, a,
+                                                                   transcript);
+        /* Not in Go: the event can run out of memory. */
+        err = burrow__tls_conn_quic_set_write_secret(c, TLS_QUIC_ENCRYPTION_LEVEL_EARLY,
+                                                     suite->id, early_traffic_secret);
+        if (BURROW_FAILED(err))
+            return err;
+    }
 
     /* serverHelloMsg is not included in the transcript */
     TlsHandshakeMsg *msg = BURROW_NEW(a, TlsHandshakeMsg);
@@ -712,8 +755,8 @@ static Error tcl_client_handshake_with(TlsConn *c, Context ctx, Alloc *a, TclHel
     /* If we are negotiating a protocol version that's lower than what we
      * support, check for the server downgrade canaries. See RFC 8446, Section
      * 4.1.3. */
-    uint16_t max_vers =
-        burrow__tls_config_max_supported_version(c->config, TLS_ROLE_CLIENT, false);
+    uint16_t max_vers = burrow__tls_config_max_supported_version(
+        c->config, TLS_ROLE_CLIENT, c->quic != NULL);
     const Byte *canary = (const Byte *)server_hello->random.p + 24;
     bool tls12_downgrade = memcmp(canary, TLS_DOWNGRADE_CANARY_TLS12, 8) == 0;
     bool tls11_downgrade = memcmp(canary, TLS_DOWNGRADE_CANARY_TLS11, 8) == 0;

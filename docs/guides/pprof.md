@@ -235,7 +235,7 @@ static void contend(void *env) {
     for (int i = 0; i < 2; i++) {
         PprofProfile *p = pprof_lookup(str_from_cstr(names[i]));
         fmt_printf_v("%s profile has records: %t\n", names[i],
-                     pprof_profile_count(p) > 0);
+                     (bool)(pprof_profile_count(p) > 0));
     }
 }
 ```

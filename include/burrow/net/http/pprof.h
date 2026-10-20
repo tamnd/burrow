@@ -59,10 +59,9 @@ void http_pprof_cmdline(void *env, HttpResponseWriter w, HttpRequest *r);
 void http_pprof_profile(void *env, HttpResponseWriter w, HttpRequest *r);
 
 /* Trace responds with the execution trace in binary form, for a duration given
- * by the seconds GET parameter, 1 second if there is none. burrow has no
- * runtime/trace yet, so for now this answers 500 with "Could not enable
- * tracing", as Go does when trace.Start fails. http_pprof_register registers it
- * as /debug/pprof/trace. */
+ * by the seconds GET parameter, 1 second if there is none, and answers 500 with
+ * "Could not enable tracing" when a trace is already on.
+ * http_pprof_register registers it as /debug/pprof/trace. */
 void http_pprof_trace(void *env, HttpResponseWriter w, HttpRequest *r);
 
 /* Symbol looks up the program counters listed in the request, responding

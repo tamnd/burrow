@@ -34,6 +34,7 @@
 #include "burrow/os.h"
 #include "burrow/runtime.h"
 #include "burrow/runtime/pprof.h"
+#include "burrow/runtime/trace.h"
 #include "burrow/slice.h"
 #include "burrow/strconv.h"
 #include "burrow/strings.h"
@@ -153,10 +154,7 @@ void http_pprof_profile(void *env, HttpResponseWriter w, HttpRequest *r) {
 
 /* Trace responds with the execution trace in binary form. Tracing lasts for
  * duration specified in seconds GET parameter, or for 1 second if not
- * specified.
- *
- * Not in Go: burrow has no runtime/trace yet, so this always takes the path Go
- * takes when trace.Start fails. */
+ * specified. */
 void http_pprof_trace(void *env, HttpResponseWriter w, HttpRequest *r) {
     (void)env;
     hpp_set(w, S_("X-Content-Type-Options"), S_("nosniff"));
@@ -172,8 +170,19 @@ void http_pprof_trace(void *env, HttpResponseWriter w, HttpRequest *r) {
      * starts writing. */
     hpp_set(w, S_("Content-Type"), S_("application/octet-stream"));
     hpp_set(w, S_("Content-Disposition"), S_("attachment; filename=\"trace\""));
-    hpp_serve_error(w, HTTP_STATUS_INTERNAL_SERVER_ERROR,
-                    S_("Could not enable tracing: burrow has no execution tracer yet"));
+    err = trace_start(http_response_writer_as_io_writer(w));
+    if (BURROW_FAILED(err)) {
+        /* trace.Start failed, so no writes yet. */
+        Arena ar;
+        arena_init(&ar, NULL, 0);
+        hpp_serve_error(
+            w, HTTP_STATUS_INTERNAL_SERVER_ERROR,
+            fmt_sprintf_v(arena_allocator(&ar), "Could not enable tracing: %s", err));
+        arena_free(&ar);
+        return;
+    }
+    hpp_sleep(r, (Duration)(sec * (double)TIME_SECOND));
+    trace_stop();
 }
 
 /* Symbol looks up the program counters listed in the request, responding with

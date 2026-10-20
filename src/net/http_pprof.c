@@ -585,7 +585,7 @@ void http_pprof_index(void *env, HttpResponseWriter w, HttpRequest *r) {
         a, (size_t)n * sizeof *profiles, _Alignof(HppProfileEntry));
     if (profiles == NULL) {
         /* Not in Go: the arena said no. */
-        log_print_v(S_("net/http/pprof: out of memory"));
+        log_printf_v("net/http/pprof: out of memory");
         arena_free(&ar);
         return;
     }

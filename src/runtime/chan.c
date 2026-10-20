@@ -1241,7 +1241,12 @@ static void sel_dequeue(Select *s) {
     }
 }
 
-Int chan_select(SelectCase *cases, Int n) {
+/* Not inlined, so gcc cannot split it either. The amalgamation gives
+ * chan_select callers in the same file, and then gcc moves most of the body
+ * into a local chan_select.part.0 that the symbol table has no name for. A block
+ * profile has to say chan_select where Go says selectgo, and TestBlockProfile
+ * checks that it does. */
+BURROW_NOINLINE Int chan_select(SelectCase *cases, Int n) {
     if (n < 0)
         runtime_throw(BURROW_S("chan_select: negative case count"));
     if (n > SELECT_MAX)

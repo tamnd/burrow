@@ -31,6 +31,7 @@
 #include "burrow/io.h"
 #include "burrow/map.h"
 #include "burrow/mem.h"
+#include "burrow/mem/arena.h"
 #include "burrow/net.h"
 #include "burrow/slice.h"
 #include "burrow/sync.h"
@@ -368,14 +369,71 @@ BURROW_OWNS(ret) Error tls_alert_error_as_error(TlsAlertError e, Alloc *a);
 
 /* -------------------------------------------------------- connection state */
 
-/* A SessionState, which session resumption keeps. What is in it comes with
- * the rest of the handshake. */
-struct TlsSessionState;
+/* A SessionState is a resumable session.
+ *
+ * Not in Go: a session keeps everything it points at in an arena of its own,
+ * which tls_session_state_free gives back. Grow extra with the allocator
+ * tls_session_state_allocator gives. The fields after early_data are Go's
+ * unexported ones, for crypto/tls only. */
+typedef struct TlsSessionState {
+    /* Extra is ignored by crypto/tls, but is encoded by SessionState.Bytes and
+     * parsed by ParseSessionState.
+     *
+     * This allows Config.UnwrapSession/Config.WrapSession and
+     * ClientSessionCache implementations to store and retrieve additional
+     * data alongside this session.
+     *
+     * To allow different layers in a protocol stack to share this field,
+     * applications must only append to it, not replace it, and must use
+     * entries that can be recognized even if out of order (for example, by
+     * starting with an id and version prefix).
+     *
+     * Not in Go: a slice of Bytes. */
+    Slice extra;
+
+    /* EarlyData indicates whether the ticket can be used for 0-RTT in a QUIC
+     * connection. The application may set this to false if it is true to
+     * decline to offer 0-RTT even if supported. */
+    bool early_data;
+
+    uint16_t version;
+    bool is_client;
+    uint16_t cipher_suite;
+    /* createdAt is the generation time of the secret on the server (which for
+     * TLS 1.0-1.2 might be earlier than the current session) and the time at
+     * which the ticket was received on the client. */
+    uint64_t created_at; /* seconds since UNIX epoch */
+    Slice secret;        /* master secret for TLS 1.2, or the PSK for TLS 1.3 */
+    bool ext_master_secret;
+    Slice peer_certificates; /* []*x509.Certificate */
+    Slice ocsp_response;
+    Slice scts;            /* [][]byte */
+    Slice verified_chains; /* [][]*x509.Certificate */
+    Str alpn_protocol;     /* only set if EarlyData is true */
+
+    /* Client-side TLS 1.3-only fields. */
+    uint64_t use_by; /* seconds since UNIX epoch */
+    uint32_t age_add;
+    Slice ticket;
+
+    /* TLS 1.0-1.2 only fields. */
+    TlsCurveID curve_id;
+
+    /* Not in Go: where the session came from, and the arena it keeps its
+     * contents in. */
+    Alloc *a;
+    Arena arena;
+} TlsSessionState;
 
 /* ClientSessionState contains the state needed by a client to resume a
- * previous TLS session. */
+ * previous TLS session.
+ *
+ * Not in Go: refs counts the references to it in place of the garbage
+ * collector. tls_new_resumption_state gives out the first one, and the last
+ * tls_client_session_state_release frees the session along with it. */
 typedef struct TlsClientSessionState {
     struct TlsSessionState *session;
+    int32_t refs;
 } TlsClientSessionState;
 
 /* What ConnectionState.ExportKeyingMaterial calls, set by the connection. */
@@ -486,7 +544,11 @@ BURROW_OWNS(ret) Slice tls_connection_state_export_keying_material(
  * put adds the ClientSessionState to the cache with the given key. It might
  * get called multiple times in a connection if a TLS 1.3 server provides more
  * than one session ticket. If called with a NULL session, it should remove the
- * cache entry. */
+ * cache entry.
+ *
+ * Not in Go: put takes a reference of its own to what it keeps, with
+ * tls_client_session_state_retain, and releases it when the entry goes. get
+ * gives the caller a reference too, which the caller releases. */
 typedef struct TlsClientSessionCacheVT {
     const Type *self_type;
     struct TlsClientSessionState *(*get)(void *self, Str session_key, bool *ok);
@@ -499,7 +561,7 @@ typedef struct TlsClientSessionCache {
 } TlsClientSessionCache;
 
 /* ClientSessionCache.Get. */
-BURROW_BORROWS(ret, c) static inline struct TlsClientSessionState *
+BURROW_OWNS(ret) static inline struct TlsClientSessionState *
 tls_client_session_cache_get(TlsClientSessionCache c, Str session_key, bool *ok) {
     return c.vt->get(c.data, session_key, ok);
 }
@@ -516,12 +578,17 @@ static inline void tls_client_session_cache_put(TlsClientSessionCache c,
  * is used instead.
  *
  * The cache and the copies of the keys it keeps are made from a, which has to
- * be one any goroutine can use at once, and the sessions are only pointed at.
- * It never holds more than capacity entries, and it gives back the memory of a
- * key it drops, so a heap allocator does not grow with use. A zero cache, with
- * no vtable, when a is out of memory. */
+ * be one any goroutine can use at once. It holds a reference to each session
+ * in it. It never holds more than capacity entries, and it gives back the
+ * memory of a key it drops, so a heap allocator does not grow with use. A zero
+ * cache, with no vtable, when a is out of memory. */
 BURROW_OWNS(ret) TlsClientSessionCache tls_new_lru_client_session_cache(Alloc *a,
                                                                         Int capacity);
+
+/* Not in Go: releases the sessions an LRU cache from
+ * tls_new_lru_client_session_cache holds and gives the cache back to the
+ * allocator it came from. */
+void tls_lru_client_session_cache_free(TlsClientSessionCache c);
 
 /* ------------------------------------------------------------- hello infos */
 
@@ -994,8 +1061,9 @@ typedef struct TlsConfig {
      * clients, see the EncryptedClientHelloConfigList field. */
     Slice encrypted_client_hello_keys;
 
-    /* Not in Go: where the config makes its session ticket keys, the heap
-     * when it is NULL. It has to be one any goroutine can use at once. */
+    /* Not in Go: where the config makes its session ticket keys, and the
+     * sessions a client keeps and DecryptTicket makes, the heap when it is
+     * NULL. It has to be one any goroutine can use at once. */
     Alloc *a;
 
     /* SessionTicketKey is used by TLS servers to provide session resumption.
@@ -1114,6 +1182,83 @@ BURROW_STATIC(ret) Error tls_config_set_session_ticket_keys(TlsConfig *c,
  * Go. burrow_err_out_of_memory when a runs out, with name_to_certificate left
  * as it was; otherwise no error. */
 BURROW_STATIC(ret) Error tls_config_build_name_to_certificate(TlsConfig *c, Alloc *a);
+
+/* ---------------------------------------------------------------- sessions */
+
+/* Bytes encodes the session, including any private fields, so that it can be
+ * parsed by ParseSessionState. The encoding contains secret values critical
+ * to the security of future and possibly past sessions.
+ *
+ * The specific encoding should be considered opaque and may change
+ * incompatibly between Go versions.
+ *
+ * Not in Go: the bytes are made from a. */
+BURROW_OWNS(ret) Slice tls_session_state_bytes(const TlsSessionState *s, Alloc *a,
+                                               Error *err);
+
+/* ParseSessionState parses a SessionState encoded by SessionState.Bytes.
+ *
+ * Not in Go: the session copies what it needs out of data, so data can go
+ * after. It comes from a, and tls_session_state_free gives it back. */
+BURROW_OWNS(ret) TlsSessionState *tls_parse_session_state(Alloc *a, Slice data,
+                                                          Error *err);
+
+/* Not in Go: gives back s and everything in it. Nothing for NULL. */
+void tls_session_state_free(TlsSessionState *s);
+
+/* Not in Go: the allocator of the arena s keeps its contents in, for growing
+ * s->extra. */
+BURROW_BORROWS(ret, s) Alloc *tls_session_state_allocator(TlsSessionState *s);
+
+/* EncryptTicket encrypts a ticket with the Config's configured (or default)
+ * session ticket keys. It can be used as a Config.WrapSession implementation.
+ *
+ * Not in Go: the ticket is made from a. */
+BURROW_OWNS(ret) Slice tls_config_encrypt_ticket(TlsConfig *c, Alloc *a,
+                                                 const TlsConnectionState *cs,
+                                                 const TlsSessionState *ss, Error *err);
+
+/* DecryptTicket decrypts a ticket encrypted by Config.EncryptTicket. It can be
+ * used as a Config.UnwrapSession implementation.
+ *
+ * If the ticket can't be decrypted or parsed, DecryptTicket returns (nil,
+ * nil).
+ *
+ * Not in Go: the session comes from c->a, or the heap when that is NULL. */
+BURROW_OWNS(ret) TlsSessionState *
+tls_config_decrypt_ticket(TlsConfig *c, Slice identity, const TlsConnectionState *cs,
+                          Error *err);
+
+/* ResumptionState returns the session ticket sent by the server (also known as
+ * the session's identity) and the state necessary to resume this session.
+ *
+ * It can be called by ClientSessionCache.Put to serialize (with
+ * SessionState.Bytes) and store the session.
+ *
+ * Not in Go: the ticket comes back, the state goes in *state, and both belong
+ * to cs. */
+BURROW_BORROWS(ret, cs) Slice tls_client_session_state_resumption_state(
+    TlsClientSessionState *cs, TlsSessionState **state, Error *err);
+
+/* NewResumptionState returns a state value that can be returned by
+ * ClientSessionCache.Get to resume a previous session.
+ *
+ * state needs to be returned by ParseSessionState, and the ticket and session
+ * state must have been returned by ClientSessionState.ResumptionState.
+ *
+ * Not in Go: the new value owns state from here on and keeps a copy of
+ * ticket. It holds one reference, for the caller. NULL with
+ * burrow_err_out_of_memory, and state freed, when there is no memory. */
+BURROW_OWNS(ret) TlsClientSessionState *
+tls_new_resumption_state(Slice ticket, TlsSessionState *state, Error *err);
+
+/* Not in Go: one more reference to cs, which comes back. NULL stays NULL. */
+BURROW_BORROWS(ret, cs) TlsClientSessionState *
+tls_client_session_state_retain(TlsClientSessionState *cs);
+
+/* Not in Go: gives back a reference to cs. The last one frees its session,
+ * and cs with it. Nothing for NULL. */
+void tls_client_session_state_release(TlsClientSessionState *cs);
 
 /* -------------------------------------------------------------------- Conn */
 

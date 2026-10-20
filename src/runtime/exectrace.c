@@ -417,7 +417,7 @@ static void writer_flush(Writer *w) {
 /* ------------------------------------------------------------------- strings */
 
 static uint64_t hash_bytes(const void *p, size_t n) {
-    return runtime_memhash(p, n, 0x9e3779b97f4a7c15u);
+    return runtime_memhash(p, n, 0x9e3779b97f4a7c15U);
 }
 
 static bool strings_grow(TraceStrings *t) {
@@ -440,6 +440,19 @@ static bool strings_grow(TraceStrings *t) {
     t->tab = tab;
     t->cap = ncap;
     return true;
+}
+
+/* Go's traceStringTable.writeString. t->lock held. */
+static void string_write(TraceStrings *t, uint64_t gen, uint64_t id, const void *s,
+                         Int n) {
+    Writer w = {&t->buf, gen, NO_THREAD};
+    if (writer_ensure(&w, 1 + 2 * BYTES_PER_NUMBER + n + 1))
+        buf_byte(t->buf, EV_STRINGS);
+    buf_byte(t->buf, EV_STRING);
+    buf_varint(t->buf, id);
+    buf_varint(t->buf, (uint64_t)n);
+    memcpy(&t->buf->arr[t->buf->pos], s, (size_t)n);
+    t->buf->pos += n;
 }
 
 /* Go's traceStringTable.put: the id of s in this generation, writing it out
@@ -476,15 +489,22 @@ static uint64_t string_put(uint64_t gen, const void *s, Int n) {
     uint64_t id = ++t->last;
     t->tab[j] = (TraceStrEnt){h, id, n, bytes};
     t->n++;
+    string_write(t, gen, id, s, n);
+    burrow__unlock(&t->lock);
+    return id;
+}
 
-    Writer w = {&t->buf, gen, NO_THREAD};
-    if (writer_ensure(&w, 1 + 2 * BYTES_PER_NUMBER + n + 1))
-        buf_byte(t->buf, EV_STRINGS);
-    buf_byte(t->buf, EV_STRING);
-    buf_varint(t->buf, id);
-    buf_varint(t->buf, (uint64_t)n);
-    memcpy(&t->buf->arr[t->buf->pos], s, (size_t)n);
-    t->buf->pos += n;
+/* Go's traceStringTable.emit: a string with an id of its own that is never
+ * looked up again, for a log message, which is seldom repeated. */
+static uint64_t string_emit(uint64_t gen, const void *s, Int n) {
+    if (n <= 0)
+        return 0;
+    if (n > MAX_STRING_SIZE)
+        n = MAX_STRING_SIZE;
+    TraceStrings *t = &trace.strings[gen % 2];
+    burrow__lock(&t->lock);
+    uint64_t id = ++t->last;
+    string_write(t, gen, id, s, n);
     burrow__unlock(&t->lock);
     return id;
 }
@@ -696,9 +716,11 @@ BURROW_NOINLINE void burrow__trace_capture(int why) {
     burrow__M *m = burrow__curm();
     if (m == NULL)
         return;
-    if (m->trace == NULL && (m->trace = tt_get()) == NULL)
-        return;
+    if (m->trace == NULL)
+        m->trace = tt_get();
     burrow__TraceThread *tt = m->trace;
+    if (tt == NULL)
+        return;
     tt->why = why;
     tt->ncap = burrow__callers(BURROW_WALK_FROM, 1, tt->cap, BURROW_PROFILE_DEPTH);
 }
@@ -882,6 +904,64 @@ static void procs_change(void) {
     uint64_t stack = here_stack(&tl);
     Writer w = event_writer(&tl, m->curg, GO_RUNNING, PROC_RUNNING);
     EVENT(&w, EV_PROCS_CHANGE, (uint64_t)burrow__gomaxprocs(), stack);
+    burrow__trace_release(&tl);
+}
+
+/* Go's trace_userTaskCreate, trace_userTaskEnd, trace_userRegion and
+ * trace_userLog. Each event needs a goroutine to belong to, as in Go, where
+ * there always is one. A thread that is not running one leaves it out. */
+static bool user_acquire(burrow__TraceLocker *tl) {
+    burrow__M *m = burrow__curm();
+    if (m == NULL || m->curg == NULL || m->p == NULL)
+        return false;
+    return burrow__trace_acquire(tl);
+}
+
+static Writer user_writer(burrow__TraceLocker *tl) {
+    return event_writer(tl, tl->m->curg, GO_RUNNING, PROC_RUNNING);
+}
+
+void burrow__trace_user_task_create(uint64_t id, uint64_t parent, Str type,
+                                    const Uintptr *pcs, Int n) {
+    burrow__TraceLocker tl;
+    if (!user_acquire(&tl))
+        return;
+    Writer w = user_writer(&tl);
+    EVENT(&w, EV_USER_TASK_BEGIN, id, parent, string_put(tl.gen, type.p, type.len),
+          stack_put(tl.gen, pcs, n));
+    burrow__trace_release(&tl);
+}
+
+void burrow__trace_user_task_end(uint64_t id, const Uintptr *pcs, Int n) {
+    burrow__TraceLocker tl;
+    if (!user_acquire(&tl))
+        return;
+    Writer w = user_writer(&tl);
+    EVENT(&w, EV_USER_TASK_END, id, stack_put(tl.gen, pcs, n));
+    burrow__trace_release(&tl);
+}
+
+void burrow__trace_user_region(uint64_t id, uint64_t mode, Str type, const Uintptr *pcs,
+                               Int n) {
+    if (mode > 1)
+        return;
+    burrow__TraceLocker tl;
+    if (!user_acquire(&tl))
+        return;
+    Writer w = user_writer(&tl);
+    EVENT(&w, mode == 0 ? EV_USER_REGION_BEGIN : EV_USER_REGION_END, id,
+          string_put(tl.gen, type.p, type.len), stack_put(tl.gen, pcs, n));
+    burrow__trace_release(&tl);
+}
+
+void burrow__trace_user_log(uint64_t id, Str category, Str message, const Uintptr *pcs,
+                            Int n) {
+    burrow__TraceLocker tl;
+    if (!user_acquire(&tl))
+        return;
+    Writer w = user_writer(&tl);
+    EVENT(&w, EV_USER_LOG, id, string_put(tl.gen, category.p, category.len),
+          string_emit(tl.gen, message.p, message.len), stack_put(tl.gen, pcs, n));
     burrow__trace_release(&tl);
 }
 

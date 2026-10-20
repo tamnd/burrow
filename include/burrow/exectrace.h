@@ -111,6 +111,19 @@ void burrow__trace_go_switch(burrow__TraceLocker *tl, burrow__G *gp, burrow__G *
 void burrow__trace_proc_start(burrow__TraceLocker *tl);
 void burrow__trace_proc_stop(burrow__TraceLocker *tl, burrow__P *p);
 
+/* The events runtime/trace's annotations write: a task beginning and ending, a
+ * region beginning (mode 0) and ending (mode 1), and a log message. pcs is the
+ * stack of the caller, which the caller walks itself so that how many frames
+ * are in between does not matter. Nothing is written for a thread that is not
+ * running a goroutine. */
+void burrow__trace_user_task_create(uint64_t id, uint64_t parent, Str type,
+                                    const Uintptr *pcs, Int n);
+void burrow__trace_user_task_end(uint64_t id, const Uintptr *pcs, Int n);
+void burrow__trace_user_region(uint64_t id, uint64_t mode, Str type, const Uintptr *pcs,
+                               Int n);
+void burrow__trace_user_log(uint64_t id, Str category, Str message, const Uintptr *pcs,
+                            Int n);
+
 /* Why the next stop on this thread happens, with the stack that led to it.
  * Called on the goroutine's own stack just before it hands over to the
  * scheduler, since by the time the event is written the stack that matters is

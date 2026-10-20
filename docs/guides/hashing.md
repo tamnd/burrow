@@ -179,7 +179,7 @@ print_sum(a, BURROW_S("sha3-224"), sha3_as_hash(sha3_new224(a)), data);
 sha3-224: 92 7b 36 2e af 84 a7 57 85 bb ec 33 70 d1 c9 71 13 49 e9 3f 11 04 ed a0 60 78 42 21
 ```
 
-Unlike the older hashes, both types already have `MarshalBinary`, `AppendBinary` and `UnmarshalBinary`, as `sha3_marshal_binary` and so on, and `sha3_clone` returns a `HashCloner`. The saved state is byte for byte what Go saves, so a state written by a Go program can be picked up here and the other way round.
+Both types have `MarshalBinary`, `AppendBinary` and `UnmarshalBinary`, as `sha3_marshal_binary` and so on, and `sha3_clone` returns a `HashCloner`. The saved state is byte for byte what Go saves, so a state written by a Go program can be picked up here and the other way round.
 
 ## maphash
 
@@ -298,7 +298,7 @@ The hash is burrow's runtime hash and not Go's, so the numbers differ from a Go 
 
 ## Saving and copying a hash
 
-As in Go, the hashes from md5, sha1, sha256, sha512, adler32, crc32, crc64 and fnv are also `encoding.BinaryMarshaler`, `BinaryAppender` and `BinaryUnmarshaler`. Go finds those with a type assertion. Here you put the `Hash` in an `Any` and hand it to the `encoding` calls, which find the method the same way:
+As in Go, the hashes from md5, sha1, sha256, sha512, sha3, adler32, crc32, crc64 and fnv are also `encoding.BinaryMarshaler`, `BinaryAppender` and `BinaryUnmarshaler`. Go finds those with a type assertion. Here you put the `Hash` in an `Any` and hand it to the `encoding` calls, which find the method the same way:
 
 <!-- example: ../examples/hash/hash.c#marshal -->
 ```c
@@ -323,7 +323,7 @@ hash_write(h2, slice_from_str(a, BURROW_S("world")), NULL);
 
 Its sum is `09ca7e4e...`, the same as hashing `hello, world` in one go. A state that does not fit is refused with Go's error, such as `hash/crc32: tables do not match` for a CRC-32 state from another polynomial.
 
-To copy a hash in memory, `hash_is_cloner` is Go's `h.(hash.Cloner)` check, and `hash_clone` returns a `HashCloner` with the same state that is written to separately from the original:
+To copy a hash in memory, `hash_is_cloner` is Go's `h.(hash.Cloner)` check, which those hashes and maphash's pass, and `hash_clone` returns a `HashCloner` with the same state that is written to separately from the original:
 
 <!-- example: ../examples/hash/hash.c#clone -->
 ```c
@@ -348,4 +348,4 @@ As in Go, `GODEBUG` turns them off. `GODEBUG=cpu.all=off` runs the portable code
 
 ## What is not here yet
 
-SHA-3 and maphash have clone calls of their own, `sha3_clone` and `maphash_hash_as_cloner`, but a `Hash` made from either does not answer `hash_is_cloner` or the `encoding` calls yet. CRC-32 in Go uses the SSE 4.2 and ARMv8 CRC instructions when it can, and burrow uses slicing by 8 tables for now, which is what Go falls back to on machines without them. SHA-512 on x86 is the portable code too, where Go has an AVX2 version. SHA-3 is portable everywhere, and it is close anyway: its portable code runs at about 90% of the speed Go gets from the SHA-3 instructions on Apple chips, and at about twice the speed of Go's portable code.
+CRC-32 in Go uses the SSE 4.2 and ARMv8 CRC instructions when it can, and burrow uses slicing by 8 tables for now, which is what Go falls back to on machines without them. SHA-512 on x86 is the portable code too, where Go has an AVX2 version. SHA-3 is portable everywhere, and it is close anyway: its portable code runs at about 90% of the speed Go gets from the SHA-3 instructions on Apple chips, and at about twice the speed of Go's portable code.

@@ -110,6 +110,56 @@ embed_fails 'BURROW_EMBED_FS(s);' 'usage: BURROW_EMBED_FS(s, "pattern"...)'
 
 printf 'check-gen: burrow-gen embed output is up to date and its errors are go build'"'"'s\n'
 
+# burrow-gen from-go and its fixture. This needs neither Go nor libclang, only
+# tools/from-go.c built against the library, which make check does first and
+# burrow-gen does itself otherwise.
+tool=
+[ -n "${FROM_GO:-}" ] && tool="--tool $FROM_GO"
+# shellcheck disable=SC2086
+tools/burrow-gen from-go $tool tests/fromgo/inventory.go -o "$tmp/inventory_gen.c" \
+	--header "$tmp/inventory_gen.h" 2>"$tmp/err" || {
+	cat "$tmp/err" >&2
+	exit 1
+}
+# The .c includes the header by its base name, the same in both places.
+for f in inventory_gen.c inventory_gen.h; do
+	if ! diff -u "tests/fromgo/$f" "$tmp/$f"; then
+		printf 'check-gen: tests/fromgo/%s is not what burrow-gen from-go writes now.\n' "$f" >&2
+		printf 'check-gen: regenerate with tools/burrow-gen from-go tests/fromgo/inventory.go -o tests/fromgo/inventory_gen.c --header tests/fromgo/inventory_gen.h\n' >&2
+		exit 1
+	fi
+done
+printf 'check-gen: burrow-gen from-go output is up to date\n'
+
+# And what it refuses, each with nothing written.
+fg="$tmp/fromgo"
+mkdir -p "$fg"
+fromgo_fails() {
+	printf 'package p\n\n%s\n' "$1" >"$fg/x.go"
+	# shellcheck disable=SC2086
+	if tools/burrow-gen from-go $tool "$fg/x.go" -o "$fg/x.c" 2>"$fg/err"; then
+		printf 'check-gen: burrow-gen from-go took %s\n' "$1" >&2
+		exit 1
+	fi
+	got=$(sed "s|^$fg/||" "$fg/err")
+	if [ "$got" != "$2" ] || [ -s "$fg/x.c" ]; then
+		printf 'check-gen: burrow-gen from-go on %s said\n%s\nwant\n%s\n' "$1" "$got" "$2" >&2
+		exit 1
+	fi
+}
+fromgo_fails 'type C chan int' 'x.go:3:8: chan int: a channel has no descriptor to give it'
+fromgo_fails 'type I interface{ M() }' 'x.go:3:8: interface{ M() }: an interface with methods has no descriptor to give it'
+fromgo_fails 'type G[T any] struct{ x T }' 'x.go:3:6: G: generic types are not supported'
+fromgo_fails 'type S struct{}' 'x.go:3:6: S: C has no empty structs'
+fromgo_fails 'type S struct { A int; a int }' 'x.go:3:6: S: fields A and a are both a in C'
+fromgo_fails 'type T struct { X struct{ Y int } }' 'x.go:3:19: struct{ Y int }: a struct needs a name of its own'
+fromgo_fails 'func F(c chan int) {}' 'x.go:3:10: chan int: a channel has no descriptor to give it'
+fromgo_fails 'type A B
+type B A' 'x.go:3:6: A: invalid recursive type
+x.go:4:6: B: invalid recursive type'
+
+printf 'check-gen: burrow-gen from-go refuses what it cannot write\n'
+
 # The same for burrow-gen tests, whose output for the fixture is checked in and
 # built with the tests. The one line allowed to differ is the Go release it was
 # generated with, and without Go there is nothing to generate with.

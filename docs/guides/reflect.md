@@ -428,3 +428,65 @@ case 1 got 5, true
 ```
 
 A case with a zero `chan` never goes ahead, as with a nil channel in Go, and a send on a closed channel panics. The value a receive got lives in the allocator passed in. `reflect_slice_at` is Go's `SliceAt`, which makes a slice over memory the caller already has, and `reflect_type_for(T)` is `TypeFor[T]`.
+
+## Types from Go
+
+When the types already exist in Go, `burrow-gen from-go` writes the C for them. It reads a Go package's files with burrow's own `go/parser` and `go/types`, so no Go toolchain is needed, and writes each type with the macros above, each exported constant as a macro, and each exported function and method as a prototype for you to fill in. Given this Go, in `weather.go`:
+
+```go
+package weather
+
+// Celsius is a temperature.
+type Celsius float64
+
+// Reading is what one sensor saw.
+type Reading struct {
+	Sensor string   `json:"sensor"`
+	Temp   Celsius  `json:"temp"`
+	Tags   []string `json:"tags,omitempty"`
+}
+
+// Freezing is where water freezes.
+const Freezing Celsius = 0
+
+// Below reports whether the reading is colder than t.
+func (r Reading) Below(t Celsius) bool { return r.Temp < t }
+```
+
+`burrow-gen from-go weather.go -o weather_gen.h` writes [weather_gen.h](../examples/reflect/weather_gen.h), and a program uses it like any other declared type:
+
+<!-- example: ../examples/reflect/weather.c#include -->
+```c
+#include "weather_gen.h"
+
+bool weather_reading_below(WeatherReading r, WeatherCelsius t) {
+    return r.temp < t;
+}
+```
+
+<!-- example: ../examples/reflect/weather.c#use -->
+```c
+Str tags[] = {BURROW_S("roof")};
+WeatherReading r = {BURROW_S("north"), -2.5, slice_from(tags, 1, 1, TYPE_OF(Str))};
+Error err = BURROW_NO_ERROR;
+Slice out = json_marshal(a, BURROW_ANY(TYPE_OF(WeatherReading), &r), &err);
+printf("%.*s\n", (int)out.len, (const char *)out.p);
+printf("below freezing: %d\n", weather_reading_below(r, WEATHER_FREEZING));
+const Type *c = TYPE_OF(WeatherCelsius);
+printf(BURROW_STR_FMT " is a " BURROW_STR_FMT "\n", BURROW_STR_ARG(c->name),
+       BURROW_STR_ARG(kind_name(c->kind)));
+```
+
+That prints:
+
+```text
+{"sensor":"north","temp":-2.5,"tags":["roof"]}
+below freezing: 1
+WeatherCelsius is a float64
+```
+
+Names get the package name in front, the way burrow's own do: `Reading` is `WeatherReading`, the method is `weather_reading_below` and the constant is `WEATHER_FREEZING`. Fields are in snake case in C and keep their Go names in the descriptor, so `json` and `reflect` see `Sensor`. `--prefix` sets the prefix, and `--prefix ""` or a package called `main` leaves it off.
+
+A slice, map, array or pointer with no name in Go gets one made from what is in it, `WeatherStrSlice` above, because C needs a name to put in a struct. A named Go map, array or pointer keeps its Go name in C, but its descriptor has no name, since the macros in `burrow/declare.h` for those make unnamed ones. A named slice keeps its name in both.
+
+The output both declares and defines, which is fine in a program with one C file. In a library used from several, `--header weather_gen.h -o weather_gen.c` puts the declarations in the header and only the definitions in the `.c` file. A Go function that allocates needs an `Alloc *` that from-go cannot know about, so the prototypes are a start and not a contract: change them before you write the bodies. A channel, a function type, an interface with methods or anything generic is an error that names the declaration, and then nothing is written.

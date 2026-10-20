@@ -16,6 +16,7 @@
 #include "burrow/type.h"
 
 #include "internal.h"
+#include "sha1_internal.h"
 
 #include <string.h>
 
@@ -495,6 +496,90 @@ Hash sha1_new(Alloc *a) {
         return (Hash){NULL, NULL};
     sha1_reset(d);
     Hash h = {&sha1_vt, d};
+    return h;
+}
+
+/* What crypto/tls asks of a SHA-1 behind HMAC, from Go's constSum: the same
+ * sum, worked out in a time that does not depend on how much of the last block
+ * is filled. It always runs two blocks and keeps the answer of the one it
+ * needed. */
+static void sha1_const_sum(Sha1Digest *d, Byte out[SHA1_SIZE]) {
+    Byte length[8];
+    sha1_put_be64(length, d->len << 3);
+
+    Byte nx = (Byte)d->nx;
+    Byte t = (Byte)(nx - 56);             /* if nx < 56 then the MSB of t is one */
+    Byte mask1b = (Byte)((int8_t)t >> 7); /* mask1b is 0xFF iff one block is enough */
+
+    Byte separator = 0x80; /* gets reset to 0x00 once used */
+    for (Byte i = 0; i < SHA1_BLOCK_SIZE; i++) {
+        Byte mask =
+            (Byte)((int8_t)(Byte)(i - nx) >> 7); /* 0x00 after the end of data */
+
+        /* if we reached the end of the data, replace with 0x80 or 0x00 */
+        d->x[i] = (Byte)((~mask & separator) | (mask & d->x[i]));
+
+        /* zero the separator once used */
+        separator &= mask;
+
+        if (i >= 56) {
+            /* we might have to write the length here if all fit in one block */
+            d->x[i] |= mask1b & length[i - 56];
+        }
+    }
+
+    /* compress, and only keep the digest if all fit in one block */
+    sha1_block(d, d->x, SHA1_BLOCK_SIZE);
+
+    for (Int i = 0; i < 5; i++) {
+        uint32_t s = d->h[i];
+        out[i * 4] = mask1b & (Byte)(s >> 24);
+        out[i * 4 + 1] = mask1b & (Byte)(s >> 16);
+        out[i * 4 + 2] = mask1b & (Byte)(s >> 8);
+        out[i * 4 + 3] = mask1b & (Byte)s;
+    }
+
+    for (Byte i = 0; i < SHA1_BLOCK_SIZE; i++) {
+        /* second block, it's always past the end of data, might start with 0x80 */
+        if (i < 56) {
+            d->x[i] = separator;
+            separator = 0;
+        } else {
+            d->x[i] = length[i - 56];
+        }
+    }
+
+    /* compress, and only keep the digest if we actually needed the second block */
+    sha1_block(d, d->x, SHA1_BLOCK_SIZE);
+
+    for (Int i = 0; i < 5; i++) {
+        uint32_t s = d->h[i];
+        out[i * 4] |= (Byte)~mask1b & (Byte)(s >> 24);
+        out[i * 4 + 1] |= (Byte)~mask1b & (Byte)(s >> 16);
+        out[i * 4 + 2] |= (Byte)~mask1b & (Byte)(s >> 8);
+        out[i * 4 + 3] |= (Byte)~mask1b & (Byte)s;
+    }
+}
+
+static Slice sha1_const_sum_append(void *self, Alloc *a, Slice in) {
+    Sha1Digest d0 = *(Sha1Digest *)self;
+    Byte h[SHA1_SIZE];
+    sha1_const_sum(&d0, h);
+    if (in.elem == NULL)
+        in = slice_nil(TYPE_BYTE);
+    return slice_append(a, in, h, SHA1_SIZE);
+}
+
+static const HashVT sha1_const_vt = {
+    {NULL, sha1_write}, sha1_const_sum_append, sha1_reset, sha1_size, sha1_block_size,
+};
+
+Hash burrow__sha1_new_constant_time(Alloc *a) {
+    Sha1Digest *d = BURROW_NEW(a, Sha1Digest);
+    if (d == NULL)
+        return (Hash){NULL, NULL};
+    sha1_reset(d);
+    Hash h = {&sha1_const_vt, d};
     return h;
 }
 

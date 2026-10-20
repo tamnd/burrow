@@ -1414,3 +1414,35 @@ print(error_text(err));
 
 One GODEBUG setting from Go applies: `x509rsacrt=0` makes `x509_parse_pkcs1_private_key` work out the CRT values again when the ones in the key are wrong, instead of failing. It is read once from the `GODEBUG` environment variable.
 
+## crypto/tls
+
+`burrow/crypto/tls.h` is the start of Go's crypto/tls. There are no connections yet. What is here is the vocabulary a handshake works with: protocol versions, cipher suites, curves, signature schemes and alerts, with the same names and numbers as Go. Inside the library the cipher suites, the TLS 1.0 to 1.2 PRF and the TLS 1.3 key schedule are already in place and tested against Go's vectors, and the record layer and handshakes will be built on them.
+
+`tls_cipher_suites` lists the suites Go counts as secure, and `tls_insecure_cipher_suites` lists the rest. Both give fresh copies each call, sorted by ID, as Go does. `tls_cipher_suite_name` finds a name in either list and falls back to the number in hex:
+
+<!-- example: ../examples/crypto/tls.c#suites -->
+```c
+Slice list = tls_cipher_suites(a);
+TlsCipherSuitePtr *p = list.p;
+printf("%d secure suites, first %s\n", (int)list.len,
+       p[0]->supported_versions.len == 1 ? "TLS 1.3 only" : "older too");
+for (Int i = 0; i < 3; i++)
+    print(p[i]->name);
+print(tls_cipher_suite_name(a, TLS_TLS_ECDHE_RSA_WITH_RC4_128_SHA));
+print(tls_cipher_suite_name(a, 0xabc));
+```
+
+The other types print the way Go's do. An `AlertError` is a plain number, and `tls_alert_error_as_error` turns it into an `Error` whose text is Go's:
+
+<!-- example: ../examples/crypto/tls.c#names -->
+```c
+print(tls_version_name(a, TLS_VERSION_TLS13));
+print(tls_curve_id_string(TLS_X25519MLKEM768, a));
+print(tls_signature_scheme_string(TLS_PSS_WITH_SHA256, a));
+
+Error err = tls_alert_error_as_error(20, a);
+print(error_text(err));
+print(tls_alert_error_error(7, a));
+```
+
+Two GODEBUG settings from Go are read already, once, from the `GODEBUG` environment variable. `tlsmlkem=0` takes the hybrid ML-KEM key exchanges out of the defaults, and `tlssecpmlkem=0` takes out just the ones built on P-256 and P-384. They will matter once there are handshakes to use the defaults.

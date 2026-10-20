@@ -80,6 +80,7 @@
 #include "burrow/crypto/sha3.h"
 #include "burrow/crypto/sha512.h"
 #include "burrow/crypto/subtle.h"
+#include "burrow/crypto/tls.h"
 #include "burrow/crypto/x509.h"
 
 #include "burrow/crypto/x509/pkix.h"

@@ -2,15 +2,13 @@
  * Go source: go1.27.1.
  *
  * The tests that listen and dial do it over loopback TCP, so they skip where
- * there is no readiness poll FD. TestConnectionState,
- * TestConnectionStateMarshal, TestPKCS1OnlyCert, TestVerifyCertificates, the
- * ML-KEM and ML-DSA handshakes, the large certificate messages, ECH,
- * TestMessageSigner, TestInvalidHandshakeSignature and the two
- * TestLocalCertificate tests are still to come. The PEMs TestX509KeyPair
- * declares are in tls_test_gen.h, and the ML-DSA ones are always tried, as
- * there is no FIPS 140-3 module here to be v1.0.0. Go ranges over the
- * disabledCipherSuites map; here that map is a predicate, so the test asks it
- * about every suite there is.
+ * there is no readiness poll FD. TestConnectionStateMarshal,
+ * TestVerifyCertificates, the ML-KEM and ML-DSA handshakes and ECH are still to
+ * come. Where Go compares with reflect.DeepEqual, the certificates here are
+ * compared by their DER. The PEMs TestX509KeyPair declares are in
+ * tls_test_gen.h, and the ML-DSA ones are always tried, as there is no FIPS
+ * 140-3 module here to be v1.0.0. Go ranges over the disabledCipherSuites map;
+ * here that map is a predicate, so the test asks it about every suite there is.
  *
  * Copyright 2012 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -2502,6 +2500,1038 @@ static void TestWarningAlertFlood(TestingT *t) {
     arena_free(&ar);
 }
 
+/* Not in Go: the constants of TestConnectionState. */
+static const char cs_alpn_protocol[] = "golang";
+static const char cs_server_name[] = "test.golang.example";
+static const char cs_sct1[] = "dummy sct 1";
+static const char cs_sct2[] = "dummy sct 2";
+static const char cs_ocsp[] = "dummy ocsp";
+
+static Slice cs_bytes(const char *s) {
+    Int n = (Int)strlen(s);
+    return slice_from((Byte *)(uintptr_t)s, n, n, TYPE_BYTE);
+}
+
+/* Not in Go: what the checkConnectionState closure gets. */
+typedef struct CheckConnState {
+    const TlsConnectionState *cs;
+    uint16_t version;
+    bool is_client;
+    Slice server_leaf, server_root, client_leaf, client_root;
+} CheckConnState;
+
+static Slice cert_raw(Slice certs, Int i) {
+    return ((X509Certificate *const *)certs.p)[i]->raw;
+}
+
+static void check_connection_state(void *env, TestingT *t) {
+    const CheckConnState *c = (const CheckConnState *)env;
+    const TlsConnectionState *cs = c->cs;
+    /* On the client, the peer is the server (testRSA2048Cert under
+     * testRootCert); on the server, the peer is the client
+     * (testClientRSA2048Cert under testClientRootCert). */
+    Slice peer_leaf = c->server_leaf, peer_root = c->server_root;
+    if (!c->is_client) {
+        peer_leaf = c->client_leaf;
+        peer_root = c->client_root;
+    }
+    if (cs->version != c->version)
+        testing_t_errorf_v(t, "got Version %x, expected %x", cs->version, c->version);
+
+    if (!cs->handshake_complete)
+        testing_t_errorf_v(t, "got HandshakeComplete %v, expected true",
+                           cs->handshake_complete);
+
+    if (cs->did_resume)
+        testing_t_errorf_v(t, "got DidResume %v, expected false", cs->did_resume);
+
+    if (cs->cipher_suite == 0)
+        testing_t_errorf_v(t, "got zero CipherSuite");
+
+    if (cs->curve_id == 0)
+        testing_t_errorf_v(t, "got zero CurveID");
+
+    Str alpn = str_from_cstr(cs_alpn_protocol);
+    if (!str_eq(cs->negotiated_protocol, alpn))
+        testing_t_errorf_v(t, "got ALPN protocol %q, expected %q",
+                           cs->negotiated_protocol, alpn);
+
+    if (!cs->negotiated_protocol_is_mutual)
+        testing_t_errorf_v(t, "got NegotiatedProtocolIsMutual %v, expected true",
+                           cs->negotiated_protocol_is_mutual);
+
+    Str server_name = str_from_cstr(cs_server_name);
+    if (!str_eq(cs->server_name, server_name))
+        testing_t_errorf_v(t, "got ServerName %q, expected %q", cs->server_name,
+                           server_name);
+
+    if (cs->peer_certificates.len != 1)
+        testing_t_errorf_v(t, "got %d PeerCertificates, expected %d",
+                           cs->peer_certificates.len, 1);
+    else if (!bytes_equal(cert_raw(cs->peer_certificates, 0), peer_leaf))
+        testing_t_errorf_v(t, "got PeerCertificates %x, expected %x",
+                           cert_raw(cs->peer_certificates, 0), peer_leaf);
+
+    const Slice *chains = (const Slice *)cs->verified_chains.p;
+    if (cs->verified_chains.len != 1)
+        testing_t_errorf_v(t, "got %d long verified chain, expected %d",
+                           cs->verified_chains.len, 1);
+    else if (chains[0].len != 2)
+        testing_t_errorf_v(t, "got %d verified chain, expected %d", chains[0].len, 2);
+    else if (!bytes_equal(cert_raw(chains[0], 0), peer_leaf))
+        testing_t_errorf_v(t, "got verified chain[0][0] %x, expected %x",
+                           cert_raw(chains[0], 0), peer_leaf);
+    else if (!bytes_equal(cert_raw(chains[0], 1), peer_root))
+        testing_t_errorf_v(t, "got verified chain[0][1] %x, expected %x",
+                           cert_raw(chains[0], 1), peer_root);
+
+    /* Only TLS 1.3 supports OCSP and SCTs on client certs. */
+    const Slice *scts = (const Slice *)cs->signed_certificate_timestamps.p;
+    Slice sct1 = cs_bytes(cs_sct1), sct2 = cs_bytes(cs_sct2), ocsp = cs_bytes(cs_ocsp);
+    if (c->is_client || c->version == TLS_VERSION_TLS13) {
+        if (cs->signed_certificate_timestamps.len != 2)
+            testing_t_errorf_v(t, "got %d SCTs, expected %d",
+                               cs->signed_certificate_timestamps.len, 2);
+        else if (!bytes_equal(scts[0], sct1))
+            testing_t_errorf_v(t, "got SCTs %x, expected %x", scts[0], sct1);
+        else if (!bytes_equal(scts[1], sct2))
+            testing_t_errorf_v(t, "got SCTs %x, expected %x", scts[1], sct2);
+        if (!bytes_equal(cs->ocsp_response, ocsp))
+            testing_t_errorf_v(t, "got OCSP %x, expected %x", cs->ocsp_response, ocsp);
+    } else {
+        if (!slice_is_nil(cs->signed_certificate_timestamps))
+            testing_t_errorf_v(t, "got %d SCTs, expected nil",
+                               cs->signed_certificate_timestamps.len);
+        if (!slice_is_nil(cs->ocsp_response))
+            testing_t_errorf_v(t, "got OCSP %x, expected nil", cs->ocsp_response);
+    }
+
+    if (c->version == TLS_VERSION_TLS13) {
+        if (!slice_is_nil(cs->tls_unique))
+            testing_t_errorf_v(t, "got TLSUnique %x, expected nil", cs->tls_unique);
+    } else {
+        if (slice_is_nil(cs->tls_unique))
+            testing_t_errorf_v(t, "got nil TLSUnique");
+    }
+}
+
+/* Not in Go: reflect.DeepEqual of two []*x509.Certificate, which here compares
+ * the certificates by their DER. */
+static bool same_certs(Slice a, Slice b) {
+    if (a.len != b.len)
+        return false;
+    for (Int i = 0; i < a.len; i++)
+        if (!bytes_equal(cert_raw(a, i), cert_raw(b, i)))
+            return false;
+    return true;
+}
+
+/* Not in Go: reflect.DeepEqual of two [][]byte or [][]*x509.Certificate. */
+static bool same_slices(Slice a, Slice b, bool certs) {
+    if (slice_is_nil(a) != slice_is_nil(b) || a.len != b.len)
+        return false;
+    for (Int i = 0; i < a.len; i++) {
+        Slice x = ((const Slice *)a.p)[i], y = ((const Slice *)b.p)[i];
+        if (certs ? !same_certs(x, y) : !bytes_equal(x, y))
+            return false;
+    }
+    return true;
+}
+
+/* Not in Go: what the compareConnectionStates closure gets. */
+typedef struct CompareConnStates {
+    const TlsConnectionState *cs1, *cs2;
+} CompareConnStates;
+
+static void compare_connection_states(void *env, TestingT *t) {
+    const CompareConnStates *c = (const CompareConnStates *)env;
+    const TlsConnectionState *cs1 = c->cs1, *cs2 = c->cs2;
+    if (cs1->version != cs2->version)
+        testing_t_errorf_v(t, "Version mismatch: %x != %x", cs1->version, cs2->version);
+    if (cs1->handshake_complete != cs2->handshake_complete)
+        testing_t_errorf_v(t, "HandshakeComplete mismatch: %v != %v",
+                           cs1->handshake_complete, cs2->handshake_complete);
+    /* DidResume is expected to be different. */
+    if (cs1->cipher_suite != cs2->cipher_suite)
+        testing_t_errorf_v(t, "CipherSuite mismatch: %x != %x", cs1->cipher_suite,
+                           cs2->cipher_suite);
+    if (cs1->curve_id != cs2->curve_id) {
+        Arena ar;
+        arena_init(&ar, NULL, 0);
+        Alloc *a = arena_allocator(&ar);
+        testing_t_errorf_v(t, "CurveID mismatch: %s != %s",
+                           tls_curve_id_string(cs1->curve_id, a),
+                           tls_curve_id_string(cs2->curve_id, a));
+        arena_free(&ar);
+    }
+    if (!str_eq(cs1->negotiated_protocol, cs2->negotiated_protocol))
+        testing_t_errorf_v(t, "NegotiatedProtocol mismatch: %q != %q",
+                           cs1->negotiated_protocol, cs2->negotiated_protocol);
+    if (cs1->negotiated_protocol_is_mutual != cs2->negotiated_protocol_is_mutual)
+        testing_t_errorf_v(t, "NegotiatedProtocolIsMutual mismatch: %v != %v",
+                           cs1->negotiated_protocol_is_mutual,
+                           cs2->negotiated_protocol_is_mutual);
+    if (!str_eq(cs1->server_name, cs2->server_name))
+        testing_t_errorf_v(t, "ServerName mismatch: %q != %q", cs1->server_name,
+                           cs2->server_name);
+    if (slice_is_nil(cs1->peer_certificates) != slice_is_nil(cs2->peer_certificates) ||
+        !same_certs(cs1->peer_certificates, cs2->peer_certificates))
+        testing_t_errorf_v(t, "PeerCertificates mismatch");
+    if (!same_slices(cs1->verified_chains, cs2->verified_chains, true))
+        testing_t_errorf_v(t, "VerifiedChains mismatch");
+    if (!same_slices(cs1->signed_certificate_timestamps,
+                     cs2->signed_certificate_timestamps, false))
+        testing_t_errorf_v(t, "SignedCertificateTimestamps mismatch: %x != %x",
+                           cs1->signed_certificate_timestamps,
+                           cs2->signed_certificate_timestamps);
+    if (!bytes_equal(cs1->ocsp_response, cs2->ocsp_response))
+        testing_t_errorf_v(t, "OCSPResponse mismatch: %x != %x", cs1->ocsp_response,
+                           cs2->ocsp_response);
+    /* TLSUnique is expected to be different. */
+}
+
+/* Not in Go: what the Resume subtest of TestConnectionState gets. */
+typedef struct ConnStateResume {
+    TlsConfig *client_config, *server_config;
+    const TlsConnectionState *ss, *cs;
+} ConnStateResume;
+
+static void connection_state_resume(void *env, TestingT *t) {
+    const ConnStateResume *r = (const ConnStateResume *)env;
+    /* TODO: test changing parameters between original and resumed connection
+     * when the protocol allows it. */
+
+    Handshake h;
+    test_handshake(t, r->client_config, r->server_config, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_fatalf_v(t, "handshake failed: %v", h.err);
+
+    if (!h.client_state.did_resume || !h.server_state.did_resume)
+        testing_t_errorf_v(t, "DidResume is false");
+
+    CompareConnStates client = {r->cs, &h.client_state};
+    CompareConnStates server = {r->ss, &h.server_state};
+    testing_t_run(t, BURROW_S("Client"),
+                  BURROW_FN(TestingTFunc, compare_connection_states, &client));
+    testing_t_run(t, BURROW_S("Server"),
+                  BURROW_FN(TestingTFunc, compare_connection_states, &server));
+    handshake_free(&h);
+}
+
+static void connection_state_version(void *env, TestingT *t) {
+    uint16_t v = *(const uint16_t *)env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Slice scts = slice_make(a, TYPE_BYTES, 2, 2);
+    if (scts.p == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    ((Slice *)scts.p)[0] = cs_bytes(cs_sct1);
+    ((Slice *)scts.p)[1] = cs_bytes(cs_sct2);
+    Slice ocsp = cs_bytes(cs_ocsp);
+
+    TlsCertificate server_cert =
+        parse_test_cert(a, test_rsa2048_cert_pem, test_rsa2048_key_pem);
+    server_cert.signed_certificate_timestamps = scts;
+    server_cert.ocsp_staple = ocsp;
+    TlsCertificate client_cert =
+        parse_test_cert(a, test_client_rsa2048_cert_pem, test_client_rsa2048_key_pem);
+    client_cert.signed_certificate_timestamps = scts;
+    client_cert.ocsp_staple = ocsp;
+    TlsCertificate root = parse_test_cert(a, test_root_cert_pem, test_root_key_pem);
+    TlsCertificate client_root =
+        parse_test_cert(a, test_client_root_cert_pem, test_client_root_key_pem);
+    X509CertPool *root_pool = x509_new_cert_pool(a);
+    X509CertPool *client_root_pool = x509_new_cert_pool(a);
+    if (root_pool == NULL || client_root_pool == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    x509_cert_pool_add_cert(root_pool, root.leaf);
+    x509_cert_pool_add_cert(client_root_pool, client_root.leaf);
+    Str next_protos[1] = {str_from_cstr(cs_alpn_protocol)};
+
+    TlsConfig server_config;
+    memset(&server_config, 0, sizeof server_config);
+    server_config.time = (TlsTimeFunc){test_time, NULL};
+    server_config.certificates = slice_from(&server_cert, 1, 1, TYPE_TLS_CERTIFICATE);
+    server_config.min_version = v;
+    server_config.max_version = v;
+    server_config.client_cas = client_root_pool;
+    server_config.client_auth = TLS_REQUIRE_AND_VERIFY_CLIENT_CERT;
+    server_config.next_protos = slice_from(next_protos, 1, 1, TYPE_STRING);
+    TlsConfig client_config;
+    memset(&client_config, 0, sizeof client_config);
+    client_config.time = (TlsTimeFunc){test_time, NULL};
+    client_config.certificates = slice_from(&client_cert, 1, 1, TYPE_TLS_CERTIFICATE);
+    client_config.min_version = v;
+    client_config.max_version = v;
+    client_config.root_cas = root_pool;
+    client_config.next_protos = slice_from(next_protos, 1, 1, TYPE_STRING);
+    client_config.server_name = str_from_cstr(cs_server_name);
+    client_config.client_session_cache =
+        tls_new_lru_client_session_cache(heap_allocator(), 1);
+    if (client_config.client_session_cache.vt == NULL)
+        testing_t_fatal_v(t, "out of memory");
+
+    Handshake h;
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_fatalf_v(t, "handshake failed: %v", h.err);
+
+    CheckConnState check = {
+        &h.client_state,
+        v,
+        true,
+        ((Slice *)server_cert.certificate.p)[0],
+        ((Slice *)root.certificate.p)[0],
+        ((Slice *)client_cert.certificate.p)[0],
+        ((Slice *)client_root.certificate.p)[0],
+    };
+    testing_t_run(t, BURROW_S("Client"),
+                  BURROW_FN(TestingTFunc, check_connection_state, &check));
+    CheckConnState server_check = check;
+    server_check.cs = &h.server_state;
+    server_check.is_client = false;
+    testing_t_run(t, BURROW_S("Server"),
+                  BURROW_FN(TestingTFunc, check_connection_state, &server_check));
+
+    ConnStateResume resume = {&client_config, &server_config, &h.server_state,
+                              &h.client_state};
+    testing_t_run(t, BURROW_S("Resume"),
+                  BURROW_FN(TestingTFunc, connection_state_resume, &resume));
+
+    handshake_free(&h);
+    tls_lru_client_session_cache_free(client_config.client_session_cache);
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    arena_free(&ar);
+}
+
+static const uint16_t connection_state_versions[] = {
+    TLS_VERSION_TLS10, TLS_VERSION_TLS12, TLS_VERSION_TLS13};
+static const char *const connection_state_names[] = {"TLSv10", "TLSv12", "TLSv13"};
+
+static void TestConnectionState(TestingT *t) {
+    for (int i = 0; i < 3; i++)
+        testing_t_run(t, str_from_cstr(connection_state_names[i]),
+                      BURROW_FN(TestingTFunc, connection_state_version,
+                                (void *)(uintptr_t)&connection_state_versions[i]));
+}
+
+/* Not in Go: brokenSigner, a crypto.Signer that replaces opts with
+ * opts.HashFunc(), so rsa.PSSOptions are discarded. */
+typedef struct BrokenSigner {
+    CryptoSigner signer;
+} BrokenSigner;
+
+static CryptoPublicKey broken_signer_public(void *self) {
+    return crypto_signer_public(((BrokenSigner *)self)->signer);
+}
+
+static Slice broken_signer_sign(void *self, Alloc *a, IoReader rand, Slice digest,
+                                CryptoSignerOpts opts, Error *err) {
+    /* Replace opts with opts.HashFunc(), so rsa.PSSOptions are discarded. */
+    CryptoHash h = opts.vt->hash_func(opts.data);
+    return crypto_signer_sign(((BrokenSigner *)self)->signer, a, rand, digest,
+                              crypto_hash_as_signer_opts(&h), err);
+}
+
+static const CryptoSignerVT broken_signer_vt = {NULL, broken_signer_public,
+                                                broken_signer_sign};
+
+static const TlsSignatureScheme pkcs1_only_schemes[] = {TLS_PKCS1_WITH_SHA1,
+                                                        TLS_PKCS1_WITH_SHA256};
+
+/* TestPKCS1OnlyCert uses a client certificate with a broken crypto.Signer that
+ * always makes PKCS #1 v1.5 signatures, so can't be used with RSA-PSS. */
+static void TestPKCS1OnlyCert(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsCertificate rsa =
+        parse_test_cert(a, test_client_rsa2048_cert_pem, test_client_rsa2048_key_pem);
+    BrokenSigner broken = {rsa_private_key_signer(rsa.private_key.data)};
+    CryptoSigner signer = {&broken_signer_vt, &broken};
+    TlsCertificate cert;
+    memset(&cert, 0, sizeof cert);
+    cert.certificate = rsa.certificate;
+    cert.private_key = BURROW_ANY(TYPE_CRYPTO_SIGNER, &signer);
+    TlsConfig client_config = test_config_client(a);
+    client_config.certificates = slice_from(&cert, 1, 1, TYPE_TLS_CERTIFICATE);
+    TlsConfig server_config = test_config_server(a);
+    server_config.max_version = TLS_VERSION_TLS12; /* TLS 1.3 doesn't support
+                                                      PKCS #1 v1.5 */
+    server_config.client_auth = TLS_REQUIRE_ANY_CLIENT_CERT;
+
+    /* If RSA-PSS is selected, the handshake should fail. */
+    Handshake h;
+    test_handshake(t, &client_config, &server_config, &h);
+    if (!BURROW_FAILED(h.err))
+        testing_t_fatal_v(t, "expected broken certificate to cause connection to fail");
+    handshake_free(&h);
+
+    cert.supported_signature_algorithms = slice_from(
+        (TlsSignatureScheme *)(uintptr_t)pkcs1_only_schemes, 2, 2, TYPE_UINT16);
+
+    /* But if the certificate restricts supported algorithms, RSA-PSS should not
+     * be selected, and the handshake should succeed. */
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_error_v(t, h.err);
+    handshake_free(&h);
+
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    arena_free(&ar);
+}
+
+/* Not in Go: the goroutine of TestEarlyLargeCertMsg. */
+static void early_large_cert_job(void *env) {
+    NetConn *client = (NetConn *)env;
+    Byte msg[9] = {TLS_RECORD_TYPE_HANDSHAKE, 3, 4,   0,  4,
+                   TLS_TYPE_CERTIFICATE,      1, 255, 255};
+    Error err = BURROW_NO_ERROR;
+    (void)client->vt->writer.write(client->data, slice_from(msg, 9, 9, TYPE_BYTE),
+                                   &err);
+    (void)err;
+}
+
+static void TestEarlyLargeCertMsg(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    NetConn client, server;
+    local_pipe(a, &client, &server);
+
+    SyncWaitGroup wg = {0};
+    sync_wait_group_go(&wg, BURROW_FN(Func, early_large_cert_job, &client));
+
+    Str expected_err = BURROW_S("tls: handshake message of length 131071 bytes exceeds "
+                                "maximum of 65536 bytes");
+    TlsConfig server_config = test_config_server(a);
+    TlsConn *serv_conn = tls_server(heap_allocator(), server, &server_config);
+    if (serv_conn == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    Error err = tls_conn_handshake(serv_conn);
+    sync_wait_group_wait(&wg);
+    if (!BURROW_FAILED(err))
+        testing_t_fatal_v(t, "unexpected success");
+    if (!str_eq(error_text(err), expected_err))
+        testing_t_fatalf_v(t, "unexpected error: got %q, want %q", error_text(err),
+                           expected_err);
+
+    tls_conn_free(serv_conn);
+    local_pipe_free(client);
+    tls_config_release(&server_config);
+    arena_free(&ar);
+}
+
+static void TestLargeCertMsg(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    EcdsaPrivateKey *k = ecdsa_generate_key(a, elliptic_p256(), (IoReader){0}, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    Int oid[3] = {1, 2, 3};
+    /* Ballast to inflate the certificate beyond the regular handshake record
+     * size. */
+    Slice ballast = slice_make(a, TYPE_BYTE, 65536, 65536);
+    if (ballast.p == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    PkixExtension ext = {slice_from(oid, 3, 3, TYPE_INT), false, ballast};
+    X509Certificate tmpl;
+    memset(&tmpl, 0, sizeof tmpl);
+    tmpl.serial_number = big_new_int(a, 1);
+    tmpl.subject.common_name = BURROW_S("test");
+    tmpl.extra_extensions = slice_from(&ext, 1, 1, TYPE_PKIX_EXTENSION);
+    Slice cert = x509_create_certificate(a, (IoReader){0}, &tmpl, &tmpl,
+                                         ecdsa_private_key_public(k),
+                                         ecdsa_private_key_signer(k), &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+
+    TlsConfig client_config = test_config_client(a);
+    TlsConfig server_config = test_config_server(a);
+    client_config.insecure_skip_verify = true;
+    TlsCertificate c;
+    memset(&c, 0, sizeof c);
+    c.certificate = slice_from(&cert, 1, 1, TYPE_BYTES);
+    c.private_key = BURROW_ANY(TYPE_ECDSA_PRIVATE_KEY, k);
+    server_config.certificates = slice_from(&c, 1, 1, TYPE_TLS_CERTIFICATE);
+    Handshake h;
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_fatalf_v(t, "unexpected failure: %s", error_text(h.err));
+    handshake_free(&h);
+
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    arena_free(&ar);
+}
+
+/* Not in Go: messageOnlySigner, a crypto.Signer whose Sign fails, found to be
+ * a crypto.MessageSigner through the SignMessage in its type's method set. */
+#define MESSAGE_ONLY_SIGNER_FIELDS(F, T) F(T, CryptoSigner, Signer, "")
+
+BURROW_STRUCT_DECL(MessageOnlySigner, MESSAGE_ONLY_SIGNER_FIELDS);
+
+static Slice message_only_signer_sign_message(MessageOnlySigner *s, CryptoAllocArg a,
+                                              IoReader rand, Bytes msg,
+                                              CryptoSignerOpts opts,
+                                              CryptoErrorArg err) {
+    Hash h = crypto_hash_new(opts.vt->hash_func(opts.data), a);
+    if (h.vt == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return slice_nil(TYPE_BYTE);
+    }
+    (void)hash_write(h, msg, NULL);
+    Slice digest = hash_sum(a, h, slice_nil(TYPE_BYTE));
+    return crypto_signer_sign(s->Signer, a, rand, digest, opts, err);
+}
+
+#define MESSAGE_ONLY_SIGNER_METHODS(M, T)                                              \
+    M(T, SignMessage, message_only_signer_sign_message, CRYPTO_SIG_SIGN_MESSAGE)
+
+BURROW_STRUCT_DEFINE_METHODS(MessageOnlySigner, MESSAGE_ONLY_SIGNER_FIELDS,
+                             MESSAGE_ONLY_SIGNER_METHODS);
+
+static CryptoPublicKey message_only_signer_public(void *self) {
+    return crypto_signer_public(((MessageOnlySigner *)self)->Signer);
+}
+
+static Slice message_only_signer_sign(void *self, Alloc *a, IoReader rand, Slice msg,
+                                      CryptoSignerOpts opts, Error *err) {
+    (void)self;
+    (void)a;
+    (void)rand;
+    (void)msg;
+    (void)opts;
+    BURROW_OUT(
+        err, errors_new(error_allocator(), BURROW_S("messageOnlySigner: Sign called")));
+    return slice_nil(TYPE_BYTE);
+}
+
+static const CryptoSignerVT message_only_signer_vt = {
+    TYPE_OF(MessageOnlySigner), message_only_signer_public, message_only_signer_sign};
+
+/* Not in Go: a Certificate with the chain of c and messageOnlySigner{key}, the
+ * signer s, which has to outlive it. */
+static TlsCertificate message_only_cert(const TlsCertificate *c, MessageOnlySigner *s,
+                                        CryptoSigner *signer, CryptoSigner key) {
+    s->Signer = key;
+    signer->vt = &message_only_signer_vt;
+    signer->data = s;
+    TlsCertificate out;
+    memset(&out, 0, sizeof out);
+    out.certificate = c->certificate;
+    out.private_key = BURROW_ANY(TYPE_CRYPTO_SIGNER, signer);
+    return out;
+}
+
+static void test_message_signer(TestingT *t, uint16_t version) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig client_config = test_config_client(a);
+    TlsConfig server_config = test_config_server(a);
+    server_config.client_auth = TLS_REQUIRE_ANY_CLIENT_CERT;
+    client_config.min_version = version;
+    client_config.max_version = version;
+    server_config.min_version = version;
+    server_config.max_version = version;
+    TlsCertificate client_rsa =
+        parse_test_cert(a, test_client_rsa2048_cert_pem, test_client_rsa2048_key_pem);
+    TlsCertificate server_rsa =
+        parse_test_cert(a, test_rsa2048_cert_pem, test_rsa2048_key_pem);
+    MessageOnlySigner client_signer, server_signer;
+    CryptoSigner client_key, server_key;
+    TlsCertificate client_cert =
+        message_only_cert(&client_rsa, &client_signer, &client_key,
+                          rsa_private_key_signer(client_rsa.private_key.data));
+    TlsCertificate server_cert =
+        message_only_cert(&server_rsa, &server_signer, &server_key,
+                          rsa_private_key_signer(server_rsa.private_key.data));
+    client_config.certificates = slice_from(&client_cert, 1, 1, TYPE_TLS_CERTIFICATE);
+    server_config.certificates = slice_from(&server_cert, 1, 1, TYPE_TLS_CERTIFICATE);
+
+    Handshake h;
+    test_handshake(t, &client_config, &server_config, &h);
+    if (version < TLS_VERSION_TLS12) {
+        if (!BURROW_FAILED(h.err))
+            testing_t_fatal_v(t, "expected failure for TLS 1.0/1.1");
+    } else {
+        if (BURROW_FAILED(h.err))
+            testing_t_fatalf_v(t, "unexpected failure: %s", error_text(h.err));
+    }
+    handshake_free(&h);
+
+    TlsCertificate client_ecdsa = parse_test_cert(a, test_client_ecdsap256_cert_pem,
+                                                  test_client_ecdsap256_key_pem);
+    TlsCertificate server_ecdsa =
+        parse_test_cert(a, test_ecdsap256_cert_pem, test_ecdsap256_key_pem);
+    client_cert =
+        message_only_cert(&client_ecdsa, &client_signer, &client_key,
+                          ecdsa_private_key_signer(client_ecdsa.private_key.data));
+    server_cert =
+        message_only_cert(&server_ecdsa, &server_signer, &server_key,
+                          ecdsa_private_key_signer(server_ecdsa.private_key.data));
+
+    test_handshake(t, &client_config, &server_config, &h);
+    if (version < TLS_VERSION_TLS12) {
+        if (!BURROW_FAILED(h.err))
+            testing_t_fatal_v(t, "expected failure for TLS 1.0/1.1");
+    } else {
+        if (BURROW_FAILED(h.err))
+            testing_t_fatalf_v(t, "unexpected failure: %s", error_text(h.err));
+    }
+    handshake_free(&h);
+
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    arena_free(&ar);
+}
+
+static void message_signer_tls10(void *env, TestingT *t) {
+    (void)env;
+    test_message_signer(t, TLS_VERSION_TLS10);
+}
+
+static void message_signer_tls12(void *env, TestingT *t) {
+    (void)env;
+    test_message_signer(t, TLS_VERSION_TLS12);
+}
+
+static void message_signer_tls13(void *env, TestingT *t) {
+    (void)env;
+    test_message_signer(t, TLS_VERSION_TLS13);
+}
+
+static void TestMessageSigner(TestingT *t) {
+    testing_t_run(t, BURROW_S("TLSv10"),
+                  BURROW_FN(TestingTFunc, message_signer_tls10, NULL));
+    testing_t_run(t, BURROW_S("TLSv12"),
+                  BURROW_FN(TestingTFunc, message_signer_tls12, NULL));
+    testing_t_run(t, BURROW_S("TLSv13"),
+                  BURROW_FN(TestingTFunc, message_signer_tls13, NULL));
+}
+
+/* bitFlippingSigner wraps a crypto.Signer and flips a bit in the signature,
+ * producing an invalid signature. */
+typedef struct BitFlippingSigner {
+    CryptoSigner signer;
+} BitFlippingSigner;
+
+static CryptoPublicKey bit_flipping_signer_public(void *self) {
+    return crypto_signer_public(((BitFlippingSigner *)self)->signer);
+}
+
+static Slice bit_flipping_signer_sign(void *self, Alloc *a, IoReader rand, Slice digest,
+                                      CryptoSignerOpts opts, Error *err) {
+    Error e = BURROW_NO_ERROR;
+    Slice sig = crypto_signer_sign(((BitFlippingSigner *)self)->signer, a, rand, digest,
+                                   opts, &e);
+    BURROW_OUT(err, e);
+    if (BURROW_FAILED(e) || sig.len == 0)
+        return slice_nil(TYPE_BYTE);
+    ((Byte *)sig.p)[0] ^= 1;
+    return sig;
+}
+
+static const CryptoSignerVT bit_flipping_signer_vt = {NULL, bit_flipping_signer_public,
+                                                      bit_flipping_signer_sign};
+
+/* Not in Go: the client goroutine of testInvalidSignatureHandshake. Its error
+ * is kept in ar. */
+typedef struct InvalidSigClient {
+    NetConn c;
+    TlsConfig *config;
+    TlsConn *conn;
+    Error err;
+    Arena ar;
+} InvalidSigClient;
+
+static void invalid_sig_client(void *env) {
+    InvalidSigClient *j = (InvalidSigClient *)env;
+    j->conn = tls_client(heap_allocator(), j->c, j->config);
+    if (j->conn == NULL)
+        j->err = burrow_err_out_of_memory;
+    else
+        j->err = error_retain(arena_allocator(&j->ar), tls_conn_handshake(j->conn));
+    (void)j->c.vt->closer.close(j->c.data);
+}
+
+/* testInvalidSignatureHandshake performs a TLS handshake and returns the
+ * errors from both client and server. Unlike testHandshake, it doesn't try to
+ * exchange data after the handshake.
+ *
+ * Not in Go: the errors are made in a. */
+static void test_invalid_signature_handshake(Alloc *a, TlsConfig *client_config,
+                                             TlsConfig *server_config,
+                                             Error *client_err, Error *server_err) {
+    NetConn c, s;
+    local_pipe(a, &c, &s);
+    InvalidSigClient j;
+    memset(&j, 0, sizeof j);
+    j.c = c;
+    j.config = client_config;
+    arena_init(&j.ar, NULL, 0);
+    SyncWaitGroup wg = {0};
+    sync_wait_group_go(&wg, BURROW_FN(Func, invalid_sig_client, &j));
+    TlsConn *srv = tls_server(heap_allocator(), s, server_config);
+    *server_err = burrow_err_out_of_memory;
+    if (srv != NULL)
+        *server_err = error_retain(a, tls_conn_handshake(srv));
+    (void)s.vt->closer.close(s.data);
+    sync_wait_group_wait(&wg);
+    *client_err = error_retain(a, j.err);
+    tls_conn_free(srv);
+    tls_conn_free(j.conn);
+    local_pipe_free(c);
+    arena_free(&j.ar);
+}
+
+/* Not in Go: what the subtests of testInvalidHandshakeSignature share. */
+typedef struct InvalidSig {
+    TlsConfig *server_config, *client_config;
+} InvalidSig;
+
+static bool invalid_signature(Error err) {
+    return strings_contains(error_text(err), BURROW_S("invalid signature"));
+}
+
+/* Test that the server rejects invalid client certificate signatures, even
+ * when RequireAnyClientCert is used. */
+static void invalid_sig_client_signature(void *env, TestingT *t) {
+    const InvalidSig *e = (const InvalidSig *)env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig *server_config = tls_config_clone(e->server_config, a);
+    TlsConfig *client_config = tls_config_clone(e->client_config, a);
+    if (server_config == NULL || client_config == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    server_config->client_auth = TLS_REQUIRE_ANY_CLIENT_CERT;
+    TlsCertificate ecdsa = parse_test_cert(a, test_client_ecdsap256_cert_pem,
+                                           test_client_ecdsap256_key_pem);
+    BitFlippingSigner flip = {ecdsa_private_key_signer(ecdsa.private_key.data)};
+    CryptoSigner signer = {&bit_flipping_signer_vt, &flip};
+    TlsCertificate cert;
+    memset(&cert, 0, sizeof cert);
+    cert.certificate = ecdsa.certificate;
+    cert.private_key = BURROW_ANY(TYPE_CRYPTO_SIGNER, &signer);
+    client_config->certificates = slice_from(&cert, 1, 1, TYPE_TLS_CERTIFICATE);
+
+    Error client_err, server_err;
+    test_invalid_signature_handshake(a, client_config, server_config, &client_err,
+                                     &server_err);
+    if (!BURROW_FAILED(server_err))
+        testing_t_fatalf_v(
+            t, "expected server to reject invalid client signature; client err = %v",
+            client_err);
+    if (!invalid_signature(server_err))
+        testing_t_errorf_v(t, "expected 'invalid signature' error, got: %v",
+                           server_err);
+    tls_config_release(server_config);
+    tls_config_release(client_config);
+    arena_free(&ar);
+}
+
+/* Not in Go: the two ServerSignature subtests, with insecure saying whether
+ * the client sets InsecureSkipVerify. */
+static void invalid_sig_server_signature(TestingT *t, const InvalidSig *e,
+                                         bool insecure) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig *client_config = tls_config_clone(e->client_config, a);
+    TlsConfig *server_config = tls_config_clone(e->server_config, a);
+    if (server_config == NULL || client_config == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    if (insecure)
+        client_config->insecure_skip_verify = true;
+    TlsCertificate rsa =
+        parse_test_cert(a, test_rsa2048_cert_pem, test_rsa2048_key_pem);
+    BitFlippingSigner flip = {rsa_private_key_signer(rsa.private_key.data)};
+    CryptoSigner signer = {&bit_flipping_signer_vt, &flip};
+    TlsCertificate cert;
+    memset(&cert, 0, sizeof cert);
+    cert.certificate = rsa.certificate;
+    cert.private_key = BURROW_ANY(TYPE_CRYPTO_SIGNER, &signer);
+    server_config->certificates = slice_from(&cert, 1, 1, TYPE_TLS_CERTIFICATE);
+
+    Error client_err, server_err;
+    test_invalid_signature_handshake(a, client_config, server_config, &client_err,
+                                     &server_err);
+    if (!BURROW_FAILED(client_err)) {
+        if (insecure)
+            testing_t_fatalf_v(t,
+                               "expected client to reject invalid server signature "
+                               "despite InsecureSkipVerify; server err = %v",
+                               server_err);
+        testing_t_fatalf_v(
+            t, "expected client to reject invalid server signature; server err = %v",
+            server_err);
+    }
+    if (!invalid_signature(client_err))
+        testing_t_errorf_v(t, "expected 'invalid signature' error, got: %v",
+                           client_err);
+    tls_config_release(server_config);
+    tls_config_release(client_config);
+    arena_free(&ar);
+}
+
+/* Test that the client rejects invalid server certificate signatures. */
+static void invalid_sig_server(void *env, TestingT *t) {
+    invalid_sig_server_signature(t, (const InvalidSig *)env, false);
+}
+
+/* Test that InsecureSkipVerify doesn't disable server signature
+ * verification. */
+static void invalid_sig_server_insecure(void *env, TestingT *t) {
+    invalid_sig_server_signature(t, (const InvalidSig *)env, true);
+}
+
+static void test_invalid_handshake_signature(TestingT *t, uint16_t version) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig server_config = test_config_server(a);
+    server_config.max_version = version;
+    server_config.min_version = version;
+    server_config.session_tickets_disabled = true;
+    TlsConfig client_config = test_config_client(a);
+    client_config.max_version = version;
+    client_config.min_version = version;
+
+    InvalidSig e = {&server_config, &client_config};
+    testing_t_run(t, BURROW_S("ClientSignature"),
+                  BURROW_FN(TestingTFunc, invalid_sig_client_signature, &e));
+    testing_t_run(t, BURROW_S("ServerSignature"),
+                  BURROW_FN(TestingTFunc, invalid_sig_server, &e));
+    testing_t_run(t, BURROW_S("ServerSignature/InsecureSkipVerify"),
+                  BURROW_FN(TestingTFunc, invalid_sig_server_insecure, &e));
+
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    arena_free(&ar);
+}
+
+static void invalid_handshake_signature_tls10(void *env, TestingT *t) {
+    (void)env;
+    test_invalid_handshake_signature(t, TLS_VERSION_TLS10);
+}
+
+static void invalid_handshake_signature_tls12(void *env, TestingT *t) {
+    (void)env;
+    test_invalid_handshake_signature(t, TLS_VERSION_TLS12);
+}
+
+static void invalid_handshake_signature_tls13(void *env, TestingT *t) {
+    (void)env;
+    test_invalid_handshake_signature(t, TLS_VERSION_TLS13);
+}
+
+/* TestInvalidHandshakeSignature tests that invalid handshake signatures are
+ * rejected for all TLS versions, for both server and client certificates,
+ * even when InsecureSkipVerify or RequireAnyClientCert are used (which disable
+ * certificate chain verification, but not signature verification). */
+static void TestInvalidHandshakeSignature(TestingT *t) {
+    testing_t_run(t, BURROW_S("TLSv10"),
+                  BURROW_FN(TestingTFunc, invalid_handshake_signature_tls10, NULL));
+    testing_t_run(t, BURROW_S("TLSv12"),
+                  BURROW_FN(TestingTFunc, invalid_handshake_signature_tls12, NULL));
+    testing_t_run(t, BURROW_S("TLSv13"),
+                  BURROW_FN(TestingTFunc, invalid_handshake_signature_tls13, NULL));
+}
+
+/* Not in Go: what the GetCertificate and GetClientCertificate closures of
+ * testLocalCertificate and testLocalCertificateResumption return. */
+typedef struct LocalCertCallbacks {
+    TlsCertificate server, client;
+} LocalCertCallbacks;
+
+static TlsCertificate *local_cert_get_certificate(void *env, TlsClientHelloInfo *chi,
+                                                  Error *err) {
+    (void)chi;
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return &((LocalCertCallbacks *)env)->server;
+}
+
+static TlsCertificate *local_cert_get_client_certificate(void *env,
+                                                         TlsCertificateRequestInfo *cri,
+                                                         Error *err) {
+    (void)cri;
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return &((LocalCertCallbacks *)env)->client;
+}
+
+/* Not in Go: slices.EqualFunc(a, b, bytes.Equal) for two [][]byte. */
+static bool same_byte_slices(Slice a, Slice b) {
+    if (a.len != b.len)
+        return false;
+    for (Int i = 0; i < a.len; i++)
+        if (!bytes_equal(((const Slice *)a.p)[i], ((const Slice *)b.p)[i]))
+            return false;
+    return true;
+}
+
+/* Not in Go: the configurations both tests start from, with the callbacks set
+ * up in cb when callback is set. */
+static void local_cert_configs(Alloc *a, uint16_t version, bool callback,
+                               LocalCertCallbacks *cb, TlsConfig *client_config,
+                               TlsConfig *server_config, TlsCertificate *server_cert,
+                               TlsCertificate *client_cert) {
+    *client_config = test_config_client(a);
+    *server_config = test_config_server(a);
+
+    client_config->min_version = server_config->min_version = version;
+    client_config->max_version = server_config->max_version = version;
+    server_config->client_auth = TLS_REQUEST_CLIENT_CERT;
+
+    *server_cert = ((const TlsCertificate *)server_config->certificates.p)[0];
+    *client_cert = ((const TlsCertificate *)client_config->certificates.p)[0];
+
+    if (callback) {
+        memset(cb, 0, sizeof *cb);
+        cb->client.certificate = client_cert->certificate;
+        cb->client.private_key = client_cert->private_key;
+        client_config->get_client_certificate = BURROW_FN(
+            TlsGetClientCertificateFunc, local_cert_get_client_certificate, cb);
+        client_config->certificates = slice_nil(TYPE_TLS_CERTIFICATE);
+        cb->server.certificate = server_cert->certificate;
+        cb->server.private_key = server_cert->private_key;
+        server_config->get_certificate =
+            BURROW_FN(TlsGetCertificateFunc, local_cert_get_certificate, cb);
+        server_config->certificates = slice_nil(TYPE_TLS_CERTIFICATE);
+    }
+}
+
+static void test_local_certificate(TestingT *t, uint16_t version, bool callback) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    LocalCertCallbacks cb;
+    TlsConfig client_config, server_config;
+    TlsCertificate server_cert, client_cert;
+    local_cert_configs(a, version, callback, &cb, &client_config, &server_config,
+                       &server_cert, &client_cert);
+
+    Handshake h;
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_fatalf_v(t, "unexpected failure: %s", error_text(h.err));
+
+    if (!same_byte_slices(h.server_state.local_certificate, server_cert.certificate))
+        testing_t_errorf_v(t, "unexpected server local certificate: %x, want %x",
+                           h.server_state.local_certificate, server_cert.certificate);
+
+    if (!same_byte_slices(h.client_state.local_certificate, client_cert.certificate))
+        testing_t_errorf_v(t, "unexpected client local certificate: %x, want %x",
+                           h.client_state.local_certificate, client_cert.certificate);
+    handshake_free(&h);
+
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    arena_free(&ar);
+}
+
+/* Not in Go: what the subtests of TestLocalCertificate and
+ * TestLocalCertificateResumption get. */
+typedef struct LocalCertTest {
+    uint16_t version;
+    bool callback;
+    void (*test)(TestingT *t, uint16_t version, bool callback);
+} LocalCertTest;
+
+static void local_cert_version(void *env, TestingT *t) {
+    const LocalCertTest *lt = (const LocalCertTest *)env;
+    lt->test(t, lt->version, lt->callback);
+}
+
+static const uint16_t local_cert_versions[] = {TLS_VERSION_TLS10, TLS_VERSION_TLS11,
+                                               TLS_VERSION_TLS12, TLS_VERSION_TLS13};
+
+static void local_cert_callback(void *env, TestingT *t) {
+    const LocalCertTest *base = (const LocalCertTest *)env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    for (int i = 0; i < 4; i++) {
+        LocalCertTest lt = *base;
+        lt.version = local_cert_versions[i];
+        testing_t_run(t, tls_version_name(a, lt.version),
+                      BURROW_FN(TestingTFunc, local_cert_version, &lt));
+    }
+    arena_free(&ar);
+}
+
+/* Not in Go: the loop both tests have over useCallback. */
+static void local_cert_tests(TestingT *t, void (*test)(TestingT *t, uint16_t version,
+                                                       bool callback)) {
+    static const bool use_callbacks[] = {true, false};
+    for (int i = 0; i < 2; i++) {
+        Str name = BURROW_S("UseCertificates");
+        if (use_callbacks[i])
+            name = BURROW_S("UseCallbacks");
+        LocalCertTest lt = {0, use_callbacks[i], test};
+        testing_t_run(t, name, BURROW_FN(TestingTFunc, local_cert_callback, &lt));
+    }
+}
+
+static void TestLocalCertificate(TestingT *t) {
+    local_cert_tests(t, test_local_certificate);
+}
+
+static void test_local_certificate_resumption(TestingT *t, uint16_t version,
+                                              bool callback) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    LocalCertCallbacks cb;
+    TlsConfig client_config, server_config;
+    TlsCertificate server_cert, client_cert;
+    local_cert_configs(a, version, callback, &cb, &client_config, &server_config,
+                       &server_cert, &client_cert);
+    client_config.client_session_cache =
+        tls_new_lru_client_session_cache(heap_allocator(), 1);
+    if (client_config.client_session_cache.vt == NULL)
+        testing_t_fatal_v(t, "out of memory");
+
+    Handshake h;
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_fatalf_v(t, "first handshake failed: %s", error_text(h.err));
+    handshake_free(&h);
+
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_fatalf_v(t, "second handshake failed: %s", error_text(h.err));
+    if (!h.server_state.did_resume || !h.client_state.did_resume)
+        testing_t_fatalf_v(t, "second handshake did not resume (server=%v client=%v)",
+                           h.server_state.did_resume, h.client_state.did_resume);
+    if (!slice_is_nil(h.server_state.local_certificate))
+        testing_t_errorf_v(t,
+                           "server LocalCertificate on resumed connection: got %x, "
+                           "want nil",
+                           h.server_state.local_certificate);
+    if (!slice_is_nil(h.client_state.local_certificate))
+        testing_t_errorf_v(t,
+                           "client LocalCertificate on resumed connection: got %x, "
+                           "want nil",
+                           h.client_state.local_certificate);
+    handshake_free(&h);
+
+    tls_lru_client_session_cache_free(client_config.client_session_cache);
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    arena_free(&ar);
+}
+
+static void TestLocalCertificateResumption(TestingT *t) {
+    local_cert_tests(t, test_local_certificate_resumption);
+}
+
 #define TESTS(X)                                                                       \
     X(TestX509KeyPair)                                                                 \
     X(TestCipherSuites)                                                                \
@@ -2522,6 +3552,14 @@ static void TestWarningAlertFlood(TestingT *t) {
     X(TestRealResumption)                                                              \
     X(TestConnCloseBreakingWrite)                                                      \
     X(TestConnCloseWrite)                                                              \
-    X(TestWarningAlertFlood)
+    X(TestWarningAlertFlood)                                                           \
+    X(TestConnectionState)                                                             \
+    X(TestPKCS1OnlyCert)                                                               \
+    X(TestEarlyLargeCertMsg)                                                           \
+    X(TestLargeCertMsg)                                                                \
+    X(TestMessageSigner)                                                               \
+    X(TestInvalidHandshakeSignature)                                                   \
+    X(TestLocalCertificate)                                                            \
+    X(TestLocalCertificateResumption)
 
 TESTING_MAIN(TESTS)

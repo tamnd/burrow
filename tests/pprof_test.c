@@ -900,6 +900,13 @@ static bool have_walk(void) {
     return runtime_callers(1, s) > 0;
 }
 
+/* Whether the stacks can be matched by function name, which needs the table
+ * of names. A build whose nm reads none of the objects, like MSVC's, has an
+ * empty one, and frames_test.c skips there the same way. */
+static bool have_names(void) {
+    return burrow__symtab_len() > 0;
+}
+
 static void TestProfileWriteTo(TestingT *t) {
     if (!have_walk())
         testing_t_skip_v(t, "no stack walk here, so the two places look the same");
@@ -2396,6 +2403,10 @@ static void TestBlockProfile(TestingT *t) {
         testing_t_skip_v(t, "no stacks to check");
         return;
     }
+    if (!have_names()) {
+        testing_t_skip_v(t, "no names to match the stacks against");
+        return;
+    }
 
     /* Generate block profile */
     runtime_set_block_profile_rate(1);
@@ -2438,6 +2449,10 @@ static int block_bias_func(Uintptr addr) {
 static void TestBlockProfileBias(TestingT *t) {
     if (!have_walk()) {
         testing_t_skip_v(t, "no stacks to tell the two functions apart by");
+        return;
+    }
+    if (!have_names()) {
+        testing_t_skip_v(t, "no names to match the stacks against");
         return;
     }
 
@@ -2647,6 +2662,10 @@ static void TestMutexProfile(TestingT *t) {
         testing_t_skip_v(t, "no stacks to check");
         return;
     }
+    if (!have_names()) {
+        testing_t_skip_v(t, "no names to match the stacks against");
+        return;
+    }
 
     /* Generate mutex profile */
 
@@ -2704,6 +2723,10 @@ static void read_mutex_profile(TestingT *t, int64_t *contentions, int64_t *delay
 static void TestMutexProfileRateAdjust(TestingT *t) {
     if (!have_walk()) {
         testing_t_skip_v(t, "no stacks to find the unlock in");
+        return;
+    }
+    if (!have_names()) {
+        testing_t_skip_v(t, "no names to match the stacks against");
         return;
     }
 

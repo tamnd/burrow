@@ -41,6 +41,7 @@
 #define BURROW_SCHED_H
 
 #include "burrow/defer.h"
+#include "burrow/exectrace.h"
 #include "burrow/func.h"
 #include "burrow/lock.h"
 #include "burrow/mcontext.h"
@@ -281,6 +282,9 @@ struct burrow__G {
      * this list from the moment it exists until the runtime stops, dead or
      * alive, so `next` and `allnext` are never the same list. */
     burrow__G *allnext;
+
+    /* What the execution tracer knows about this goroutine. */
+    burrow__TraceG trace;
 };
 
 /* A scheduling context. GOMAXPROCS of these and no more, which is what makes
@@ -473,6 +477,11 @@ struct burrow__M {
      * and never again. */
     int32_t ncreatestack;
     uintptr_t createstack[BURROW_PROFILE_DEPTH];
+
+    /* This thread's buffers for the execution tracer, taken the first time it
+     * writes an event and given back when it stops. Only this thread uses the
+     * field. */
+    burrow__TraceThread *trace;
 };
 
 /* ------------------------------------------------------------------ the ring

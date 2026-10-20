@@ -1,0 +1,133 @@
+# Execution traces
+
+`burrow/runtime/trace.h` is Go's `runtime/trace`. A trace records what the scheduler did while it was on: every goroutine created, started, blocked, woken and ended, and every P taken and given back, each with the time and the stack it happened at. The file is in the format Go 1.26 writes, so `go tool trace` opens it and shows the same timeline, goroutine analysis and latency views it shows for a Go program.
+
+## Starting and stopping
+
+`trace_start` takes any `IoWriter` and starts writing to it. The writes happen on a goroutine of their own while the program runs, so the writer has to be safe to use from there. A second `trace_start` while one is running fails with "execution tracer already enabled".
+
+<!-- example: ../examples/trace/trace.c#start -->
+```c
+BytesBuffer buf = BYTES_BUFFER(a);
+Error err = trace_start(bytes_buffer_as_io_writer(&buf));
+if (BURROW_FAILED(err))
+    return;
+```
+
+`trace_stop` returns once everything has been written, so the buffer is complete when it does:
+
+<!-- example: ../examples/trace/trace.c#stop -->
+```c
+trace_stop();
+Bytes out = bytes_buffer_bytes(&buf);
+fmt_printf_v("trace written: %t\n", (bool)(out.len > 0));
+fmt_printf_v("tracing: %t\n", trace_is_enabled());
+```
+
+Write the trace to a file with `os_create` and `os_file_as_io_writer`, and then look at it with
+
+```sh
+go tool trace trace.out
+```
+
+A test binary does all of this for you with `-test.trace=trace.out`, and a server that registers the `net/http/pprof` handlers serves a trace of the next few seconds at `/debug/pprof/trace?seconds=5`.
+
+## Tasks, regions and logs
+
+The scheduler's events say what each goroutine did but not why. A program can add that. A task is one piece of work the program cares about, such as one request, which may run on several goroutines and which `go tool trace` measures from start to end. A region is a stretch of one goroutine's time inside a task, and a log is a message at a moment, filed under a category.
+
+`trace_new_task` returns a context that carries the task. A task made from a context that already has one is its subtask:
+
+<!-- example: ../examples/trace/trace.c#task -->
+```c
+TraceTask *task;
+Context ctx = trace_new_task(arena_allocator(&ar[1]), context_background(),
+                             BURROW_S("orders"), &task);
+for (int i = 0; i < 3; i++) {
+    sync_wait_group_add(&orders, 1);
+    (void)go(BURROW_FN(Func, make_cappuccino, &ctx));
+}
+sync_wait_group_wait(&orders);
+trace_task_end(task);
+```
+
+Each goroutine marks what it spends time on with a region and logs what is worth knowing:
+
+<!-- example: ../examples/trace/trace.c#order -->
+```c
+/* One order, made on its own goroutine, as a subtask of the task the context
+ * carries. The subtask lives in an arena of the goroutine's own. */
+static SyncWaitGroup orders;
+
+static void make_cappuccino(void *env) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    TraceTask *task;
+    Context ctx = trace_new_task(arena_allocator(&ar), *(Context *)env,
+                                 BURROW_S("makeCappuccino"), &task);
+
+    TraceRegion r = trace_start_region(ctx, BURROW_S("steamMilk"));
+    time_sleep(TIME_MILLISECOND);
+    trace_region_end(r);
+
+    trace_logf_v(ctx, BURROW_S("orderID"), BURROW_S("%d"), 1234);
+    trace_task_end(task);
+    arena_free(&ar);
+    sync_wait_group_done(&orders);
+}
+```
+
+`trace_with_region` runs a function inside a region, for when the region is exactly one call. Regions have to nest inside each goroutine, and a region has to end on the goroutine that started it.
+
+The task and the context come from the allocator you pass and are never given back, because other goroutines can still be using the task after the context has gone. An arena that outlives the task is the usual choice, and `gc_allocator` works in a build with the collector. An arena is not safe to share between goroutines, so give each goroutine that makes tasks its own, as `make_cappuccino` does, and do not share one with the trace's buffer either, since another goroutine grows that while the trace is on. When no trace is on, the annotations cost a check of one flag, so they can stay in production code.
+
+## The flight recorder
+
+A trace of a whole run is large, and the interesting part is usually the last few seconds before something went wrong. A flight recorder keeps only that. It traces all the time but holds just the most recent stretch in memory, throwing older parts away, and writes out what it holds when you ask. `min_age` says how far back to keep and `max_bytes` caps the memory, and `max_bytes` wins when the two disagree. Leave either at zero for the defaults, 10 seconds and 10 MiB.
+
+<!-- example: ../examples/trace/flight.c#start -->
+```c
+TraceFlightRecorderConfig cfg = {.min_age = 5 * TIME_SECOND, .max_bytes = 4 << 20};
+TraceFlightRecorder *fr = trace_new_flight_recorder(a, cfg);
+if (fr == NULL)
+    return;
+Error err = trace_flight_recorder_start(fr);
+if (BURROW_FAILED(err))
+    return;
+fmt_printf_v("recording: %t\n", trace_flight_recorder_enabled(fr));
+```
+
+When the program sees the thing worth looking at, such as a request that took far too long, it takes a snapshot. The snapshot is a complete trace that `go tool trace` opens like any other:
+
+<!-- example: ../examples/trace/flight.c#snapshot -->
+```c
+BytesBuffer buf = BYTES_BUFFER(a);
+int64_t n =
+    trace_flight_recorder_write_to(fr, bytes_buffer_as_io_writer(&buf), &err);
+fmt_printf_v("snapshot written: %t\n", (bool)(n > 0 && !BURROW_FAILED(err)));
+```
+
+Only one snapshot can be taken at a time, and a second `trace_flight_recorder_write_to` while one is running fails. Only one flight recorder can be recording at a time too, but it can record while `trace_start` writes a trace of its own, and the two see the same events.
+
+`trace_flight_recorder_stop` waits for a snapshot in progress to finish. `trace_flight_recorder_free` stops the recorder if it is still recording and gives it back:
+
+<!-- example: ../examples/trace/flight.c#stop -->
+```c
+trace_flight_recorder_stop(fr);
+fmt_printf_v("recording: %t\n", trace_flight_recorder_enabled(fr));
+(void)trace_flight_recorder_write_to(fr, bytes_buffer_as_io_writer(&buf), &err);
+fmt_printf_v("after stop: %v\n", err);
+trace_flight_recorder_free(fr);
+```
+
+## Where it differs from Go
+
+Frames in a trace have no file names or line numbers, the same as in a profile, and a frame has a function name only when burrow's symbol table has one. That covers the library and not your program, so frames in your own code show as bare addresses.
+
+Go stops the world for a moment when a trace starts. burrow cannot, so a goroutine whose state changes at exactly that moment, on a thread that then stalls for most of a second, can be missing that one change from the first second of the trace.
+
+A thread the program started itself can call the annotations, but it is not running a goroutine, so nothing is written for it.
+
+A trace started inside `runtime_main` ends when `runtime_main` returns, since the goroutine writing it ends then too. Call `trace_stop` first. A trace that ended that way still needs `trace_stop` before the next `trace_start`. A trace started before `runtime_main` is written by a thread instead and can span several runs.
+
+A flight recorder is made from an allocator and given back with `trace_flight_recorder_free`, where Go leaves it to the collector. The parts of the trace it holds come from the heap whatever allocator you pass, since they are taken and given back on the goroutine that copies the trace out.

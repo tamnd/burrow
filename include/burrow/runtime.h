@@ -372,6 +372,35 @@ Int runtime_stack(Slice buf, bool all);
  * wasip1 nothing interrupts the program, so the profile has no samples. */
 void runtime_set_cpu_profile_rate(Int hz);
 
+/* Go's runtime.StartTrace: turns the execution tracer on. From here until
+ * runtime_stop_trace, every change the scheduler makes to a goroutine or a P is
+ * written down, for runtime_read_trace to hand out in the format go tool trace
+ * reads. Fails with "tracing is already enabled" if a trace is on, or is still
+ * being read after a stop.
+ *
+ * Most programs want trace_start in burrow/runtime/trace.h instead, which
+ * calls this and writes the trace to a writer.
+ *
+ * A trace started inside runtime_main ends with it, since whatever was reading
+ * it was a goroutine. One started outside it, from a thread of the program's
+ * own, carries on across runs. On wasip1 there is no thread to read with
+ * outside runtime_main, so it has to be started inside. */
+BURROW_STATIC(ret) Error runtime_start_trace(void);
+
+/* Go's runtime.StopTrace: turns the tracer off, and returns once the reader
+ * has had all of it. Does nothing if no trace is on. */
+void runtime_stop_trace(void);
+
+/* Go's runtime.ReadTrace: the next piece of the trace, waiting until there is
+ * one. The bytes are only good until the next call. An empty slice with a NULL
+ * pointer means the trace is over, which is after runtime_stop_trace and
+ * everything before it has been read.
+ *
+ * Only one goroutine or thread may read at a time. The reader is also what ends
+ * each generation of about a second, so a trace nobody reads stays in its first
+ * generation and holds on to everything written in it. */
+BURROW_BORROWS(ret) Bytes runtime_read_trace(void);
+
 /* ------------------------------------------------------------------ random
  *
  * Sixty four random bits, from a generator seeded once per thread out of

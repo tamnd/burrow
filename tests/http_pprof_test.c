@@ -99,12 +99,6 @@ static const HandlerCase handler_cases[] = {
 
 static void handlers_one(void *env, TestingT *t) {
     const HandlerCase *tc = (const HandlerCase *)env;
-    /* Not in Go: burrow has no runtime/trace, so the trace handler always
-     * answers 500. */
-    if (tc->handler == http_pprof_trace) {
-        testing_t_skip_v(t, "burrow has no execution tracer yet");
-        return;
-    }
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);

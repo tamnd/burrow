@@ -320,4 +320,4 @@ threadcreate
 trace
 ```
 
-A program that serves its own mux puts the handlers on it with `http_serve_mux_handle_func`, and `http_pprof_handler` makes a handler for one profile by name. Two things differ from Go. burrow has no `runtime/trace` yet, so `/debug/pprof/trace` answers 500 with "Could not enable tracing", which is what Go does when the tracer will not start. And `gc=N` on the heap profile is accepted and does nothing, since there is no collector to run first.
+A program that serves its own mux puts the handlers on it with `http_serve_mux_handle_func`, and `http_pprof_handler` makes a handler for one profile by name. One thing differs from Go: `gc=N` on the heap profile is accepted and does nothing, since there is no collector to run first. `/debug/pprof/trace` writes an execution trace, the same as Go's, which [the trace guide](trace.md) covers.

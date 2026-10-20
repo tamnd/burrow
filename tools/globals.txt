@@ -38,6 +38,7 @@ category	sema-table	The wait queues behind sync, keyed on the address of the cou
 category	futex	The wait queues that stand in for a futex on the platforms that have no such call, keyed on the address being waited on, which is what makes them one per process by definition.
 category	reclaim	The epoch and the handover lists behind lock free reading. One epoch per process is the whole idea, since a reader on any thread has to be able to hold any of them back.
 category	pool	sync.Pool's registry and the lock over it, which is one per process because the sweep has to be able to find every pool from the system monitor's thread.
+category	exec-trace	The execution tracer's generation, buffers and tables. Go keeps the same state in the runtime's trace variable, and it is one per process because a trace is of the whole program: every thread writes into it and one reader takes it all out.
 category	clock	The conversion factor between what the machine's counter counts and nanoseconds. Fixed at boot, so it is asked for once.
 category	machine	What the machine is: the page size and how many cores the process may run on. Both are fixed for the life of the process, so both are asked for once.
 category	coverage	The compiler's coverage counters. The compiler lays them out once per module and calls in to register them before main, so there is one set per process by construction.
@@ -76,6 +77,8 @@ global	src/debug/pprof.c	ppr_mutex_profile	package-vars	Go's mutexProfile, a bui
 global	src/debug/pprof.c	ppr_profiles	package-vars	Go's profiles.m, every profile NewProfile has made, by name. Made on first use and only read or written with ppr_profiles_mu held.
 global	src/debug/pprof.c	ppr_profiles_mu	package-vars	Go's profiles.mu, the lock for ppr_profiles. Zero is an unlocked mutex, so it needs no setting up.
 global	src/debug/pprof.c	ppr_cpu	package-vars	Go's cpu, whether a CPU profile is running and the channel its writer says it is done on. Only read or written with ppr_cpu.mu held, which pprof_stop_cpu_profile holds until the writer has said so.
+global	src/debug/runtime_trace.c	tracing	package-vars	Go's traceMultiplexer, which runtime/trace keeps one of. Its mutexes are zero when unlocked, enabled is atomic, and the rest is only read or written with mu, subscribers_mu or gate held, the way Go's is.
+global	src/debug/runtime_trace.c	rtr_last_task_id	package-vars	Go's lastTaskID, the last task id handed out. Only touched with an atomic add.
 global	src/go/types_universe.c	gt_all_term	tables	The term for all types. Initialised in place and never written.
 global	src/go/types_universe.c	gt_all_terms	tables	The termlist of all types, which holds gt_all_term. Initialised in place and never written.
 global	src/go/types_universe.c	gt_byte	tables	The byte alias of uint8. Initialised in place and never written.
@@ -484,3 +487,5 @@ global	src/expvar/expvar.c	ev_register_once	package-vars	Makes expvar_register p
 global	src/text/template_parse.c	burrow__parse_max_stack_depth	package-vars	Go's maxStackDepth, a variable there too, which only the tests change, before any parse starts.
 global	src/text/template_parse_node.c	burrow__parse_text_format_q	package-vars	Go's textFormat, which only the tests change, around parses and String calls on the same thread, as Go's do.
 global	src/html/template_escape.c	hte_debug_flags	godebug	The htmlmetacontenturlescape setting, read from GODEBUG on first use. Relaxed atomic loads and stores only, and two racing first loads store the same value. burrow__ht_godebug_set changes it for the tests, as t.Setenv does in Go.
+global	src/runtime/exectrace.c	burrow__trace_gen	exec-trace	Go's trace.gen. Atomic. Written only with adv_lock held, read by every hook without a lock.
+global	src/runtime/exectrace.c	trace	exec-trace	Go's trace. Each part is under the lock its comment names: ctl, adv_lock, trace.lock, tt_lock, or the lock of the thread or table it belongs to.

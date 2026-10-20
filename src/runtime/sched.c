@@ -440,6 +440,13 @@ bool burrow__goroutine_stacks(burrow__StackRecordFn fn, void *env) {
     return true;
 }
 
+void burrow__sched_walk_gs(void (*fn)(burrow__G *g, void *arg), void *arg) {
+    burrow__lock(&sched.lock);
+    for (burrow__G *g = sched.allg; g != NULL; g = g->allnext)
+        fn(g, arg);
+    burrow__unlock(&sched.lock);
+}
+
 int32_t burrow__thread_count(void) {
     burrow__lock(&sched.lock);
     int32_t n = sched.nmcreated;
@@ -766,6 +773,12 @@ static void acquirep(burrow__M *m, burrow__P *p) {
     m->p = p;
     burrow__atomic_store_ptr((void **)&p->m, m);
     set_pstatus(p, BURROW_PRUNNING);
+
+    burrow__TraceLocker tl;
+    if (burrow__trace_acquire(&tl)) {
+        burrow__trace_proc_start(&tl);
+        burrow__trace_release(&tl);
+    }
 }
 
 static void midle_put(burrow__M *m) {
@@ -1072,8 +1085,14 @@ static burrow__G *execute(burrow__M *m, burrow__G *gp) {
      * the same reason acquirep writes the P's back pointer atomically. Read
      * back plainly everywhere else in this file, which is allowed because every
      * one of those reads is on the thread that owns the M. */
+    burrow__TraceLocker tl;
+    bool traced = burrow__trace_acquire(&tl);
     burrow__atomic_store_release_ptr((void **)&m->curg, gp);
     cas_running(gp);
+    if (traced) {
+        burrow__trace_go_start(&tl, gp);
+        burrow__trace_release(&tl);
+    }
     burrow__stack_set_current(&gp->stack);
 
     /* Both of these are the preemption bookkeeping and both belong here rather
@@ -1132,7 +1151,11 @@ static burrow__G *execute(burrow__M *m, burrow__G *gp) {
 /* --------------------------------------------------- the three ways to stop */
 
 static burrow__G *goexit0(burrow__M *m, burrow__G *gp) {
+    burrow__TraceLocker tl;
+    bool traced = burrow__trace_acquire(&tl);
     set_status_release(gp, BURROW_GDEAD);
+    if (traced)
+        burrow__trace_go_destroy(&tl, gp);
     gp->entry = NULL;
     gp->arg = NULL;
     count_goroutine(m->p, -1);
@@ -1151,7 +1174,11 @@ static burrow__G *goexit0(burrow__M *m, burrow__G *gp) {
         burrow__bubble_unblock(coronext);
         if (!cas_status(coronext, BURROW_GWAITING, BURROW_GRUNNABLE))
             runtime_throw(BURROW_S("coroexit: the waiting goroutine was not parked"));
+        if (traced)
+            burrow__trace_go_unpark(&tl, coronext);
     }
+    if (traced)
+        burrow__trace_release(&tl);
 
     bool was_main = gp == sched.maing;
 
@@ -1205,7 +1232,13 @@ static burrow__G *goexit0(burrow__M *m, burrow__G *gp) {
 }
 
 static burrow__G *gosched0(burrow__M *m, burrow__G *gp) {
+    burrow__TraceLocker tl;
+    bool traced = burrow__trace_acquire(&tl);
     set_status_release(gp, BURROW_GRUNNABLE);
+    if (traced) {
+        burrow__trace_go_stop(&tl, gp);
+        burrow__trace_release(&tl);
+    }
 
     /* The back of this P's own ring, and not the front, because a goroutine
      * that asked to give way and went straight back to the front of its queue
@@ -1218,7 +1251,13 @@ static burrow__G *gosched0(burrow__M *m, burrow__G *gp) {
 }
 
 static burrow__G *park0(burrow__M *m, burrow__G *gp) {
+    burrow__TraceLocker tl;
+    bool traced = burrow__trace_acquire(&tl);
     set_status(gp, BURROW_GWAITING);
+    if (traced) {
+        burrow__trace_go_park(&tl, gp);
+        burrow__trace_release(&tl);
+    }
 
     SchedUnlockFn unlockf = m->parkunlock;
     void *lock = m->parklock;
@@ -1256,8 +1295,13 @@ static burrow__G *park0(burrow__M *m, burrow__G *gp) {
             burrow__bubble_unblock(gp);
             burrow__bubble_release(bubble);
         }
+        traced = burrow__trace_acquire(&tl);
         if (!cas_status(gp, BURROW_GWAITING, BURROW_GRUNNABLE))
             runtime_throw(BURROW_S("park: goroutine changed state while parking"));
+        if (traced) {
+            burrow__trace_go_unpark(&tl, gp);
+            burrow__trace_release(&tl);
+        }
         return gp;
     }
 
@@ -1348,8 +1392,14 @@ static void ready_list(burrow__GQueue *q) {
         if (g == NULL)
             break;
 
+        burrow__TraceLocker tl;
+        bool traced = burrow__trace_acquire(&tl);
         if (!cas_status(g, BURROW_GWAITING, BURROW_GRUNNABLE))
             runtime_throw(BURROW_S("netpoll: readied a goroutine that was not parked"));
+        if (traced) {
+            burrow__trace_go_unpark(&tl, g);
+            burrow__trace_release(&tl);
+        }
 
         if (local)
             runq_put(m->p, g, false);
@@ -2072,6 +2122,11 @@ static burrow__G *findrunnable(burrow__M *m) {
             burrow__unlock(&sched.lock);
             return gp;
         }
+        burrow__TraceLocker tl;
+        if (burrow__trace_acquire(&tl)) {
+            burrow__trace_proc_stop(&tl, p);
+            burrow__trace_release(&tl);
+        }
         m->p = NULL;
         pidle_put(p);
         burrow__unlock(&sched.lock);
@@ -2234,6 +2289,7 @@ static void mstart(void *arg) {
         burrow__atomic_add_u32(&sched.nmspinning, (uint32_t)-1);
     }
 
+    burrow__trace_m_exit(m);
     burrow__stack_guard_disarm_thread();
     burrow__mcontext_detach(&m->g0.ctx);
     setm(NULL);
@@ -2345,6 +2401,7 @@ static bool go_start(Func fn, size_t stack_bytes, burrow__Bubble *bubble, bool b
         outside_leave(counted);
         return false;
     }
+    burrow__trace_g_reset(newg, p != NULL);
 
     newg->entry = fn.f;
     newg->arg = fn.env;
@@ -2376,8 +2433,17 @@ static bool go_start(Func fn, size_t stack_bytes, burrow__Bubble *bubble, bool b
     }
 
     /* A release store is enough, because nobody can see newg until the queue
-     * put below publishes it, and that is a release too. */
+     * put below publishes it, and that is a release too.
+     *
+     * A thread with no P has nowhere to write the creation to, so the
+     * goroutine was marked for the thread that first runs it to write. */
+    burrow__TraceLocker tl;
+    bool traced = p != NULL && burrow__trace_acquire(&tl);
     set_status_release(newg, BURROW_GRUNNABLE);
+    if (traced) {
+        burrow__trace_go_create(&tl, newg, false);
+        burrow__trace_release(&tl);
+    }
     count_goroutine(p, 1);
 
     if (p != NULL) {
@@ -2443,6 +2509,7 @@ bool burrow__newcoro(burrow__Coro *c, void (*f)(burrow__Coro *c, void *env),
     burrow__G *newg = gfget(m->p, BURROW_GOROUTINE_STACK);
     if (newg == NULL)
         return false;
+    burrow__trace_g_reset(newg, true);
 
     newg->entry = corostart;
     newg->arg = c;
@@ -2472,7 +2539,13 @@ bool burrow__newcoro(burrow__Coro *c, void (*f)(burrow__Coro *c, void *env),
     }
 
     newg->waitreason = (uint8_t)BURROW_WAIT_COROUTINE;
+    burrow__TraceLocker tl;
+    bool traced = burrow__trace_acquire(&tl);
     set_status_release(newg, BURROW_GWAITING);
+    if (traced) {
+        burrow__trace_go_create(&tl, newg, true);
+        burrow__trace_release(&tl);
+    }
     count_goroutine(m->p, 1);
     return true;
 }
@@ -2507,9 +2580,15 @@ void burrow__coroswitch(burrow__Coro *c) {
     }
 
     gp->waitreason = (uint8_t)BURROW_WAIT_COROUTINE;
+    burrow__TraceLocker tl;
+    bool traced = burrow__trace_acquire(&tl);
     set_status_release(gp, BURROW_GWAITING);
     burrow__atomic_store_release_ptr((void **)&m->curg, next);
     cas_running(next);
+    if (traced) {
+        burrow__trace_go_switch(&tl, gp, next);
+        burrow__trace_release(&tl);
+    }
     burrow__stack_set_current(&next->stack);
     burrow__mcontext_switch(&gp->ctx, &next->ctx);
 }
@@ -2559,6 +2638,7 @@ void burrow__park(bool (*unlockf)(burrow__G *g, void *lock), void *lock,
     m->parkunlock = unlockf;
     m->parklock = lock;
     m->parkdurable = durable;
+    burrow__trace_capture(BURROW_TRACE_PARK);
     mcall(park0);
 }
 
@@ -2575,9 +2655,15 @@ void sched_ready(Goroutine *g) {
 
     bool counted = outside_enter();
 
+    burrow__TraceLocker tl;
+    bool traced = burrow__trace_acquire(&tl);
     if (!cas_status(g, BURROW_GWAITING, BURROW_GRUNNABLE)) {
         outside_leave(counted);
         runtime_throw(BURROW_S("sched_ready: goroutine is not parked"));
+    }
+    if (traced) {
+        burrow__trace_go_unpark(&tl, g);
+        burrow__trace_release(&tl);
     }
 
     /* Before the queue and not after it, so that a bubble counts a goroutine
@@ -2606,6 +2692,7 @@ void sched_ready(Goroutine *g) {
 void runtime_gosched(void) {
     if (getm() == NULL || getm()->curg == NULL)
         runtime_throw(BURROW_S("runtime_gosched: not on a goroutine"));
+    burrow__trace_capture(BURROW_TRACE_GOSCHED);
     mcall(gosched0);
 }
 
@@ -2650,6 +2737,7 @@ void burrow__preempt_point(void) {
      * straight back, is not asked again by the very next safe point it walks
      * past. That would turn one preemption into a loop of them. */
     burrow__atomic_store_u32(&getm()->curg->preempt, 0);
+    burrow__trace_capture(BURROW_TRACE_PREEMPTED);
     mcall(gosched0);
 }
 
@@ -2760,6 +2848,11 @@ static void teardown(void) {
     while (burrow__atomic_load_acquire_u32(&sched.noutside) != 0)
         burrow__thread_yield();
 
+    /* Before the goroutines go, since a trace that is still on is about to
+     * have nobody left to read it, and the next run's goroutine ids start at
+     * one again. */
+    burrow__trace_run_end(sched.nextgoid);
+
     /* Anything an M retired and had not yet handed on is in that M's pocket,
      * and the M is about to stop existing. Nobody is pinned by the time this
      * runs, which is exactly the condition a drain needs, so the last few
@@ -2820,9 +2913,11 @@ void runtime_main(Func fn) {
 
     /* The main goroutine, built by hand because `go` refuses to run before the
      * world is up and the world is not up until this exists. */
+    burrow__trace_run_start();
     burrow__G *mg = gfget(NULL, BURROW_GOROUTINE_STACK);
     if (mg == NULL)
         runtime_throw(BURROW_S("runtime_main: cannot make the main goroutine"));
+    burrow__trace_g_reset(mg, false);
 
     mg->entry = fn.f;
     mg->arg = fn.env;

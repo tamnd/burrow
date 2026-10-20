@@ -26,6 +26,7 @@
 #include "burrow/panic.h"
 #include "burrow/proc.h"
 #include "burrow/runtime/pprof.h"
+#include "burrow/runtime/trace.h"
 #include "burrow/sched.h"
 #include "burrow/slice.h"
 #include "burrow/strconv.h"
@@ -599,6 +600,8 @@ typedef struct Package {
     /* Not in Go: Go leaves the -test.cpuprofile file open for the process to
      * close. after closes this one. */
     OsFile *cpu_profile;
+    /* Not in Go either: Go never closes the -test.trace file. after does. */
+    OsFile *trace_file;
     bool labels_done;
     bool after_done;   /* afterOnce */
     int bench_procs;   /* the -test.cpu value the benchmark is named for */
@@ -4650,6 +4653,29 @@ static void m_before(void) {
         if (pkg.cpu_profile == NULL)
             return;
     }
+    if (pkg.flags[F_TRACE].s.len > 0) {
+        Arena ar;
+        arena_init(&ar, NULL, 0);
+        Alloc *a = arena_allocator(&ar);
+        Error err = {0};
+        OsFile *f =
+            os_create(heap_allocator(), to_output_dir(a, pkg.flags[F_TRACE].s), &err);
+        if (err.vt != NULL) {
+            write_to(stderr, fmt_sprintf_v(a, "testing: %s\n", err));
+        } else {
+            err = trace_start(os_file_as_io_writer(f));
+            if (err.vt != NULL) {
+                write_to(stderr,
+                         fmt_sprintf_v(a, "testing: can't start tracing: %s\n", err));
+                os_file_free(f);
+            } else {
+                pkg.trace_file = f;
+            }
+        }
+        arena_free(&ar);
+        if (pkg.trace_file == NULL)
+            return;
+    }
     if (pkg.flags[F_BLOCKPROFILE].s.len > 0 && pkg.flags[F_BLOCKPROFILERATE].i >= 0)
         runtime_set_block_profile_rate((Int)pkg.flags[F_BLOCKPROFILERATE].i);
     if (pkg.flags[F_MUTEXPROFILE].s.len > 0 && pkg.flags[F_MUTEXPROFILEFRACTION].i >= 0)
@@ -4684,6 +4710,11 @@ static void m_after(void) {
         pprof_stop_cpu_profile();
         os_file_free(pkg.cpu_profile);
         pkg.cpu_profile = NULL;
+    }
+    if (pkg.trace_file != NULL) {
+        trace_stop(); /* flushes trace to disk */
+        os_file_free(pkg.trace_file);
+        pkg.trace_file = NULL;
     }
     Arena ar;
     arena_init(&ar, NULL, 0);

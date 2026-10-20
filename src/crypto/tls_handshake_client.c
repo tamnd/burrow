@@ -1482,7 +1482,7 @@ static Error tcl_send_finished(TclState *hs, Byte out[12]) {
 }
 
 /* checkKeySize. */
-static bool tcl_check_key_size(Int n, Int *max) {
+bool burrow__tls_check_key_size(Int n, Int *max) {
     Int m;
     if (burrow__tls_godebug_max_rsa_size(&m)) {
         /* Go counts the tlsmaxrsasize GODEBUG setting here when it changes
@@ -1557,7 +1557,7 @@ Error burrow__tls_conn_verify_server_certificate(TlsConn *c, Slice certificates)
         if (cert->public_key_algorithm == X509_RSA) {
             const RsaPublicKey *pub = cert->public_key.data;
             Int max;
-            if (!tcl_check_key_size(big_int_bit_len(pub->n), &max)) {
+            if (!burrow__tls_check_key_size(big_int_bit_len(pub->n), &max)) {
                 (void)burrow__tls_conn_send_alert(c, TLS_ALERT_BAD_CERTIFICATE);
                 return fmt_errorf_v("tls: server sent certificate containing RSA key "
                                     "larger than %d bits",

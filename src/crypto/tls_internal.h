@@ -1173,6 +1173,10 @@ bool burrow__tls_supports_ecdhe(const TlsConfig *c, uint16_t version,
                                 Slice supported_curves, Slice supported_points,
                                 Error *err);
 
+/* requiresClientCert reports whether the ClientAuthType requires a client
+ * certificate to be provided. */
+bool burrow__tls_requires_client_cert(TlsClientAuthType c);
+
 /* ---------------------------------------------------------- key agreement */
 
 /* A keyAgreement implements the client and server side of a TLS 1.0–1.2 key
@@ -1522,6 +1526,11 @@ struct TlsConn {
      * peer_certificates, verified_chains and ocsp_response point into after
      * a resumption. tls_conn_free gives it back. */
     TlsClientSessionState *resumed_session;
+
+    /* Not in Go: the session a server resumed, which peer_certificates,
+     * verified_chains, ocsp_response and scts point into after a resumption.
+     * tls_conn_free frees it. */
+    TlsSessionState *server_session;
 };
 
 /* Not in Go. What Client and Server share: a Conn over conn that runs fn as
@@ -1659,6 +1668,10 @@ bool burrow__tls_clone_bytes_list(Alloc *a, Slice list, Slice *out);
 /* Not in Go. s copied into a, or false when a is out of memory. */
 bool burrow__tls_clone_str(Alloc *a, Str s, Str *out);
 
+/* checkKeySize reports whether an RSA key of n bits is allowed, and sets *max
+ * to the largest size that is. */
+bool burrow__tls_check_key_size(Int n, Int *max);
+
 /* ------------------------------------------------- TLS 1.3 client handshake */
 
 typedef struct TlsClientHandshakeStateTLS13 {
@@ -1698,5 +1711,70 @@ typedef struct TlsClientHandshakeStateTLS13 {
  * NULL there. */
 Error burrow__tls_client_handshake_state_tls13_handshake(
     TlsClientHandshakeStateTLS13 *hs);
+
+/* --------------------------------------------------------- server handshake */
+
+/* serverHandshakeState contains details of a server handshake in progress. */
+typedef struct TlsServerHandshakeState {
+    TlsConn *c;
+    Context ctx;
+    TlsClientHelloMsg *client_hello;
+    TlsServerHelloMsg *hello;
+    const TlsSuite *suite;
+    bool ecdhe_ok;
+    bool ec_sign_ok;
+    bool rsa_decrypt_ok;
+    bool rsa_sign_ok;
+    TlsSessionState *session_state;
+    TlsFinishedHash finished_hash;
+    Slice master_secret;
+    TlsCertificate *cert;
+
+    /* Not in Go: the messages client_hello and hello are in, and the scratch
+     * allocator everything that only lasts the handshake is made in. */
+    TlsHandshakeMsg *client_hello_msg;
+    TlsHandshakeMsg *hello_msg;
+    Alloc *a;
+} TlsServerHandshakeState;
+
+/* serverHandshake performs a TLS handshake as a server. */
+Error burrow__tls_server_handshake(TlsConn *c, Context ctx);
+
+/* Not in Go. The TLS 1.0–1.2 handshake once the ClientHello is read: hs.c,
+ * hs.ctx, hs.client_hello, hs.client_hello_msg and hs.a have to be set. */
+Error burrow__tls_server_handshake_state_handshake(TlsServerHandshakeState *hs);
+
+/* readClientHello reads a ClientHello message and selects the protocol
+ * version.
+ *
+ * Not in Go: the message is made in a. */
+Error burrow__tls_conn_read_client_hello(TlsConn *c, Context ctx, Alloc *a,
+                                         TlsHandshakeMsg **out);
+
+/* processClientHello. */
+Error burrow__tls_server_handshake_state_process_client_hello(
+    TlsServerHandshakeState *hs);
+
+/* pickCipherSuite. */
+Error burrow__tls_server_handshake_state_pick_cipher_suite(TlsServerHandshakeState *hs);
+
+/* negotiateALPN picks a shared ALPN protocol that both sides support in server
+ * preference order. If ALPN is not configured or the peer doesn't support it,
+ * it returns "" and no error.
+ *
+ * Not in Go: *out is a view of server_protos. */
+Error burrow__tls_negotiate_alpn(Slice server_protos, Slice client_protos, bool quic,
+                                 Str *out);
+
+/* processCertsFromClient takes a chain of client certificates either from a
+ * certificateMsg message or a certificateMsgTLS13 message and verifies them. */
+Error burrow__tls_conn_process_certs_from_client(TlsConn *c,
+                                                 const TlsCertificate *certificate);
+
+/* clientHelloInfo. Not in Go: the info is made in a and points into
+ * client_hello. NULL when a is out of memory. */
+BURROW_BORROWS(ret, client_hello) TlsClientHelloInfo *
+burrow__tls_client_hello_info(Alloc *a, Context ctx, TlsConn *c,
+                              const TlsClientHelloMsg *client_hello);
 
 #endif /* BURROW_SRC_CRYPTO_TLS_INTERNAL_H */

@@ -903,6 +903,16 @@ bool burrow__tls_supports_ecdhe(const TlsConfig *c, uint16_t version,
     return supports_curve && supports_point_format;
 }
 
+bool burrow__tls_requires_client_cert(TlsClientAuthType c) {
+    switch (c) {
+    case TLS_REQUIRE_ANY_CLIENT_CERT:
+    case TLS_REQUIRE_AND_VERIFY_CLIENT_CERT:
+        return true;
+    default:
+        return false;
+    }
+}
+
 /* ---------------------------------------------------------- connection state */
 
 Slice tls_connection_state_export_keying_material(const TlsConnectionState *cs,

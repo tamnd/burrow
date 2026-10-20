@@ -266,7 +266,9 @@ Error burrow__tls_client_handshake_state_tls13_handshake(
     if (hs->ech_context != NULL && hs->ech_context->ech_rejected) {
         (void)burrow__tls_conn_send_alert(c, TLS_ALERT_ECH_REQUIRED);
         TlsECHRejectionError rejection = {hs->ech_context->retry_configs};
-        return tls_ech_rejection_error_as_error(&rejection, hs->a);
+        /* Not in Go: made with what c keeps, as hs->a is gone by the time
+         * the error is looked at. */
+        return tls_ech_rejection_error_as_error(&rejection, tc13_keep(c));
     }
 
     sync_atomic_bool_store(&c->is_handshake_complete, true);

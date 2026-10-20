@@ -8,10 +8,10 @@
  * testhash_with_clone runs the same checks on a hash that is made as a
  * hash.Cloner to begin with, as maphash's is.
  *
- * testhash_repeat and testhash_show are not from Go. Go's golden tables spell a long input
- * as strings.Repeat(rep, count) + tail, and testhash_repeat builds one of those
- * so the tables here can say it the same way. testhash_show cuts an input down
- * for an error message the way Go's tests do.
+ * testhash_repeat and testhash_show are not from Go. Go's golden tables spell a
+ * long input as strings.Repeat(rep, count) + tail, and testhash_repeat builds
+ * one of those so the tables here can say it the same way. testhash_show cuts
+ * an input down for an error message the way Go's tests do.
  *
  * Go seeds its random input from the clock and logs the seed, and so does this,
  * with a splitmix64 generator standing in for math/rand until that is ported.

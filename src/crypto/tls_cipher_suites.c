@@ -617,7 +617,11 @@ bool burrow__tls_disabled_cipher_suite(uint16_t id) {
 
 /* Go's test is for the assembly it has. burrow has hardware AES-GCM for x86
  * and arm64 only, so ppc64 and s390x are false here where Go has them true. */
+int burrow__tls_aes_gcm_hardware_override = -1;
+
 bool burrow__tls_has_aes_gcm_hardware_support(void) {
+    if (burrow__tls_aes_gcm_hardware_override >= 0)
+        return burrow__tls_aes_gcm_hardware_override != 0;
 #if defined(CRYPTO_X86_AES)
     uint32_t need =
         PAL_CPU_X86_AES | PAL_CPU_X86_PCLMULQDQ | PAL_CPU_X86_SSE41 | PAL_CPU_X86_SSSE3;

@@ -77,6 +77,142 @@ static TlsConfig test_config_client(Alloc *a) {
     return config;
 }
 
+/* Not in Go: localPipe. Go's is a TCP connection on the loopback, and the
+ * socket buffers let one side write a whole flight before the other side reads
+ * any of it, which a TLS 1.3 server does when it sends its session tickets. The
+ * tests have no sockets on Windows and WASI, so this is a pair of ends with the
+ * same buffering: a write never waits, and a read waits for bytes or a close.
+ * As with TCP, what is written after the other end closed is dropped, and a
+ * read after it closed gets what is left and then io_eof. The ends have no
+ * addresses or deadlines. */
+typedef struct LocalPipe LocalPipe;
+
+typedef struct LocalPipeEnd {
+    LocalPipe *p;
+    int i;
+} LocalPipeEnd;
+
+struct LocalPipe {
+    SyncMutex mu;
+    SyncCond cond;
+    BytesBuffer in[2]; /* what end i has to read */
+    bool closed[2];
+    LocalPipeEnd end[2];
+};
+
+static Int local_pipe_read(void *self, Slice b, Error *err) {
+    LocalPipeEnd *e = (LocalPipeEnd *)self;
+    LocalPipe *p = e->p;
+    BytesBuffer *in = &p->in[e->i];
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    Int n = 0;
+    sync_mutex_lock(&p->mu);
+    while (!p->closed[0] && !p->closed[1] && bytes_buffer_len(in) == 0 && b.len > 0)
+        sync_cond_wait(&p->cond);
+    if (p->closed[e->i])
+        BURROW_OUT(err, net_err_closed);
+    else if (bytes_buffer_len(in) > 0)
+        n = bytes_buffer_read(in, b, err);
+    else if (b.len > 0)
+        BURROW_OUT(err, io_eof);
+    sync_mutex_unlock(&p->mu);
+    return n;
+}
+
+static Int local_pipe_write(void *self, Slice b, Error *err) {
+    LocalPipeEnd *e = (LocalPipeEnd *)self;
+    LocalPipe *p = e->p;
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    Int n = b.len;
+    sync_mutex_lock(&p->mu);
+    if (p->closed[e->i]) {
+        BURROW_OUT(err, net_err_closed);
+        n = 0;
+    } else if (!p->closed[1 - e->i]) {
+        n = bytes_buffer_write(&p->in[1 - e->i], b, err);
+        sync_cond_broadcast(&p->cond);
+    }
+    sync_mutex_unlock(&p->mu);
+    return n;
+}
+
+static Error local_pipe_close(void *self) {
+    LocalPipeEnd *e = (LocalPipeEnd *)self;
+    LocalPipe *p = e->p;
+    Error err = BURROW_NO_ERROR;
+    sync_mutex_lock(&p->mu);
+    if (p->closed[e->i])
+        err = net_err_closed;
+    p->closed[e->i] = true;
+    sync_cond_broadcast(&p->cond);
+    sync_mutex_unlock(&p->mu);
+    return err;
+}
+
+static NetAddr local_pipe_addr(void *self) {
+    (void)self;
+    NetAddr none = {NULL, NULL};
+    return none;
+}
+
+static Error local_pipe_set_deadline(void *self, Time t) {
+    (void)self;
+    (void)t;
+    return errors_err_unsupported;
+}
+
+static const Type local_pipe_type = {
+    {(const Byte *)"localPipe", 9},
+    {(const Byte *)"tls_test", 8},
+    KIND_STRUCT,
+    (uint32_t)sizeof(LocalPipeEnd),
+    (uint16_t)_Alignof(LocalPipeEnd),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0x6c706970U, /* "lpip" */
+    NULL,
+};
+
+static const NetConnVT local_pipe_vt = {
+    {&local_pipe_type, local_pipe_read},
+    {&local_pipe_type, local_pipe_write},
+    {&local_pipe_type, local_pipe_close},
+    local_pipe_addr,
+    local_pipe_addr,
+    local_pipe_set_deadline,
+    local_pipe_set_deadline,
+    local_pipe_set_deadline,
+};
+
+/* The pair is made in a. What is written is kept on the heap, since both ends
+ * grow it while the test goes on making things in a, and local_pipe_free gives
+ * it back once nothing uses either end. */
+static void local_pipe(Alloc *a, NetConn *c1, NetConn *c2) {
+    LocalPipe *p = BURROW_NEW(a, LocalPipe);
+    if (p == NULL)
+        panic_str(BURROW_S("out of memory"));
+    memset(p, 0, sizeof *p);
+    p->cond = SYNC_COND(sync_mutex_locker(&p->mu));
+    for (int i = 0; i < 2; i++) {
+        p->in[i] = BYTES_BUFFER(heap_allocator());
+        p->end[i].p = p;
+        p->end[i].i = i;
+    }
+    *c1 = (NetConn){&local_pipe_vt, &p->end[0]};
+    *c2 = (NetConn){&local_pipe_vt, &p->end[1]};
+}
+
+static void local_pipe_free(NetConn c) {
+    LocalPipe *p = ((LocalPipeEnd *)c.data)->p;
+    bytes_buffer_free(&p->in[0]);
+    bytes_buffer_free(&p->in[1]);
+}
+
 /* Not in Go: the goroutine the tests start for the client side. It writes m
  * from a Client whose vers is the ClientHello's, then reads the reply when
  * reply_kind says how, and closes c. The Client is left for the test to free,
@@ -749,7 +885,7 @@ static void test_handshake(TestingT *t, TlsConfig *client_config,
     arena_init(&h->ar, NULL, 0);
     Alloc *a = arena_allocator(&h->ar);
     NetConn c, s;
-    net_pipe(a, &c, &s);
+    local_pipe(a, &c, &s);
     h->c = c;
     HandshakeClient *j = &h->client;
     j->t = t;
@@ -786,7 +922,7 @@ static void test_handshake(TestingT *t, TlsConfig *client_config,
 static void handshake_free(Handshake *h) {
     tls_conn_free(h->server);
     tls_conn_free(h->client.cli);
-    net_pipe_free(h->c);
+    local_pipe_free(h->c);
     arena_free(&h->client.ar);
     arena_free(&h->ar);
 }
@@ -1194,6 +1330,326 @@ static void TestHandshakeServerEmptyCertificates(TestingT *t) {
     arena_free(&ar);
 }
 
+static void TestSNIGivenOnFailure(TestingT *t) {
+    static const char expected_server_name[] = "test.testing";
+
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    static uint16_t suites[1] = {TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256};
+    TlsHandshakeMsg m = client_hello(a, TLS_VERSION_TLS12);
+    m.client_hello.cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    m.client_hello.compression_methods = slice_from(compression_none, 1, 1, TYPE_BYTE);
+    m.client_hello.server_name = str_from_cstr(expected_server_name);
+
+    TlsConfig server_config = test_config_server(a);
+    /* Erase the server's cipher suites to ensure the handshake fails. */
+    server_config.cipher_suites = slice_nil(TYPE_UINT16);
+
+    NetConn c, s;
+    local_pipe(a, &c, &s);
+    TlsConfig client_config = test_config_client(a);
+    ClientJob job;
+    client_job_init(&job, c, &client_config, &m, REPLY_NONE);
+    SyncWaitGroup wg = {0};
+    sync_wait_group_go(&wg, BURROW_FN(Func, client_job, &job));
+    TlsConn *conn = tls_server(heap_allocator(), s, &server_config);
+    if (conn == NULL) {
+        testing_t_fatal_v(t, "out of memory");
+        return;
+    }
+    Context ctx = context_background();
+    TlsHandshakeMsg *ch = NULL;
+    Error err = burrow__tls_conn_read_client_hello(conn, ctx, a, &ch);
+    TlsServerHandshakeState hs;
+    memset(&hs, 0, sizeof hs);
+    hs.c = conn;
+    hs.ctx = ctx;
+    hs.master_secret = slice_nil(TYPE_BYTE);
+    hs.a = a;
+    if (!BURROW_FAILED(err)) {
+        hs.client_hello_msg = ch;
+        hs.client_hello = &ch->client_hello;
+        err = burrow__tls_server_handshake_state_process_client_hello(&hs);
+    }
+    if (!BURROW_FAILED(err))
+        err = burrow__tls_server_handshake_state_pick_cipher_suite(&hs);
+
+    if (!BURROW_FAILED(err))
+        testing_t_error_v(t, "No error reported from server");
+
+    TlsConnectionState cs = tls_conn_connection_state(hs.c);
+    if (cs.handshake_complete)
+        testing_t_error_v(t, "Handshake registered as complete");
+
+    if (!str_eq(cs.server_name, str_from_cstr(expected_server_name)))
+        testing_t_errorf_v(t, "Expected ServerName of %q, but got %q",
+                           str_from_cstr(expected_server_name), cs.server_name);
+
+    (void)s.vt->closer.close(s.data);
+    sync_wait_group_wait(&wg);
+    if (BURROW_FAILED(job.write_err))
+        testing_t_errorf_v(t, "%v", job.write_err);
+    tls_conn_free(conn);
+    client_job_free(&job);
+    local_pipe_free(c);
+    tls_config_release(&client_config);
+    tls_config_release(&server_config);
+    arena_free(&ar);
+}
+
+/* Not in Go: one of getConfigForClientTests. The Config the callback returns
+ * is made in a, which the test keeps until the Conn that used it is gone. */
+typedef struct GetConfigForClientTest {
+    void (*setup)(TlsConfig *config);
+    TlsConfig *(*callback)(Alloc *a, TlsClientHelloInfo *client_hello, Error *err);
+    const char *error_substring;
+    Error (*verify)(TlsConfig *config);
+} GetConfigForClientTest;
+
+static TlsConfig *config_for_client_nil(Alloc *a, TlsClientHelloInfo *client_hello,
+                                        Error *err) {
+    (void)a;
+    (void)client_hello;
+    (void)err;
+    return NULL;
+}
+
+static TlsConfig *config_for_client_error(Alloc *a, TlsClientHelloInfo *client_hello,
+                                          Error *err) {
+    (void)a;
+    (void)client_hello;
+    BURROW_OUT(err, errors_new(error_allocator(), BURROW_S("should bubble up")));
+    return NULL;
+}
+
+static TlsConfig *config_for_client_tls11(Alloc *a, TlsClientHelloInfo *client_hello,
+                                          Error *err) {
+    (void)client_hello;
+    TlsConfig *config = BURROW_NEW(a, TlsConfig);
+    if (config == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    *config = test_config_server(a);
+    /* Setting a maximum version of TLS 1.1 should cause the handshake to fail,
+     * as the client MinVersion is TLS 1.2. */
+    config->max_version = TLS_VERSION_TLS11;
+    return config;
+}
+
+static void config_for_client_set_key(TlsConfig *config) {
+    for (int i = 0; i < 32; i++)
+        config->session_ticket_key[i] = (Byte)i;
+    burrow__tls_ticket_keys_release(config->session_ticket_keys);
+    config->session_ticket_keys = NULL;
+}
+
+static TlsConfig *
+config_for_client_clear_key(Alloc *a, TlsClientHelloInfo *client_hello, Error *err) {
+    (void)client_hello;
+    TlsConfig *config = BURROW_NEW(a, TlsConfig);
+    if (config == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    *config = test_config_server(a);
+    memset(config->session_ticket_key, 0, sizeof config->session_ticket_key);
+    config->session_ticket_keys = NULL;
+    return config;
+}
+
+static Error config_for_client_verify_key(TlsConfig *config) {
+    static const Byte zero[32];
+    if (memcmp(config->session_ticket_key, zero, 32) == 0)
+        return fmt_errorf_v("expected SessionTicketKey to be set");
+    return BURROW_NO_ERROR;
+}
+
+static void config_for_client_set_keys(TlsConfig *config) {
+    Byte dummy_key[1][32];
+    for (int i = 0; i < 32; i++)
+        dummy_key[0][i] = (Byte)i;
+
+    (void)tls_config_set_session_ticket_keys(config, (const Byte(*)[32])dummy_key, 1);
+}
+
+static TlsConfig *config_for_client_no_keys(Alloc *a, TlsClientHelloInfo *client_hello,
+                                            Error *err) {
+    (void)client_hello;
+    TlsConfig *config = BURROW_NEW(a, TlsConfig);
+    if (config == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    *config = test_config_server(a);
+    config->session_ticket_keys = NULL;
+    return config;
+}
+
+static const GetConfigForClientTest get_config_for_client_tests[] = {
+    {NULL, config_for_client_nil, "", NULL},
+    {NULL, config_for_client_error, "should bubble up", NULL},
+    {NULL, config_for_client_tls11, "client offered only unsupported versions", NULL},
+    {config_for_client_set_key, config_for_client_clear_key, "",
+     config_for_client_verify_key},
+    {config_for_client_set_keys, config_for_client_no_keys, "",
+     config_for_client_verify_key},
+};
+
+/* Not in Go: what the GetConfigForClient of TestGetConfigForClient closes
+ * over. */
+typedef struct ConfigForClientEnv {
+    const GetConfigForClientTest *test;
+    Alloc *a;
+    TlsConfig *config_returned;
+} ConfigForClientEnv;
+
+static TlsConfig *config_for_client(void *env, TlsClientHelloInfo *client_hello,
+                                    Error *err) {
+    ConfigForClientEnv *e = (ConfigForClientEnv *)env;
+    TlsConfig *config = e->test->callback(e->a, client_hello, err);
+    e->config_returned = config;
+    return config;
+}
+
+/* Not in Go: the goroutine of TestGetConfigForClient. */
+typedef struct ServerJob {
+    NetConn s;
+    TlsConfig *config;
+    TlsConn *server;
+    Error err;
+} ServerJob;
+
+static void server_job(void *env) {
+    ServerJob *j = (ServerJob *)env;
+    j->server = tls_server(heap_allocator(), j->s, j->config);
+    if (j->server == NULL)
+        j->err = burrow_err_out_of_memory;
+    else
+        j->err = tls_conn_handshake(j->server);
+    (void)j->s.vt->closer.close(j->s.data);
+}
+
+static void TestGetConfigForClient(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig server_config = test_config_server(a);
+    TlsConfig client_config = test_config_client(a);
+    client_config.min_version = TLS_VERSION_TLS12;
+
+    Int n = (Int)(sizeof get_config_for_client_tests /
+                  sizeof get_config_for_client_tests[0]);
+    for (Int i = 0; i < n; i++) {
+        const GetConfigForClientTest *test = &get_config_for_client_tests[i];
+        if (test->setup != NULL)
+            test->setup(&server_config);
+
+        Arena returned;
+        arena_init(&returned, NULL, 0);
+        ConfigForClientEnv env = {test, arena_allocator(&returned), NULL};
+        server_config.get_config_for_client =
+            (TlsGetConfigForClientFunc){config_for_client, &env};
+        NetConn c, s;
+        local_pipe(a, &c, &s);
+        ServerJob job = {s, &server_config, NULL, BURROW_NO_ERROR};
+        SyncWaitGroup done = {0};
+        sync_wait_group_go(&done, BURROW_FN(Func, server_job, &job));
+
+        TlsConn *client = tls_client(heap_allocator(), c, &client_config);
+        if (client == NULL)
+            testing_t_fatal_v(t, "out of memory");
+        Error client_err = tls_conn_handshake(client);
+        (void)c.vt->closer.close(c.data);
+
+        sync_wait_group_wait(&done);
+        Error server_err = job.err;
+
+        if (test->error_substring[0] == '\0') {
+            if (BURROW_FAILED(server_err) || BURROW_FAILED(client_err))
+                testing_t_errorf_v(t,
+                                   "test[%d]: expected no error but got serverErr: "
+                                   "%q, clientErr: %q",
+                                   i, server_err, client_err);
+            if (test->verify != NULL) {
+                Error err = test->verify(env.config_returned);
+                if (BURROW_FAILED(err))
+                    testing_t_errorf_v(t, "test[%d]: verify returned error: %v", i,
+                                       err);
+            }
+        } else {
+            if (!BURROW_FAILED(server_err))
+                testing_t_errorf_v(t,
+                                   "test[%d]: expected error containing %q but got "
+                                   "no error",
+                                   i, str_from_cstr(test->error_substring));
+            else if (!strings_contains(error_text(server_err),
+                                       str_from_cstr(test->error_substring)))
+                testing_t_errorf_v(t,
+                                   "test[%d]: expected error to contain %q but it "
+                                   "was %q",
+                                   i, str_from_cstr(test->error_substring), server_err);
+        }
+
+        tls_conn_free(client);
+        tls_conn_free(job.server);
+        local_pipe_free(c);
+        if (env.config_returned != NULL)
+            tls_config_release(env.config_returned);
+        arena_free(&returned);
+    }
+    tls_config_release(&client_config);
+    tls_config_release(&server_config);
+    arena_free(&ar);
+}
+
+/* Not in Go: the goroutine of TestCloseServerConnectionOnIdleClient. */
+typedef struct IdleClient {
+    NetConn client_conn;
+    TlsConn *server;
+} IdleClient;
+
+static void idle_client(void *env) {
+    IdleClient *j = (IdleClient *)env;
+    Byte zero = '0';
+    Error err;
+    (void)j->client_conn.vt->writer.write(j->client_conn.data,
+                                          slice_from(&zero, 1, 1, TYPE_BYTE), &err);
+    (void)tls_conn_close(j->server);
+}
+
+static void TestCloseServerConnectionOnIdleClient(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    NetConn client_conn, server_conn;
+    local_pipe(a, &client_conn, &server_conn);
+    TlsConfig config = test_config_server(a);
+    TlsConn *server = tls_server(heap_allocator(), server_conn, &config);
+    if (server == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    IdleClient job = {client_conn, server};
+    SyncWaitGroup wg = {0};
+    sync_wait_group_go(&wg, BURROW_FN(Func, idle_client, &job));
+    (void)tls_conn_set_read_deadline(server, time_add(time_now(), TIME_MINUTE));
+    Error err = tls_conn_handshake(server);
+    if (BURROW_FAILED(err)) {
+        if (net_is_error(err) && net_error_timeout(err))
+            testing_t_errorf_v(
+                t, "Expected a closed network connection error but got '%s'",
+                error_text(err));
+    } else {
+        testing_t_errorf_v(t, "Error expected, but no error returned");
+    }
+
+    sync_wait_group_wait(&wg);
+    tls_conn_free(server);
+    local_pipe_free(client_conn);
+    tls_config_release(&config);
+    arena_free(&ar);
+}
+
 static void expect_error(TestingT *t, Error err, const char *sub) {
     if (!BURROW_FAILED(err))
         testing_t_errorf_v(t, "expected error %q, got nil", str_from_cstr(sub));
@@ -1288,6 +1744,468 @@ static void TestMultipleCertificates(TestingT *t) {
     arena_free(&ar);
 }
 
+/* Not in Go: one of the cases of TestAESCipherReordering. The lists of
+ * ciphers end at the first zero. */
+typedef struct AESCipherReorderingTest {
+    const char *name;
+    uint16_t client_ciphers[5];
+    bool server_has_aesgcm;
+    uint16_t server_ciphers[3];
+    uint16_t expected_cipher;
+} AESCipherReorderingTest;
+
+/* Not in Go: the ciphers in p, up to the first zero, and nil for none. */
+static Slice ciphers_of(const uint16_t *p) {
+    Int n = 0;
+    while (p[n] != 0)
+        n++;
+    if (n == 0)
+        return slice_nil(TYPE_UINT16);
+    return slice_from((uint16_t *)(uintptr_t)p, n, n, TYPE_UINT16);
+}
+
+static const AESCipherReorderingTest aes_cipher_reordering_tests[] = {
+    {"server has hardware AES, client doesn't (pick ChaCha)",
+     {TLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+      TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, TLS_TLS_RSA_WITH_AES_128_CBC_SHA},
+     true,
+     {0},
+     TLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256},
+    {"client prefers AES-GCM, server doesn't have hardware AES (pick ChaCha)",
+     {TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+      TLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+      TLS_TLS_RSA_WITH_AES_128_CBC_SHA},
+     false,
+     {0},
+     TLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256},
+    {"client prefers AES-GCM, server has hardware AES (pick AES-GCM)",
+     {TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+      TLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+      TLS_TLS_RSA_WITH_AES_128_CBC_SHA},
+     true,
+     {0},
+     TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256},
+    {"client prefers AES-GCM and sends GREASE, server has hardware AES (pick AES-GCM)",
+     {0x0A0A, /* GREASE value */
+      TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+      TLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+      TLS_TLS_RSA_WITH_AES_128_CBC_SHA},
+     true,
+     {0},
+     TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256},
+    {"client prefers AES-GCM and doesn't support ChaCha, server doesn't have hardware "
+     "AES (pick AES-GCM)",
+     {TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+      TLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256, TLS_TLS_RSA_WITH_AES_128_CBC_SHA},
+     false,
+     {0},
+     TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256},
+    {"client prefers AES-GCM and AES-CBC over ChaCha, server doesn't have hardware AES "
+     "(pick ChaCha)",
+     {TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256, TLS_TLS_RSA_WITH_AES_128_CBC_SHA,
+      TLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256},
+     false,
+     {0},
+     TLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256},
+    {"client prefers AES-GCM over ChaCha and sends GREASE, server doesn't have "
+     "hardware AES (pick ChaCha)",
+     {0x0A0A, /* GREASE value */
+      TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+      TLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+      TLS_TLS_RSA_WITH_AES_128_CBC_SHA},
+     false,
+     {0},
+     TLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256},
+    {"client supports multiple AES-GCM, server doesn't have hardware AES and doesn't "
+     "support ChaCha (AES-GCM)",
+     {TLS_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+      TLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+      TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256},
+     false,
+     {TLS_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+      TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256},
+     TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256},
+    {"client prefers AES-GCM, server has hardware but doesn't support AES (pick "
+     "ChaCha)",
+     {TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+      TLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256,
+      TLS_TLS_RSA_WITH_AES_128_CBC_SHA},
+     true,
+     {TLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256},
+     TLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256},
+};
+
+static void aes_cipher_reordering(void *env, TestingT *t) {
+    const AESCipherReorderingTest *tc = (const AESCipherReorderingTest *)env;
+    burrow__tls_aes_gcm_hardware_override = tc->server_has_aesgcm ? 1 : 0;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig config;
+    memset(&config, 0, sizeof config);
+    config.cipher_suites = ciphers_of(tc->server_ciphers);
+    NetConn c, s;
+    local_pipe(a, &c, &s);
+    TlsConn *conn = tls_server(heap_allocator(), s, &config);
+    if (conn == NULL) {
+        testing_t_fatal_v(t, "out of memory");
+        return;
+    }
+    conn->vers = TLS_VERSION_TLS12;
+    TlsHandshakeMsg ch;
+    burrow__tls_handshake_msg_init(&ch, TLS_MSG_CLIENT_HELLO);
+    ch.client_hello.cipher_suites = ciphers_of(tc->client_ciphers);
+    ch.client_hello.vers = TLS_VERSION_TLS12;
+    TlsServerHandshakeState hs;
+    memset(&hs, 0, sizeof hs);
+    hs.c = conn;
+    hs.ctx = context_background();
+    hs.client_hello_msg = &ch;
+    hs.client_hello = &ch.client_hello;
+    hs.ecdhe_ok = true;
+    hs.rsa_sign_ok = true;
+    hs.rsa_decrypt_ok = true;
+    hs.master_secret = slice_nil(TYPE_BYTE);
+    hs.a = a;
+
+    Error err = burrow__tls_server_handshake_state_pick_cipher_suite(&hs);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "pickCipherSuite failed: %s", error_text(err));
+
+    uint16_t got = hs.suite == NULL ? 0 : hs.suite->id;
+    if (tc->expected_cipher != got)
+        testing_t_errorf_v(t, "unexpected cipher chosen: want %d, got %d",
+                           tc->expected_cipher, got);
+
+    tls_conn_free(conn);
+    local_pipe_free(c);
+    tls_config_release(&config);
+    arena_free(&ar);
+}
+
+static void TestAESCipherReordering(TestingT *t) {
+    Int n = (Int)(sizeof aes_cipher_reordering_tests /
+                  sizeof aes_cipher_reordering_tests[0]);
+    for (Int i = 0; i < n; i++) {
+        const AESCipherReorderingTest *tc = &aes_cipher_reordering_tests[i];
+        testing_t_run(
+            t, str_from_cstr(tc->name),
+            BURROW_FN(TestingTFunc, aes_cipher_reordering, (void *)(uintptr_t)tc));
+    }
+    burrow__tls_aes_gcm_hardware_override = -1;
+}
+
+/* Not in Go: one of the cases of TestAESCipherReorderingTLS13. The list of
+ * ciphers ends at the first zero. */
+typedef struct AESCipherReorderingTLS13Test {
+    const char *name;
+    uint16_t client_ciphers[4];
+    bool server_has_aesgcm;
+    uint16_t expected_cipher;
+} AESCipherReorderingTLS13Test;
+
+static const AESCipherReorderingTLS13Test aes_cipher_reordering_tls13_tests[] = {
+    {"server has hardware AES, client doesn't (pick ChaCha)",
+     {TLS_TLS_CHACHA20_POLY1305_SHA256, TLS_TLS_AES_128_GCM_SHA256},
+     true,
+     TLS_TLS_CHACHA20_POLY1305_SHA256},
+    {"neither server nor client have hardware AES (pick ChaCha)",
+     {TLS_TLS_CHACHA20_POLY1305_SHA256, TLS_TLS_AES_128_GCM_SHA256},
+     false,
+     TLS_TLS_CHACHA20_POLY1305_SHA256},
+    {"client prefers AES, server doesn't have hardware (pick ChaCha)",
+     {TLS_TLS_AES_128_GCM_SHA256, TLS_TLS_CHACHA20_POLY1305_SHA256},
+     false,
+     TLS_TLS_CHACHA20_POLY1305_SHA256},
+    {"client prefers AES and sends GREASE, server doesn't have hardware (pick ChaCha)",
+     {0x0A0A, /* GREASE value */
+      TLS_TLS_AES_128_GCM_SHA256, TLS_TLS_CHACHA20_POLY1305_SHA256},
+     false,
+     TLS_TLS_CHACHA20_POLY1305_SHA256},
+    {"client prefers AES, server has hardware AES (pick AES)",
+     {TLS_TLS_AES_128_GCM_SHA256, TLS_TLS_CHACHA20_POLY1305_SHA256},
+     true,
+     TLS_TLS_AES_128_GCM_SHA256},
+    {"client prefers AES and sends GREASE, server has hardware AES (pick AES)",
+     {0x0A0A, /* GREASE value */
+      TLS_TLS_AES_128_GCM_SHA256, TLS_TLS_CHACHA20_POLY1305_SHA256},
+     true,
+     TLS_TLS_AES_128_GCM_SHA256},
+};
+
+static uint16_t versions_tls13[1] = {TLS_VERSION_TLS13};
+static uint16_t curves_x25519[1] = {TLS_X25519};
+
+static void aes_cipher_reordering_tls13(void *env, TestingT *t) {
+    const AESCipherReorderingTLS13Test *tc = (const AESCipherReorderingTLS13Test *)env;
+    burrow__tls_aes_gcm_hardware_override = tc->server_has_aesgcm ? 1 : 0;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    IoReader rand = {NULL, NULL};
+    EcdhPrivateKey *pk = ecdh_curve_generate_key(ecdh_x25519(), a, rand, &err);
+    if (pk == NULL) {
+        testing_t_fatal_v(t, "%v", err);
+        return;
+    }
+    TlsKeyShare share = {TLS_X25519,
+                         ecdh_public_key_bytes(ecdh_private_key_public_key(pk), a)};
+    TlsConfig config;
+    memset(&config, 0, sizeof config);
+    NetConn c, s;
+    local_pipe(a, &c, &s);
+    TlsConn *conn = tls_server(heap_allocator(), s, &config);
+    if (conn == NULL) {
+        testing_t_fatal_v(t, "out of memory");
+        return;
+    }
+    conn->vers = TLS_VERSION_TLS13;
+    TlsHandshakeMsg ch;
+    burrow__tls_handshake_msg_init(&ch, TLS_MSG_CLIENT_HELLO);
+    ch.client_hello.cipher_suites = ciphers_of(tc->client_ciphers);
+    ch.client_hello.supported_versions = slice_from(versions_tls13, 1, 1, TYPE_UINT16);
+    ch.client_hello.compression_methods = slice_from(compression_none, 1, 1, TYPE_BYTE);
+    ch.client_hello.key_shares = slice_from(&share, 1, 1, &burrow__tls_key_share_type);
+    ch.client_hello.supported_curves = slice_from(curves_x25519, 1, 1, TYPE_UINT16);
+    TlsServerHandshakeStateTLS13 hs;
+    memset(&hs, 0, sizeof hs);
+    hs.c = conn;
+    hs.ctx = context_background();
+    hs.client_hello_msg = &ch;
+    hs.client_hello = &ch.client_hello;
+    hs.a = a;
+
+    err = burrow__tls_server_handshake_state_tls13_process_client_hello(&hs);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "pickCipherSuite failed: %s", error_text(err));
+
+    uint16_t got = hs.suite == NULL ? 0 : hs.suite->id;
+    if (tc->expected_cipher != got)
+        testing_t_errorf_v(t, "unexpected cipher chosen: want %d, got %d",
+                           tc->expected_cipher, got);
+
+    tls_conn_free(conn);
+    local_pipe_free(c);
+    tls_config_release(&config);
+    ecdh_private_key_free(pk);
+    arena_free(&ar);
+}
+
+static void TestAESCipherReorderingTLS13(TestingT *t) {
+    Int n = (Int)(sizeof aes_cipher_reordering_tls13_tests /
+                  sizeof aes_cipher_reordering_tls13_tests[0]);
+    for (Int i = 0; i < n; i++) {
+        const AESCipherReorderingTLS13Test *tc = &aes_cipher_reordering_tls13_tests[i];
+        testing_t_run(t, str_from_cstr(tc->name),
+                      BURROW_FN(TestingTFunc, aes_cipher_reordering_tls13,
+                                (void *)(uintptr_t)tc));
+    }
+    burrow__tls_aes_gcm_hardware_override = -1;
+}
+
+/* Not in Go: the goroutine of TestServerHandshakeContextCancellation. */
+typedef struct CancelJob {
+    ContextCancelFunc cancel;
+    SyncWaitGroup *unblock_client;
+    NetConn c;
+} CancelJob;
+
+static void cancel_job(void *env) {
+    CancelJob *j = (CancelJob *)env;
+    BURROW_CALLF0(j->cancel);
+    sync_wait_group_wait(j->unblock_client);
+    (void)j->c.vt->closer.close(j->c.data);
+}
+
+/* TestServerHandshakeContextCancellation tests that canceling the context given
+ * to the server side conn.HandshakeContext interrupts the in-progress
+ * handshake. */
+static void TestServerHandshakeContextCancellation(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    NetConn c, s;
+    local_pipe(a, &c, &s);
+    ContextCancelFunc cancel;
+    Context ctx = context_with_cancel(a, context_background(), &cancel);
+    if (BURROW_CONTEXT_IS_NIL(ctx)) {
+        testing_t_fatal_v(t, "out of memory");
+        return;
+    }
+    SyncWaitGroup unblock_client = {0};
+    sync_wait_group_add(&unblock_client, 1);
+    CancelJob job = {cancel, &unblock_client, c};
+    SyncWaitGroup wg = {0};
+    sync_wait_group_go(&wg, BURROW_FN(Func, cancel_job, &job));
+    TlsConfig config = test_config_server(a);
+    TlsConn *conn = tls_server(heap_allocator(), s, &config);
+    if (conn == NULL) {
+        testing_t_fatal_v(t, "out of memory");
+        return;
+    }
+    /* Initiates server side handshake, which will block until a client hello
+     * is read unless the cancellation works. */
+    Error err = tls_conn_handshake_context(conn, ctx);
+    if (!BURROW_FAILED(err)) {
+        sync_wait_group_done(&unblock_client);
+        sync_wait_group_wait(&wg);
+        testing_t_fatal_v(t, "Server handshake did not error when the context was "
+                             "canceled");
+        return;
+    }
+    if (err.vt != context_canceled.vt || err.data != context_canceled.data)
+        testing_t_errorf_v(t, "Unexpected server handshake error: %v", err);
+    /* Not in Go: the skip on js and wasip1, where Go's localPipe does not
+     * error on a second Close. This one does everywhere. */
+    err = tls_conn_close(conn);
+    if (!BURROW_FAILED(err))
+        testing_t_error_v(t, "Server connection was not closed when the context was "
+                             "canceled");
+
+    sync_wait_group_done(&unblock_client);
+    sync_wait_group_wait(&wg);
+    tls_conn_free(conn);
+    local_pipe_free(c);
+    context_release(ctx);
+    tls_config_release(&config);
+    arena_free(&ar);
+}
+
+/* Not in Go: the type of the key TestHandshakeContextHierarchy keeps its value
+ * under, which is struct{}{} there. */
+static const Type hierarchy_key_type = {
+    {(const Byte *)"hierarchyKey", 12},
+    {(const Byte *)"tls_test", 8},
+    KIND_INT,
+    (uint32_t)sizeof(Int),
+    (uint16_t)_Alignof(Int),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0x686b6579U, /* "hkey" */
+    NULL,
+};
+
+/* Not in Go: what the callbacks and the client goroutine of
+ * TestHandshakeContextHierarchy close over. */
+typedef struct HierarchyEnv {
+    TestingT *t;
+    Context ctx;
+    NetConn c;
+    TlsConfig *client_config;
+    Any key;
+    TlsCertificate *cert;
+    TlsConn *cli;
+    Error client_err;
+} HierarchyEnv;
+
+static bool hierarchy_has_key(Context ctx, Any key) {
+    Any val = context_value(ctx, key);
+    return !BURROW_ANY_IS_NIL(val) && val.t == TYPE_BOOL && *(const bool *)val.data;
+}
+
+static TlsCertificate *hierarchy_get_client_certificate(
+    void *env, TlsCertificateRequestInfo *certificate_request, Error *err) {
+    (void)err;
+    HierarchyEnv *e = (HierarchyEnv *)env;
+    if (!hierarchy_has_key(tls_certificate_request_info_context(certificate_request),
+                           e->key))
+        testing_t_error_v(e->t, "GetClientCertificate context was not child of "
+                                "HandshakeContext");
+    return e->cert;
+}
+
+static TlsCertificate *
+hierarchy_get_certificate(void *env, TlsClientHelloInfo *client_hello, Error *err) {
+    (void)err;
+    HierarchyEnv *e = (HierarchyEnv *)env;
+    if (!hierarchy_has_key(tls_client_hello_info_context(client_hello), e->key))
+        testing_t_error_v(e->t, "GetClientCertificate context was not child of "
+                                "HandshakeContext");
+    return e->cert;
+}
+
+static void hierarchy_client(void *env) {
+    HierarchyEnv *e = (HierarchyEnv *)env;
+    e->client_config->certificates = slice_nil(TYPE_TLS_CERTIFICATE);
+    e->client_config->get_client_certificate =
+        (TlsGetClientCertificateFunc){hierarchy_get_client_certificate, e};
+    e->cli = tls_client(heap_allocator(), e->c, e->client_config);
+    if (e->cli == NULL)
+        e->client_err = burrow_err_out_of_memory;
+    else
+        e->client_err = tls_conn_handshake_context(e->cli, e->ctx);
+    (void)e->c.vt->closer.close(e->c.data);
+}
+
+/* TestHandshakeContextHierarchy tests whether the contexts available to
+ * GetClientCertificate and GetCertificate are derived from the context provided
+ * to HandshakeContext, and that those contexts are canceled after
+ * HandshakeContext has returned.
+ *
+ * Not in Go: the checks that the inner contexts are done after
+ * HandshakeContext returned are left out, as HandshakeContext gives them back
+ * before it returns. */
+static void TestHandshakeContextHierarchy(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    NetConn c, s;
+    local_pipe(a, &c, &s);
+    TlsConfig client_config = test_config_client(a);
+    TlsConfig server_config = test_config_server(a);
+    ContextCancelFunc cancel;
+    Context cancel_ctx = context_with_cancel(a, context_background(), &cancel);
+    if (BURROW_CONTEXT_IS_NIL(cancel_ctx)) {
+        testing_t_fatal_v(t, "out of memory");
+        return;
+    }
+    Int key_value = 0;
+    Any key = BURROW_ANY(&hierarchy_key_type, &key_value);
+    bool yes = true;
+    Context ctx = context_with_value(a, cancel_ctx, key, BURROW_ANY(TYPE_BOOL, &yes));
+    if (BURROW_CONTEXT_IS_NIL(ctx)) {
+        testing_t_fatal_v(t, "out of memory");
+        return;
+    }
+    TlsCertificate cert =
+        parse_test_cert(a, test_rsa2048_cert_pem, test_rsa2048_key_pem);
+    HierarchyEnv env = {t, ctx, c, &client_config, key, &cert, NULL, BURROW_NO_ERROR};
+    SyncWaitGroup wg = {0};
+    sync_wait_group_go(&wg, BURROW_FN(Func, hierarchy_client, &env));
+    server_config.certificates = slice_nil(TYPE_TLS_CERTIFICATE);
+    server_config.client_auth = TLS_REQUEST_CLIENT_CERT;
+    server_config.get_certificate =
+        (TlsGetCertificateFunc){hierarchy_get_certificate, &env};
+    TlsConn *conn = tls_server(heap_allocator(), s, &server_config);
+    if (conn == NULL) {
+        testing_t_fatal_v(t, "out of memory");
+        return;
+    }
+    Error err = tls_conn_handshake_context(conn, ctx);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "Unexpected server handshake error: %v", err);
+    sync_wait_group_wait(&wg);
+    if (BURROW_FAILED(env.client_err))
+        testing_t_errorf_v(t, "Unexpected client error: %v", env.client_err);
+
+    (void)s.vt->closer.close(s.data);
+    tls_conn_free(conn);
+    tls_conn_free(env.cli);
+    local_pipe_free(c);
+    BURROW_CALLF0(cancel);
+    context_release(ctx);
+    context_release(cancel_ctx);
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestSimpleError)                                                                 \
     X(TestRejectBadProtocolVersion)                                                    \
@@ -1309,7 +2227,14 @@ static void TestMultipleCertificates(TestingT *t) {
     X(TestHandshakeServerGetCertificateExtensions)                                     \
     X(TestHandshakeServerSNIGetCertificateError)                                       \
     X(TestHandshakeServerEmptyCertificates)                                            \
+    X(TestSNIGivenOnFailure)                                                           \
+    X(TestGetConfigForClient)                                                          \
+    X(TestCloseServerConnectionOnIdleClient)                                           \
     X(TestKeyTooSmallForRSAPSS)                                                        \
-    X(TestMultipleCertificates)
+    X(TestMultipleCertificates)                                                        \
+    X(TestAESCipherReordering)                                                         \
+    X(TestAESCipherReorderingTLS13)                                                    \
+    X(TestServerHandshakeContextCancellation)                                          \
+    X(TestHandshakeContextHierarchy)
 
 TESTING_MAIN(TESTS)

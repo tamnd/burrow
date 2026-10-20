@@ -462,6 +462,7 @@ global	src/crypto/rsa.c	rsa_debug_flags	godebug	The rsa1024min setting, read fro
 global	src/crypto/x509.c	x509_debug_flags	godebug	The x509rsacrt setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/crypto/tls.c	tls_debug_flags	godebug	The tlsmlkem, tlssecpmlkem, tlssha1 and tlsmaxrsasize settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/crypto/tls.c	tls_debug_max_rsa	godebug	The number tlsmaxrsasize is set to, stored before tls_debug_flags is stored with release ordering and read after it is loaded with acquire ordering. Two racing first loads store the same value.
+global	src/crypto/tls_cipher_suites.c	burrow__tls_aes_gcm_hardware_override	package-vars	hasAESGCMHardwareSupport, as far as tests are concerned. Only tests set it, while nothing is running, as Go's tests do.
 global	src/crypto/x509_verify.c	x509_roots_once	package-vars	A SyncOnce, the sync.Once of root.go that loads the system roots on first use.
 global	src/crypto/x509_verify.c	x509_roots_mu	package-vars	The SyncRWMutex of root.go, which guards the four globals below it.
 global	src/crypto/x509_verify.c	x509_system_roots	package-vars	systemRoots, the shared system pool. Written under x509_roots_mu only.

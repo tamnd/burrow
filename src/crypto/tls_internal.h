@@ -665,6 +665,15 @@ bool burrow__tls13_traffic_key(const TlsSuiteTLS13 *c, Alloc *a, Slice traffic_s
 Slice burrow__tls13_finished_hash(const TlsSuiteTLS13 *c, Alloc *a, Slice base_key,
                                   Hash transcript);
 
+/* exportKeyingMaterial implements RFC5705 exporters for TLS 1.3 according to
+ * RFC 8446, Section 7.5.
+ *
+ * Not in Go: the closure Conn.ekm holds, over an exporter master secret made
+ * in a. A zero TlsEkmFunc when a is out of memory. */
+TlsEkmFunc burrow__tls13_export_keying_material(const TlsSuiteTLS13 *c, Alloc *a,
+                                                const Tls13MasterSecret *s,
+                                                Hash transcript);
+
 /* ------------------------------------------------------ handshake messages
  *
  * Go's handshake_messages.go. Each message has a marshal that gives its bytes
@@ -1631,5 +1640,63 @@ BURROW_BORROWS(ret, chains) Slice burrow__tls_fips_allowed_chains(Slice chains,
  * opts.Roots is nil). If verifiedChains is empty, it returns false. */
 bool burrow__tls_any_valid_verified_chain(Slice verified_chains,
                                           X509VerifyOptions opts);
+
+/* computeAndUpdatePSK. Not in Go: the transcript and binder are made in a. */
+Error burrow__tls_compute_and_update_psk(TlsClientHelloMsg *m, Alloc *a,
+                                         Slice binder_key, Hash transcript,
+                                         const TlsSuiteTLS13 *suite);
+
+/* getClientCertificate. Not in Go: an empty certificate, when there is none
+ * to send, is made in a. */
+BURROW_BORROWS(ret) TlsCertificate *
+burrow__tls_conn_get_client_certificate(TlsConn *c, Alloc *a,
+                                        TlsCertificateRequestInfo *cri, Error *err);
+
+/* Not in Go. A copy of a [][]byte, and of each []byte in it, from a. A nil
+ * list stays nil. False when a is out of memory. */
+bool burrow__tls_clone_bytes_list(Alloc *a, Slice list, Slice *out);
+
+/* Not in Go. s copied into a, or false when a is out of memory. */
+bool burrow__tls_clone_str(Alloc *a, Str s, Str *out);
+
+/* ------------------------------------------------- TLS 1.3 client handshake */
+
+typedef struct TlsClientHandshakeStateTLS13 {
+    TlsConn *c;
+    Context ctx;
+    TlsServerHelloMsg *server_hello;
+    TlsClientHelloMsg *hello;
+    TlsKeySharePrivateKeys *key_share_keys;
+
+    TlsSessionState *session;
+    const Tls13EarlySecret *early_secret;
+    Slice binder_key;
+
+    TlsCertificateRequestMsgTLS13 *cert_req;
+    bool using_psk;
+    bool sent_dummy_ccs;
+    const TlsSuiteTLS13 *suite;
+    Hash transcript;
+    Tls13MasterSecret master_secret;
+    Slice traffic_secret; /* client_application_traffic_secret_0 */
+
+    /* Not in Go: the messages server_hello and hello are in, the cache entry
+     * session came from, which holds it, and the scratch allocator everything
+     * that only lasts the handshake is made in. Go's echContext comes with
+     * ech.go. */
+    TlsHandshakeMsg *server_hello_msg;
+    TlsHandshakeMsg *hello_msg;
+    TlsClientSessionState *cs;
+    Alloc *a;
+} TlsClientHandshakeStateTLS13;
+
+/* handshake requires hs.c, hs.hello, hs.serverHello, hs.keyShareKeys, and,
+ * optionally, hs.session, hs.earlySecret and hs.binderKey to be set.
+ *
+ * Not in Go: hs.hello_msg, hs.server_hello_msg and hs.a have to be set too,
+ * and hs.cs along with hs.session. A resumption moves hs.cs to c, and leaves
+ * NULL there. */
+Error burrow__tls_client_handshake_state_tls13_handshake(
+    TlsClientHandshakeStateTLS13 *hs);
 
 #endif /* BURROW_SRC_CRYPTO_TLS_INTERNAL_H */

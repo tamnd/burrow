@@ -306,6 +306,31 @@ Slice burrow__tls13_finished_hash(const TlsSuiteTLS13 *c, Alloc *a, Slice base_k
     return out;
 }
 
+static Slice tls13_ekm_call(void *env, Alloc *a, Str label, Slice context, Int length,
+                            Error *err) {
+    Slice out = burrow__tls13_exporter_master_secret_exporter(
+        (const Tls13ExporterMasterSecret *)env, a, label, context, length);
+    if (out.p == NULL && length > 0)
+        BURROW_OUT(err, burrow_err_out_of_memory);
+    return out;
+}
+
+TlsEkmFunc burrow__tls13_export_keying_material(const TlsSuiteTLS13 *c, Alloc *a,
+                                                const Tls13MasterSecret *s,
+                                                Hash transcript) {
+    (void)c;
+    TlsEkmFunc f = {0};
+    Tls13ExporterMasterSecret *exp_master_secret =
+        BURROW_NEW(a, Tls13ExporterMasterSecret);
+    if (exp_master_secret == NULL)
+        return f;
+    *exp_master_secret =
+        burrow__tls13_master_secret_exporter_master_secret(s, a, transcript);
+    if (exp_master_secret->secret.p == NULL)
+        return f;
+    return BURROW_FN(TlsEkmFunc, tls13_ekm_call, exp_master_secret);
+}
+
 /* ------------------------------------------------------- key exchanges */
 
 BURROW_SENTINEL_ERROR(tke_err_unsupported, "tls: unsupported key exchange");

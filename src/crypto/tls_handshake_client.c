@@ -1,10 +1,8 @@
 /* crypto/tls: handshake_client.go, the client side of a TLS 1.0–1.2 handshake
  * and the ClientHello every client handshake starts with.
  *
- * The TLS 1.3 handshake, handshake_client_tls13.go, is not here yet. The
- * ClientHello still offers TLS 1.3 with its key shares and PSK binders, the
- * way Go's does, and a server that picks TLS 1.3 gets an error until it is.
- * QUIC comes with quic.go and Encrypted Client Hello with ech.go.
+ * The TLS 1.3 handshake is in tls_handshake_client_tls13.c. QUIC comes with
+ * quic.go and Encrypted Client Hello with ech.go.
  *
  * Everything the handshake only needs while it runs is made in a scratch
  * arena that goes when it ends. What the Conn keeps afterwards, the server's
@@ -70,8 +68,6 @@ BURROW_SENTINEL_ERROR(tcl_err_ech_max_version, "tls: MaxVersion must be >= "
                                                "populated");
 BURROW_SENTINEL_ERROR(tcl_err_ech_not_here, "tls: Encrypted Client Hello is not "
                                             "supported yet");
-BURROW_SENTINEL_ERROR(tcl_err_tls13_not_here,
-                      "tls: the TLS 1.3 client handshake is not supported yet");
 BURROW_SENTINEL_ERROR(tcl_err_downgrade, "tls: downgrade attempt detected, possibly "
                                          "due to a MitM attack or a broken middlebox");
 BURROW_SENTINEL_ERROR(tcl_err_echoed_session_id, "tls: server echoed TLS 1.3 "
@@ -138,9 +134,7 @@ static Alloc *tcl_keep(TlsConn *c) {
     return arena_allocator(&c->state);
 }
 
-/* Not in Go. A copy of a [][]byte, and of each []byte in it, from a. A nil
- * list stays nil. False when a is out of memory. */
-static bool tcl_clone_bytes_list(Alloc *a, Slice list, Slice *out) {
+bool burrow__tls_clone_bytes_list(Alloc *a, Slice list, Slice *out) {
     if (slice_is_nil(list)) {
         *out = slice_nil(TYPE_BYTES);
         return true;
@@ -159,8 +153,7 @@ static bool tcl_clone_bytes_list(Alloc *a, Slice list, Slice *out) {
     return true;
 }
 
-/* Not in Go. s copied into a, or false when a is out of memory. */
-static bool tcl_clone_str(Alloc *a, Str s, Str *out) {
+bool burrow__tls_clone_str(Alloc *a, Str s, Str *out) {
     Slice b = slice_from((Byte *)(uintptr_t)s.p, s.len, s.len, TYPE_BYTE);
     Slice d = bytes_clone(a, b);
     if (d.p == NULL && s.len > 0)
@@ -372,10 +365,9 @@ static Error tcl_make_client_hello(TlsConn *c, Alloc *a, TclHello *out) {
     return BURROW_NO_ERROR;
 }
 
-/* computeAndUpdatePSK. Not in Go: the transcript and binder are made in a. */
-static Error tcl_compute_and_update_psk(TlsClientHelloMsg *m, Alloc *a,
-                                        Slice binder_key, Hash transcript,
-                                        const TlsSuiteTLS13 *suite) {
+Error burrow__tls_compute_and_update_psk(TlsClientHelloMsg *m, Alloc *a,
+                                         Slice binder_key, Hash transcript,
+                                         const TlsSuiteTLS13 *suite) {
     Error err = BURROW_NO_ERROR;
     Slice hello_bytes =
         burrow__tls_client_hello_msg_marshal_without_binders(m, a, &err);
@@ -568,8 +560,8 @@ static Error tcl_load_session(TlsConn *c, Alloc *a, TlsClientHelloMsg *hello,
         tls_client_session_state_release(cs);
         return burrow_err_out_of_memory;
     }
-    Error err =
-        tcl_compute_and_update_psk(hello, a, l->binder_key, transcript, cipher_suite);
+    Error err = burrow__tls_compute_and_update_psk(hello, a, l->binder_key, transcript,
+                                                   cipher_suite);
     if (BURROW_FAILED(err)) {
         tls_client_session_state_release(cs);
         return err;
@@ -612,7 +604,8 @@ static Error tcl_client_handshake_with(TlsConn *c, Context ctx, Alloc *a, TclHel
                                        TclLoaded *l) {
     /* Encrypted Client Hello comes with ech.go. */
 
-    if (!tcl_clone_str(tcl_keep(c), h->msg.client_hello.server_name, &c->server_name))
+    if (!burrow__tls_clone_str(tcl_keep(c), h->msg.client_hello.server_name,
+                               &c->server_name))
         return burrow_err_out_of_memory;
 
     IoWriter none = {NULL, NULL};
@@ -658,9 +651,24 @@ static Error tcl_client_handshake_with(TlsConn *c, Context ctx, Alloc *a, TclHel
     }
 
     if (c->vers == TLS_VERSION_TLS13) {
-        /* Not in Go: handshake_client_tls13.go is not here yet. */
-        (void)burrow__tls_conn_send_alert(c, TLS_ALERT_PROTOCOL_VERSION);
-        return tcl_err_tls13_not_here;
+        TlsClientHandshakeStateTLS13 hs;
+        memset(&hs, 0, sizeof hs);
+        hs.c = c;
+        hs.ctx = ctx;
+        hs.server_hello = server_hello;
+        hs.hello = &h->msg.client_hello;
+        hs.key_share_keys = &h->key_share_keys;
+        hs.session = l->session;
+        hs.early_secret = &l->early_secret;
+        hs.binder_key = l->binder_key;
+        hs.server_hello_msg = msg;
+        hs.hello_msg = &h->msg;
+        hs.cs = l->cs;
+        hs.a = a;
+        err = burrow__tls_client_handshake_state_tls13_handshake(&hs);
+        /* Not in Go: a resumption may have moved the session to c. */
+        l->cs = hs.cs;
+        return err;
     }
 
     TclState hs;
@@ -963,9 +971,6 @@ static Error tcl_certificate_verify(TclState *hs, const TlsCertificate *chain_to
 static TlsCertificateRequestInfo *
 tcl_certificate_request_info_from_msg(Alloc *a, Context ctx, uint16_t vers,
                                       const TlsCertificateRequestMsg *cert_req);
-static TlsCertificate *tcl_get_client_certificate(TlsConn *c, Alloc *a,
-                                                  TlsCertificateRequestInfo *cri,
-                                                  Error *err);
 
 /* What doFullHandshake does once it has the server's messages up to
  * ServerHelloDone, with the key agreement they set up. */
@@ -1077,7 +1082,7 @@ static Error tcl_full_handshake_key_exchange(TclState *hs, TlsHandshakeMsg *msg,
             tcl_certificate_request_info_from_msg(hs->a, hs->ctx, c->vers, cert_req);
         if (cri == NULL)
             return burrow_err_out_of_memory;
-        chain_to_send = tcl_get_client_certificate(c, hs->a, cri, &err);
+        chain_to_send = burrow__tls_conn_get_client_certificate(c, hs->a, cri, &err);
         if (BURROW_FAILED(err)) {
             (void)burrow__tls_conn_send_alert(c, TLS_ALERT_INTERNAL_ERROR);
             return err;
@@ -1091,8 +1096,8 @@ static Error tcl_full_handshake_key_exchange(TclState *hs, TlsHandshakeMsg *msg,
     if (chain_to_send != NULL) {
         /* Not in Go: the certificate only has to last for the handshake, so c
          * keeps a copy. */
-        if (!tcl_clone_bytes_list(tcl_keep(c), chain_to_send->certificate,
-                                  &c->local_certificate))
+        if (!burrow__tls_clone_bytes_list(tcl_keep(c), chain_to_send->certificate,
+                                          &c->local_certificate))
             return burrow_err_out_of_memory;
     }
 
@@ -1281,11 +1286,11 @@ static Error tcl_process_server_hello(TclState *hs, bool *is_resume) {
         (void)burrow__tls_conn_send_alert(c, TLS_ALERT_UNSUPPORTED_EXTENSION);
         return err;
     }
-    if (!tcl_clone_str(tcl_keep(c), hs->server_hello->alpn_protocol,
-                       &c->client_protocol))
+    if (!burrow__tls_clone_str(tcl_keep(c), hs->server_hello->alpn_protocol,
+                               &c->client_protocol))
         return burrow_err_out_of_memory;
 
-    if (!tcl_clone_bytes_list(tcl_keep(c), hs->server_hello->scts, &c->scts))
+    if (!burrow__tls_clone_bytes_list(tcl_keep(c), hs->server_hello->scts, &c->scts))
         return burrow_err_out_of_memory;
 
     if (!tcl_server_resumed_session(hs))
@@ -1726,9 +1731,9 @@ tcl_certificate_request_info_from_msg(Alloc *a, Context ctx, uint16_t vers,
  *
  * Not in Go: a NULL certificate with no error from GetClientCertificate,
  * which its doc rules out and Go would crash on, is taken as none. */
-static TlsCertificate *tcl_get_client_certificate(TlsConn *c, Alloc *a,
-                                                  TlsCertificateRequestInfo *cri,
-                                                  Error *err) {
+TlsCertificate *burrow__tls_conn_get_client_certificate(TlsConn *c, Alloc *a,
+                                                        TlsCertificateRequestInfo *cri,
+                                                        Error *err) {
     if (c->config->get_client_certificate.f != NULL) {
         Error e = BURROW_NO_ERROR;
         TlsCertificate *cert = BURROW_CALLF(c->config->get_client_certificate, cri, &e);

@@ -253,6 +253,209 @@ static void TestServerSelectingUnconfiguredCipherSuite(TestingT *t) {
     arena_free(&ar);
 }
 
+/* Not in Go. Reads s until the client closes its end, so that what the
+ * client writes after the ServerHello does not block it. */
+static void drain_job(void *env) {
+    NetConn *s = (NetConn *)env;
+    Byte buf[512];
+    Error err = BURROW_NO_ERROR;
+    while (BURROW_OK(err))
+        (void)s->vt->reader.read(s->data, slice_from(buf, 512, 512, TYPE_BYTE), &err);
+}
+
+/* Not in Go. Each mutation turns a good TLS 1.3 ServerHello for hello into one
+ * the client has to reject. */
+static void sh_legacy_version_field(TlsServerHelloMsg *m, const TlsClientHelloMsg *h) {
+    (void)h;
+    m->supported_version = 0;
+    m->vers = TLS_VERSION_TLS13;
+}
+
+static void sh_legacy_version(TlsServerHelloMsg *m, const TlsClientHelloMsg *h) {
+    (void)h;
+    m->vers = TLS_VERSION_TLS11;
+}
+
+static void sh_ticket(TlsServerHelloMsg *m, const TlsClientHelloMsg *h) {
+    (void)h;
+    m->ticket_supported = true;
+}
+
+static void sh_session_id(TlsServerHelloMsg *m, const TlsClientHelloMsg *h) {
+    (void)h;
+    m->session_id = slice_nil(TYPE_BYTE);
+}
+
+static void sh_compression(TlsServerHelloMsg *m, const TlsClientHelloMsg *h) {
+    (void)h;
+    m->compression_method = 1;
+}
+
+static void sh_tls12_suite(TlsServerHelloMsg *m, const TlsClientHelloMsg *h) {
+    (void)h;
+    m->cipher_suite = TLS_TLS_RSA_WITH_AES_128_GCM_SHA256;
+}
+
+/* Any non-empty bytes do for the cookie and the ECH extension, so these
+ * borrow the client's legacy session ID. */
+static void sh_cookie(TlsServerHelloMsg *m, const TlsClientHelloMsg *h) {
+    m->cookie = h->session_id;
+}
+
+static void sh_no_key_share(TlsServerHelloMsg *m, const TlsClientHelloMsg *h) {
+    (void)h;
+    m->server_share.group = 0;
+}
+
+static void sh_other_group(TlsServerHelloMsg *m, const TlsClientHelloMsg *h) {
+    (void)h;
+    m->server_share.group = TLS_CURVE_P521;
+}
+
+static void sh_psk(TlsServerHelloMsg *m, const TlsClientHelloMsg *h) {
+    (void)h;
+    m->selected_identity_present = true;
+}
+
+static void sh_hrr(TlsServerHelloMsg *m) {
+    memcpy(m->random.p, burrow__tls_hello_retry_request_random, 32);
+    m->server_share.group = 0;
+    m->server_share.data = slice_nil(TYPE_BYTE);
+}
+
+static void hrr_unnecessary(TlsServerHelloMsg *m, const TlsClientHelloMsg *h) {
+    (void)h;
+    sh_hrr(m);
+}
+
+static void hrr_same_group(TlsServerHelloMsg *m, const TlsClientHelloMsg *h) {
+    sh_hrr(m);
+    m->selected_group = ((const TlsKeyShare *)h->key_shares.p)[0].group;
+}
+
+static void hrr_other_group(TlsServerHelloMsg *m, const TlsClientHelloMsg *h) {
+    (void)h;
+    sh_hrr(m);
+    m->selected_group = 0x0a0a;
+}
+
+static void hrr_server_share(TlsServerHelloMsg *m, const TlsClientHelloMsg *h) {
+    TlsKeyShare share = m->server_share;
+    sh_hrr(m);
+    m->server_share = share;
+    sh_cookie(m, h);
+}
+
+static void hrr_ech(TlsServerHelloMsg *m, const TlsClientHelloMsg *h) {
+    sh_hrr(m);
+    m->encrypted_client_hello = slice_sub(h->session_id, 0, 8);
+}
+
+typedef struct ServerHelloTLS13Test {
+    const char *name;
+    void (*mutate)(TlsServerHelloMsg *m, const TlsClientHelloMsg *h);
+    Str want;
+} ServerHelloTLS13Test;
+
+static const ServerHelloTLS13Test server_hello_tls13_tests[] = {
+    {"legacy version field", sh_legacy_version_field,
+     BURROW_S_INIT("tls: server selected TLS 1.3 using the legacy version field")},
+    {"legacy version", sh_legacy_version,
+     BURROW_S_INIT("tls: server sent an incorrect legacy version")},
+    {"ticket extension", sh_ticket,
+     BURROW_S_INIT("tls: server sent a ServerHello extension forbidden in TLS 1.3")},
+    {"session ID", sh_session_id,
+     BURROW_S_INIT("tls: server did not echo the legacy session ID")},
+    {"compression", sh_compression,
+     BURROW_S_INIT("tls: server sent non-zero legacy TLS compression method")},
+    {"TLS 1.2 suite", sh_tls12_suite,
+     BURROW_S_INIT("tls: server chose an unconfigured cipher suite")},
+    {"cookie", sh_cookie,
+     BURROW_S_INIT("tls: server sent a cookie in a normal ServerHello")},
+    {"no key share", sh_no_key_share,
+     BURROW_S_INIT("tls: server did not send a key share")},
+    {"other group", sh_other_group,
+     BURROW_S_INIT("tls: server selected unsupported group")},
+    {"PSK", sh_psk, BURROW_S_INIT("tls: server selected an invalid PSK")},
+    {"unnecessary HRR", hrr_unnecessary,
+     BURROW_S_INIT("tls: server sent an unnecessary HelloRetryRequest message")},
+    {"HRR for a sent group", hrr_same_group,
+     BURROW_S_INIT("tls: server sent an unnecessary HelloRetryRequest key_share")},
+    {"HRR for another group", hrr_other_group,
+     BURROW_S_INIT("tls: server selected unsupported group")},
+    {"HRR with a key share", hrr_server_share,
+     BURROW_S_INIT("tls: received malformed key_share extension")},
+    {"HRR with ECH", hrr_ech,
+     BURROW_S_INIT("tls: unexpected encrypted client hello extension in serverHello")},
+};
+
+/* Not in Go. Go checks these through its recorded handshakes and its own
+ * server. This sends the client a TLS 1.3 ServerHello, or HelloRetryRequest,
+ * with one thing wrong, and checks the error the handshake gives. */
+static void TestClientTLS13ServerHelloErrors(TestingT *t) {
+    for (size_t i = 0;
+         i < sizeof server_hello_tls13_tests / sizeof server_hello_tls13_tests[0];
+         i++) {
+        const ServerHelloTLS13Test *tt = &server_hello_tls13_tests[i];
+        Arena ar;
+        arena_init(&ar, NULL, 0);
+        Alloc *a = arena_allocator(&ar);
+        NetConn c, s;
+        net_pipe(a, &c, &s);
+
+        TlsConfig config;
+        memset(&config, 0, sizeof config);
+        config.server_name = BURROW_S("foo");
+        ClientJob job = {tls_client(heap_allocator(), c, &config), BURROW_NO_ERROR};
+        if (job.c == NULL)
+            testing_t_fatal_v(t, "out of memory");
+        SyncWaitGroup wg = {0};
+        sync_wait_group_go(&wg, BURROW_FN(Func, client_handshake_job, &job));
+
+        Slice record = read_record(t, a, s);
+        TlsClientHelloMsg hello = burrow__tls_client_hello_msg_zero();
+        if (!burrow__tls_client_hello_msg_unmarshal(&hello, a, record) ||
+            hello.key_shares.len == 0)
+            testing_t_fatalf_v(t, "%s: unmarshaling ClientHello failed", tt->name);
+
+        TlsServerHelloMsg server_hello = burrow__tls_server_hello_msg_zero();
+        server_hello.vers = TLS_VERSION_TLS12;
+        server_hello.random = slice_make(a, TYPE_BYTE, 32, 32);
+        server_hello.session_id = hello.session_id;
+        server_hello.cipher_suite = TLS_TLS_AES_128_GCM_SHA256;
+        server_hello.supported_version = TLS_VERSION_TLS13;
+        server_hello.server_share = ((const TlsKeyShare *)hello.key_shares.p)[0];
+        tt->mutate(&server_hello, &hello);
+        Error err = BURROW_NO_ERROR;
+        Slice server_hello_bytes =
+            burrow__tls_server_hello_msg_marshal(&server_hello, a, &err);
+        if (BURROW_FAILED(err))
+            testing_t_fatal_v(t, "%v", err);
+
+        Byte header[5] = {
+            TLS_RECORD_TYPE_HANDSHAKE,        (Byte)(TLS_VERSION_TLS12 >> 8),
+            (Byte)(TLS_VERSION_TLS12 & 0xff), (Byte)(server_hello_bytes.len >> 8),
+            (Byte)server_hello_bytes.len,
+        };
+        (void)s.vt->writer.write(s.data, slice_from(header, 5, 5, TYPE_BYTE), NULL);
+        (void)s.vt->writer.write(s.data, server_hello_bytes, NULL);
+        SyncWaitGroup drain = {0};
+        sync_wait_group_go(&drain, BURROW_FN(Func, drain_job, &s));
+
+        sync_wait_group_wait(&wg);
+        if (!str_eq(error_text(job.err), tt->want))
+            testing_t_errorf_v(t, "%s: got error %q, want %q", tt->name,
+                               error_text(job.err), tt->want);
+
+        (void)c.vt->closer.close(c.data);
+        sync_wait_group_wait(&drain);
+        (void)s.vt->closer.close(s.data);
+        tls_conn_free(job.c);
+        net_pipe_free(c);
+        arena_free(&ar);
+    }
+}
+
 /* discardConn is a net.Conn whose writes go nowhere. Not in Go: nothing reads
  * from it, and a read gets io.EOF. */
 static Int discard_read(void *self, Slice b, Error *err) {
@@ -321,6 +524,7 @@ static void TestHandshakeRSATooBig(TestingT *t) {
     X(TestLRUClientSessionCache)                                                       \
     X(TestHostnameInSNI)                                                               \
     X(TestServerSelectingUnconfiguredCipherSuite)                                      \
+    X(TestClientTLS13ServerHelloErrors)                                                \
     X(TestHandshakeRSATooBig)
 
 TESTING_MAIN(TESTS)

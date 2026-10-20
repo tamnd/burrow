@@ -1322,8 +1322,11 @@ static void ppr_profile_writer(void *env) {
         ppr_panic_name("runtime/pprof: converting profile: ", error_text(err));
     }
     (void)burrow__ppr_build(b);
-    if (on_thread)
+    if (on_thread) {
+        /* The errors made on a thread of its own go with the thread. */
+        burrow__error_thread_exit();
         return;
+    }
     bool done = true;
     chan_send(ppr_cpu.done, &done);
 }

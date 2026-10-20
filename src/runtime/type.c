@@ -629,7 +629,7 @@ static uint64_t string_hash(const void *p, uint64_t seed) {
     return hash_bytes(s->p, (size_t)s->len, seed);
 }
 
-static const TypeOps string_ops = {string_equal, string_hash, NULL, NULL, NULL};
+const TypeOps burrow__string_ops = {string_equal, string_hash, NULL, NULL, NULL};
 
 /* Floats do not compare by their bytes either, and the reasons are the two
  * corners of IEEE 754 that Go's map inherits from the hardware.
@@ -701,12 +701,12 @@ static uint64_t complex128_hash(const void *p, uint64_t seed) {
     return float64_hash_bits(c->im, float64_hash_bits(c->re, seed));
 }
 
-static const TypeOps float32_ops = {float32_equal, float32_hash, NULL, NULL, NULL};
-static const TypeOps float64_ops = {float64_equal, float64_hash, NULL, NULL, NULL};
-static const TypeOps complex64_ops = {complex64_equal, complex64_hash, NULL, NULL,
-                                      NULL};
-static const TypeOps complex128_ops = {complex128_equal, complex128_hash, NULL, NULL,
+const TypeOps burrow__float32_ops = {float32_equal, float32_hash, NULL, NULL, NULL};
+const TypeOps burrow__float64_ops = {float64_equal, float64_hash, NULL, NULL, NULL};
+const TypeOps burrow__complex64_ops = {complex64_equal, complex64_hash, NULL, NULL,
                                        NULL};
+const TypeOps burrow__complex128_ops = {complex128_equal, complex128_hash, NULL, NULL,
+                                        NULL};
 
 /* The hash field is a small distinct constant per builtin rather than anything
  * derived. It only has to differ between types within one build, and hand
@@ -750,11 +750,12 @@ BUILTIN(uint16_t, KIND_UINT16, uint16_t, "uint16", 9, NULL);
 BUILTIN(uint32_t, KIND_UINT32, uint32_t, "uint32", 10, NULL);
 BUILTIN(uint64_t, KIND_UINT64, uint64_t, "uint64", 11, NULL);
 BUILTIN(Uintptr, KIND_UINTPTR, Uintptr, "uintptr", 12, NULL);
-BUILTIN(float, KIND_FLOAT32, float, "float32", 13, &float32_ops);
-BUILTIN(double, KIND_FLOAT64, double, "float64", 14, &float64_ops);
-BUILTIN(Complex64, KIND_COMPLEX64, Complex64, "complex64", 15, &complex64_ops);
-BUILTIN(Complex128, KIND_COMPLEX128, Complex128, "complex128", 16, &complex128_ops);
-BUILTIN(Str, KIND_STRING, Str, "string", 17, &string_ops);
+BUILTIN(float, KIND_FLOAT32, float, "float32", 13, &burrow__float32_ops);
+BUILTIN(double, KIND_FLOAT64, double, "float64", 14, &burrow__float64_ops);
+BUILTIN(Complex64, KIND_COMPLEX64, Complex64, "complex64", 15, &burrow__complex64_ops);
+BUILTIN(Complex128, KIND_COMPLEX128, Complex128, "complex128", 16,
+        &burrow__complex128_ops);
+BUILTIN(Str, KIND_STRING, Str, "string", 17, &burrow__string_ops);
 BUILTIN(UnsafePointer, KIND_UNSAFE_POINTER, void *, "unsafe.Pointer", 18, NULL);
 
 /* []byte, declared in slice.h. Unnamed like every slice type, with no ops

@@ -102,8 +102,12 @@ extern "C" {
  * initialiser these descriptors are. Making them work needs either the kind
  * spelled out at the call site, which is a second place to get it wrong, or a
  * pass at startup, which is the registration this whole approach exists to
- * avoid. Neither is worth doing badly to fill a gap nothing has asked for yet.
- * See docs/design/07-reflect.md section 3. */
+ * avoid. See docs/design/07-reflect.md section 3.
+ *
+ * BURROW_NAMED_TYPE below is the first of those, the kind spelled out, and it
+ * is there for burrow-gen from-go, which writes it from a Go declaration and
+ * so cannot get the kind wrong. Writing one by hand is allowed and is exactly
+ * as safe as the kind you write. */
 
 /* ------------------------------------------------- marking a plain struct
  *
@@ -309,8 +313,7 @@ extern "C" {
     typedef Slice Name;                                                                \
     extern const Type burrow_type_##Name
 
-#define BURROW_NAMED_SLICE_TYPE(Name, T)                                               \
-    BURROW_NAMED_SLICE_TYPE_DECL(Name, T);                                             \
+#define BURROW_NAMED_SLICE_TYPE_DEFINE(Name, T)                                        \
     const Type burrow_type_##Name = {                                                  \
         BURROW_S_INIT(#Name),                                                          \
         {NULL, 0},                                                                     \
@@ -327,6 +330,10 @@ extern "C" {
         0,                                                                             \
         NULL,                                                                          \
     }
+
+#define BURROW_NAMED_SLICE_TYPE(Name, T)                                               \
+    BURROW_NAMED_SLICE_TYPE_DECL(Name, T);                                             \
+    BURROW_NAMED_SLICE_TYPE_DEFINE(Name, T)
 
 /* An array of N of them, which unlike a slice is its elements and is therefore
  * N times the size. The typedef is a struct with the array inside it rather
@@ -368,8 +375,7 @@ extern "C" {
     typedef T *Name;                                                                   \
     extern const Type burrow_type_##Name
 
-#define BURROW_PTR_TYPE(Name, T)                                                       \
-    BURROW_PTR_TYPE_DECL(Name, T);                                                     \
+#define BURROW_PTR_TYPE_DEFINE(Name, T)                                                \
     const Type burrow_type_##Name = {                                                  \
         {NULL, 0},                                                                     \
         {NULL, 0},                                                                     \
@@ -387,6 +393,10 @@ extern "C" {
         NULL,                                                                          \
     }
 
+#define BURROW_PTR_TYPE(Name, T)                                                       \
+    BURROW_PTR_TYPE_DECL(Name, T);                                                     \
+    BURROW_PTR_TYPE_DEFINE(Name, T)
+
 /* A map from K to V. The descriptor carries both, since a map needs the key's
  * hash and equality as much as it needs the value's size, and the key goes in
  * the field called key while the value goes in elem, matching Go's reflect. */
@@ -394,8 +404,7 @@ extern "C" {
     typedef Map *Name;                                                                 \
     extern const Type burrow_type_##Name
 
-#define BURROW_MAP_TYPE(Name, K, V)                                                    \
-    BURROW_MAP_TYPE_DECL(Name, K, V);                                                  \
+#define BURROW_MAP_TYPE_DEFINE(Name, K, V)                                             \
     const Type burrow_type_##Name = {                                                  \
         {NULL, 0},                                                                     \
         {NULL, 0},                                                                     \
@@ -412,6 +421,73 @@ extern "C" {
         0,                                                                             \
         NULL,                                                                          \
     }
+
+#define BURROW_MAP_TYPE(Name, K, V)                                                    \
+    BURROW_MAP_TYPE_DECL(Name, K, V);                                                  \
+    BURROW_MAP_TYPE_DEFINE(Name, K, V)
+
+/* A type with a name of its own and a basic type underneath, Go's
+ *
+ *     type Celsius float64
+ *
+ * which is
+ *
+ *     BURROW_NAMED_TYPE(Celsius, double, KIND_FLOAT64);
+ *
+ * T is the C spelling of the underlying type and KIND is its kind, written as
+ * the KIND_ constant itself and not through anything that expands to one,
+ * because the macro pastes it into a name. That paste is how the descriptor
+ * gets the same equality and hash as T: a string or a float compares by more
+ * than its bytes, and the tables that do it are reached by kind here.
+ *
+ * Unlike the composites above, this one carries the name, so reflect and fmt
+ * see Celsius and not float64. */
+#define BURROW_NAMED_TYPE_DECL(Name, T, KIND)                                          \
+    typedef T Name;                                                                    \
+    extern const Type burrow_type_##Name
+
+#define BURROW_NAMED_TYPE_DEFINE(Name, T, KIND)                                        \
+    const Type burrow_type_##Name = {                                                  \
+        BURROW_S_INIT(#Name),                                                          \
+        {NULL, 0},                                                                     \
+        KIND,                                                                          \
+        (uint32_t)sizeof(Name),                                                        \
+        (uint16_t)_Alignof(Name),                                                      \
+        0,                                                                             \
+        0,                                                                             \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        NULL,                                                                          \
+        0,                                                                             \
+        0,                                                                             \
+        BURROW__KIND_OPS_##KIND,                                                       \
+    }
+
+#define BURROW_NAMED_TYPE(Name, T, KIND)                                               \
+    BURROW_NAMED_TYPE_DECL(Name, T, KIND);                                             \
+    BURROW_NAMED_TYPE_DEFINE(Name, T, KIND)
+
+/* Which of the builtins' equality and hash tables, from burrow/type.h, a named
+ * type of each basic kind shares. */
+#define BURROW__KIND_OPS_KIND_BOOL NULL
+#define BURROW__KIND_OPS_KIND_INT NULL
+#define BURROW__KIND_OPS_KIND_INT8 NULL
+#define BURROW__KIND_OPS_KIND_INT16 NULL
+#define BURROW__KIND_OPS_KIND_INT32 NULL
+#define BURROW__KIND_OPS_KIND_INT64 NULL
+#define BURROW__KIND_OPS_KIND_UINT NULL
+#define BURROW__KIND_OPS_KIND_UINT8 NULL
+#define BURROW__KIND_OPS_KIND_UINT16 NULL
+#define BURROW__KIND_OPS_KIND_UINT32 NULL
+#define BURROW__KIND_OPS_KIND_UINT64 NULL
+#define BURROW__KIND_OPS_KIND_UINTPTR NULL
+#define BURROW__KIND_OPS_KIND_FLOAT32 (&burrow__float32_ops)
+#define BURROW__KIND_OPS_KIND_FLOAT64 (&burrow__float64_ops)
+#define BURROW__KIND_OPS_KIND_COMPLEX64 (&burrow__complex64_ops)
+#define BURROW__KIND_OPS_KIND_COMPLEX128 (&burrow__complex128_ops)
+#define BURROW__KIND_OPS_KIND_STRING (&burrow__string_ops)
+#define BURROW__KIND_OPS_KIND_UNSAFE_POINTER NULL
 
 /* ------------------------------------------------------------------ methods
  *

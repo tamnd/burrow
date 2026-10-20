@@ -8,6 +8,7 @@
 #     burrow-gen doc          the code in docs/ checked against real programs
 #     burrow-gen collisions   burrow's link names against other libraries' symbols
 #     burrow-gen tests        the mechanical half of porting one of Go's test files
+#     burrow-gen from-go      C types, descriptors and prototypes from Go declarations
 #
 # REFLECT
 #
@@ -162,6 +163,17 @@
 # and the like, get their C names from the rules in tools/burrow-coverage. A
 # value it cannot translate compiles as the zero value with the Go in a comment
 # starting "by hand:".
+#
+# FROM-GO
+#
+#     burrow-gen from-go inventory.go -o inventory_gen.c --header inventory_gen.h
+#
+# The other way round from reflect: a Go package's types, exported constants and
+# exported function signatures, written as the C that burrow/declare.h would
+# have you write by hand. The work is done by tools/from-go.c, which reads the
+# Go with burrow's own go/parser and go/types, so there is no Go toolchain
+# involved. This builds it with make the first time, into build/tools, and runs
+# it. "Types from Go" in docs/guides/reflect.md has the rules for names and types.
 #
 # Copyright 2026 The burrow Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style licence that can be found
@@ -1415,6 +1427,33 @@ def coll_waivers(path):
     return out
 
 
+def run_from_go(args):
+    """burrow-gen from-go: build tools/from-go.c if needed and run it."""
+    root = args.root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    exe = args.tool
+    if exe is None:
+        exe = os.path.join(root, "build", "tools", "from-go" + (".exe" if os.name == "nt" else ""))
+        src = os.path.join(root, "tools", "from-go.c")
+        if not os.path.exists(exe) or os.path.getmtime(exe) < os.path.getmtime(src):
+            try:
+                subprocess.run(["make", "-C", root, "from-go"], check=True)
+            except OSError:
+                raise Error("building from-go needs make, or say where it is with --tool")
+            except subprocess.CalledProcessError:
+                raise Error("could not build %s" % src)
+    cmd = [exe]
+    if args.output != "-":
+        cmd += ["-o", args.output]
+    if args.header:
+        cmd += ["-header", args.header]
+    if args.prefix is not None:
+        cmd += ["-prefix", args.prefix]
+    try:
+        return subprocess.run(cmd + ["--"] + args.files).returncode
+    except OSError as e:
+        raise Error("cannot run %s: %s" % (exe, e.strerror))
+
+
 def run_tests(args):
     """burrow-gen tests: build tools/gen-tests if needed, run it, and name things."""
     root = args.root or os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -2300,7 +2339,22 @@ def main():
         help="a header to include before burrow/embed.h, which can be given more than once",
     )
 
+    f = sub.add_parser("from-go", help="C types, descriptors and prototypes from Go declarations")
+    f.add_argument("files", nargs="+", help="the .go files of one package")
+    f.add_argument("-o", "--output", default="-", help="where to write, - for stdout")
+    f.add_argument("--header", metavar="FILE", help="put the declarations here and only the definitions in the output")
+    f.add_argument("--prefix", metavar="NAME", help="what names start with, default the package name, none for main")
+    f.add_argument("--tool", metavar="PATH", help="the from-go binary, default build/tools/from-go, made if missing")
+    f.add_argument("--root", metavar="DIR", help="the burrow tree to read, default the one this script is in")
+
     args = p.parse_args()
+
+    if args.command == "from-go":
+        try:
+            return run_from_go(args)
+        except Error as e:
+            sys.stderr.write("%s: %s\n" % (PROG, e))
+            return 1
 
     if args.command == "embed":
         try:

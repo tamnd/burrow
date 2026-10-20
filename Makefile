@@ -242,7 +242,7 @@ TEST_GEN := $(wildcard tests/gen/*.c)
 DEPFLAGS := -MMD -MP
 DEPS     := $(OBJS:.o=.d) $(TEST_BINS:=.d)
 
-.PHONY: all lib test check collisions clean install fmt tidy amalgamation gofmt-gate sqlite
+.PHONY: all lib test check collisions clean install fmt tidy amalgamation gofmt-gate sqlite from-go
 
 all: lib
 
@@ -341,7 +341,8 @@ check:
 	@tools/check-globals.sh
 	@tools/check-statics.sh
 	@tools/check-pal.sh
-	@tools/check-gen.sh
+	@$(MAKE) --no-print-directory from-go
+	@FROM_GO=$(FROM_GO_BIN) tools/check-gen.sh
 	@tools/check-amalg.sh
 	@$(MAKE) test
 
@@ -427,6 +428,16 @@ $(GOFMT_BIN): tools/gofmt.c $(LIB)
 
 gofmt-gate: $(GOFMT_BIN)
 	@tools/check-gofmt.sh $(GOFMT_BIN)
+
+# burrow-gen from-go, which reads Go declarations and writes the C for them.
+# See tools/from-go.c.
+FROM_GO_BIN := $(BUILD)/tools/from-go
+
+$(FROM_GO_BIN): tools/from-go.c $(LIB)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(THREADS) $< $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
+
+from-go: $(FROM_GO_BIN)
 
 # The SQLite driver in examples/sqlite, the one program here that links a
 # library burrow does not have. pkg-config finds SQLite where it can, and

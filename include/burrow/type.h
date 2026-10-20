@@ -98,6 +98,15 @@ typedef struct TypeOps {
     void (*call)(const void *fn, void **args, void **rets);
 } TypeOps;
 
+/* The tables the builtins that compare by more than their bytes use: floats,
+ * complex numbers and strings. A named type over one of them needs the same
+ * table, which is what BURROW_NAMED_TYPE in burrow/declare.h hands it. */
+extern const TypeOps burrow__float32_ops;
+extern const TypeOps burrow__float64_ops;
+extern const TypeOps burrow__complex64_ops;
+extern const TypeOps burrow__complex128_ops;
+extern const TypeOps burrow__string_ops;
+
 /* One field of a struct.
  *
  * tag is the struct tag exactly as written, unparsed. encoding/json and the

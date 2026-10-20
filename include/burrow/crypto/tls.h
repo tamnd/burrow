@@ -244,6 +244,23 @@ typedef struct TlsCertificate {
     struct X509Certificate *leaf;
 } TlsCertificate;
 
+/* X509KeyPair parses a public/private key pair from a pair of PEM encoded
+ * data. On successful return, Certificate.Leaf will be populated.
+ *
+ * Everything the certificate holds is made from a, in more pieces than are
+ * worth freeing one at a time, so give it an arena. After an error what was
+ * made is left in a too. */
+BURROW_OWNS(ret) TlsCertificate tls_x509_key_pair(Alloc *a, Slice cert_pem_block,
+                                                  Slice key_pem_block, Error *err);
+
+/* LoadX509KeyPair reads and parses a public/private key pair from a pair of
+ * files. The files must contain PEM encoded data. The certificate file may
+ * contain intermediate certificates following the leaf certificate to form a
+ * certificate chain. On successful return, Certificate.Leaf will be populated.
+ * The certificate is made from a, as tls_x509_key_pair makes it. */
+BURROW_OWNS(ret) TlsCertificate tls_load_x509_key_pair(Alloc *a, Str cert_file,
+                                                       Str key_file, Error *err);
+
 /* ---------------------------------------------------- client auth policies */
 
 /* ClientAuthType declares the policy the server will follow for TLS Client

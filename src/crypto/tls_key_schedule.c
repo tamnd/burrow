@@ -9,10 +9,14 @@
 #include "burrow/crypto/tls.h"
 
 #include "burrow/core.h"
+#include "burrow/crypto.h"
+#include "burrow/crypto/ecdh.h"
 #include "burrow/crypto/hkdf.h"
 #include "burrow/crypto/hmac.h"
+#include "burrow/crypto/mlkem.h"
 #include "burrow/error.h"
 #include "burrow/hash.h"
+#include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/panic.h"
@@ -300,4 +304,381 @@ Slice burrow__tls13_finished_hash(const TlsSuiteTLS13 *c, Alloc *a, Slice base_k
     }
     arena_free(&scratch);
     return out;
+}
+
+/* ------------------------------------------------------- key exchanges */
+
+BURROW_SENTINEL_ERROR(tke_err_unsupported, "tls: unsupported key exchange");
+BURROW_SENTINEL_ERROR(tke_err_client_share_length,
+                      "tls: invalid client key share length for hybrid key exchange");
+BURROW_SENTINEL_ERROR(tke_err_server_share_length,
+                      "tls: invalid server key share length for hybrid key exchange");
+
+enum { TKE_ECDH, TKE_HYBRID, TKE_MLKEM1024 };
+
+/* ecdhKeyExchange. */
+typedef struct TkeEcdh {
+    TlsCurveID id;
+    const EcdhCurve *(*curve)(void);
+} TkeEcdh;
+
+struct TlsKeyExchange {
+    /* The rest of a hybridKeyExchange, whose mlkemGenerateKey and
+     * mlkemNewPublicKey are those for ML-KEM-1024 when mlkem1024 is set and
+     * for ML-KEM-768 when it is not. */
+    Int ecdh_element_size;
+    Int mlkem_public_key_size;
+    Int mlkem_ciphertext_size;
+
+    /* The whole of an ecdhKeyExchange, or the ECDH part of a hybrid. */
+    TkeEcdh ecdh;
+
+    int kind;
+    TlsCurveID id;
+    bool mlkem1024;
+};
+
+static const TlsKeyExchange tke_exchanges[] = {
+    {0, 0, 0, {TLS_X25519, ecdh_x25519}, TKE_ECDH, TLS_X25519, false},
+    {0, 0, 0, {TLS_CURVE_P256, ecdh_p256}, TKE_ECDH, TLS_CURVE_P256, false},
+    {0, 0, 0, {TLS_CURVE_P384, ecdh_p384}, TKE_ECDH, TLS_CURVE_P384, false},
+    {0, 0, 0, {TLS_CURVE_P521, ecdh_p521}, TKE_ECDH, TLS_CURVE_P521, false},
+    {32,
+     MLKEM_ENCAPSULATION_KEY_SIZE768,
+     MLKEM_CIPHERTEXT_SIZE768,
+     {TLS_X25519, ecdh_x25519},
+     TKE_HYBRID,
+     TLS_X25519MLKEM768,
+     false},
+    {65,
+     MLKEM_ENCAPSULATION_KEY_SIZE768,
+     MLKEM_CIPHERTEXT_SIZE768,
+     {TLS_CURVE_P256, ecdh_p256},
+     TKE_HYBRID,
+     TLS_SEC_P256_R1_MLKEM768,
+     false},
+    {97,
+     MLKEM_ENCAPSULATION_KEY_SIZE1024,
+     MLKEM_CIPHERTEXT_SIZE1024,
+     {TLS_CURVE_P384, ecdh_p384},
+     TKE_HYBRID,
+     TLS_SEC_P384_R1_MLKEM1024,
+     true},
+    {0, 0, 0, {0, NULL}, TKE_MLKEM1024, TLS_MLKEM1024, true},
+};
+
+const TlsKeyExchange *burrow__tls_key_exchange_for_curve_id(TlsCurveID id, Error *err) {
+    for (size_t i = 0; i < sizeof(tke_exchanges) / sizeof(tke_exchanges[0]); i++) {
+        if (tke_exchanges[i].id == id)
+            return &tke_exchanges[i];
+    }
+    BURROW_OUT(err, tke_err_unsupported);
+    return NULL;
+}
+
+void burrow__tls_key_share_private_keys_free(TlsKeySharePrivateKeys *k) {
+    ecdh_private_key_free(k->ecdhe);
+    mlkem_decapsulation_key768_free(k->mlkem768);
+    mlkem_decapsulation_key1024_free(k->mlkem1024);
+    memset(k, 0, sizeof *k);
+}
+
+/* x then y, from a, or nil when a is out of memory. */
+static Slice tke_concat(Alloc *a, Slice x, Slice y) {
+    Slice out = slice_make(a, TYPE_BYTE, x.len + y.len, x.len + y.len);
+    if (out.p == NULL)
+        return out;
+    if (x.len > 0)
+        memcpy(out.p, x.p, (size_t)x.len);
+    if (y.len > 0)
+        memcpy((Byte *)out.p + x.len, y.p, (size_t)y.len);
+    return out;
+}
+
+/* mlkemGenerateKey, into priv. */
+static bool tke_mlkem_generate_key(bool k1024, Alloc *a, TlsKeySharePrivateKeys *priv,
+                                   Error *err) {
+    if (k1024) {
+        priv->mlkem1024 = mlkem_generate_key1024(a, err);
+        if (priv->mlkem1024 == NULL)
+            return false;
+        priv->mlkem = mlkem_decapsulation_key1024_as_decapsulator(priv->mlkem1024);
+    } else {
+        priv->mlkem768 = mlkem_generate_key768(a, err);
+        if (priv->mlkem768 == NULL)
+            return false;
+        priv->mlkem = mlkem_decapsulation_key768_as_decapsulator(priv->mlkem768);
+    }
+    return true;
+}
+
+/* mlkemNewPublicKey and then Encapsulate: the shared key, with the ciphertext
+ * in *ciphertext, both from a. */
+static Slice tke_mlkem_encapsulate(bool k1024, Alloc *a, Slice public_key,
+                                   Slice *ciphertext, Error *err) {
+    Slice shared_key = slice_nil(TYPE_BYTE);
+    if (k1024) {
+        MlkemEncapsulationKey1024 *ek =
+            mlkem_new_encapsulation_key1024(a, public_key, err);
+        if (ek == NULL)
+            return shared_key;
+        shared_key = mlkem_encapsulation_key1024_encapsulate(ek, a, ciphertext);
+        mlkem_encapsulation_key1024_free(ek);
+    } else {
+        MlkemEncapsulationKey768 *ek =
+            mlkem_new_encapsulation_key768(a, public_key, err);
+        if (ek == NULL)
+            return shared_key;
+        shared_key = mlkem_encapsulation_key768_encapsulate(ek, a, ciphertext);
+        mlkem_encapsulation_key768_free(ek);
+    }
+    if (shared_key.p == NULL)
+        BURROW_OUT(err, burrow_err_out_of_memory);
+    return shared_key;
+}
+
+static bool tke_ecdh_key_shares(const TkeEcdh *ke, Alloc *a, IoReader rand,
+                                TlsKeySharePrivateKeys *priv, TlsKeyShare *share,
+                                Error *err) {
+    EcdhPrivateKey *key = ecdh_curve_generate_key(ke->curve(), a, rand, err);
+    if (key == NULL)
+        return false;
+    Slice data = ecdh_public_key_bytes(ecdh_private_key_public_key(key), a);
+    if (data.p == NULL) {
+        ecdh_private_key_free(key);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return false;
+    }
+    priv->ecdhe = key;
+    *share = (TlsKeyShare){ke->id, data};
+    return true;
+}
+
+static Slice tke_ecdh_server_shared_secret(const TkeEcdh *ke, Alloc *a, IoReader rand,
+                                           Slice client_key_share, TlsKeyShare *ks,
+                                           Error *err) {
+    Slice shared_key = slice_nil(TYPE_BYTE);
+    EcdhPrivateKey *key = ecdh_curve_generate_key(ke->curve(), a, rand, err);
+    if (key == NULL)
+        return shared_key;
+    EcdhPublicKey *peer_key =
+        ecdh_curve_new_public_key(ke->curve(), a, client_key_share, err);
+    if (peer_key != NULL) {
+        Slice secret = ecdh_private_key_ecdh(key, a, peer_key, err);
+        if (secret.p != NULL) {
+            Slice data = ecdh_public_key_bytes(ecdh_private_key_public_key(key), a);
+            if (data.p == NULL) {
+                BURROW_OUT(err, burrow_err_out_of_memory);
+            } else {
+                shared_key = secret;
+                *ks = (TlsKeyShare){ke->id, data};
+            }
+        }
+        ecdh_public_key_free(peer_key);
+    }
+    ecdh_private_key_free(key);
+    return shared_key;
+}
+
+static Slice tke_ecdh_client_shared_secret(const TkeEcdh *ke, Alloc *a,
+                                           const TlsKeySharePrivateKeys *priv,
+                                           Slice server_key_share, Error *err) {
+    EcdhPublicKey *peer_key =
+        ecdh_curve_new_public_key(ke->curve(), a, server_key_share, err);
+    if (peer_key == NULL)
+        return slice_nil(TYPE_BYTE);
+    Slice shared_key = ecdh_private_key_ecdh(priv->ecdhe, a, peer_key, err);
+    ecdh_public_key_free(peer_key);
+    return shared_key;
+}
+
+/* The rest of hybridKeyExchange.serverSharedSecret once the share is split, with
+ * the halves in s and what it gives in a. */
+static Slice tke_hybrid_server_shared_secret(const TlsKeyExchange *ke, Alloc *a,
+                                             Alloc *s, IoReader rand,
+                                             Slice ecdh_share_data,
+                                             Slice mlkem_share_data, TlsKeyShare *ks,
+                                             Error *err) {
+    TlsKeyShare ecdh_ks = {0};
+    /* Go runs this under fips140.WithoutEnforcement, as keyShares does. */
+    Slice ecdh_shared_secret = tke_ecdh_server_shared_secret(
+        &ke->ecdh, s, rand, ecdh_share_data, &ecdh_ks, err);
+    if (ecdh_shared_secret.p == NULL)
+        return slice_nil(TYPE_BYTE);
+    Slice mlkem_key_share = slice_nil(TYPE_BYTE);
+    Slice mlkem_shared_secret = tke_mlkem_encapsulate(
+        ke->mlkem1024, s, mlkem_share_data, &mlkem_key_share, err);
+    if (mlkem_shared_secret.p == NULL)
+        return slice_nil(TYPE_BYTE);
+    Slice shared_key, data;
+    if (ke->id == TLS_X25519MLKEM768) {
+        shared_key = tke_concat(a, mlkem_shared_secret, ecdh_shared_secret);
+        data = tke_concat(a, mlkem_key_share, ecdh_ks.data);
+    } else {
+        shared_key = tke_concat(a, ecdh_shared_secret, mlkem_shared_secret);
+        data = tke_concat(a, ecdh_ks.data, mlkem_key_share);
+    }
+    if (shared_key.p == NULL || data.p == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return slice_nil(TYPE_BYTE);
+    }
+    *ks = (TlsKeyShare){ke->id, data};
+    return shared_key;
+}
+
+/* The same for hybridKeyExchange.clientSharedSecret. */
+static Slice tke_hybrid_client_shared_secret(const TlsKeyExchange *ke, Alloc *a,
+                                             Alloc *s,
+                                             const TlsKeySharePrivateKeys *priv,
+                                             Slice ecdh_share_data,
+                                             Slice mlkem_share_data, Error *err) {
+    /* Go runs this under fips140.WithoutEnforcement, as keyShares does. */
+    Slice ecdh_shared_secret =
+        tke_ecdh_client_shared_secret(&ke->ecdh, s, priv, ecdh_share_data, err);
+    if (ecdh_shared_secret.p == NULL)
+        return slice_nil(TYPE_BYTE);
+    Slice mlkem_shared_secret =
+        crypto_decapsulator_decapsulate(priv->mlkem, s, mlkem_share_data, err);
+    if (mlkem_shared_secret.p == NULL)
+        return slice_nil(TYPE_BYTE);
+    Slice shared_key;
+    if (ke->id == TLS_X25519MLKEM768)
+        shared_key = tke_concat(a, mlkem_shared_secret, ecdh_shared_secret);
+    else
+        shared_key = tke_concat(a, ecdh_shared_secret, mlkem_shared_secret);
+    if (shared_key.p == NULL)
+        BURROW_OUT(err, burrow_err_out_of_memory);
+    return shared_key;
+}
+
+bool burrow__tls_key_exchange_key_shares(const TlsKeyExchange *ke, Alloc *a,
+                                         IoReader rand, TlsKeySharePrivateKeys *priv,
+                                         Slice *shares, Error *err) {
+    memset(priv, 0, sizeof *priv);
+    Int n = ke->kind == TKE_HYBRID ? 2 : 1;
+    *shares = slice_make(a, &burrow__tls_key_share_type, n, n);
+    if (shares->p == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return false;
+    }
+    TlsKeyShare *out = shares->p;
+
+    if (ke->kind == TKE_ECDH) {
+        if (tke_ecdh_key_shares(&ke->ecdh, a, rand, priv, &out[0], err))
+            return true;
+        *shares = slice_nil(&burrow__tls_key_share_type);
+        return false;
+    }
+
+    if (ke->kind == TKE_MLKEM1024) {
+        if (tke_mlkem_generate_key(true, a, priv, err)) {
+            Slice data = crypto_encapsulator_bytes(
+                crypto_decapsulator_encapsulator(priv->mlkem), a);
+            if (data.p != NULL) {
+                out[0] = (TlsKeyShare){TLS_MLKEM1024, data};
+                return true;
+            }
+            BURROW_OUT(err, burrow_err_out_of_memory);
+        }
+        burrow__tls_key_share_private_keys_free(priv);
+        *shares = slice_nil(&burrow__tls_key_share_type);
+        return false;
+    }
+
+    /* Go runs the ECDH part under fips140.WithoutEnforcement, being a hybrid of
+     * ML-KEM, which is Approved. Enforcement is never on in burrow. */
+    if (tke_ecdh_key_shares(&ke->ecdh, a, rand, priv, &out[1], err) &&
+        tke_mlkem_generate_key(ke->mlkem1024, a, priv, err)) {
+        Slice ek =
+            crypto_encapsulator_bytes(crypto_decapsulator_encapsulator(priv->mlkem), a);
+        Slice share_data = slice_nil(TYPE_BYTE);
+        /* For X25519MLKEM768, the ML-KEM-768 encapsulation key comes first.
+         * For SecP256r1MLKEM768 and SecP384r1MLKEM1024, the ECDH share comes
+         * first. See draft-ietf-tls-ecdhe-mlkem-02, Section 4.1. */
+        if (ek.p != NULL)
+            share_data = ke->id == TLS_X25519MLKEM768 ? tke_concat(a, ek, out[1].data)
+                                                      : tke_concat(a, out[1].data, ek);
+        if (share_data.p != NULL) {
+            out[0] = (TlsKeyShare){ke->id, share_data};
+            return true;
+        }
+        BURROW_OUT(err, burrow_err_out_of_memory);
+    }
+    burrow__tls_key_share_private_keys_free(priv);
+    *shares = slice_nil(&burrow__tls_key_share_type);
+    return false;
+}
+
+Slice burrow__tls_key_exchange_server_shared_secret(const TlsKeyExchange *ke, Alloc *a,
+                                                    IoReader rand,
+                                                    Slice client_key_share,
+                                                    TlsKeyShare *ks, Error *err) {
+    if (ke->kind == TKE_ECDH)
+        return tke_ecdh_server_shared_secret(&ke->ecdh, a, rand, client_key_share, ks,
+                                             err);
+
+    if (ke->kind == TKE_MLKEM1024) {
+        Slice ciphertext = slice_nil(TYPE_BYTE);
+        Slice shared_key =
+            tke_mlkem_encapsulate(true, a, client_key_share, &ciphertext, err);
+        if (shared_key.p != NULL)
+            *ks = (TlsKeyShare){TLS_MLKEM1024, ciphertext};
+        return shared_key;
+    }
+
+    if (client_key_share.len != ke->ecdh_element_size + ke->mlkem_public_key_size) {
+        BURROW_OUT(err, tke_err_client_share_length);
+        return slice_nil(TYPE_BYTE);
+    }
+    Slice ecdh_share_data, mlkem_share_data;
+    if (ke->id == TLS_X25519MLKEM768) {
+        mlkem_share_data = slice_sub(client_key_share, 0, ke->mlkem_public_key_size);
+        ecdh_share_data = slice_sub(client_key_share, ke->mlkem_public_key_size,
+                                    client_key_share.len);
+    } else {
+        ecdh_share_data = slice_sub(client_key_share, 0, ke->ecdh_element_size);
+        mlkem_share_data =
+            slice_sub(client_key_share, ke->ecdh_element_size, client_key_share.len);
+    }
+
+    Arena scratch;
+    arena_init(&scratch, NULL, 0);
+    Slice shared_key =
+        tke_hybrid_server_shared_secret(ke, a, arena_allocator(&scratch), rand,
+                                        ecdh_share_data, mlkem_share_data, ks, err);
+    arena_free(&scratch);
+    return shared_key;
+}
+
+Slice burrow__tls_key_exchange_client_shared_secret(const TlsKeyExchange *ke, Alloc *a,
+                                                    const TlsKeySharePrivateKeys *priv,
+                                                    Slice server_key_share,
+                                                    Error *err) {
+    if (ke->kind == TKE_ECDH)
+        return tke_ecdh_client_shared_secret(&ke->ecdh, a, priv, server_key_share, err);
+
+    if (ke->kind == TKE_MLKEM1024)
+        return crypto_decapsulator_decapsulate(priv->mlkem, a, server_key_share, err);
+
+    if (server_key_share.len != ke->ecdh_element_size + ke->mlkem_ciphertext_size) {
+        BURROW_OUT(err, tke_err_server_share_length);
+        return slice_nil(TYPE_BYTE);
+    }
+    Slice ecdh_share_data, mlkem_share_data;
+    if (ke->id == TLS_X25519MLKEM768) {
+        mlkem_share_data = slice_sub(server_key_share, 0, ke->mlkem_ciphertext_size);
+        ecdh_share_data = slice_sub(server_key_share, ke->mlkem_ciphertext_size,
+                                    server_key_share.len);
+    } else {
+        ecdh_share_data = slice_sub(server_key_share, 0, ke->ecdh_element_size);
+        mlkem_share_data =
+            slice_sub(server_key_share, ke->ecdh_element_size, server_key_share.len);
+    }
+
+    Arena scratch;
+    arena_init(&scratch, NULL, 0);
+    Slice shared_key = tke_hybrid_client_shared_secret(
+        ke, a, arena_allocator(&scratch), priv, ecdh_share_data, mlkem_share_data, err);
+    arena_free(&scratch);
+    return shared_key;
 }

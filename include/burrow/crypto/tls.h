@@ -517,6 +517,13 @@ typedef struct TlsConnectionState {
     bool hello_retry_request;
 } TlsConnectionState;
 
+/* The descriptor of ConnectionState, with the exported fields in Go's order,
+ * so that it can be given to encoding/json. Not in Go: ekm and
+ * testingOnlyPeerSignatureAlgorithm are left out, as only the package can see
+ * them. */
+extern const Type burrow_type_TlsConnectionState;
+#define TYPE_TLS_CONNECTION_STATE TYPE_OF(TlsConnectionState)
+
 /* ExportKeyingMaterial returns length bytes of exported key material in a new
  * slice as defined in RFC 5705. If context is nil, it is not used as part of
  * the seed. If the connection was set to allow renegotiation via

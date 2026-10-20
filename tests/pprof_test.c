@@ -1861,8 +1861,10 @@ static void memory_profiler_debug1(void *env, TestingT *t) {
         testing_t_fatalf_v(t, "failed to write heap profile: %v", err);
 
     for (Int i = 0; i < e->n; i++) {
-        if (!regexp_match(regexp_must_compile(a, e->tests[i].legacy),
-                          bytes_buffer_bytes(&buf)))
+        Regexp *re = regexp_must_compile(a, e->tests[i].legacy);
+        bool ok = regexp_match(re, bytes_buffer_bytes(&buf));
+        regexp_free(re);
+        if (!ok)
             testing_t_fatalf_v(t, "The entry did not match:\n%v\n\nProfile:\n%v\n",
                                e->tests[i].legacy, bytes_buffer_string(&buf, a));
     }
@@ -1969,6 +1971,871 @@ static void TestMemoryProfiler(TestingT *t) {
     arena_free(&ar);
 }
 
+/* ------------------------------------------------ block and mutex profiles */
+
+/* Go's profileStacks flattens each sample to the names of its lines. A
+ * location with no name has no line, so here it is kept as an empty name
+ * instead of being left out, since a test function has no name and its place
+ * in the stack is what there is to check. */
+static Slice profile_stacks(Alloc *a, PfProfile *p) {
+    Slice res = slice_make(a, TYPE_UNSAFE_POINTER, 0, p->sample.len);
+    PfSample **ps = (PfSample **)p->sample.p;
+    for (Int i = 0; i < p->sample.len; i++) {
+        PfLocation **ls = (PfLocation **)ps[i]->location.p;
+        Slice *stk = (Slice *)mem_alloc(a, sizeof(Slice), _Alignof(Slice));
+        *stk = slice_make(a, TYPE_STRING, 0, ps[i]->location.len);
+        for (Int j = 0; j < ps[i]->location.len; j++) {
+            Str name = location_name(ls[j]);
+            *stk = slice_append(a, *stk, &name, 1);
+        }
+        res = slice_append(a, res, &stk, 1);
+    }
+    return res;
+}
+
+/* blockRecordStacks, with the same empty name for a frame that has none. */
+static Slice block_record_stacks(Alloc *a, const RuntimeBlockProfileRecord *records,
+                                 Int n) {
+    Slice res = slice_make(a, TYPE_UNSAFE_POINTER, 0, n);
+    for (Int i = 0; i < n; i++) {
+        Int nstk = runtime_block_profile_record_stack(&records[i]);
+        Slice *stk = (Slice *)mem_alloc(a, sizeof(Slice), _Alignof(Slice));
+        *stk = slice_make(a, TYPE_STRING, 0, nstk);
+        for (Int j = 0; j < nstk; j++) {
+            RuntimeFrame frame;
+            (void)burrow__ppr_frame(records[i].stack0[j], &frame);
+            *stk = slice_append(a, *stk, &frame.function, 1);
+        }
+        res = slice_append(a, res, &stk, 1);
+    }
+    return res;
+}
+
+static bool contains_stack(Slice got, const Str *want, Int nwant) {
+    Slice *const *stks = (Slice *const *)got.p;
+    for (Int i = 0; i < got.len; i++) {
+        const Slice *stk = stks[i];
+        if (stk->len < nwant)
+            continue;
+        const Str *names = (const Str *)stk->p;
+        for (Int j = 0; j < nwant; j++) {
+            if (!str_eq(want[j], names[j]))
+                break;
+            if (j == nwant - 1)
+                return true;
+        }
+    }
+    return false;
+}
+
+/* Not in Go: the number of goroutines a stack dump shows in the given state,
+ * which is what await_blocked_goroutine counts with. */
+static Int goroutines_in_state(Str state) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Regexp *r =
+        regexp_must_compile(a, fmt_sprintf_v(a, "(?m)^goroutine \\d+ \\[%s\\]:\n",
+                                             regexp_quote_meta(a, state)));
+    Int size = 64 << 10;
+    Int got = 0;
+    for (;;) {
+        Byte *buf = (Byte *)mem_alloc(a, (size_t)size, 1);
+        if (buf == NULL)
+            panic_str(S("out of memory"));
+        Int n = runtime_stack(slice_from(buf, size, size, TYPE_BYTE), true);
+        if (n == size) {
+            /* Buffer wasn't large enough for a full goroutine dump. Resize it
+             * and try again. */
+            size *= 2;
+            continue;
+        }
+        got = regexp_find_all(r, a, slice_from(buf, n, n, TYPE_BYTE), -1).len;
+        break;
+    }
+    regexp_free(r);
+    arena_free(&ar);
+    return got;
+}
+
+/* awaitBlockedGoroutine spins on runtime_gosched until a runtime stack dump
+ * shows count goroutines in the given state. Go looks for the test's own frame
+ * in the goroutine, which here has no name, and a goroutine that is not
+ * running only has frames where the scheduler's switch leaves one to start
+ * from. So the caller counts the goroutines already in the state first, and
+ * count is that and the ones it is waiting for. */
+static void await_blocked_goroutine(Str state, Int count) {
+    for (;;) {
+        runtime_gosched();
+        if (goroutines_in_state(state) >= count)
+            return;
+    }
+}
+
+/* What a blockXxx function shares with the goroutine it starts. The goroutine
+ * says when it is done, since what it shares is on the test's stack. */
+typedef struct BlockEnv {
+    Chan *c;
+    Chan *c2;
+    SyncMutex mu;
+    SyncCond cond;
+    Str state;
+    Int count;
+    Int n;
+    Duration d;
+    SyncWaitGroup wg;
+    SyncWaitGroup done;
+} BlockEnv;
+
+static void block_go(TestingT *t, BlockEnv *e, Str state, Int n, void (*f)(void *env)) {
+    e->state = state;
+    e->count = goroutines_in_state(state) + n;
+    sync_wait_group_add(&e->done, 1);
+    if (!go(BURROW_FN(Func, f, e)))
+        testing_t_fatalf_v(t, "go failed");
+}
+
+static void block_wait(BlockEnv *e) {
+    sync_wait_group_wait(&e->done);
+    if (e->c != NULL)
+        chan_free(e->c);
+    if (e->c2 != NULL)
+        chan_free(e->c2);
+}
+
+static void block_chan_recv_func1(void *env) {
+    BlockEnv *e = (BlockEnv *)env;
+    await_blocked_goroutine(e->state, e->count);
+    bool v = true;
+    chan_send(e->c, &v);
+    sync_wait_group_done(&e->done);
+}
+
+static BURROW_NOINLINE void block_chan_recv(TestingT *t) {
+    BlockEnv e = {0};
+    e.c = chan_make(heap_allocator(), TYPE_BOOL, 0);
+    block_go(t, &e, S("chan receive"), 1, block_chan_recv_func1);
+    bool v;
+    (void)chan_recv(e.c, &v);
+    block_wait(&e);
+}
+
+static void block_chan_send_func1(void *env) {
+    BlockEnv *e = (BlockEnv *)env;
+    await_blocked_goroutine(e->state, e->count);
+    bool v;
+    (void)chan_recv(e->c, &v);
+    sync_wait_group_done(&e->done);
+}
+
+static BURROW_NOINLINE void block_chan_send(TestingT *t) {
+    BlockEnv e = {0};
+    e.c = chan_make(heap_allocator(), TYPE_BOOL, 0);
+    block_go(t, &e, S("chan send"), 1, block_chan_send_func1);
+    bool v = true;
+    chan_send(e.c, &v);
+    block_wait(&e);
+}
+
+static void block_chan_close_func1(void *env) {
+    BlockEnv *e = (BlockEnv *)env;
+    await_blocked_goroutine(e->state, e->count);
+    chan_close(e->c);
+    sync_wait_group_done(&e->done);
+}
+
+static BURROW_NOINLINE void block_chan_close(TestingT *t) {
+    BlockEnv e = {0};
+    e.c = chan_make(heap_allocator(), TYPE_BOOL, 0);
+    block_go(t, &e, S("chan receive"), 1, block_chan_close_func1);
+    bool v;
+    (void)chan_recv(e.c, &v);
+    block_wait(&e);
+}
+
+enum { NUM_TRIES = 3 };
+
+static void block_select_recv_async_func1(void *env) {
+    BlockEnv *e = (BlockEnv *)env;
+    for (int i = 0; i < NUM_TRIES; i++) {
+        await_blocked_goroutine(e->state, e->count);
+        bool v = true;
+        chan_send(e->c, &v);
+    }
+    sync_wait_group_done(&e->done);
+}
+
+static BURROW_NOINLINE void block_select_recv_async(TestingT *t) {
+    BlockEnv e = {0};
+    e.c = chan_make(heap_allocator(), TYPE_BOOL, 1);
+    e.c2 = chan_make(heap_allocator(), TYPE_BOOL, 1);
+    block_go(t, &e, S("select"), 1, block_select_recv_async_func1);
+    for (int i = 0; i < NUM_TRIES; i++) {
+        SelectCase cases[] = {BURROW_RECV(e.c, NULL), BURROW_RECV(e.c2, NULL)};
+        (void)chan_select(cases, 2);
+    }
+    block_wait(&e);
+}
+
+static void block_select_send_sync_func1(void *env) {
+    BlockEnv *e = (BlockEnv *)env;
+    await_blocked_goroutine(e->state, e->count);
+    bool v;
+    (void)chan_recv(e->c, &v);
+    sync_wait_group_done(&e->done);
+}
+
+static BURROW_NOINLINE void block_select_send_sync(TestingT *t) {
+    BlockEnv e = {0};
+    e.c = chan_make(heap_allocator(), TYPE_BOOL, 0);
+    e.c2 = chan_make(heap_allocator(), TYPE_BOOL, 0);
+    block_go(t, &e, S("select"), 1, block_select_send_sync_func1);
+    bool v = true;
+    SelectCase cases[] = {BURROW_SEND(e.c, &v), BURROW_SEND(e.c2, &v)};
+    (void)chan_select(cases, 2);
+    block_wait(&e);
+}
+
+static void block_mutex_func1(void *env) {
+    BlockEnv *e = (BlockEnv *)env;
+    await_blocked_goroutine(e->state, e->count);
+    sync_mutex_unlock(&e->mu);
+    sync_wait_group_done(&e->done);
+}
+
+static BURROW_NOINLINE void block_mutex(TestingT *t) {
+    BlockEnv e = {0};
+    sync_mutex_lock(&e.mu);
+    block_go(t, &e, S("sync.Mutex.Lock"), 1, block_mutex_func1);
+    /* Note: Unlock releases mu before recording the mutex event, so it's
+     * theoretically possible for this to proceed and capture the profile
+     * before the event is recorded. As long as this is blocked before the
+     * unlock happens, it's okay. */
+    sync_mutex_lock(&e.mu);
+    block_wait(&e);
+}
+
+static void block_mutex_n_func1(void *env) {
+    BlockEnv *e = (BlockEnv *)env;
+    await_blocked_goroutine(e->state, e->count);
+    time_sleep(e->d);
+    sync_mutex_unlock(&e->mu);
+    sync_wait_group_done(&e->done);
+}
+
+static void block_mutex_n_func2(void *env) {
+    BlockEnv *e = (BlockEnv *)env;
+    sync_mutex_lock(&e->mu);
+    sync_mutex_unlock(&e->mu);
+    sync_wait_group_done(&e->wg);
+}
+
+static BURROW_NOINLINE void block_mutex_n(TestingT *t, Int n, Duration d) {
+    BlockEnv e = {0};
+    e.d = d;
+    sync_mutex_lock(&e.mu);
+    block_go(t, &e, S("sync.Mutex.Lock"), n, block_mutex_n_func1);
+    /* Note: Unlock releases mu before recording the mutex event, so it's
+     * theoretically possible for this to proceed and capture the profile
+     * before the event is recorded. As long as this is blocked before the
+     * unlock happens, it's okay. */
+    for (Int i = 0; i < n; i++) {
+        sync_wait_group_add(&e.wg, 1);
+        if (!go(BURROW_FN(Func, block_mutex_n_func2, &e)))
+            testing_t_fatalf_v(t, "go failed");
+    }
+    sync_wait_group_wait(&e.wg);
+    block_wait(&e);
+}
+
+static void block_cond_func1(void *env) {
+    BlockEnv *e = (BlockEnv *)env;
+    await_blocked_goroutine(e->state, e->count);
+    sync_mutex_lock(&e->mu);
+    sync_cond_signal(&e->cond);
+    sync_mutex_unlock(&e->mu);
+    sync_wait_group_done(&e->done);
+}
+
+static BURROW_NOINLINE void block_cond(TestingT *t) {
+    BlockEnv e = {0};
+    e.cond = SYNC_COND(sync_mutex_locker(&e.mu));
+    sync_mutex_lock(&e.mu);
+    block_go(t, &e, S("sync.Cond.Wait"), 1, block_cond_func1);
+    sync_cond_wait(&e.cond);
+    sync_mutex_unlock(&e.mu);
+    block_wait(&e);
+}
+
+/* Go names each stack's test functions, blockChanRecv and TestBlockProfile. A
+ * test function has no name here, so those two frames are only checked to be
+ * there, with no name, under the function that blocked. */
+typedef struct BlockProfileCase {
+    Str name;
+    void (*f)(TestingT *t);
+    Str stk[3];
+    Str re;
+} BlockProfileCase;
+
+#define BLOCK_RE(fn)                                                                   \
+    BURROW_S_INIT("\n[0-9]+ [0-9]+ @( 0x[[:xdigit:]]+)+\n"                             \
+                  "#\t+0x[0-9a-f]+\t+" fn "\\+0x[0-9a-f]+\t+.*:[0-9]+\n"               \
+                  "#\t+0x[0-9a-f]+\n"                                                  \
+                  "#\t+0x[0-9a-f]+\n")
+
+static const BlockProfileCase block_profile_tests[] = {
+    {
+        BURROW_S_INIT("chan recv"),
+        block_chan_recv,
+        {BURROW_S_INIT("chan_recv"), BURROW_S_INIT(""), BURROW_S_INIT("")},
+        BLOCK_RE("chan_recv"),
+    },
+    {
+        BURROW_S_INIT("chan send"),
+        block_chan_send,
+        {BURROW_S_INIT("chan_send"), BURROW_S_INIT(""), BURROW_S_INIT("")},
+        BLOCK_RE("chan_send"),
+    },
+    {
+        BURROW_S_INIT("chan close"),
+        block_chan_close,
+        {BURROW_S_INIT("chan_recv"), BURROW_S_INIT(""), BURROW_S_INIT("")},
+        BLOCK_RE("chan_recv"),
+    },
+    {
+        BURROW_S_INIT("select recv async"),
+        block_select_recv_async,
+        {BURROW_S_INIT("chan_select"), BURROW_S_INIT(""), BURROW_S_INIT("")},
+        BLOCK_RE("chan_select"),
+    },
+    {
+        BURROW_S_INIT("select send sync"),
+        block_select_send_sync,
+        {BURROW_S_INIT("chan_select"), BURROW_S_INIT(""), BURROW_S_INIT("")},
+        BLOCK_RE("chan_select"),
+    },
+    {
+        BURROW_S_INIT("mutex"),
+        block_mutex,
+        {BURROW_S_INIT("burrow__sync_mutex_lock_slow"), BURROW_S_INIT(""),
+         BURROW_S_INIT("")},
+        BLOCK_RE("burrow__sync_mutex_lock_slow"),
+    },
+    {
+        BURROW_S_INIT("cond"),
+        block_cond,
+        {BURROW_S_INIT("sync_cond_wait"), BURROW_S_INIT(""), BURROW_S_INIT("")},
+        BLOCK_RE("sync_cond_wait"),
+    },
+};
+
+static void block_profile_debug1(void *env, TestingT *t) {
+    (void)env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    StringsBuilder w = STRINGS_BUILDER(a);
+    (void)pprof_profile_write_to(pprof_lookup(S("block")),
+                                 strings_builder_as_io_writer(&w), 1);
+    Str prof = strings_builder_string(&w);
+
+    if (!strings_has_prefix(prof, S("--- contention:\ncycles/second=")))
+        testing_t_fatalf_v(t, "Bad profile header:\n%v", prof);
+
+    if (strings_has_suffix(prof, S("#\t0x0\n\n")))
+        testing_t_errorf_v(t, "Useless 0 suffix:\n%v", prof);
+
+    for (Int i = 0; i < NELEM(block_profile_tests); i++) {
+        const BlockProfileCase *test = &block_profile_tests[i];
+        Regexp *re = regexp_must_compile(a, test->re);
+        if (!regexp_match_string(re, prof))
+            testing_t_errorf_v(t, "Bad %v entry, expect:\n%v\ngot:\n%v", test->name,
+                               test->re, prof);
+        regexp_free(re);
+    }
+    arena_free(&ar);
+}
+
+static void block_profile_proto(void *env, TestingT *t) {
+    (void)env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    /* proto format */
+    BytesBuffer w = BYTES_BUFFER(a);
+    (void)pprof_profile_write_to(pprof_lookup(S("block")),
+                                 bytes_buffer_as_io_writer(&w), 0);
+    Error err = BURROW_NO_ERROR;
+    PfProfile *p = burrow__pf_parse(a, bytes_buffer_as_io_reader(&w), &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "failed to parse profile: %v", err);
+    testing_t_logf_v(t, "parsed proto: %s", burrow__pf_profile_string(p, a));
+    err = burrow__pf_profile_check_valid(p);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "invalid profile: %v", err);
+
+    Slice stks = profile_stacks(a, p);
+    for (Int i = 0; i < NELEM(block_profile_tests); i++) {
+        const BlockProfileCase *test = &block_profile_tests[i];
+        if (!contains_stack(stks, test->stk, 3))
+            testing_t_errorf_v(t, "No matching stack entry for %v, want %v %v %v",
+                               test->name, test->stk[0], test->stk[1], test->stk[2]);
+    }
+    arena_free(&ar);
+}
+
+static void reset_block_profile_rate(void *env) {
+    (void)env;
+    runtime_set_block_profile_rate(0);
+}
+
+static void TestBlockProfile(TestingT *t) {
+    /* Not in Go. The stacks are what is checked, and without a walk every one
+     * of them is empty. */
+    if (!have_walk()) {
+        testing_t_skip_v(t, "no stacks to check");
+        return;
+    }
+
+    /* Generate block profile */
+    runtime_set_block_profile_rate(1);
+    testing_t_cleanup(t, BURROW_FN(Func, reset_block_profile_rate, NULL));
+    for (Int i = 0; i < NELEM(block_profile_tests); i++)
+        block_profile_tests[i].f(t);
+
+    testing_t_run(t, S("debug=1"), BURROW_FN(TestingTFunc, block_profile_debug1, NULL));
+    testing_t_run(t, S("proto"), BURROW_FN(TestingTFunc, block_profile_proto, NULL));
+}
+
+/* blockFrequentShort produces 100000 block events with an average duration of
+ * rate / 10. */
+static BURROW_NOINLINE void block_frequent_short(Int rate) {
+    for (int i = 0; i < 100000; i++)
+        burrow__blockevent((int64_t)(rate / 10), 1);
+}
+
+/* blockInfrequentLong produces 10000 block events with an average duration of
+ * rate. */
+static BURROW_NOINLINE void block_infrequent_long(Int rate) {
+    for (int i = 0; i < 10000; i++)
+        burrow__blockevent((int64_t)rate, 1);
+}
+
+/* Not in Go: which of the two functions above the address is in, since
+ * neither has a name to look for. It is the one that starts nearest below it,
+ * or 0 for an address below both. */
+static int block_bias_func(Uintptr addr) {
+    Uintptr fs = (Uintptr)block_frequent_short;
+    Uintptr il = (Uintptr)block_infrequent_long;
+    if (addr >= fs && (addr < il || fs > il))
+        return 1;
+    if (addr >= il)
+        return 2;
+    return 0;
+}
+
+/* See http://golang.org/cl/299991. */
+static void TestBlockProfileBias(TestingT *t) {
+    if (!have_walk()) {
+        testing_t_skip_v(t, "no stacks to tell the two functions apart by");
+        return;
+    }
+
+    Int rate = 1000; /* arbitrary value */
+    runtime_set_block_profile_rate(rate);
+    testing_t_cleanup(t, BURROW_FN(Func, reset_block_profile_rate, NULL));
+
+    /* simulate blocking events */
+    block_frequent_short(rate);
+    block_infrequent_long(rate);
+
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    BytesBuffer w = BYTES_BUFFER(a);
+    (void)pprof_profile_write_to(pprof_lookup(S("block")),
+                                 bytes_buffer_as_io_writer(&w), 0);
+    Error err = BURROW_NO_ERROR;
+    PfProfile *p = burrow__pf_parse(a, bytes_buffer_as_io_reader(&w), &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "failed to parse profile: %v", err);
+    testing_t_logf_v(t, "parsed proto: %s", burrow__pf_profile_string(p, a));
+
+    double il = -1; /* blockInfrequentLong duration */
+    double fs = -1; /* blockFrequentShort duration */
+    PfSample **ps = (PfSample **)p->sample.p;
+    for (Int i = 0; i < p->sample.len; i++) {
+        const PfSample *s = ps[i];
+        if (s->value.len < 2)
+            testing_t_fatal_v(t, "block profile has less than 2 sample types");
+        /* The first location is the function that called blockevent, and only
+         * these two have one with no name. */
+        if (s->location.len == 0)
+            continue;
+        const PfLocation *l = ((PfLocation *const *)s->location.p)[0];
+        if (location_name(l).len != 0)
+            continue;
+        int64_t v = ((const int64_t *)s->value.p)[1];
+        switch (block_bias_func((Uintptr)l->address)) {
+        case 1:
+            fs = (double)v;
+            break;
+        case 2:
+            il = (double)v;
+            break;
+        default:
+            break;
+        }
+    }
+    if (il == -1 || fs == -1)
+        testing_t_fatal_v(t, "block profile is missing expected functions");
+
+    /* stddev of bias from 100 runs on local machine multiplied by 10x */
+    const double threshold = 0.2;
+    double bias = (il - fs) / il;
+    if (math_abs(bias) > threshold)
+        testing_t_fatalf_v(t, "bias: abs(%f) > %f", bias, threshold);
+    else
+        testing_t_logf_v(t, "bias: abs(%f) < %f", bias, threshold);
+    arena_free(&ar);
+}
+
+enum { MUTEX_N = 100 };
+#define MUTEX_D (100 * TIME_MILLISECOND)
+
+typedef struct MutexProfileEnv {
+    Duration block_mutex_n_time;
+} MutexProfileEnv;
+
+static void mutex_profile_debug1(void *env, TestingT *t) {
+    (void)env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    StringsBuilder w = STRINGS_BUILDER(a);
+    (void)pprof_profile_write_to(pprof_lookup(S("mutex")),
+                                 strings_builder_as_io_writer(&w), 1);
+    Str prof = strings_builder_string(&w);
+    testing_t_logf_v(t, "received profile: %v", prof);
+
+    if (!strings_has_prefix(prof, S("--- mutex:\ncycles/second=")))
+        testing_t_errorf_v(t, "Bad profile header:\n%v", prof);
+    prof = strings_trim(prof, S("\n"));
+    Slice lines = strings_split(a, prof, S("\n"));
+    if (lines.len < 6)
+        testing_t_fatalf_v(t, "expected >=6 lines, got %d %q\n%s", lines.len, prof,
+                           prof);
+    const Str *l = (const Str *)lines.p;
+    /* checking that the line is like "35258904 1 @ 0x48288d 0x47cd28 0x458931" */
+    Str r2 = S("^\\d+ \\d+ @(?: 0x[[:xdigit:]]+)+");
+    Regexp *re2 = regexp_must_compile(a, r2);
+    if (!regexp_match_string(re2, l[3]))
+        testing_t_errorf_v(t, "%q didn't match %q", l[3], r2);
+    regexp_free(re2);
+    /* Go's line 5 is the frame of blockMutexN.func1, which here has no name, so
+     * line 4 is checked to be the unlock it called. */
+    Str r4 = S("^#.*burrow__sync_mutex_unlock_slow.*$");
+    Regexp *re4 = regexp_must_compile(a, r4);
+    if (!regexp_match_string(re4, l[4]))
+        testing_t_errorf_v(t, "%q didn't match %q", l[4], r4);
+    regexp_free(re4);
+    Str r3 = S("^#\t+0x[[:xdigit:]]+$");
+    Regexp *re3 = regexp_must_compile(a, r3);
+    if (!regexp_match_string(re3, l[5]))
+        testing_t_errorf_v(t, "%q didn't match %q", l[5], r3);
+    regexp_free(re3);
+    testing_t_log_v(t, prof);
+    arena_free(&ar);
+}
+
+static void mutex_profile_proto(void *env, TestingT *t) {
+    const MutexProfileEnv *e = (const MutexProfileEnv *)env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    /* proto format */
+    BytesBuffer w = BYTES_BUFFER(a);
+    (void)pprof_profile_write_to(pprof_lookup(S("mutex")),
+                                 bytes_buffer_as_io_writer(&w), 0);
+    Error err = BURROW_NO_ERROR;
+    PfProfile *p = burrow__pf_parse(a, bytes_buffer_as_io_reader(&w), &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "failed to parse profile: %v", err);
+    testing_t_logf_v(t, "parsed proto: %s", burrow__pf_profile_string(p, a));
+    err = burrow__pf_profile_check_valid(p);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "invalid profile: %v", err);
+
+    Slice stks = profile_stacks(a, p);
+    const Str want[] = {S("burrow__sync_mutex_unlock_slow"), S("")};
+    if (!contains_stack(stks, want, NELEM(want)))
+        testing_t_errorf_v(t, "No matching stack entry for %v %v", want[0], want[1]);
+
+    PfValueType **st = (PfValueType **)p->sample_type.p;
+    Int i = 0;
+    for (; i < p->sample_type.len; i++) {
+        if (str_eq(st[i]->unit, S("nanoseconds")))
+            break;
+    }
+    if (i >= p->sample_type.len)
+        testing_t_fatalf_v(t, "profile did not contain nanoseconds sample");
+    int64_t total = 0;
+    PfSample **ps = (PfSample **)p->sample.p;
+    for (Int j = 0; j < p->sample.len; j++)
+        total += ((const int64_t *)ps[j]->value.p)[i];
+    /* Want d to be at least N*D, but give some wiggle-room to avoid a test
+     * flaking. Set an upper-bound proportional to the total wall time spent in
+     * blockMutexN. Generally speaking, the total contention time could be
+     * arbitrarily high when considering OS scheduler delays, or any other
+     * delays from the environment: time keeps ticking during these delays. By
+     * making the upper bound proportional to the wall time in blockMutexN, in
+     * theory we're accounting for all these possible delays. */
+    Duration d = (Duration)total;
+    Duration lo = (Duration)(MUTEX_N * MUTEX_D * 9 / 10);
+    Duration hi = (Duration)MUTEX_N * e->block_mutex_n_time * 11 / 10;
+    if (d < lo || d > hi) {
+        for (Int j = 0; j < p->sample.len; j++)
+            testing_t_logf_v(t, "sample: %dns", ((const int64_t *)ps[j]->value.p)[i]);
+        testing_t_fatalf_v(t,
+                           "profile samples total %dns, want within range [%dns, %dns] "
+                           "(target: %dns)",
+                           d, lo, hi, (Duration)(MUTEX_N * MUTEX_D));
+    }
+    arena_free(&ar);
+}
+
+static void mutex_profile_records(void *env, TestingT *t) {
+    (void)env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    /* Record a mutex profile using the structured record API. */
+    RuntimeBlockProfileRecord *records = NULL;
+    Int n = 0;
+    for (;;) {
+        bool ok;
+        Int got = runtime_mutex_profile(records, n, &ok);
+        if (ok) {
+            n = got;
+            break;
+        }
+        n = got * 2;
+        records = (RuntimeBlockProfileRecord *)mem_alloc_array(
+            a, (size_t)n, sizeof(RuntimeBlockProfileRecord),
+            _Alignof(RuntimeBlockProfileRecord));
+        if (records == NULL)
+            testing_t_fatalf_v(t, "out of memory");
+    }
+
+    /* Check that we see the same stack trace as the proto profile. Go also
+     * expects a runtime.goexit root frame here, which burrow does not have. */
+    Slice stks = block_record_stacks(a, records, n);
+    const Str want[] = {S("burrow__sync_mutex_unlock_slow"), S("")};
+    if (!contains_stack(stks, want, NELEM(want)))
+        testing_t_errorf_v(t, "No matching stack entry for %v %v", want[0], want[1]);
+    arena_free(&ar);
+}
+
+static void restore_mutex_profile_fraction(void *env) {
+    (void)runtime_set_mutex_profile_fraction(*(const Int *)env);
+}
+
+static void TestMutexProfile(TestingT *t) {
+    if (!have_walk()) {
+        testing_t_skip_v(t, "no stacks to check");
+        return;
+    }
+
+    /* Generate mutex profile */
+
+    static Int old;
+    old = runtime_set_mutex_profile_fraction(1);
+    testing_t_cleanup(t, BURROW_FN(Func, restore_mutex_profile_fraction, &old));
+    if (old != 0)
+        testing_t_fatalf_v(t, "need MutexProfileRate 0, got %d", old);
+
+    Time start = time_now();
+    block_mutex_n(t, MUTEX_N, MUTEX_D);
+    MutexProfileEnv e = {time_since(start)};
+
+    testing_t_run(t, S("debug=1"), BURROW_FN(TestingTFunc, mutex_profile_debug1, &e));
+    testing_t_run(t, S("proto"), BURROW_FN(TestingTFunc, mutex_profile_proto, &e));
+    testing_t_run(t, S("records"), BURROW_FN(TestingTFunc, mutex_profile_records, &e));
+}
+
+/* Go counts the samples with blockMutex.func1 in them. That has no name here,
+ * so this counts the ones that start at the unlock it called, which takes in
+ * the ones TestMutexProfile left too. They are the same before and after, which
+ * is what is being checked. */
+static void read_mutex_profile(TestingT *t, int64_t *contentions, int64_t *delay) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    BytesBuffer w = BYTES_BUFFER(a);
+    (void)pprof_profile_write_to(pprof_lookup(S("mutex")),
+                                 bytes_buffer_as_io_writer(&w), 0);
+    Error err = BURROW_NO_ERROR;
+    PfProfile *p = burrow__pf_parse(a, bytes_buffer_as_io_reader(&w), &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "failed to parse profile: %v", err);
+    testing_t_logf_v(t, "parsed proto: %s", burrow__pf_profile_string(p, a));
+    err = burrow__pf_profile_check_valid(p);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "invalid profile: %v", err);
+
+    *contentions = 0;
+    *delay = 0;
+    PfSample **ps = (PfSample **)p->sample.p;
+    for (Int i = 0; i < p->sample.len; i++) {
+        const PfSample *s = ps[i];
+        if (s->location.len == 0)
+            continue;
+        const PfLocation *l = ((PfLocation *const *)s->location.p)[0];
+        if (str_eq(location_name(l), S("burrow__sync_mutex_unlock_slow"))) {
+            *contentions += ((const int64_t *)s->value.p)[0];
+            *delay += ((const int64_t *)s->value.p)[1];
+        }
+    }
+    arena_free(&ar);
+}
+
+static void TestMutexProfileRateAdjust(TestingT *t) {
+    if (!have_walk()) {
+        testing_t_skip_v(t, "no stacks to find the unlock in");
+        return;
+    }
+
+    static Int old;
+    old = runtime_set_mutex_profile_fraction(1);
+    testing_t_cleanup(t, BURROW_FN(Func, restore_mutex_profile_fraction, &old));
+    if (old != 0)
+        testing_t_fatalf_v(t, "need MutexProfileRate 0, got %d", old);
+
+    block_mutex(t);
+    int64_t contentions, delay;
+    read_mutex_profile(t, &contentions, &delay);
+    if (contentions ==
+        0) /* low-resolution timers can have delay of 0 in mutex profile */
+        testing_t_fatal_v(t, "did not see expected function in profile");
+    (void)runtime_set_mutex_profile_fraction(0);
+    int64_t new_contentions, new_delay;
+    read_mutex_profile(t, &new_contentions, &new_delay);
+    if (new_contentions != contentions || new_delay != delay)
+        testing_t_fatalf_v(t, "sample value changed: got [%d, %d], want [%d, %d]",
+                           new_contentions, new_delay, contentions, delay);
+}
+
+typedef Int (*BlockCollectFn)(RuntimeBlockProfileRecord *p, Int len, bool *ok);
+
+/* getProfileStacks, as TestMutexBlockFullAggregation calls it, with fileLine and
+ * pcs both true. A frame here has no file and line to write, so each line of a
+ * stack is the pc and the function's name, the name empty where the symbol
+ * table has none. */
+static Slice get_profile_stacks(TestingT *t, Alloc *a, BlockCollectFn collect) {
+    Int n = 0;
+    RuntimeBlockProfileRecord *p = NULL;
+    for (;;) {
+        p = (RuntimeBlockProfileRecord *)mem_alloc_array(
+            a, (size_t)n, sizeof(RuntimeBlockProfileRecord),
+            _Alignof(RuntimeBlockProfileRecord));
+        if (p == NULL && n > 0)
+            testing_t_fatalf_v(t, "out of memory");
+        bool ok;
+        n = collect(p, n, &ok);
+        if (ok)
+            break;
+    }
+    Slice stacks = slice_make(a, TYPE_STRING, 0, n);
+    for (Int i = 0; i < n; i++) {
+        Str stack = S("");
+        Int nstk = runtime_block_profile_record_stack(&p[i]);
+        for (Int j = 0; j < nstk; j++) {
+            Uintptr pc = p[i].stack0[j];
+            RuntimeFunc f = {0};
+            (void)runtime_func_for_pc(pc - 1, &f);
+            stack = fmt_sprintf_v(a, "%s%s%x %s", stack, j > 0 ? S("\n") : S(""), pc,
+                                  f.name);
+        }
+        stacks = slice_append(a, stacks, &stack, 1);
+    }
+    return stacks;
+}
+
+static void assert_no_duplicates(TestingT *t, Str name, BlockCollectFn collect) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Slice stacks = get_profile_stacks(t, a, collect);
+    const Str *s = (const Str *)stacks.p;
+    for (Int i = 0; i < stacks.len; i++)
+        for (Int j = 0; j < i; j++)
+            if (str_eq(s[i], s[j])) {
+                testing_t_errorf_v(
+                    t, "saw duplicate entry in %s profile with stack:\n%s", name, s[i]);
+                break;
+            }
+    if (stacks.len == 0)
+        testing_t_errorf_v(t, "did not see any samples in %s profile for this test",
+                           name);
+    arena_free(&ar);
+}
+
+static void full_aggregation_mutex(void *env, TestingT *t) {
+    (void)env;
+    assert_no_duplicates(t, S("mutex"), runtime_mutex_profile);
+}
+
+static void full_aggregation_block(void *env, TestingT *t) {
+    (void)env;
+    assert_no_duplicates(t, S("block"), runtime_block_profile);
+}
+
+typedef struct FullAggregationEnv {
+    SyncMutex m;
+    SyncWaitGroup wg;
+} FullAggregationEnv;
+
+enum { FULL_AGGREGATION_ITERS = 100, FULL_AGGREGATION_WORKERS = 2 };
+
+static void full_aggregation_worker(void *env) {
+    FullAggregationEnv *e = (FullAggregationEnv *)env;
+    for (int i = 0; i < FULL_AGGREGATION_ITERS; i++) {
+        sync_mutex_lock(&e->m);
+        /* Wait at least 1 millisecond to pass the starvation threshold for the
+         * mutex */
+        time_sleep(TIME_MILLISECOND);
+        sync_mutex_unlock(&e->m);
+    }
+    sync_wait_group_done(&e->wg);
+}
+
+static void TestMutexBlockFullAggregation(TestingT *t) {
+    /* This regression test is adapted from
+     * https://github.com/grafana/pyroscope-go/issues/103, authored by Tolya
+     * Korniltsev */
+
+    FullAggregationEnv e = {0};
+
+    static Int prev;
+    prev = runtime_set_mutex_profile_fraction(-1);
+    testing_t_cleanup(t, BURROW_FN(Func, restore_mutex_profile_fraction, &prev));
+
+    enum { fraction = 1 };
+
+    (void)runtime_set_mutex_profile_fraction(fraction);
+    runtime_set_block_profile_rate(1);
+    testing_t_cleanup(t, BURROW_FN(Func, reset_block_profile_rate, NULL));
+
+    sync_wait_group_add(&e.wg, FULL_AGGREGATION_WORKERS);
+    for (int i = 0; i < FULL_AGGREGATION_WORKERS; i++)
+        if (!go(BURROW_FN(Func, full_aggregation_worker, &e)))
+            testing_t_fatalf_v(t, "go failed");
+    sync_wait_group_wait(&e.wg);
+
+    testing_t_run(t, S("mutex"), BURROW_FN(TestingTFunc, full_aggregation_mutex, NULL));
+    testing_t_run(t, S("block"), BURROW_FN(TestingTFunc, full_aggregation_block, NULL));
+}
+
 #define TESTS(X)                                                                       \
     X(TestContextLabels)                                                               \
     X(TestLabelMapStringer)                                                            \
@@ -1987,6 +2854,11 @@ static void TestMemoryProfiler(TestingT *t) {
     X(TestMathBigDivide)                                                               \
     X(TestCPUProfileLabel)                                                             \
     X(TestConvertMemProfile)                                                           \
-    X(TestMemoryProfiler)
+    X(TestMemoryProfiler)                                                              \
+    X(TestBlockProfile)                                                                \
+    X(TestBlockProfileBias)                                                            \
+    X(TestMutexProfile)                                                                \
+    X(TestMutexProfileRateAdjust)                                                      \
+    X(TestMutexBlockFullAggregation)
 
 TESTING_MAIN(TESTS)

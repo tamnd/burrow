@@ -95,6 +95,39 @@ static bool profile_heap(Alloc *a) {
 }
 // doc: end
 
+// doc: contention
+/* One goroutine holds a lock while another waits for it. */
+static SyncMutex mu;
+
+static void hold(void *env) {
+    sync_mutex_lock(&mu);
+    bool ok = true;
+    chan_send((Chan *)env, &ok);
+    time_sleep(50 * TIME_MILLISECOND);
+    sync_mutex_unlock(&mu);
+}
+
+static void contend(void *env) {
+    runtime_set_block_profile_rate(1);
+    runtime_set_mutex_profile_fraction(1);
+
+    Chan *locked = chan_make((Alloc *)env, TYPE_BOOL, 0);
+    if (locked == NULL || !go(BURROW_FN(Func, hold, locked)))
+        return;
+    (void)chan_recv(locked, NULL);
+    sync_mutex_lock(&mu); /* waits until hold lets go */
+    sync_mutex_unlock(&mu);
+    chan_free(locked);
+
+    const char *names[] = {"block", "mutex"};
+    for (int i = 0; i < 2; i++) {
+        PprofProfile *p = pprof_lookup(str_from_cstr(names[i]));
+        fmt_printf_v("%s profile has records: %t\n", names[i],
+                     (bool)(pprof_profile_count(p) > 0));
+    }
+}
+// doc: end
+
 int main(void) {
     // doc: rate
     runtime_set_mem_profile_rate(1);
@@ -134,6 +167,9 @@ int main(void) {
     runtime_main(BURROW_FN(Func, profile_cpu, a));
     if (!profile_heap(a))
         return 1;
+    // doc: run
+    runtime_main(BURROW_FN(Func, contend, a));
+    // doc: end
     arena_free(&ar);
     return 0;
 }
@@ -146,4 +182,6 @@ goroutine profile: total 4
 cpu profile written: true
 heap profile
 buffers in the profile: true
+block profile has records: true
+mutex profile has records: true
 */

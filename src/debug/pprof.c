@@ -330,6 +330,10 @@ static Error ppr_write_thread_create(IoWriter w, Int debug);
 static Int ppr_count_heap(void);
 static Error ppr_write_heap(IoWriter w, Int debug);
 static Error ppr_write_alloc(IoWriter w, Int debug);
+static Int ppr_count_block(void);
+static Error ppr_write_block(IoWriter w, Int debug);
+static Int ppr_count_mutex(void);
+static Error ppr_write_mutex(IoWriter w, Int debug);
 
 static PprofProfile ppr_goroutine_profile = {
     .name = BURROW_S_INIT("goroutine"),
@@ -355,12 +359,25 @@ static PprofProfile ppr_allocs_profile = {
     .write = ppr_write_alloc,
 };
 
+static PprofProfile ppr_block_profile = {
+    .name = BURROW_S_INIT("block"),
+    .count = ppr_count_block,
+    .write = ppr_write_block,
+};
+
+static PprofProfile ppr_mutex_profile = {
+    .name = BURROW_S_INIT("mutex"),
+    .count = ppr_count_mutex,
+    .write = ppr_write_mutex,
+};
+
 static void ppr_lock_profiles(void) {
     sync_mutex_lock(&ppr_profiles_mu);
     if (ppr_profiles == NULL) {
         /* Initial built-in profiles. */
         PprofProfile *builtin[] = {&ppr_goroutine_profile, &ppr_threadcreate_profile,
-                                   &ppr_heap_profile, &ppr_allocs_profile};
+                                   &ppr_heap_profile,      &ppr_allocs_profile,
+                                   &ppr_block_profile,     &ppr_mutex_profile};
         Map *m = map_make(heap_allocator(), TYPE_STRING, TYPE_UNSAFE_POINTER, 0);
         bool ok = m != NULL;
         for (size_t i = 0; ok && i < sizeof builtin / sizeof builtin[0]; i++) {
@@ -1042,6 +1059,153 @@ static Error ppr_write_heap(IoWriter w, Int debug) {
  * allocation space as the default sample type. */
 static Error ppr_write_alloc(IoWriter w, Int debug) {
     return ppr_write_heap_internal(w, debug, S_("alloc_space"));
+}
+
+/* countBlock returns the number of records in the blocking profile. */
+static Int ppr_count_block(void) {
+    return runtime_block_profile(NULL, 0, NULL);
+}
+
+/* countMutex returns the number of records in the mutex profile. */
+static Int ppr_count_mutex(void) {
+    return runtime_mutex_profile(NULL, 0, NULL);
+}
+
+/* The records pprof_blockProfileInternal and pprof_mutexProfileInternal copy
+ * out, into room made for them before, as the copying is done under the
+ * profile's lock. */
+typedef struct PprBlockRecords {
+    burrow__BlockProfileRecord *r;
+    Int n;
+} PprBlockRecords;
+
+static void ppr_collect_block(void *env, const burrow__BlockProfileRecord *r) {
+    PprBlockRecords *rs = (PprBlockRecords *)env;
+    rs->r[rs->n++] = *r;
+}
+
+static int ppr_compare_cycles(void *env, const void *a, const void *b) {
+    (void)env;
+    int64_t x = (*(const burrow__BlockProfileRecord *const *)a)->cycles;
+    int64_t y = (*(const burrow__BlockProfileRecord *const *)b)->cycles;
+    return y < x ? -1 : y > x ? 1 : 0;
+}
+
+/* printCountCycleProfile outputs block profile records (for block or mutex
+ * profiles) as the pprof-proto format output. Translations from cycle count to
+ * time duration are done because The proto expects count and time
+ * (nanoseconds) instead of count and the number of cycles for block,
+ * contention profiles. */
+static Error ppr_print_count_cycle_profile(IoWriter w, Str count_name, Str cycle_name,
+                                           burrow__BlockProfileRecord *const *records,
+                                           Int n) {
+    /* Output profile in protobuf form. */
+    PprBuilder *b = burrow__ppr_new_builder(w);
+    burrow__ppr_value_type(b, PPR_TAG_PROFILE_PERIOD_TYPE, count_name, S_("count"));
+    burrow__ppr_int64_opt(b, PPR_TAG_PROFILE_PERIOD, 1);
+    burrow__ppr_value_type(b, PPR_TAG_PROFILE_SAMPLE_TYPE, count_name, S_("count"));
+    burrow__ppr_value_type(b, PPR_TAG_PROFILE_SAMPLE_TYPE, cycle_name,
+                           S_("nanoseconds"));
+
+    double cpu_ghz = (double)burrow__ticks_per_second() / 1e9;
+
+    int64_t values[2] = {0, 0};
+    Slice locs = slice_nil(TYPE_UINT64);
+    for (Int i = 0; i < n; i++) {
+        const burrow__BlockProfileRecord *r = records[i];
+        values[0] = r->count;
+        values[1] = (int64_t)((double)r->cycles / cpu_ghz);
+        /* For count profiles, all stack addresses are return PCs, which is
+         * what appendLocsForStack expects. */
+        locs = burrow__ppr_append_locs_for_stack(b, slice_sub(locs, 0, 0),
+                                                 slice_from((void *)(uintptr_t)r->stack,
+                                                            r->nstack, r->nstack,
+                                                            TYPE_UINTPTR));
+        burrow__ppr_sample(b, slice_from(values, 2, 2, TYPE_INT64), locs, NULL);
+    }
+    return burrow__ppr_build(b);
+}
+
+/* writeProfileInternal writes the current blocking or mutex profile depending
+ * on the passed parameters. */
+static Error ppr_write_profile_internal(
+    IoWriter w, Int debug, Str name,
+    Int (*runtime_profile)(Int size, burrow__BlockProfileFn fn, void *env, bool *ok)) {
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    BURROW_SCOPE {
+        BURROW_DEFER(ppr_free_arena, &ar);
+
+        PprBlockRecords rs = {NULL, 0};
+        bool ok;
+        Int n = runtime_profile(0, ppr_collect_block, &rs, &ok);
+        for (;;) {
+            rs.r = (burrow__BlockProfileRecord *)mem_alloc_array(
+                a, (size_t)(n + 50), sizeof(burrow__BlockProfileRecord),
+                _Alignof(burrow__BlockProfileRecord));
+            if (rs.r == NULL)
+                ppr_out_of_memory();
+            rs.n = 0;
+            n = runtime_profile(n + 50, ppr_collect_block, &rs, &ok);
+            if (ok)
+                break;
+        }
+        burrow__BlockProfileRecord **p = (burrow__BlockProfileRecord **)mem_alloc_array(
+            a, (size_t)(n > 0 ? n : 1), sizeof(burrow__BlockProfileRecord *),
+            _Alignof(burrow__BlockProfileRecord *));
+        if (p == NULL)
+            ppr_out_of_memory();
+        for (Int i = 0; i < n; i++)
+            p[i] = &rs.r[i];
+
+        slices_sort_func(slice_from(p, n, n, TYPE_UNSAFE_POINTER),
+                         BURROW_FN(SlicesCmpFunc, ppr_compare_cycles, NULL));
+
+        if (debug <= 0) {
+            err =
+                ppr_print_count_cycle_profile(w, S_("contentions"), S_("delay"), p, n);
+        } else {
+            TabwriterWriter *tw = tabwriter_new_writer(a, w, 1, 8, 1, '\t', 0);
+            if (tw == NULL)
+                ppr_out_of_memory();
+            IoWriter tww = tabwriter_writer_as_io_writer(tw);
+
+            fmt_fprintf_v(tww, "--- %v:\n", name);
+            fmt_fprintf_v(tww, "cycles/second=%v\n", burrow__ticks_per_second());
+            if (str_eq(name, S_("mutex")))
+                fmt_fprintf_v(tww, "sampling period=%d\n",
+                              runtime_set_mutex_profile_fraction(-1));
+            for (Int i = 0; i < n; i++) {
+                const burrow__BlockProfileRecord *r = p[i];
+                fmt_fprintf_v(tww, "%v %v @", r->cycles, r->count);
+                for (Int j = 0; j < r->nstack; j++)
+                    fmt_fprintf_v(tww, " %#x", r->stack[j]);
+                fmt_fprintf_v(tww, "\n");
+                ppr_print_stack_record(tww,
+                                       slice_from((void *)(uintptr_t)r->stack,
+                                                  r->nstack, r->nstack, TYPE_UINTPTR),
+                                       true);
+            }
+
+            err = tabwriter_writer_flush(tw);
+            tabwriter_writer_free(tw);
+        }
+    }
+    BURROW_SCOPE_END;
+    return err;
+}
+
+/* writeBlock writes the current blocking profile to w. */
+static Error ppr_write_block(IoWriter w, Int debug) {
+    return ppr_write_profile_internal(w, debug, S_("contention"),
+                                      burrow__block_profile);
+}
+
+/* writeMutex writes the current mutex profile to w. */
+static Error ppr_write_mutex(IoWriter w, Int debug) {
+    return ppr_write_profile_internal(w, debug, S_("mutex"), burrow__mutex_profile);
 }
 
 /* countGoroutine returns the number of goroutines. */

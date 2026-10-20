@@ -1,7 +1,8 @@
-/* The heap profile's records. See burrow/mprof.h for what it is for.
+/* The heap, block and mutex profiles' records. See burrow/mprof.h for what
+ * they are for.
  *
- * Derived from Go's src/runtime/mprof.go, src/runtime/malloc.go and
- * src/runtime/fastlog2.go.
+ * Derived from Go's src/runtime/mprof.go, src/runtime/malloc.go,
+ * src/runtime/fastlog2.go and src/runtime/runtime.go.
  * Go source: go1.27.1.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
@@ -12,6 +13,7 @@
 #include "burrow/mprof.h"
 
 #include "burrow/atomic.h"
+#include "burrow/clock.h"
 #include "burrow/lock.h"
 #include "burrow/mem.h"
 #include "burrow/mem/heap.h"
@@ -20,6 +22,13 @@
 #include "burrow/type.h"
 
 #include <string.h>
+
+/* bucketType. Go's is 1 for memProfile. */
+enum {
+    MPROF_MEM = 1,
+    MPROF_BLOCK,
+    MPROF_MUTEX,
+};
 
 enum {
     /* size of bucket hash table */
@@ -40,6 +49,9 @@ enum {
 _Static_assert(sizeof(((RuntimeMemProfileRecord *)0)->stack0) ==
                    MPROF_STACK0 * sizeof(Uintptr),
                "stack0 is MPROF_STACK0 long");
+_Static_assert(sizeof(((RuntimeBlockProfileRecord *)0)->stack0) ==
+                   MPROF_STACK0 * sizeof(Uintptr),
+               "stack0 is MPROF_STACK0 long");
 
 /* A bucket holds per-call-stack profiling information.
  *
@@ -50,14 +62,21 @@ _Static_assert(sizeof(((RuntimeMemProfileRecord *)0)->stack0) ==
  * cycles of counts waiting to be published, so that a profile is as of the end
  * of a collection rather than skewed toward allocations whose frees the
  * collector has not swept yet. Here a free is counted when it happens, so
- * there is only ever the one set of counts. */
+ * there is only ever the one set of counts.
+ *
+ * A block or mutex bucket keeps a blockRecord, count and cycles, which Go
+ * puts after the stack too. Here every bucket has room for both kinds of
+ * record, and uses the one its typ says. */
 typedef struct MprofBucket {
     struct MprofBucket *next;
     struct MprofBucket *allnext;
+    int typ; /* memBucket or blockBucket (includes mutexProfile) */
     Uintptr hash;
     Uintptr size;
     Int nstk;
     uint64_t allocs, frees;
+    double count;
+    int64_t cycles;
     Uintptr stk[];
 } MprofBucket;
 
@@ -72,7 +91,9 @@ typedef struct MprofSampled {
 typedef struct MprofState {
     burrow__Lock lock;
     MprofBucket **buckhash;
-    MprofBucket *mbuckets; /* every bucket, newest first */
+    MprofBucket *mbuckets; /* memory profile buckets, newest first */
+    MprofBucket *bbuckets; /* blocking profile buckets */
+    MprofBucket *xbuckets; /* mutex profile buckets */
     /* Open addressing on the pointer, a power of two long, and never more than
      * half full. */
     MprofSampled *sampled;
@@ -218,7 +239,8 @@ static bool mprof_eqslice(const Uintptr *x, Int nx, const Uintptr *y, Int ny) {
 
 /* Return the bucket for stk[0:nstk], allocating new bucket if needed. NULL when
  * memory has run out. Called with the lock held. */
-static MprofBucket *mprof_stkbucket(Uintptr size, const Uintptr *stk, Int nstk) {
+static MprofBucket *mprof_stkbucket(int typ, Uintptr size, const Uintptr *stk,
+                                    Int nstk) {
     Alloc *a = burrow__heap_unprofiled();
     if (mprof.buckhash == NULL) {
         mprof.buckhash = (MprofBucket **)mem_alloc_array(
@@ -244,7 +266,7 @@ static MprofBucket *mprof_stkbucket(Uintptr size, const Uintptr *stk, Int nstk) 
 
     Uintptr i = h % MPROF_BUCK_HASH_SIZE;
     for (MprofBucket *b = mprof.buckhash[i]; b != NULL; b = b->next)
-        if (b->hash == h && b->size == size &&
+        if (b->typ == typ && b->hash == h && b->size == size &&
             mprof_eqslice(b->stk, b->nstk, stk, nstk))
             return b;
 
@@ -254,14 +276,23 @@ static MprofBucket *mprof_stkbucket(Uintptr size, const Uintptr *stk, Int nstk) 
     if (b == NULL)
         return NULL;
     memcpy(b->stk, stk, (size_t)nstk * sizeof(Uintptr));
+    b->typ = typ;
     b->nstk = nstk;
     b->hash = h;
     b->size = size;
 
     b->next = mprof.buckhash[i];
-    b->allnext = mprof.mbuckets;
     mprof.buckhash[i] = b;
-    mprof.mbuckets = b;
+    if (typ == MPROF_MEM) {
+        b->allnext = mprof.mbuckets;
+        mprof.mbuckets = b;
+    } else if (typ == MPROF_MUTEX) {
+        b->allnext = mprof.xbuckets;
+        mprof.xbuckets = b;
+    } else {
+        b->allnext = mprof.bbuckets;
+        mprof.bbuckets = b;
+    }
     return b;
 }
 
@@ -353,7 +384,7 @@ void burrow__mprof_malloc(void *p, size_t size) {
         2, slice_from(stk, MPROF_STACK_DEPTH, MPROF_STACK_DEPTH, TYPE_UINTPTR));
 
     burrow__lock(&mprof.lock);
-    MprofBucket *b = mprof_stkbucket((Uintptr)size, stk, nstk);
+    MprofBucket *b = mprof_stkbucket(MPROF_MEM, (Uintptr)size, stk, nstk);
     if (b == NULL) {
         burrow__unlock(&mprof.lock);
         return;
@@ -395,6 +426,135 @@ void burrow__mprof_free(const void *p) {
             mprof_unsample(i);
     }
     burrow__unlock(&mprof.lock);
+}
+
+/* Go's cputicks, which reads the processor's cycle counter where there is one.
+ * Not in Go: burrow has no such counter, so a tick is a nanosecond. */
+int64_t burrow__cputicks(void) {
+    return burrow__nanotime();
+}
+
+/* ticksPerSecond returns a conversion rate between the cputicks clock and the
+ * nanotime clock. Not in Go: they are the same clock here. */
+int64_t burrow__ticks_per_second(void) {
+    return INT64_C(1000000000);
+}
+
+static uint64_t mprof_block_rate; /* in CPU ticks */
+
+bool burrow__block_profiling(void) {
+    return burrow__atomic_load_relaxed_u64(&mprof_block_rate) > 0;
+}
+
+/* SetBlockProfileRate controls the fraction of goroutine blocking events
+ * that are reported in the blocking profile. The profiler aims to sample
+ * an average of one blocking event per rate nanoseconds spent blocked.
+ *
+ * To include every blocking event in the profile, pass rate = 1.
+ * To turn off profiling entirely, pass rate <= 0. */
+void runtime_set_block_profile_rate(Int rate) {
+    int64_t r;
+    if (rate <= 0) {
+        r = 0; /* disable profiling */
+    } else if (rate == 1) {
+        r = 1; /* profile everything */
+    } else {
+        /* convert ns to cycles, use float64 to prevent overflow during
+         * multiplication */
+        r = (int64_t)((double)rate * (double)burrow__ticks_per_second() /
+                      (1000 * 1000 * 1000));
+        if (r == 0)
+            r = 1;
+    }
+
+    burrow__atomic_store_relaxed_u64(&mprof_block_rate, (uint64_t)r);
+}
+
+/* saveBlockEventStack. */
+static void mprof_save_block_event_stack(int64_t cycles, int64_t rate,
+                                         const Uintptr *stk, Int nstk, int which) {
+    burrow__lock(&mprof.lock);
+    MprofBucket *b = mprof_stkbucket(which, 0, stk, nstk);
+    if (b == NULL) {
+        burrow__unlock(&mprof.lock);
+        return;
+    }
+    /* We want to up-scale the count and cycles according to the probability
+     * that the event was sampled. For block profile events, the sample
+     * probability is 1 if cycles >= rate, and cycles / rate otherwise. For
+     * mutex profile events, the sample probability is 1 / rate. We scale the
+     * events by 1 / (probability the event was sampled). */
+    if (which == MPROF_BLOCK && cycles < rate) {
+        /* Remove sampling bias, see discussion on http://golang.org/cl/299991. */
+        b->count += (double)rate / (double)cycles;
+        b->cycles += rate;
+    } else if (which == MPROF_MUTEX) {
+        b->count += (double)rate;
+        b->cycles += rate * cycles;
+    } else {
+        b->count++;
+        b->cycles += cycles;
+    }
+    burrow__unlock(&mprof.lock);
+}
+
+/* saveblockevent records a profile event of the type specified by which.
+ * cycles is the quantity associated with this event and rate is the sampling
+ * rate, used to adjust the cycles value in the manner determined by the
+ * profile type. skip is the number of frames to omit from the traceback
+ * associated with the event, counted from the function this is inlined into,
+ * which is why it always is. */
+static BURROW_INLINE void mprof_save_block_event(int64_t cycles, int64_t rate, Int skip,
+                                                 int which) {
+    Uintptr stk[MPROF_STACK_DEPTH];
+    Int nstk = runtime_callers(
+        skip, slice_from(stk, MPROF_STACK_DEPTH, MPROF_STACK_DEPTH, TYPE_UINTPTR));
+    mprof_save_block_event_stack(cycles, rate, stk, nstk, which);
+}
+
+/* blocksampled returns true for all events where cycles >= rate. Shorter
+ * events have a cycles/rate random chance of returning true. */
+static bool mprof_block_sampled(int64_t cycles, int64_t rate) {
+    if (rate <= 0 ||
+        (rate > cycles && (int64_t)(runtime_rand64() % (uint64_t)rate) > cycles))
+        return false;
+    return true;
+}
+
+BURROW_NOINLINE void burrow__blockevent(int64_t cycles, Int skip) {
+    if (cycles <= 0)
+        cycles = 1;
+
+    int64_t rate = (int64_t)burrow__atomic_load_relaxed_u64(&mprof_block_rate);
+    if (mprof_block_sampled(cycles, rate))
+        mprof_save_block_event(cycles, rate, skip + 1, MPROF_BLOCK);
+}
+
+static uint64_t mprof_mutex_rate; /* fraction sampled */
+
+bool burrow__mutex_profiling(void) {
+    return burrow__atomic_load_relaxed_u64(&mprof_mutex_rate) > 0;
+}
+
+/* SetMutexProfileFraction controls the fraction of mutex contention events
+ * that are reported in the mutex profile. On average 1/rate events are
+ * reported. The previous rate is returned.
+ *
+ * To turn off profiling entirely, pass rate 0.
+ * To just read the current rate, pass rate < 0.
+ * (For n>1 the details of sampling may change.) */
+Int runtime_set_mutex_profile_fraction(Int rate) {
+    if (rate < 0)
+        return (Int)burrow__atomic_load_relaxed_u64(&mprof_mutex_rate);
+    return (Int)burrow__atomic_swap_u64(&mprof_mutex_rate, (uint64_t)rate);
+}
+
+BURROW_NOINLINE void burrow__mutexevent(int64_t cycles, Int skip) {
+    if (cycles < 0)
+        cycles = 0;
+    int64_t rate = (int64_t)burrow__atomic_load_relaxed_u64(&mprof_mutex_rate);
+    if (rate > 0 && runtime_rand64() % (uint64_t)rate == 0)
+        mprof_save_block_event(cycles, rate, skip + 1, MPROF_MUTEX);
 }
 
 /* memProfileInternal returns the number of records n in the profile. If there
@@ -461,4 +621,81 @@ Int runtime_mem_profile(RuntimeMemProfileRecord *p, Int len, bool inuse_zero,
                         bool *ok) {
     RuntimeMemProfileRecord *next = p;
     return burrow__mem_profile(len, inuse_zero, mprof_copy_record, &next, ok);
+}
+
+Int runtime_block_profile_record_stack(const RuntimeBlockProfileRecord *r) {
+    for (Int i = 0; i < MPROF_STACK0; i++)
+        if (r->stack0[i] == 0)
+            return i;
+    return MPROF_STACK0;
+}
+
+/* The records of one of the block and mutex profiles. Go has
+ * blockProfileInternal and mutexProfileInternal, which differ only in the
+ * list they walk and in the adjustment to Count. */
+static Int mprof_block_records(MprofBucket *const *list, bool count_at_least_one,
+                               Int size, burrow__BlockProfileFn fn, void *env,
+                               bool *ok) {
+    Int n = 0;
+    burrow__lock(&mprof.lock);
+    MprofBucket *head = *list;
+    for (MprofBucket *b = head; b != NULL; b = b->allnext)
+        n++;
+    bool done = false;
+    if (n <= size) {
+        done = true;
+        for (MprofBucket *b = head; b != NULL; b = b->allnext) {
+            burrow__BlockProfileRecord r = {
+                .count = (int64_t)b->count,
+                .cycles = b->cycles,
+                .stack = b->stk,
+                .nstack = b->nstk,
+            };
+            /* Prevent callers from having to worry about division by zero
+             * errors. See discussion on http://golang.org/cl/299991. */
+            if (count_at_least_one && r.count == 0)
+                r.count = 1;
+            fn(env, &r);
+        }
+    }
+    burrow__unlock(&mprof.lock);
+    if (ok != NULL)
+        *ok = done;
+    return n;
+}
+
+/* blockProfileInternal returns the number of records n in the profile. If there
+ * are less than size records, copyFn is invoked for each record, and ok returns
+ * true. */
+Int burrow__block_profile(Int size, burrow__BlockProfileFn fn, void *env, bool *ok) {
+    return mprof_block_records(&mprof.bbuckets, true, size, fn, env, ok);
+}
+
+/* mutexProfileInternal returns the number of records n in the profile. If there
+ * are less than size records, copyFn is invoked for each record, and ok returns
+ * true. */
+Int burrow__mutex_profile(Int size, burrow__BlockProfileFn fn, void *env, bool *ok) {
+    return mprof_block_records(&mprof.xbuckets, false, size, fn, env, ok);
+}
+
+/* copyBlockProfileRecord copies the sample values and call stack from src to
+ * dst. */
+static void mprof_copy_block_record(void *env, const burrow__BlockProfileRecord *src) {
+    RuntimeBlockProfileRecord **next = (RuntimeBlockProfileRecord **)env;
+    RuntimeBlockProfileRecord *dst = (*next)++;
+    dst->count = src->count;
+    dst->cycles = src->cycles;
+    Int i = src->nstack < MPROF_STACK0 ? src->nstack : MPROF_STACK0;
+    memcpy(dst->stack0, src->stack, (size_t)i * sizeof(Uintptr));
+    memset(dst->stack0 + i, 0, ((size_t)MPROF_STACK0 - (size_t)i) * sizeof(Uintptr));
+}
+
+Int runtime_block_profile(RuntimeBlockProfileRecord *p, Int len, bool *ok) {
+    RuntimeBlockProfileRecord *next = p;
+    return burrow__block_profile(len, mprof_copy_block_record, &next, ok);
+}
+
+Int runtime_mutex_profile(RuntimeBlockProfileRecord *p, Int len, bool *ok) {
+    RuntimeBlockProfileRecord *next = p;
+    return burrow__mutex_profile(len, mprof_copy_block_record, &next, ok);
 }

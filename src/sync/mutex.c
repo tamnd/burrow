@@ -154,7 +154,9 @@ void burrow__sync_mutex_lock_slow(SyncMutex *m) {
         /* Never durable. A goroutine waiting for a mutex is waiting for the
          * goroutine holding it, and that one is running, so a synctest bubble
          * full of these has not gone idle. */
-        burrow__sema_acquire(&m->sema, lifo, BURROW_WAIT_SYNC_MUTEX_LOCK, false);
+        burrow__sema_acquire(&m->sema, lifo,
+                             BURROW_SEMA_BLOCK_PROFILE | BURROW_SEMA_MUTEX_PROFILE,
+                             BURROW_WAIT_SYNC_MUTEX_LOCK, false);
 
         starving =
             starving || burrow__nanotime() - wait_start > STARVATION_THRESHOLD_NS;
@@ -196,6 +198,7 @@ void burrow__sync_mutex_unlock_slow(SyncMutex *m, int32_t next) {
          * locked bit stays clear and the waiter sets it when it wakes; until
          * then the starving bit is what keeps new arrivals out. */
         burrow__sema_release(&m->sema, true);
+        BURROW_SEMA_KEEP_FRAME();
         return;
     }
 
@@ -212,6 +215,7 @@ void burrow__sync_mutex_unlock_slow(SyncMutex *m, int32_t next) {
         int32_t want = (old - (1 << MUTEX_WAITER_SHIFT)) | MUTEX_WOKEN;
         if (sync_atomic_compare_and_swap_int32(&m->state, old, want)) {
             burrow__sema_release(&m->sema, false);
+            BURROW_SEMA_KEEP_FRAME();
             return;
         }
         old = sync_atomic_load_int32(&m->state);

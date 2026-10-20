@@ -1,8 +1,8 @@
 /* crypto/tls: handshake_server.go, the server side of a TLS 1.0–1.2 handshake
  * and the reading of the ClientHello every server handshake starts with.
  *
- * The TLS 1.3 server handshake comes with handshake_server_tls13.go, QUIC with
- * quic.go and Encrypted Client Hello with ech.go.
+ * The TLS 1.3 server handshake is in tls_handshake_server_tls13.c. QUIC comes
+ * with quic.go and Encrypted Client Hello with ech.go.
  *
  * As on the client, what the handshake only needs while it runs is made in a
  * scratch arena that goes when it ends, and what the Conn keeps afterwards is
@@ -49,8 +49,6 @@ BURROW_SENTINEL_ERROR(tsv_err_invalid_ech_ext, "tls: client sent invalid "
                                                "encrypted_client_hello extension");
 BURROW_SENTINEL_ERROR(tsv_err_ech_not_here, "tls: Encrypted Client Hello is not "
                                             "supported yet");
-BURROW_SENTINEL_ERROR(tsv_err_tls13_not_here, "tls: the TLS 1.3 server handshake is "
-                                              "not supported yet");
 BURROW_SENTINEL_ERROR(tsv_err_compression,
                       "tls: client does not support uncompressed connections");
 BURROW_SENTINEL_ERROR(tsv_err_initial_renegotiation, "tls: initial handshake had "
@@ -93,11 +91,16 @@ Error burrow__tls_server_handshake(TlsConn *c, Context ctx) {
     }
 
     if (c->vers == TLS_VERSION_TLS13) {
-        /* Not in Go: the TLS 1.3 server handshake is not here yet, and the
-         * client is told so with an alert rather than left waiting. */
-        (void)burrow__tls_conn_send_alert(c, TLS_ALERT_INTERNAL_ERROR);
+        TlsServerHandshakeStateTLS13 hs;
+        memset(&hs, 0, sizeof hs);
+        hs.c = c;
+        hs.ctx = ctx;
+        hs.client_hello_msg = client_hello;
+        hs.client_hello = &client_hello->client_hello;
+        hs.a = a;
+        err = burrow__tls_server_handshake_state_tls13_handshake(&hs);
         arena_free(&ar);
-        return tsv_err_tls13_not_here;
+        return err;
     }
 
     TlsServerHandshakeState hs;

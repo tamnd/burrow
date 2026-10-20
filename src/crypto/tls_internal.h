@@ -1758,6 +1758,60 @@ Error burrow__tls_server_handshake_state_process_client_hello(
 /* pickCipherSuite. */
 Error burrow__tls_server_handshake_state_pick_cipher_suite(TlsServerHandshakeState *hs);
 
+/* ------------------------------------------------- TLS 1.3 server handshake */
+
+/* maxClientPSKIdentities is the number of client PSK identities the server will
+ * attempt to validate. It will ignore the rest not to let cheap ClientHello
+ * messages cause too much work in session ticket decryption attempts. */
+#define TLS_MAX_CLIENT_PSK_IDENTITIES 5
+
+typedef struct TlsServerHandshakeStateTLS13 {
+    TlsConn *c;
+    Context ctx;
+    TlsClientHelloMsg *client_hello;
+    TlsServerHelloMsg *hello;
+    bool sent_dummy_ccs;
+    bool using_psk;
+    bool early_data;
+    const TlsSuiteTLS13 *suite;
+    TlsCertificate *cert;
+    TlsSignatureScheme sig_alg;
+    Tls13EarlySecret early_secret; /* Not in Go: a nil secret for Go's nil */
+    Slice shared_key;
+    Tls13HandshakeSecret handshake_secret;
+    Tls13MasterSecret master_secret;
+    Slice traffic_secret; /* client_application_traffic_secret_0 */
+    Hash transcript;
+    Slice client_finished;
+
+    /* Not in Go: the messages client_hello and hello are in, the hash of the
+     * first ClientHello and the HelloRetryRequest when one was sent, which
+     * cloneHash writes again, and the scratch allocator everything that only
+     * lasts the handshake is made in. Go's echContext comes with ech.go. */
+    TlsHandshakeMsg *client_hello_msg;
+    TlsHandshakeMsg *hello_msg;
+    Slice ch_hash;
+    TlsHandshakeMsg *hello_retry_request_msg;
+    Alloc *a;
+} TlsServerHandshakeStateTLS13;
+
+/* Not in Go. The TLS 1.3 handshake once the ClientHello is read: hs.c, hs.ctx,
+ * hs.client_hello, hs.client_hello_msg and hs.a have to be set. */
+Error burrow__tls_server_handshake_state_tls13_handshake(
+    TlsServerHandshakeStateTLS13 *hs);
+
+/* processClientHello, checkForResumption and pickCertificate, the first steps
+ * of the handshake, which testClientHelloFailure runs on their own. */
+Error burrow__tls_server_handshake_state_tls13_process_client_hello(
+    TlsServerHandshakeStateTLS13 *hs);
+Error burrow__tls_server_handshake_state_tls13_check_for_resumption(
+    TlsServerHandshakeStateTLS13 *hs);
+Error burrow__tls_server_handshake_state_tls13_pick_certificate(
+    TlsServerHandshakeStateTLS13 *hs);
+
+/* sendSessionTicket. extra is a [][]byte. */
+Error burrow__tls_conn_send_session_ticket(TlsConn *c, bool early_data, Slice extra);
+
 /* negotiateALPN picks a shared ALPN protocol that both sides support in server
  * preference order. If ALPN is not configured or the peer doesn't support it,
  * it returns "" and no error.

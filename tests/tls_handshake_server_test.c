@@ -2206,6 +2206,481 @@ static void TestHandshakeContextHierarchy(TestingT *t) {
     arena_free(&ar);
 }
 
+/* Not in Go: a Config.Time that answers the Time at env. */
+static Time fixed_time(void *env) {
+    return *(const Time *)env;
+}
+
+/* Not in Go: testResume, which the tests below each declare. */
+static void test_resume(TestingT *t, TlsConfig *sc, TlsConfig *cc, bool expect_resume) {
+    Handshake h;
+    test_handshake(t, cc, sc, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_fatalf_v(t, "handshake: %v", h.err);
+    if (h.client_state.did_resume != expect_resume)
+        testing_t_fatalf_v(t, "DidResume = %v; want %v", h.client_state.did_resume,
+                           expect_resume);
+    if (h.server_state.did_resume != expect_resume)
+        testing_t_fatalf_v(t, "DidResume = %v; want %v", h.client_state.did_resume,
+                           expect_resume);
+    handshake_free(&h);
+}
+
+/* Not in Go: the keys of the certificates the tests below make, which are
+ * testECDSAP256Key, testECDSAP521Key and testRSA2048Key there. */
+typedef struct ResumptionKeys {
+    EcdsaPrivateKey *p256;
+    EcdsaPrivateKey *p521;
+    RsaPrivateKey *rsa2048;
+    CryptoPrivateKey p256_any;
+} ResumptionKeys;
+
+static ResumptionKeys resumption_keys(Alloc *a) {
+    ResumptionKeys k;
+    k.p256_any =
+        parse_test_cert(a, test_ecdsap256_cert_pem, test_ecdsap256_key_pem).private_key;
+    k.p256 = (EcdsaPrivateKey *)k.p256_any.data;
+    k.p521 = (EcdsaPrivateKey *)parse_test_cert(a, test_ecdsap521_cert_pem,
+                                                test_ecdsap521_key_pem)
+                 .private_key.data;
+    k.rsa2048 =
+        (RsaPrivateKey *)parse_test_cert(a, test_rsa2048_cert_pem, test_rsa2048_key_pem)
+            .private_key.data;
+    return k;
+}
+
+/* Not in Go: a Certificate of the DER certificates in ders, with key. */
+static TlsCertificate der_certificate(Alloc *a, const Slice *ders, Int n,
+                                      CryptoPrivateKey key) {
+    TlsCertificate c;
+    memset(&c, 0, sizeof c);
+    c.certificate = slice_make(a, TYPE_BYTES, n, n);
+    for (Int i = 0; i < n; i++)
+        ((Slice *)c.certificate.p)[i] = ders[i];
+    c.private_key = key;
+    return c;
+}
+
+/* Not in Go: createChain of testHandshakeChainExpiryResumption. */
+static bool create_chain(TestingT *t, Alloc *a, const ResumptionKeys *k,
+                         Time leaf_not_after, Time root_not_after, Slice *leaf_der,
+                         Slice *expired_leaf_der, X509Certificate **root) {
+    Error err = BURROW_NO_ERROR;
+    X509Certificate tmpl;
+    memset(&tmpl, 0, sizeof tmpl);
+    tmpl.subject.common_name = BURROW_S("root");
+    tmpl.not_before = time_add(root_not_after, -TIME_HOUR * 24);
+    tmpl.not_after = root_not_after;
+    tmpl.is_ca = true;
+    tmpl.basic_constraints_valid = true;
+    Slice root_der = x509_create_certificate(a, (IoReader){0}, &tmpl, &tmpl,
+                                             ecdsa_private_key_public(k->p521),
+                                             ecdsa_private_key_signer(k->p521), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "CreateCertificate: %v", err);
+        return false;
+    }
+    *root = x509_parse_certificate(a, root_der, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "ParseCertificate: %v", err);
+        return false;
+    }
+
+    memset(&tmpl, 0, sizeof tmpl);
+    Str dns_name = BURROW_S("expired-resume.example.com");
+    tmpl.dns_names = slice_from(&dns_name, 1, 1, TYPE_STRING);
+    tmpl.not_before = time_add(leaf_not_after, -TIME_HOUR * 24);
+    tmpl.not_after = leaf_not_after;
+    tmpl.key_usage = X509_KEY_USAGE_DIGITAL_SIGNATURE;
+    Slice leaf_cert_der = x509_create_certificate(
+        a, (IoReader){0}, &tmpl, *root, ecdsa_private_key_public(k->p256),
+        ecdsa_private_key_signer(k->p521), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "CreateCertificate: %v", err);
+        return false;
+    }
+    tmpl.not_before = time_add(leaf_not_after, -TIME_HOUR * 24 * 365);
+    tmpl.not_after = time_add(leaf_not_after, -TIME_HOUR * 24 * 364);
+    Slice expired_leaf_der_cert_der = x509_create_certificate(
+        a, (IoReader){0}, &tmpl, *root, ecdsa_private_key_public(k->p256),
+        ecdsa_private_key_signer(k->p521), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "CreateCertificate: %v", err);
+        return false;
+    }
+
+    *leaf_der = leaf_cert_der;
+    *expired_leaf_der = expired_leaf_der_cert_der;
+    return true;
+}
+
+/* Not in Go: what testExpiration of testHandshakeChainExpiryResumption closes
+ * over, and its two arguments. */
+typedef struct ChainExpiryResumption {
+    uint16_t version;
+    Time now;
+    Time leaf_not_after;
+    Time root_not_after;
+} ChainExpiryResumption;
+
+static void test_expiration(void *env, TestingT *t) {
+    const ChainExpiryResumption *x = (const ChainExpiryResumption *)env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ResumptionKeys k = resumption_keys(a);
+    Time now = x->now;
+    Slice initial_leaf_der, expired_leaf_der;
+    X509Certificate *initial_root;
+    if (!create_chain(t, a, &k, x->leaf_not_after, x->root_not_after, &initial_leaf_der,
+                      &expired_leaf_der, &initial_root))
+        return;
+
+    Slice ders[2] = {initial_leaf_der, expired_leaf_der};
+    TlsCertificate server_cert = der_certificate(a, ders, 2, k.p256_any);
+    TlsConfig server_config = test_config_server(a);
+    server_config.max_version = x->version;
+    server_config.certificates = slice_from(&server_cert, 1, 1, TYPE_TLS_CERTIFICATE);
+    server_config.client_cas = x509_new_cert_pool(a);
+    x509_cert_pool_add_cert(server_config.client_cas, initial_root);
+    server_config.client_auth = TLS_REQUIRE_AND_VERIFY_CLIENT_CERT;
+    server_config.time = (TlsTimeFunc){fixed_time, &now};
+    server_config.insecure_skip_verify = false;
+    server_config.server_name = BURROW_S("expired-resume.example.com");
+
+    TlsCertificate client_cert = der_certificate(a, ders, 2, k.p256_any);
+    TlsConfig client_config = test_config_client(a);
+    client_config.max_version = x->version;
+    client_config.certificates = slice_from(&client_cert, 1, 1, TYPE_TLS_CERTIFICATE);
+    client_config.root_cas = x509_new_cert_pool(a);
+    x509_cert_pool_add_cert(client_config.root_cas, initial_root);
+    client_config.server_name = BURROW_S("expired-resume.example.com");
+    client_config.client_session_cache =
+        tls_new_lru_client_session_cache(heap_allocator(), 32);
+    if (client_config.client_session_cache.vt == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    client_config.insecure_skip_verify = false;
+    client_config.server_name = BURROW_S("expired-resume.example.com");
+    client_config.time = (TlsTimeFunc){fixed_time, &now};
+
+    test_resume(t, &server_config, &client_config, false);
+    test_resume(t, &server_config, &client_config, true);
+
+    int64_t leaf_nano = time_unix_nano(x->leaf_not_after);
+    int64_t root_nano = time_unix_nano(x->root_not_after);
+    Time expired_now = time_add(
+        time_from_unix(0, leaf_nano < root_nano ? leaf_nano : root_nano), TIME_MINUTE);
+
+    Slice fresh_leaf_der;
+    X509Certificate *fresh_root;
+    if (!create_chain(t, a, &k, time_add(expired_now, TIME_HOUR),
+                      time_add(expired_now, TIME_HOUR), &fresh_leaf_der,
+                      &expired_leaf_der, &fresh_root))
+        return;
+    Slice fresh_ders[2] = {fresh_leaf_der, expired_leaf_der};
+    client_cert = der_certificate(a, fresh_ders, 2, k.p256_any);
+    server_config.time = (TlsTimeFunc){fixed_time, &expired_now};
+    server_config.client_cas = x509_new_cert_pool(a);
+    x509_cert_pool_add_cert(server_config.client_cas, fresh_root);
+
+    test_resume(t, &server_config, &client_config, false);
+
+    tls_lru_client_session_cache_free(client_config.client_session_cache);
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    arena_free(&ar);
+}
+
+static void test_handshake_chain_expiry_resumption(TestingT *t, uint16_t version) {
+    Time now = time_now();
+
+    ChainExpiryResumption before = {version, now, time_add(now, 2 * TIME_HOUR),
+                                    time_add(now, 3 * TIME_HOUR)};
+    testing_t_run(t, BURROW_S("LeafExpiresBeforeRoot"),
+                  BURROW_FN(TestingTFunc, test_expiration, &before));
+    ChainExpiryResumption after = {version, now, time_add(now, 2 * TIME_HOUR),
+                                   time_add(now, TIME_HOUR)};
+    testing_t_run(t, BURROW_S("LeafExpiresAfterRoot"),
+                  BURROW_FN(TestingTFunc, test_expiration, &after));
+}
+
+static void chain_expiry_resumption_tls12(void *env, TestingT *t) {
+    (void)env;
+    test_handshake_chain_expiry_resumption(t, TLS_VERSION_TLS12);
+}
+
+static void chain_expiry_resumption_tls13(void *env, TestingT *t) {
+    (void)env;
+    test_handshake_chain_expiry_resumption(t, TLS_VERSION_TLS13);
+}
+
+static void TestHandshakeChainExpiryResumption(TestingT *t) {
+    testing_t_run(t, BURROW_S("TLS1.2"),
+                  BURROW_FN(TestingTFunc, chain_expiry_resumption_tls12, NULL));
+    testing_t_run(t, BURROW_S("TLS1.3"),
+                  BURROW_FN(TestingTFunc, chain_expiry_resumption_tls13, NULL));
+}
+
+/* Not in Go: the roots and certificates both tests below make first. */
+typedef struct TwoRoots {
+    X509Certificate *root_a;
+    X509Certificate *root_b;
+    Slice cert_a;
+    Slice cert_b;
+} TwoRoots;
+
+static bool two_roots(TestingT *t, Alloc *a, const ResumptionKeys *k, Time now,
+                      TwoRoots *r) {
+    Error err = BURROW_NO_ERROR;
+    X509Certificate tmpl;
+    memset(&tmpl, 0, sizeof tmpl);
+    tmpl.subject.common_name = BURROW_S("root");
+    tmpl.not_before = time_add(now, -TIME_HOUR * 24);
+    tmpl.not_after = time_add(now, TIME_HOUR * 24);
+    tmpl.is_ca = true;
+    tmpl.basic_constraints_valid = true;
+    Slice root_der = x509_create_certificate(a, (IoReader){0}, &tmpl, &tmpl,
+                                             ecdsa_private_key_public(k->p521),
+                                             ecdsa_private_key_signer(k->p521), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "CreateCertificate: %v", err);
+        return false;
+    }
+    r->root_a = x509_parse_certificate(a, root_der, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "ParseCertificate: %v", err);
+        return false;
+    }
+    root_der = x509_create_certificate(a, (IoReader){0}, &tmpl, &tmpl,
+                                       rsa_private_key_public(k->rsa2048),
+                                       rsa_private_key_signer(k->rsa2048), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "CreateCertificate: %v", err);
+        return false;
+    }
+    r->root_b = x509_parse_certificate(a, root_der, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "ParseCertificate: %v", err);
+        return false;
+    }
+
+    memset(&tmpl, 0, sizeof tmpl);
+    Str dns_name = BURROW_S("example.com");
+    tmpl.dns_names = slice_from(&dns_name, 1, 1, TYPE_STRING);
+    tmpl.not_before = time_add(now, -TIME_HOUR * 24);
+    tmpl.not_after = time_add(now, TIME_HOUR * 24);
+    tmpl.key_usage = X509_KEY_USAGE_DIGITAL_SIGNATURE;
+    r->cert_a = x509_create_certificate(a, (IoReader){0}, &tmpl, r->root_a,
+                                        ecdsa_private_key_public(k->p256),
+                                        ecdsa_private_key_signer(k->p521), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "CreateCertificate: %v", err);
+        return false;
+    }
+    r->cert_b = x509_create_certificate(a, (IoReader){0}, &tmpl, r->root_b,
+                                        ecdsa_private_key_public(k->p256),
+                                        rsa_private_key_signer(k->rsa2048), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "CreateCertificate: %v", err);
+        return false;
+    }
+    return true;
+}
+
+/* Not in Go: what the GetConfigForClient of
+ * testHandshakeGetConfigForClientDifferentClientCAs closes over. The clones
+ * it makes are kept to be given back at the end. */
+typedef struct SwitchConfig {
+    bool switch_config;
+    TlsConfig *server_config;
+    X509Certificate *root_b;
+    Alloc *a;
+    TlsConfig *clones[2];
+    int nclones;
+} SwitchConfig;
+
+static TlsConfig *switch_config_for_client(void *env, TlsClientHelloInfo *client_hello,
+                                           Error *err) {
+    (void)client_hello;
+    SwitchConfig *e = (SwitchConfig *)env;
+    if (!e->switch_config)
+        return NULL;
+    if (e->nclones == 2) {
+        BURROW_OUT(err, fmt_errorf_v("more handshakes than the test makes"));
+        return NULL;
+    }
+    TlsConfig *cfg = tls_config_clone(e->server_config, e->a);
+    if (cfg == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    e->clones[e->nclones++] = cfg;
+    cfg->client_cas = x509_new_cert_pool(e->a);
+    x509_cert_pool_add_cert(cfg->client_cas, e->root_b);
+    return cfg;
+}
+
+static void
+test_handshake_get_config_for_client_different_client_cas(TestingT *t,
+                                                          uint16_t version) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ResumptionKeys k = resumption_keys(a);
+    Time now = time_now();
+    TwoRoots r;
+    if (!two_roots(t, a, &k, now, &r))
+        return;
+
+    TlsCertificate server_cert = der_certificate(a, &r.cert_a, 1, k.p256_any);
+    TlsConfig server_config = test_config_server(a);
+    server_config.max_version = version;
+    server_config.certificates = slice_from(&server_cert, 1, 1, TYPE_TLS_CERTIFICATE);
+    server_config.time = (TlsTimeFunc){fixed_time, &now};
+    server_config.client_cas = x509_new_cert_pool(a);
+    x509_cert_pool_add_cert(server_config.client_cas, r.root_a);
+    server_config.client_auth = TLS_REQUIRE_AND_VERIFY_CLIENT_CERT;
+    SwitchConfig sw;
+    memset(&sw, 0, sizeof sw);
+    sw.server_config = &server_config;
+    sw.root_b = r.root_b;
+    sw.a = a;
+    server_config.get_config_for_client =
+        (TlsGetConfigForClientFunc){switch_config_for_client, &sw};
+    server_config.insecure_skip_verify = false;
+    server_config.server_name = BURROW_S("example.com");
+
+    TlsCertificate client_cert = der_certificate(a, &r.cert_a, 1, k.p256_any);
+    TlsConfig client_config = test_config_client(a);
+    client_config.max_version = version;
+    client_config.certificates = slice_from(&client_cert, 1, 1, TYPE_TLS_CERTIFICATE);
+    client_config.client_session_cache =
+        tls_new_lru_client_session_cache(heap_allocator(), 32);
+    if (client_config.client_session_cache.vt == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    client_config.root_cas = x509_new_cert_pool(a);
+    x509_cert_pool_add_cert(client_config.root_cas, r.root_a);
+    client_config.time = (TlsTimeFunc){fixed_time, &now};
+    client_config.insecure_skip_verify = false;
+    client_config.server_name = BURROW_S("example.com");
+
+    test_resume(t, &server_config, &client_config, false);
+    test_resume(t, &server_config, &client_config, true);
+
+    client_cert.certificate = slice_make(a, TYPE_BYTES, 1, 1);
+    ((Slice *)client_cert.certificate.p)[0] = r.cert_b;
+
+    /* Cause GetConfigForClient to return a config cloned from the base config,
+     * but with a different ClientCAs pool. This should cause resumption to
+     * fail. */
+    sw.switch_config = true;
+
+    test_resume(t, &server_config, &client_config, false);
+    test_resume(t, &server_config, &client_config, true);
+
+    for (int i = 0; i < sw.nclones; i++)
+        tls_config_release(sw.clones[i]);
+    tls_lru_client_session_cache_free(client_config.client_session_cache);
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    arena_free(&ar);
+}
+
+static void get_config_for_client_different_client_cas_tls12(void *env, TestingT *t) {
+    (void)env;
+    test_handshake_get_config_for_client_different_client_cas(t, TLS_VERSION_TLS12);
+}
+
+static void get_config_for_client_different_client_cas_tls13(void *env, TestingT *t) {
+    (void)env;
+    test_handshake_get_config_for_client_different_client_cas(t, TLS_VERSION_TLS13);
+}
+
+static void TestHandshakeGetConfigForClientDifferentClientCAs(TestingT *t) {
+    testing_t_run(t, BURROW_S("TLS1.2"),
+                  BURROW_FN(TestingTFunc,
+                            get_config_for_client_different_client_cas_tls12, NULL));
+    testing_t_run(t, BURROW_S("TLS1.3"),
+                  BURROW_FN(TestingTFunc,
+                            get_config_for_client_different_client_cas_tls13, NULL));
+}
+
+static void test_handshake_change_root_cas_resumption(TestingT *t, uint16_t version) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ResumptionKeys k = resumption_keys(a);
+    Time now = time_now();
+    TwoRoots r;
+    if (!two_roots(t, a, &k, now, &r))
+        return;
+
+    TlsCertificate server_cert = der_certificate(a, &r.cert_a, 1, k.p256_any);
+    TlsConfig server_config = test_config_server(a);
+    server_config.max_version = version;
+    server_config.certificates = slice_from(&server_cert, 1, 1, TYPE_TLS_CERTIFICATE);
+    server_config.time = (TlsTimeFunc){fixed_time, &now};
+    server_config.client_cas = x509_new_cert_pool(a);
+    x509_cert_pool_add_cert(server_config.client_cas, r.root_a);
+    server_config.client_auth = TLS_REQUIRE_AND_VERIFY_CLIENT_CERT;
+    server_config.insecure_skip_verify = false;
+    server_config.server_name = BURROW_S("example.com");
+
+    TlsCertificate client_cert = der_certificate(a, &r.cert_a, 1, k.p256_any);
+    TlsConfig client_config = test_config_client(a);
+    client_config.max_version = version;
+    client_config.certificates = slice_from(&client_cert, 1, 1, TYPE_TLS_CERTIFICATE);
+    client_config.client_session_cache =
+        tls_new_lru_client_session_cache(heap_allocator(), 32);
+    if (client_config.client_session_cache.vt == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    client_config.root_cas = x509_new_cert_pool(a);
+    x509_cert_pool_add_cert(client_config.root_cas, r.root_a);
+    client_config.time = (TlsTimeFunc){fixed_time, &now};
+    client_config.insecure_skip_verify = false;
+    client_config.server_name = BURROW_S("example.com");
+
+    test_resume(t, &server_config, &client_config, false);
+    test_resume(t, &server_config, &client_config, true);
+
+    TlsConfig *client_config2 = tls_config_clone(&client_config, a);
+    if (client_config2 == NULL) {
+        testing_t_fatal_v(t, "out of memory");
+        return;
+    }
+    client_config2->root_cas = x509_new_cert_pool(a);
+    x509_cert_pool_add_cert(client_config2->root_cas, r.root_b);
+
+    server_cert.certificate = slice_make(a, TYPE_BYTES, 1, 1);
+    ((Slice *)server_cert.certificate.p)[0] = r.cert_b;
+
+    test_resume(t, &server_config, client_config2, false);
+    test_resume(t, &server_config, client_config2, true);
+
+    tls_lru_client_session_cache_free(client_config.client_session_cache);
+    tls_config_release(client_config2);
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    arena_free(&ar);
+}
+
+static void change_root_cas_resumption_tls12(void *env, TestingT *t) {
+    (void)env;
+    test_handshake_change_root_cas_resumption(t, TLS_VERSION_TLS12);
+}
+
+static void change_root_cas_resumption_tls13(void *env, TestingT *t) {
+    (void)env;
+    test_handshake_change_root_cas_resumption(t, TLS_VERSION_TLS13);
+}
+
+static void TestHandshakeChangeRootCAsResumption(TestingT *t) {
+    testing_t_run(t, BURROW_S("TLS1.2"),
+                  BURROW_FN(TestingTFunc, change_root_cas_resumption_tls12, NULL));
+    testing_t_run(t, BURROW_S("TLS1.3"),
+                  BURROW_FN(TestingTFunc, change_root_cas_resumption_tls13, NULL));
+}
+
 #define TESTS(X)                                                                       \
     X(TestSimpleError)                                                                 \
     X(TestRejectBadProtocolVersion)                                                    \
@@ -2235,6 +2710,9 @@ static void TestHandshakeContextHierarchy(TestingT *t) {
     X(TestAESCipherReordering)                                                         \
     X(TestAESCipherReorderingTLS13)                                                    \
     X(TestServerHandshakeContextCancellation)                                          \
-    X(TestHandshakeContextHierarchy)
+    X(TestHandshakeContextHierarchy)                                                   \
+    X(TestHandshakeChainExpiryResumption)                                              \
+    X(TestHandshakeGetConfigForClientDifferentClientCAs)                               \
+    X(TestHandshakeChangeRootCAsResumption)
 
 TESTING_MAIN(TESTS)

@@ -1399,6 +1399,62 @@ static bool read_back(const char *path, char *buf, size_t cap) {
     return true;
 }
 
+/* Not in Go. The profile flags, which Go's own tests leave to cmd/go: each
+ * file lands in -test.outputdir, gzipped like any profile, and a run that times
+ * out still writes them. */
+static bool is_profile(const char *dir, const char *name) {
+    char path[1024];
+    char text[4096];
+    snprintf(path, sizeof path, "%s" GEN_SEP "%s", dir, name);
+    if (!read_back(path, text, sizeof text))
+        return false;
+    pal_unlink(path, NULL);
+    return (unsigned char)text[0] == 0x1f && (unsigned char)text[1] == 0x8b;
+}
+
+static void TestProfileFlags(TestingT *t) {
+    if (self_path == NULL) {
+        testing_t_skip_v(t, "no path to this binary");
+        return;
+    }
+    char dir[1024];
+    snprintf(dir, sizeof dir, "%s.prof", self_path);
+    PalErrno err = PAL_OK;
+    if (!pal_mkdir(dir, 0755, &err) && err != PAL_EEXIST) {
+        testing_t_fatalf_v(t, "mkdir %s: %s", dir, pal_errno_string(err));
+        return;
+    }
+    char flags[2048];
+    snprintf(flags, sizeof flags,
+             "-test.run=TestPass -test.cpuprofile=cpu.prof -test.memprofile=mem.prof "
+             "-test.blockprofile=block.prof -test.mutexprofile=mutex.prof "
+             "-test.outputdir=\"%s\"",
+             dir);
+    Buf out = {0};
+    int code = spawn(flags, "basic", &out);
+    if (code != 0)
+        testing_t_errorf_v(t, "exit status %d, output\n%s", code, out.p);
+    buf_free(&out);
+    static const char *const files[] = {"cpu.prof", "mem.prof", "block.prof",
+                                        "mutex.prof"};
+    for (size_t i = 0; i < sizeof files / sizeof files[0]; i++)
+        if (!is_profile(dir, files[i]))
+            testing_t_errorf_v(t, "no profile in %s" GEN_SEP "%s", dir, files[i]);
+
+    snprintf(flags, sizeof flags,
+             "-test.timeout=300ms -test.blockprofile=timeout.prof "
+             "-test.outputdir=\"%s\"",
+             dir);
+    out = (Buf){0};
+    code = spawn(flags, "sleep", &out);
+    if (code != 2)
+        testing_t_errorf_v(t, "timeout: exit status %d, want 2", code);
+    buf_free(&out);
+    if (!is_profile(dir, "timeout.prof"))
+        testing_t_errorf_v(t, "no profile in %s" GEN_SEP "timeout.prof", dir);
+    pal_rmdir(dir, NULL);
+}
+
 static void TestFuzzing(TestingT *t) {
     if (self_path == NULL)
         testing_t_skip_v(t, "no path to this binary");
@@ -1749,6 +1805,7 @@ static void TestHelpers(TestingT *t) {
     X(TestOutput)                                                                      \
     X(TestBenchmarkOutput)                                                             \
     X(TestFuzzing)                                                                     \
+    X(TestProfileFlags)                                                                \
     X(FuzzTypes)                                                                       \
     X(FuzzMisuse)                                                                      \
     X(FuzzUnsupported)                                                                 \

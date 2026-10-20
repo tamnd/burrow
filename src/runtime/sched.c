@@ -254,6 +254,10 @@ burrow__G *burrow__curg(void) {
     return getm() != NULL ? getm()->curg : NULL;
 }
 
+bool burrow__sched_running(void) {
+    return burrow__atomic_load_acquire_u32(&sched.running) != 0;
+}
+
 /* Where the labels go on a thread with no goroutine. */
 static BURROW_THREAD_LOCAL void *thread_prof_labels;
 

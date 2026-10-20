@@ -19,10 +19,13 @@
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
+#include "burrow/mprof.h"
 #include "burrow/note.h"
+#include "burrow/os.h"
 #include "burrow/pal.h"
 #include "burrow/panic.h"
 #include "burrow/proc.h"
+#include "burrow/runtime/pprof.h"
 #include "burrow/sched.h"
 #include "burrow/slice.h"
 #include "burrow/strconv.h"
@@ -324,8 +327,8 @@ static Str fmt_dur(Alloc *a, int64_t d) {
 /* ------------------------------------------------------------------ flags
  *
  * The flags a Go test binary registers, with Go's usage text, so that -h
- * prints what Go prints. The ones for profiles, coverage and fuzzing are
- * accepted and do nothing. */
+ * prints what Go prints. The coverage flags and -test.trace are accepted and
+ * do nothing. */
 
 enum {
     FK_BOOL,
@@ -593,7 +596,11 @@ typedef struct Package {
     uintptr_t *bench_keys;
     Int nbench_keys;
     Int cbench_keys;
+    /* Not in Go: Go leaves the -test.cpuprofile file open for the process to
+     * close. after closes this one. */
+    OsFile *cpu_profile;
     bool labels_done;
+    bool after_done;   /* afterOnce */
     int bench_procs;   /* the -test.cpu value the benchmark is named for */
     int heap_counting; /* how many benchmark runs want the heap counted */
 } Package;
@@ -2883,11 +2890,14 @@ static int name_cmp(const void *x, const void *y) {
     return a->len < b->len ? -1 : a->len > b->len;
 }
 
+static void m_after(void);
+
 static void alarm_main(void *arg) {
     (void)arg;
     int64_t timeout = pkg.flags[F_TIMEOUT].d;
     if (burrow__note_sleep_timeout(&timeout_alarm.note, timeout))
         return;
+    m_after();
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
@@ -4591,6 +4601,102 @@ static void shuffle_table(void *base, Int n, size_t size, uint64_t *state) {
     }
 }
 
+/* ---------------------------------------------------------------- profiles */
+
+/* toOutputDir: path, moved into -test.outputdir if it is relative. */
+static Str to_output_dir(Alloc *a, Str path) {
+    Str dir = pkg.flags[F_OUTPUTDIR].s;
+    if (dir.len == 0 || path.len == 0)
+        return path;
+#if defined(BURROW_OS_WINDOWS)
+    /* A drive letter and a colon. Absolute paths always have one, ignoring
+     * UNC, and a path that starts with one is stuck with it. */
+    if (path.len >= 2) {
+        Byte letter = path.p[0], colon = path.p[1];
+        if ((('a' <= letter && letter <= 'z') || ('A' <= letter && letter <= 'Z')) &&
+            colon == ':')
+            return path;
+    }
+#endif
+    if (os_is_path_separator(path.p[0]))
+        return path;
+    return fmt_sprintf_v(a, "%s%c%s", dir, (int32_t)OS_PATH_SEPARATOR, path);
+}
+
+/* M.before, for the profile flags. */
+static void m_before(void) {
+    if (pkg.flags[F_MEMPROFILERATE].i > 0)
+        runtime_set_mem_profile_rate((Int)pkg.flags[F_MEMPROFILERATE].i);
+    if (pkg.flags[F_CPUPROFILE].s.len > 0) {
+        Arena ar;
+        arena_init(&ar, NULL, 0);
+        Alloc *a = arena_allocator(&ar);
+        Error err = {0};
+        OsFile *f = os_create(heap_allocator(),
+                              to_output_dir(a, pkg.flags[F_CPUPROFILE].s), &err);
+        if (err.vt != NULL) {
+            write_to(stderr, fmt_sprintf_v(a, "testing: %s\n", err));
+        } else {
+            err = pprof_start_cpu_profile(os_file_as_io_writer(f));
+            if (err.vt != NULL) {
+                write_to(stderr, fmt_sprintf_v(
+                                     a, "testing: can't start cpu profile: %s\n", err));
+                os_file_free(f);
+            } else {
+                pkg.cpu_profile = f;
+            }
+        }
+        arena_free(&ar);
+        if (pkg.cpu_profile == NULL)
+            return;
+    }
+    if (pkg.flags[F_BLOCKPROFILE].s.len > 0 && pkg.flags[F_BLOCKPROFILERATE].i >= 0)
+        runtime_set_block_profile_rate((Int)pkg.flags[F_BLOCKPROFILERATE].i);
+    if (pkg.flags[F_MUTEXPROFILE].s.len > 0 && pkg.flags[F_MUTEXPROFILEFRACTION].i >= 0)
+        (void)runtime_set_mutex_profile_fraction(
+            (Int)pkg.flags[F_MUTEXPROFILEFRACTION].i);
+}
+
+/* One of the profiles writeProfiles writes after the run. */
+static void write_profile(Alloc *a, Str name, int flag) {
+    Str file = pkg.flags[flag].s;
+    Error err = {0};
+    OsFile *f = os_create(heap_allocator(), to_output_dir(a, file), &err);
+    if (err.vt != NULL) {
+        write_to(stderr, fmt_sprintf_v(a, "testing: %s\n", err));
+        exit(2);
+    }
+    err = pprof_profile_write_to(pprof_lookup(name), os_file_as_io_writer(f), 0);
+    if (err.vt != NULL) {
+        write_to(stderr, fmt_sprintf_v(a, "testing: can't write %s: %s\n", file, err));
+        exit(2);
+    }
+    os_file_free(f);
+}
+
+/* M.after and writeProfiles. burrow has no collector, so there is no
+ * runtime.GC to call before the allocs profile. */
+static void m_after(void) {
+    if (pkg.after_done)
+        return;
+    pkg.after_done = true;
+    if (pkg.cpu_profile != NULL) {
+        pprof_stop_cpu_profile();
+        os_file_free(pkg.cpu_profile);
+        pkg.cpu_profile = NULL;
+    }
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    if (pkg.flags[F_MEMPROFILE].s.len > 0)
+        write_profile(a, BURROW_S("allocs"), F_MEMPROFILE);
+    if (pkg.flags[F_BLOCKPROFILE].s.len > 0 && pkg.flags[F_BLOCKPROFILERATE].i >= 0)
+        write_profile(a, BURROW_S("block"), F_BLOCKPROFILE);
+    if (pkg.flags[F_MUTEXPROFILE].s.len > 0 && pkg.flags[F_MUTEXPROFILEFRACTION].i >= 0)
+        write_profile(a, BURROW_S("mutex"), F_MUTEXPROFILE);
+    arena_free(&ar);
+}
+
 int testing_m_run(TestingM *m) {
     m->num_run++;
     if (!pkg.parsed)
@@ -4600,6 +4706,7 @@ int testing_m_run(TestingM *m) {
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
     const char *prefix = pkg.flags[F_V].json ? "\x16" : "";
+    bool profiling = false; /* defer m.after() */
 
     if (pkg.flags[F_PARALLEL].i < 1) {
         write_to(err_out(),
@@ -4647,6 +4754,8 @@ int testing_m_run(TestingM *m) {
     }
 
     parse_cpu_list();
+    m_before();
+    profiling = true;
 
     /* A worker only fuzzes: its coordinator has run everything else. */
     if (!pkg.flags[F_FUZZWORKER].b) {
@@ -4680,6 +4789,8 @@ int testing_m_run(TestingM *m) {
     if (!pkg.flags[F_FUZZWORKER].b)
         write_to(stdout, fmt_sprintf_v(a, "%sPASS\n", prefix));
 out:
+    if (profiling)
+        m_after();
     arena_free(&ar);
     return m->exit_code;
 }

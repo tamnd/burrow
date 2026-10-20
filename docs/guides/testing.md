@@ -753,6 +753,12 @@ Five of the cases look for the time. The zero-time case checks the opposite, tha
 
 `slogtest_run` is `slogtest.Run`, the same cases with one subtest each. It asks for a new handler at the start of each subtest and for the one record as a map at the end, so a failure names the case it came from.
 
+## Profiles
+
+The profile flags work as they do under `go test`. `-test.cpuprofile=cpu.prof` profiles the whole run, `-test.memprofile=mem.prof` writes the allocs profile when it ends, and `-test.blockprofile` and `-test.mutexprofile` turn those profiles on before the first test and write them at the end. `-test.memprofilerate`, `-test.blockprofilerate` and `-test.mutexprofilefraction` set the rates, with Go's defaults. A relative file name goes into `-test.outputdir` when that is given. The files are the gzipped protocol buffers `go tool pprof` reads, and a run that times out still writes them before it reports the tests that were running. The [pprof guide](pprof.md) covers what each profile holds.
+
+burrow has no garbage collector, so there is no `runtime.GC` before the allocs profile is written. Go calls it to bring the profile up to date with its collector. burrow counts a free when `mem_free` is called, so the profile is already current.
+
 ## Porting a test from Go
 
 Most of Go's tests are tables of cases and a loop over them, and the tables are the tedious part to copy by hand. `tools/burrow-gen tests` does that part. Give it one of Go's test files and it writes a C test file with every table translated, the structs they are made of declared, and every `Test` function stubbed out with its Go left in a comment:
@@ -786,4 +792,4 @@ The file compiles and runs as it comes out, with every test skipping, so you can
 
 ## What is not there yet
 
-The flags for profiles, coverage and tracing are accepted and do nothing. `-test.run` uses a small regular expression matcher that reads RE2 syntax and reports errors with Go's messages. It folds case for ASCII only and does not know Unicode classes like `\pL`. `-test.shuffle` shuffles with its own generator, so a given seed does not give the same order it would in Go.
+The flags for coverage and tracing are accepted and do nothing. `-test.run` uses a small regular expression matcher that reads RE2 syntax and reports errors with Go's messages. It folds case for ASCII only and does not know Unicode classes like `\pL`. `-test.shuffle` shuffles with its own generator, so a given seed does not give the same order it would in Go.

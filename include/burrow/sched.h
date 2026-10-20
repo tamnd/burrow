@@ -629,6 +629,11 @@ BURROW_STATIC(ret) burrow__M *burrow__curm(void);
  * answers, under the internal name. */
 BURROW_BORROWS(ret) burrow__G *burrow__curg(void);
 
+/* Whether runtime_main is running, so that `go` can start a goroutine. Code
+ * that may be called before runtime_main, or between two runs of it, asks this
+ * before it starts one. */
+bool burrow__sched_running(void);
+
 /* Go's runtime_setProfLabel and runtime_getProfLabel: the profiling labels of
  * the calling goroutine. A thread that is not running a goroutine keeps them
  * in a thread local instead, so code run before runtime_main can still use

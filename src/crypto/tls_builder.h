@@ -14,8 +14,9 @@
 #ifndef BURROW_CRYPTO_TLS_BUILDER_H
 #define BURROW_CRYPTO_TLS_BUILDER_H
 
-#include "burrow/core.h"
 #include "burrow/crypto/tls.h"
+
+#include "burrow/core.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
 #include "burrow/mem.h"

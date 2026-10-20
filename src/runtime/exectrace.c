@@ -1141,16 +1141,12 @@ static void advance_locked(bool stop) {
 }
 
 void burrow__trace_advance(bool stop) {
-    if (stop) {
-        burrow__lock(&trace.adv_lock);
-        advance_locked(true);
-        burrow__unlock(&trace.adv_lock);
-        return;
-    }
-
     /* The reader only ends a generation once it has read everything before
      * it, since the generation after next fills the same buffers, so this
-     * waits for it to get that far too. */
+     * waits for it to get that far too. That goes for the last generation as
+     * well: the reader ends one without waiting for anyone, and a stop that
+     * came straight after would flush the next one while the reader was still
+     * on the one before, and the reader would wait for it forever. */
     uint64_t gen;
     for (;;) {
         burrow__lock(&trace.adv_lock);
@@ -1160,7 +1156,7 @@ void burrow__trace_advance(bool stop) {
         bool caught_up = trace.reader_gen == gen;
         burrow__unlock(&trace.lock);
         if (live && caught_up)
-            advance_locked(false);
+            advance_locked(stop);
         burrow__unlock(&trace.adv_lock);
         if (!live)
             return;
@@ -1168,6 +1164,8 @@ void burrow__trace_advance(bool stop) {
             break;
         time_sleep(POLL);
     }
+    if (stop)
+        return;
 
     /* Block until the trace reader has finished processing the last
      * generation, as Go does on trace.doneSema. A trace that ended with its

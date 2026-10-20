@@ -780,3 +780,47 @@ const Type burrow_type_TlsEncryptedClientHelloKey = {
     0,
     NULL,
 };
+
+/* [][]*x509.Certificate and [][]byte, for the fields of ConnectionState. */
+BURROW_SLICE_TYPE(TlsCertificateChains, X509CertificateChain);
+BURROW_SLICE_TYPE(TlsByteSlices, Bytes);
+
+#define TLS_CONNECTION_STATE_FIELDS(F, T)                                              \
+    F(T, uint16_t, version, Version, "")                                               \
+    F(T, bool, handshake_complete, HandshakeComplete, "")                              \
+    F(T, bool, did_resume, DidResume, "")                                              \
+    F(T, uint16_t, cipher_suite, CipherSuite, "")                                      \
+    F(T, uint16_t, curve_id, CurveID, "")                                              \
+    F(T, Str, negotiated_protocol, NegotiatedProtocol, "")                             \
+    F(T, bool, negotiated_protocol_is_mutual, NegotiatedProtocolIsMutual, "")          \
+    F(T, Str, server_name, ServerName, "")                                             \
+    F(T, X509CertificateChain, peer_certificates, PeerCertificates, "")                \
+    F(T, TlsCertificateChains, verified_chains, VerifiedChains, "")                    \
+    F(T, TlsByteSlices, signed_certificate_timestamps, SignedCertificateTimestamps,    \
+      "")                                                                              \
+    F(T, Bytes, ocsp_response, OCSPResponse, "")                                       \
+    F(T, Bytes, tls_unique, TLSUnique, "")                                             \
+    F(T, bool, ech_accepted, ECHAccepted, "")                                          \
+    F(T, bool, hello_retry_request, HelloRetryRequest, "")                             \
+    F(T, TlsByteSlices, local_certificate, LocalCertificate, "")
+
+static const Field tls_connection_state_fields[] = {
+    TLS_CONNECTION_STATE_FIELDS(BURROW__FIELD_AS, TlsConnectionState)};
+
+const Type burrow_type_TlsConnectionState = {
+    {(const Byte *)"ConnectionState", 15},
+    {(const Byte *)"crypto/tls", 10},
+    KIND_STRUCT,
+    (uint32_t)sizeof(TlsConnectionState),
+    (uint16_t)_Alignof(TlsConnectionState),
+    (uint16_t)(sizeof tls_connection_state_fields /
+               sizeof tls_connection_state_fields[0]),
+    0,
+    tls_connection_state_fields,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};

@@ -2,12 +2,12 @@
  * Go source: go1.27.1.
  *
  * The tests that listen and dial do it over loopback TCP, so they skip where
- * there is no readiness poll FD. TestConnectionStateMarshal and ECH are still
- * to come. Where Go compares with reflect.DeepEqual, the certificates here are
- * compared by their DER. The PEMs TestX509KeyPair declares are in
- * tls_test_gen.h, and the ML-DSA ones are always tried, as there is no FIPS
- * 140-3 module here to be v1.0.0. Go ranges over the disabledCipherSuites map;
- * here that map is a predicate, so the test asks it about every suite there is.
+ * there is no readiness poll FD. TestECH is still to come. Where Go compares
+ * with reflect.DeepEqual, the certificates here are compared by their DER. The
+ * PEMs TestX509KeyPair declares are in tls_test_gen.h, and the ML-DSA ones are
+ * always tried, as there is no FIPS 140-3 module here to be v1.0.0. Go ranges
+ * over the disabledCipherSuites map; here that map is a predicate, so the test
+ * asks it about every suite there is.
  *
  * Copyright 2012 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -25,6 +25,7 @@
 #include "burrow/crypto/elliptic.h"
 #include "burrow/crypto/tls.h"
 #include "burrow/crypto/x509.h"
+#include "burrow/encoding/json.h"
 #include "burrow/encoding/pem.h"
 #include "burrow/fmt.h"
 #include "burrow/io.h"
@@ -2809,6 +2810,21 @@ static const uint16_t connection_state_versions[] = {
     TLS_VERSION_TLS10, TLS_VERSION_TLS12, TLS_VERSION_TLS13};
 static const char *const connection_state_names[] = {"TLSv10", "TLSv12", "TLSv13"};
 
+static void TestConnectionStateMarshal(TestingT *t) {
+    /* Not in Go: Go marshals a pointer to the zero ConnectionState; there is
+     * no pointer type for it here, so the value is marshaled instead. */
+    TlsConnectionState cs;
+    memset(&cs, 0, sizeof cs);
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Error err = BURROW_NO_ERROR;
+    (void)json_marshal(arena_allocator(&ar), BURROW_ANY(TYPE_TLS_CONNECTION_STATE, &cs),
+                       &err);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "json.Marshal failed on ConnectionState: %v", err);
+    arena_free(&ar);
+}
+
 static void TestConnectionState(TestingT *t) {
     for (int i = 0; i < 3; i++)
         testing_t_run(t, str_from_cstr(connection_state_names[i]),
@@ -4281,6 +4297,7 @@ static void TestHandshakeMLDSA(TestingT *t) {
     X(TestConnCloseBreakingWrite)                                                      \
     X(TestConnCloseWrite)                                                              \
     X(TestWarningAlertFlood)                                                           \
+    X(TestConnectionStateMarshal)                                                      \
     X(TestConnectionState)                                                             \
     X(TestPKCS1OnlyCert)                                                               \
     X(TestEarlyLargeCertMsg)                                                           \

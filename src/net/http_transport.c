@@ -696,7 +696,8 @@ static void tp_queue_clean_front_not_waiting(tp_Queue *q) {
         tp_Want *w = tp_queue_peek(q);
         if (w == NULL || tp_want_waiting(w))
             return;
-        tp_want_unref(tp_queue_pop(q));
+        (void)tp_queue_pop(q);
+        tp_want_unref(w);
     }
 }
 
@@ -706,7 +707,8 @@ static void tp_queue_clean_front_canceled(tp_Queue *q) {
         tp_Want *w = tp_queue_peek(q);
         if (w == NULL || w->has_cancel_ctx)
             return;
-        tp_want_unref(tp_queue_pop(q));
+        (void)tp_queue_pop(q);
+        tp_want_unref(w);
     }
 }
 

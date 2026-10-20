@@ -64,7 +64,9 @@ BURROW_OWNS(ret) const Crc32Table *crc32_make_table(Alloc *a, uint32_t poly);
 BURROW_OWNS(ret) BURROW_BORROWS(ret, tab) HashHash32 crc32_new(Alloc *a,
                                                                const Crc32Table *tab);
 
-/* crc32_new with the IEEE table. */
+/* crc32_new with the IEEE table. The returned Hash32 also implements
+ * encoding.BinaryMarshaler and encoding.BinaryUnmarshaler to marshal and
+ * unmarshal the internal state of the hash. */
 BURROW_OWNS(ret) HashHash32 crc32_new_ieee(Alloc *a);
 
 /* Returns crc with the bytes of p added, which is how you checksum a stream in

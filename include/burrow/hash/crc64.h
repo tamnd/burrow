@@ -44,7 +44,9 @@ BURROW_OWNS(ret) const Crc64Table *crc64_make_table(Alloc *a, uint64_t poly);
 
 /* A new Hash64 computing the CRC-64 with tab, allocated from a. Sum appends the
  * checksum big endian. The hash keeps a pointer to tab, which has to outlive
- * it. */
+ * it. The returned Hash64 also implements encoding.BinaryMarshaler and
+ * encoding.BinaryUnmarshaler to marshal and unmarshal the internal state of the
+ * hash. */
 BURROW_OWNS(ret) BURROW_BORROWS(ret, tab) HashHash64 crc64_new(Alloc *a,
                                                                const Crc64Table *tab);
 

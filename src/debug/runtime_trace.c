@@ -355,6 +355,12 @@ static void rtr_copy(void *env) {
     }
 }
 
+/* The copier on a thread of its own, whose errors go with it. */
+static void rtr_copy_thread(void *env) {
+    rtr_copy(env);
+    burrow__error_thread_exit();
+}
+
 static Error rtr_start_locked(void) {
     /* Go starts the trace and then the goroutine that reads it, which cannot
      * fail. Here making the copier can, and a trace with no reader can never
@@ -373,7 +379,7 @@ static Error rtr_start_locked(void) {
      * of its own when the program is tracing from outside runtime_main. */
     tracing.on_thread = !burrow__sched_running();
     bool started = tracing.on_thread
-                       ? burrow__thread_start(&tracing.thread, rtr_copy, NULL, 0)
+                       ? burrow__thread_start(&tracing.thread, rtr_copy_thread, NULL, 0)
                        : go(BURROW_FN(Func, rtr_copy, NULL));
     if (!started) {
         tracing.on_thread = false;

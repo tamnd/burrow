@@ -11,6 +11,8 @@
 
 #include "burrow/crypto/tls.h"
 
+#include "burrow/bytes.h"
+#include "burrow/context.h"
 #include "burrow/core.h"
 #include "burrow/crypto.h"
 #include "burrow/crypto/cipher.h"
@@ -20,6 +22,7 @@
 #include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
+#include "burrow/net.h"
 #include "burrow/slice.h"
 #include "burrow/sync.h"
 
@@ -921,6 +924,85 @@ bool burrow__tls_new_session_ticket_msg_unmarshal(TlsNewSessionTicketMsg *m,
 Slice burrow__tls_hello_request_msg_marshal(Alloc *a, Error *err);
 bool burrow__tls_hello_request_msg_unmarshal(Slice data);
 
+/* The handshakeMessage interface. Go holds a pointer to one of the message
+ * types above and switches on its type. Here the message is held by value and
+ * kind says which. helloRequestMsg, serverHelloDoneMsg and endOfEarlyDataMsg
+ * have no fields, so they are a kind and nothing else. */
+typedef Int TlsMsgKind;
+
+#define TLS_MSG_NONE ((TlsMsgKind)0)
+#define TLS_MSG_HELLO_REQUEST ((TlsMsgKind)1)
+#define TLS_MSG_CLIENT_HELLO ((TlsMsgKind)2)
+#define TLS_MSG_SERVER_HELLO ((TlsMsgKind)3)
+#define TLS_MSG_NEW_SESSION_TICKET ((TlsMsgKind)4)
+#define TLS_MSG_NEW_SESSION_TICKET_TLS13 ((TlsMsgKind)5)
+#define TLS_MSG_CERTIFICATE ((TlsMsgKind)6)
+#define TLS_MSG_CERTIFICATE_TLS13 ((TlsMsgKind)7)
+#define TLS_MSG_CERTIFICATE_REQUEST ((TlsMsgKind)8)
+#define TLS_MSG_CERTIFICATE_REQUEST_TLS13 ((TlsMsgKind)9)
+#define TLS_MSG_CERTIFICATE_STATUS ((TlsMsgKind)10)
+#define TLS_MSG_SERVER_KEY_EXCHANGE ((TlsMsgKind)11)
+#define TLS_MSG_SERVER_HELLO_DONE ((TlsMsgKind)12)
+#define TLS_MSG_CLIENT_KEY_EXCHANGE ((TlsMsgKind)13)
+#define TLS_MSG_CERTIFICATE_VERIFY ((TlsMsgKind)14)
+#define TLS_MSG_FINISHED ((TlsMsgKind)15)
+#define TLS_MSG_ENCRYPTED_EXTENSIONS ((TlsMsgKind)16)
+#define TLS_MSG_END_OF_EARLY_DATA ((TlsMsgKind)17)
+#define TLS_MSG_KEY_UPDATE ((TlsMsgKind)18)
+
+typedef struct TlsHandshakeMsg {
+    TlsMsgKind kind;
+    union {
+        TlsClientHelloMsg client_hello;
+        TlsServerHelloMsg server_hello;
+        TlsNewSessionTicketMsg new_session_ticket;
+        TlsNewSessionTicketMsgTLS13 new_session_ticket_tls13;
+        TlsCertificateMsg certificate;
+        TlsCertificateMsgTLS13 certificate_tls13;
+        TlsCertificateRequestMsg certificate_request;
+        TlsCertificateRequestMsgTLS13 certificate_request_tls13;
+        TlsCertificateStatusMsg certificate_status;
+        TlsServerKeyExchangeMsg server_key_exchange;
+        TlsClientKeyExchangeMsg client_key_exchange;
+        TlsCertificateVerifyMsg certificate_verify;
+        TlsFinishedMsg finished;
+        TlsEncryptedExtensionsMsg encrypted_extensions;
+        TlsKeyUpdateMsg key_update;
+    };
+} TlsHandshakeMsg;
+
+/* Not in Go. A message of the given kind with its zero value, which is what
+ * new(T) gives in Go, with the slices nil and typed. */
+void burrow__tls_handshake_msg_init(TlsHandshakeMsg *m, TlsMsgKind kind);
+
+/* marshal and unmarshal for whichever message m is. unmarshal keeps slices of
+ * data, and copies what it has to into a. */
+Slice burrow__tls_handshake_msg_marshal(const TlsHandshakeMsg *m, Alloc *a, Error *err);
+bool burrow__tls_handshake_msg_unmarshal(TlsHandshakeMsg *m, Alloc *a, Slice data);
+
+/* Not in Go. What %T prints for a message of that kind, such as
+ * "*tls.finishedMsg", and "<nil>" for TLS_MSG_NONE. */
+Str burrow__tls_handshake_msg_type_name(TlsMsgKind kind);
+
+/* unexpectedMessageError, for a message got when one of type wanted was
+ * expected. The error comes from error_allocator. */
+Error burrow__tls_unexpected_message_error(TlsMsgKind wanted, TlsMsgKind got);
+
+/* transcriptMsg is a helper used to hash messages which are not hashed when
+ * they are read from, or written to, the wire. This is typically the case for
+ * messages which are either not sent, or need to be hashed out of order from
+ * when they are read/written.
+ *
+ * For most messages, the message is marshalled using their marshal method,
+ * since their wire representation is idempotent. For clientHelloMsg and
+ * serverHelloMsg, we store the original wire representation of the message and
+ * use that for hashing, since unmarshal/marshal are not idempotent due to
+ * extension ordering and other malleable fields, which may cause differences
+ * between what was received and what we marshal.
+ *
+ * Not in Go: a marshalled message is made in a. */
+Error burrow__tls_transcript_msg(const TlsHandshakeMsg *m, IoWriter h, Alloc *a);
+
 /* ---------------------------------------------------------------- config */
 
 /* roleClient and roleServer are meant to call supportedVersions and parents
@@ -1081,14 +1163,20 @@ typedef struct TlsHalfConn {
     Alloc *parent;
     Arena *keys;      /* where cipher, mac and traffic_secret are */
     Arena *next_keys; /* where next_cipher and next_mac are */
+    Arena *errs;      /* where err is */
 } TlsHalfConn;
 
 /* Not in Go. Sets hc up to make its arenas from a, which NULL means
  * heap_allocator. */
 void burrow__tls_half_conn_init(TlsHalfConn *hc, Alloc *a);
 
-/* Not in Go. Gives back both arenas. */
+/* Not in Go. Gives back the arenas. */
 void burrow__tls_half_conn_free(TlsHalfConn *hc);
+
+/* setErrorLocked keeps err as the first permanent error. A net.Error goes in
+ * a permanentError, which says it is not temporary. Not in Go: the error is
+ * copied into an arena of hc's, so it lasts as long as hc does. */
+Error burrow__tls_half_conn_set_error_locked(TlsHalfConn *hc, Error err);
 
 /* Not in Go. The allocator to make the cipher and MAC for the next
  * burrow__tls_half_conn_prepare_cipher_spec in, which is a new arena that
@@ -1143,5 +1231,188 @@ Slice burrow__tls_half_conn_decrypt(TlsHalfConn *hc, Slice record, uint8_t *typ,
  * record without room for it grows in a. */
 Slice burrow__tls_half_conn_encrypt(TlsHalfConn *hc, Alloc *a, Slice record,
                                     Slice payload, IoReader rand, Error *err);
+
+/* ------------------------------------------------------------------- Conn */
+
+/* tcpMSSEstimate is a conservative estimate of the TCP maximum segment size
+ * (MSS). A constant is used, rather than querying the kernel for the actual
+ * MSS, to avoid complexity. The value here is the IPv6 minimum MTU (1280
+ * bytes) minus the overhead of an IPv6 header (40 bytes) and a TCP header with
+ * timestamps (32 bytes). */
+#define TLS_TCP_MSS_ESTIMATE 1208
+
+/* recordSizeBoostThreshold is the number of bytes of application data sent
+ * after which the TLS record size will be increased to the maximum. */
+#define TLS_RECORD_SIZE_BOOST_THRESHOLD ((int64_t)128 * 1024)
+
+/* handshakeFn: (*Conn).clientHandshake or serverHandshake. It runs with
+ * handshake_mutex and in.mu held. */
+typedef Error (*TlsHandshakeFn)(TlsConn *c, Context ctx);
+
+struct TlsConn {
+    /* constant */
+    NetConn conn;
+    bool is_client;
+    TlsHandshakeFn handshake_fn;
+
+    /* isHandshakeComplete is true if the connection is currently transferring
+     * application data (i.e. is not currently processing a handshake).
+     * isHandshakeComplete is true implies handshakeErr == nil. */
+    SyncAtomicBool is_handshake_complete;
+    /* constant after handshake; protected by handshakeMutex */
+    SyncMutex handshake_mutex;
+    Error handshake_err; /* error resulting from handshake */
+    uint16_t vers;       /* TLS version */
+    bool have_vers;      /* version has been negotiated */
+    TlsConfig *config;   /* configuration passed to constructor */
+    /* handshakes counts the number of handshakes performed on the connection
+     * so far. If renegotiation is disabled then this is either zero or one. */
+    Int handshakes;
+    bool ext_master_secret;
+    bool did_resume; /* whether this connection was a session resumption */
+    bool did_hrr;    /* whether a HelloRetryRequest was sent/received */
+    uint16_t cipher_suite;
+    TlsCurveID curve_id;
+    TlsSignatureScheme peer_sig_alg;
+    Slice ocsp_response;     /* stapled OCSP response */
+    Slice scts;              /* signed certificate timestamps from server */
+    Slice peer_certificates; /* []*x509.Certificate */
+    Slice local_certificate; /* [][]byte */
+    /* verifiedChains contains the certificate chains that we built, as
+     * opposed to the ones presented by the server. */
+    Slice verified_chains;
+    /* serverName contains the server name indicated by the client, if any. */
+    Str server_name;
+    /* secureRenegotiation is true if the server echoed the secure
+     * renegotiation extension. (This is meaningless as a server because
+     * renegotiation is not supported in that case.) */
+    bool secure_renegotiation;
+    /* ekm is a closure for exporting keying material. */
+    TlsEkmFunc ekm;
+    /* resumptionSecret is the resumption_master_secret for handling or
+     * sending NewSessionTicket messages. */
+    Slice resumption_secret;
+    bool ech_accepted;
+
+    /* ticketKeys is the set of active session ticket keys for this
+     * connection. The first one is used to encrypt new tickets and all are
+     * tried to decrypt tickets. */
+    TlsTicketKeys *ticket_keys;
+
+    /* clientFinishedIsFirst is true if the client sent the first Finished
+     * message during the most recent handshake. This is recorded because the
+     * first transmitted Finished message is the tls-unique channel-binding
+     * value. */
+    bool client_finished_is_first;
+
+    /* closeNotifyErr is any error from sending the alertCloseNotify record. */
+    Error close_notify_err;
+    /* closeNotifySent is true if the Conn attempted to send an
+     * alertCloseNotify record. */
+    bool close_notify_sent;
+
+    /* clientFinished and serverFinished contain the Finished message sent by
+     * the client or server in the most recent handshake. This is retained to
+     * support the renegotiation extension and tls-unique channel-binding. */
+    Byte client_finished[12];
+    Byte server_finished[12];
+
+    /* clientProtocol is the negotiated ALPN protocol. */
+    Str client_protocol;
+
+    /* input/output */
+    TlsHalfConn in, out;
+    BytesBuffer raw_input; /* raw input, starting with a record header */
+    Slice input;           /* application data waiting to be read, from rawInput.Next */
+    BytesBuffer hand;      /* handshake data waiting to be read */
+    bool buffering;        /* whether records are buffered in sendBuf */
+    BytesBuffer send_buf;  /* a buffer of records waiting to be sent */
+
+    /* bytesSent counts the bytes of application data sent. packetsSent counts
+     * packets. */
+    int64_t bytes_sent;
+    int64_t packets_sent;
+
+    /* retryCount counts the number of consecutive non-advancing records
+     * received by Conn.readRecord. That is, records that neither advance the
+     * handshake, nor deliver application data. Protected by in.Mutex. */
+    Int retry_count;
+
+    /* activeCall indicates whether Close has been call in the low bit. the
+     * rest of the bits are the number of goroutines in Conn.Write. */
+    SyncAtomicInt32 active_call;
+
+    Byte tmp[16];
+
+    /* Not in Go. a is what the Conn came from. state is where the handshake
+     * keeps what lasts as long as the connection, handshake_err included,
+     * under handshake_mutex. out_bufs takes the place of outBufPool, under
+     * out.mu. */
+    Alloc *a;
+    Arena state;
+    Arena out_bufs;
+};
+
+/* Not in Go. What Client and Server share: a Conn over conn that runs fn as
+ * its handshake, made from a. NULL when a is out of memory. */
+TlsConn *burrow__tls_conn_new(Alloc *a, NetConn conn, TlsConfig *config, bool is_client,
+                              TlsHandshakeFn fn);
+
+/* readRecord and readChangeCipherSpec, which are readRecordOrCCS without and
+ * with expectChangeCipherSpec. c->in.mu has to be held. */
+Error burrow__tls_conn_read_record(TlsConn *c);
+Error burrow__tls_conn_read_change_cipher_spec(TlsConn *c);
+
+/* sendAlertLocked sends a TLS alert message, with c->out.mu held, and
+ * sendAlert takes it. */
+Error burrow__tls_conn_send_alert_locked(TlsConn *c, uint8_t err);
+Error burrow__tls_conn_send_alert(TlsConn *c, uint8_t err);
+
+/* maxPayloadSizeForWrite returns the maximum TLS payload size to use for the
+ * next application data record. */
+Int burrow__tls_conn_max_payload_size_for_write(TlsConn *c, uint8_t typ);
+
+/* flush writes out what buffering kept in sendBuf. */
+Int burrow__tls_conn_flush(TlsConn *c, Error *err);
+
+/* writeRecordLocked writes a TLS record with the given type and payload to the
+ * connection and updates the record layer state. */
+Int burrow__tls_conn_write_record_locked(TlsConn *c, uint8_t typ, Slice data,
+                                         Error *err);
+
+/* writeHandshakeRecord writes a handshake message to the connection and
+ * updates the record layer state. If transcript is non-nil the marshaled
+ * message is written to it. */
+Int burrow__tls_conn_write_handshake_record(TlsConn *c, const TlsHandshakeMsg *msg,
+                                            IoWriter transcript, Error *err);
+
+/* writeChangeCipherRecord writes a ChangeCipherSpec message to the connection
+ * and updates the record layer state. */
+Error burrow__tls_conn_write_change_cipher_record(TlsConn *c);
+
+/* readHandshake reads the next handshake message from the record layer. If
+ * transcript is non-nil, the message is written to the passed transcriptHash.
+ *
+ * Not in Go: the message goes to *msg, and its copy of the bytes is made in
+ * a. */
+Error burrow__tls_conn_read_handshake(TlsConn *c, IoWriter transcript, Alloc *a,
+                                      TlsHandshakeMsg *msg);
+
+/* setReadTrafficSecret sets the read traffic secret for the given encryption
+ * level. If being called at the same time as setWriteTrafficSecret, the
+ * caller must ensure the call to setWriteTrafficSecret happens first so any
+ * alerts are sent at the write level. */
+Error burrow__tls_conn_set_read_traffic_secret(TlsConn *c, const TlsSuiteTLS13 *suite,
+                                               TlsQuicEncryptionLevel level,
+                                               Slice secret, bool locked);
+
+/* setWriteTrafficSecret sets the write traffic secret for the given encryption
+ * level. If being called at the same time as setReadTrafficSecret, the caller
+ * must ensure the call to setWriteTrafficSecret happens first so any alerts
+ * are sent at the write level. Not in Go: it can run out of memory, which
+ * goes to c->out.err as well. */
+Error burrow__tls_conn_set_write_traffic_secret(TlsConn *c, const TlsSuiteTLS13 *suite,
+                                                TlsQuicEncryptionLevel level,
+                                                Slice secret);
 
 #endif /* BURROW_SRC_CRYPTO_TLS_INTERNAL_H */

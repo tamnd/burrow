@@ -2113,3 +2113,223 @@ Slice burrow__tls_hello_request_msg_marshal(Alloc *a, Error *err) {
 bool burrow__tls_hello_request_msg_unmarshal(Slice data) {
     return data.len == 4;
 }
+
+/* ------------------------------------------------------- handshakeMessage */
+
+void burrow__tls_handshake_msg_init(TlsHandshakeMsg *m, TlsMsgKind kind) {
+    memset(m, 0, sizeof *m);
+    m->kind = kind;
+    switch (kind) {
+    case TLS_MSG_CLIENT_HELLO:
+        m->client_hello = burrow__tls_client_hello_msg_zero();
+        break;
+    case TLS_MSG_SERVER_HELLO:
+        m->server_hello = burrow__tls_server_hello_msg_zero();
+        break;
+    case TLS_MSG_NEW_SESSION_TICKET:
+        m->new_session_ticket.ticket = slice_nil(TYPE_BYTE);
+        break;
+    case TLS_MSG_NEW_SESSION_TICKET_TLS13:
+        m->new_session_ticket_tls13 = burrow__tls_new_session_ticket_msg_tls13_zero();
+        break;
+    case TLS_MSG_CERTIFICATE:
+        m->certificate.certificates = slice_nil(TYPE_BYTES);
+        break;
+    case TLS_MSG_CERTIFICATE_TLS13:
+        m->certificate_tls13 = burrow__tls_certificate_msg_tls13_zero();
+        break;
+    case TLS_MSG_CERTIFICATE_REQUEST:
+        m->certificate_request = burrow__tls_certificate_request_msg_zero();
+        break;
+    case TLS_MSG_CERTIFICATE_REQUEST_TLS13:
+        m->certificate_request_tls13 = burrow__tls_certificate_request_msg_tls13_zero();
+        break;
+    case TLS_MSG_CERTIFICATE_STATUS:
+        m->certificate_status.response = slice_nil(TYPE_BYTE);
+        break;
+    case TLS_MSG_SERVER_KEY_EXCHANGE:
+        m->server_key_exchange.key = slice_nil(TYPE_BYTE);
+        break;
+    case TLS_MSG_CLIENT_KEY_EXCHANGE:
+        m->client_key_exchange.ciphertext = slice_nil(TYPE_BYTE);
+        break;
+    case TLS_MSG_CERTIFICATE_VERIFY:
+        m->certificate_verify.signature = slice_nil(TYPE_BYTE);
+        break;
+    case TLS_MSG_FINISHED:
+        m->finished.verify_data = slice_nil(TYPE_BYTE);
+        break;
+    case TLS_MSG_ENCRYPTED_EXTENSIONS:
+        m->encrypted_extensions = burrow__tls_encrypted_extensions_msg_zero();
+        break;
+    default:
+        break;
+    }
+}
+
+Slice burrow__tls_handshake_msg_marshal(const TlsHandshakeMsg *m, Alloc *a,
+                                        Error *err) {
+    switch (m->kind) {
+    case TLS_MSG_HELLO_REQUEST:
+        return burrow__tls_hello_request_msg_marshal(a, err);
+    case TLS_MSG_CLIENT_HELLO:
+        return burrow__tls_client_hello_msg_marshal(&m->client_hello, a, err);
+    case TLS_MSG_SERVER_HELLO:
+        return burrow__tls_server_hello_msg_marshal(&m->server_hello, a, err);
+    case TLS_MSG_NEW_SESSION_TICKET:
+        return burrow__tls_new_session_ticket_msg_marshal(&m->new_session_ticket, a,
+                                                          err);
+    case TLS_MSG_NEW_SESSION_TICKET_TLS13:
+        return burrow__tls_new_session_ticket_msg_tls13_marshal(
+            &m->new_session_ticket_tls13, a, err);
+    case TLS_MSG_CERTIFICATE:
+        return burrow__tls_certificate_msg_marshal(&m->certificate, a, err);
+    case TLS_MSG_CERTIFICATE_TLS13:
+        return burrow__tls_certificate_msg_tls13_marshal(&m->certificate_tls13, a, err);
+    case TLS_MSG_CERTIFICATE_REQUEST:
+        return burrow__tls_certificate_request_msg_marshal(&m->certificate_request, a,
+                                                           err);
+    case TLS_MSG_CERTIFICATE_REQUEST_TLS13:
+        return burrow__tls_certificate_request_msg_tls13_marshal(
+            &m->certificate_request_tls13, a, err);
+    case TLS_MSG_CERTIFICATE_STATUS:
+        return burrow__tls_certificate_status_msg_marshal(&m->certificate_status, a,
+                                                          err);
+    case TLS_MSG_SERVER_KEY_EXCHANGE:
+        return burrow__tls_server_key_exchange_msg_marshal(&m->server_key_exchange, a,
+                                                           err);
+    case TLS_MSG_SERVER_HELLO_DONE:
+        return burrow__tls_server_hello_done_msg_marshal(a, err);
+    case TLS_MSG_CLIENT_KEY_EXCHANGE:
+        return burrow__tls_client_key_exchange_msg_marshal(&m->client_key_exchange, a,
+                                                           err);
+    case TLS_MSG_CERTIFICATE_VERIFY:
+        return burrow__tls_certificate_verify_msg_marshal(&m->certificate_verify, a,
+                                                          err);
+    case TLS_MSG_FINISHED:
+        return burrow__tls_finished_msg_marshal(&m->finished, a, err);
+    case TLS_MSG_ENCRYPTED_EXTENSIONS:
+        return burrow__tls_encrypted_extensions_msg_marshal(&m->encrypted_extensions, a,
+                                                            err);
+    case TLS_MSG_END_OF_EARLY_DATA:
+        return burrow__tls_end_of_early_data_msg_marshal(a, err);
+    case TLS_MSG_KEY_UPDATE:
+        return burrow__tls_key_update_msg_marshal(&m->key_update, a, err);
+    default:
+        panic_str(BURROW_S("tls: marshal of a handshake message of no kind"));
+    }
+}
+
+bool burrow__tls_handshake_msg_unmarshal(TlsHandshakeMsg *m, Alloc *a, Slice data) {
+    switch (m->kind) {
+    case TLS_MSG_HELLO_REQUEST:
+        return burrow__tls_hello_request_msg_unmarshal(data);
+    case TLS_MSG_CLIENT_HELLO:
+        return burrow__tls_client_hello_msg_unmarshal(&m->client_hello, a, data);
+    case TLS_MSG_SERVER_HELLO:
+        return burrow__tls_server_hello_msg_unmarshal(&m->server_hello, a, data);
+    case TLS_MSG_NEW_SESSION_TICKET:
+        return burrow__tls_new_session_ticket_msg_unmarshal(&m->new_session_ticket,
+                                                            data);
+    case TLS_MSG_NEW_SESSION_TICKET_TLS13:
+        return burrow__tls_new_session_ticket_msg_tls13_unmarshal(
+            &m->new_session_ticket_tls13, data);
+    case TLS_MSG_CERTIFICATE:
+        return burrow__tls_certificate_msg_unmarshal(&m->certificate, a, data);
+    case TLS_MSG_CERTIFICATE_TLS13:
+        return burrow__tls_certificate_msg_tls13_unmarshal(&m->certificate_tls13, a,
+                                                           data);
+    case TLS_MSG_CERTIFICATE_REQUEST:
+        return burrow__tls_certificate_request_msg_unmarshal(&m->certificate_request, a,
+                                                             data);
+    case TLS_MSG_CERTIFICATE_REQUEST_TLS13:
+        return burrow__tls_certificate_request_msg_tls13_unmarshal(
+            &m->certificate_request_tls13, a, data);
+    case TLS_MSG_CERTIFICATE_STATUS:
+        return burrow__tls_certificate_status_msg_unmarshal(&m->certificate_status,
+                                                            data);
+    case TLS_MSG_SERVER_KEY_EXCHANGE:
+        return burrow__tls_server_key_exchange_msg_unmarshal(&m->server_key_exchange,
+                                                             data);
+    case TLS_MSG_SERVER_HELLO_DONE:
+        return burrow__tls_server_hello_done_msg_unmarshal(data);
+    case TLS_MSG_CLIENT_KEY_EXCHANGE:
+        return burrow__tls_client_key_exchange_msg_unmarshal(&m->client_key_exchange,
+                                                             data);
+    case TLS_MSG_CERTIFICATE_VERIFY:
+        return burrow__tls_certificate_verify_msg_unmarshal(&m->certificate_verify,
+                                                            data);
+    case TLS_MSG_FINISHED:
+        return burrow__tls_finished_msg_unmarshal(&m->finished, data);
+    case TLS_MSG_ENCRYPTED_EXTENSIONS:
+        return burrow__tls_encrypted_extensions_msg_unmarshal(&m->encrypted_extensions,
+                                                              a, data);
+    case TLS_MSG_END_OF_EARLY_DATA:
+        return burrow__tls_end_of_early_data_msg_unmarshal(data);
+    case TLS_MSG_KEY_UPDATE:
+        return burrow__tls_key_update_msg_unmarshal(&m->key_update, data);
+    default:
+        return false;
+    }
+}
+
+static const Str tls_msg_type_names[] = {
+    BURROW_S_INIT("<nil>"),
+    BURROW_S_INIT("*tls.helloRequestMsg"),
+    BURROW_S_INIT("*tls.clientHelloMsg"),
+    BURROW_S_INIT("*tls.serverHelloMsg"),
+    BURROW_S_INIT("*tls.newSessionTicketMsg"),
+    BURROW_S_INIT("*tls.newSessionTicketMsgTLS13"),
+    BURROW_S_INIT("*tls.certificateMsg"),
+    BURROW_S_INIT("*tls.certificateMsgTLS13"),
+    BURROW_S_INIT("*tls.certificateRequestMsg"),
+    BURROW_S_INIT("*tls.certificateRequestMsgTLS13"),
+    BURROW_S_INIT("*tls.certificateStatusMsg"),
+    BURROW_S_INIT("*tls.serverKeyExchangeMsg"),
+    BURROW_S_INIT("*tls.serverHelloDoneMsg"),
+    BURROW_S_INIT("*tls.clientKeyExchangeMsg"),
+    BURROW_S_INIT("*tls.certificateVerifyMsg"),
+    BURROW_S_INIT("*tls.finishedMsg"),
+    BURROW_S_INIT("*tls.encryptedExtensionsMsg"),
+    BURROW_S_INIT("*tls.endOfEarlyDataMsg"),
+    BURROW_S_INIT("*tls.keyUpdateMsg"),
+};
+
+Str burrow__tls_handshake_msg_type_name(TlsMsgKind kind) {
+    if (kind < 0 ||
+        kind >= (TlsMsgKind)(sizeof tls_msg_type_names / sizeof tls_msg_type_names[0]))
+        return tls_msg_type_names[0];
+    return tls_msg_type_names[kind];
+}
+
+Error burrow__tls_unexpected_message_error(TlsMsgKind wanted, TlsMsgKind got) {
+    return fmt_errorf_v("tls: received unexpected handshake message of type %s when "
+                        "waiting for %s",
+                        burrow__tls_handshake_msg_type_name(got),
+                        burrow__tls_handshake_msg_type_name(wanted));
+}
+
+/* h.Write, whose error a hash never has. */
+static void tls_transcript_write(IoWriter h, Slice p) {
+    Error err = BURROW_NO_ERROR;
+    (void)h.vt->write(h.data, p, &err);
+}
+
+Error burrow__tls_transcript_msg(const TlsHandshakeMsg *m, IoWriter h, Alloc *a) {
+    Slice orig = slice_nil(TYPE_BYTE);
+    if (m->kind == TLS_MSG_CLIENT_HELLO)
+        orig = m->client_hello.original;
+    else if (m->kind == TLS_MSG_SERVER_HELLO)
+        orig = m->server_hello.original;
+    if (orig.p != NULL) {
+        tls_transcript_write(h, orig);
+        return BURROW_NO_ERROR;
+    }
+
+    Error err = BURROW_NO_ERROR;
+    Slice data = burrow__tls_handshake_msg_marshal(m, a, &err);
+    if (BURROW_FAILED(err))
+        return err;
+    tls_transcript_write(h, data);
+    return BURROW_NO_ERROR;
+}

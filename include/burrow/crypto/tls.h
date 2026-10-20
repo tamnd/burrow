@@ -1115,6 +1115,154 @@ BURROW_STATIC(ret) Error tls_config_set_session_ticket_keys(TlsConfig *c,
  * as it was; otherwise no error. */
 BURROW_STATIC(ret) Error tls_config_build_name_to_certificate(TlsConfig *c, Alloc *a);
 
+/* -------------------------------------------------------------------- Conn */
+
+/* RecordHeaderError is returned when a TLS record header is invalid. */
+typedef struct TlsRecordHeaderError {
+    /* Msg contains a human readable string that describes the error. */
+    Str msg;
+    /* RecordHeader contains the five bytes of TLS record header that
+     * triggered the error. */
+    Byte record_header[5];
+    /* Conn provides the underlying net.Conn in the case that a client sent an
+     * initial handshake that didn't look like TLS. It is nil if there's
+     * already been a handshake or a TLS alert has been written to the
+     * connection. */
+    NetConn conn;
+} TlsRecordHeaderError;
+
+extern const Type *const TYPE_TLS_RECORD_HEADER_ERROR;
+
+/* RecordHeaderError.Error: "tls: " and e->msg, built in a. */
+BURROW_OWNS(ret) Str tls_record_header_error_error(const TlsRecordHeaderError *e,
+                                                   Alloc *a);
+
+/* An Error for e, which errors_as with TYPE_TLS_RECORD_HEADER_ERROR gives
+ * back. msg is copied into a, and conn is not, so whatever conn is has to
+ * outlive the error if anything is going to use it. Out of memory gives
+ * burrow_err_out_of_memory. */
+BURROW_OWNS(ret) Error tls_record_header_error_as_error(const TlsRecordHeaderError *e,
+                                                        Alloc *a);
+
+/* A Conn represents a secured connection. It implements the net.Conn
+ * interface.
+ *
+ * Client and Server, which make one, come with the handshakes. A Conn comes
+ * from the allocator it was made with, which has to be one that two
+ * goroutines can use at once, as the heap can, since reads and writes run in
+ * parallel. tls_conn_free gives it back.
+ *
+ * Once a read or a write has failed for good, the Conn keeps the error and
+ * gives it back from every later call. Those errors belong to the Conn and
+ * last until tls_conn_free. Any other error comes from the calling
+ * goroutine's error_allocator. */
+typedef struct TlsConn TlsConn;
+
+/* LocalAddr returns the local network address. */
+NetAddr tls_conn_local_addr(TlsConn *c);
+
+/* RemoteAddr returns the remote network address. */
+NetAddr tls_conn_remote_addr(TlsConn *c);
+
+/* SetDeadline sets the read and write deadlines associated with the
+ * connection. A zero value for t means Conn.Read and Conn.Write will not time
+ * out. After a Write has timed out, the TLS state is corrupt and all future
+ * writes will return the same error. */
+BURROW_BORROWS(ret, c) Error tls_conn_set_deadline(TlsConn *c, Time t);
+
+/* SetReadDeadline sets the read deadline on the underlying connection. A zero
+ * value for t means Conn.Read will not time out. */
+BURROW_BORROWS(ret, c) Error tls_conn_set_read_deadline(TlsConn *c, Time t);
+
+/* SetWriteDeadline sets the write deadline on the underlying connection. A
+ * zero value for t means Conn.Write will not time out. After a Conn.Write has
+ * timed out, the TLS state is corrupt and all future writes will return the
+ * same error. */
+BURROW_BORROWS(ret, c) Error tls_conn_set_write_deadline(TlsConn *c, Time t);
+
+/* NetConn returns the underlying connection that is wrapped by c. Note that
+ * writing to or reading from this connection directly will corrupt the TLS
+ * session. */
+NetConn tls_conn_net_conn(TlsConn *c);
+
+/* Write writes data to the connection.
+ *
+ * As Write calls Conn.Handshake, in order to prevent indefinite blocking a
+ * deadline must be set for both Conn.Read and Write before Write is called
+ * when the handshake has not yet completed. See Conn.SetDeadline,
+ * Conn.SetReadDeadline, and Conn.SetWriteDeadline. */
+Int tls_conn_write(TlsConn *c, Slice b, Error *err);
+
+/* Read reads data from the connection.
+ *
+ * As Read calls Conn.Handshake, in order to prevent indefinite blocking a
+ * deadline must be set for both Read and Conn.Write before Read is called when
+ * the handshake has not yet completed. See Conn.SetDeadline,
+ * Conn.SetReadDeadline, and Conn.SetWriteDeadline. */
+Int tls_conn_read(TlsConn *c, Slice b, Error *err);
+
+/* Close closes the connection. */
+BURROW_BORROWS(ret, c) Error tls_conn_close(TlsConn *c);
+
+/* CloseWrite shuts down the writing side of the connection. It should only be
+ * called once the handshake has completed and does not call CloseWrite on the
+ * underlying connection. Most callers should just use Conn.Close. */
+BURROW_BORROWS(ret, c) Error tls_conn_close_write(TlsConn *c);
+
+/* Handshake runs the client or server handshake protocol if it has not yet
+ * been run.
+ *
+ * Most uses of this package need not call Handshake explicitly: the first
+ * Conn.Read or Conn.Write will call it automatically.
+ *
+ * For control over canceling or setting a timeout on a handshake, use
+ * Conn.HandshakeContext or the Dialer's DialContext method instead. */
+BURROW_BORROWS(ret, c) Error tls_conn_handshake(TlsConn *c);
+
+/* HandshakeContext runs the client or server handshake protocol if it has not
+ * yet been run.
+ *
+ * The provided Context must be non-nil. If the context is canceled before the
+ * handshake is complete, the handshake is interrupted and an error is
+ * returned. Once the handshake has completed, cancellation of the context will
+ * not affect the connection.
+ *
+ * Most uses of this package need not call HandshakeContext explicitly: the
+ * first Conn.Read or Conn.Write will call it automatically. */
+BURROW_BORROWS(ret, c) Error tls_conn_handshake_context(TlsConn *c, Context ctx);
+
+/* ConnectionState returns basic TLS details about the connection.
+ *
+ * The returned ConnectionState is only meaningful after the handshake has
+ * completed, as reported by ConnectionState.HandshakeComplete; before then its
+ * fields are not populated. The handshake is run automatically by the first
+ * Conn.Read or Conn.Write, or it can be triggered explicitly with
+ * Conn.Handshake.
+ *
+ * Not in Go: what the state points at belongs to c. */
+TlsConnectionState tls_conn_connection_state(TlsConn *c);
+
+/* OCSPResponse returns the stapled OCSP response from the TLS server, if any.
+ * (Only valid for client connections.)
+ *
+ * Not in Go: the response belongs to c. */
+BURROW_BORROWS(ret, c) Slice tls_conn_ocsp_response(TlsConn *c);
+
+/* VerifyHostname checks that the peer certificate chain is valid for
+ * connecting to host. If so, it returns nil; if not, it returns an error
+ * describing the problem. */
+BURROW_BORROWS(ret, c) Error tls_conn_verify_hostname(TlsConn *c, Str host);
+
+/* Not in Go: c as a net.Conn, which is what Go gets by using the *Conn as
+ * one. */
+NetConn tls_conn_as_net_conn(TlsConn *c);
+
+/* Not in Go: gives c back to the allocator it came from, with everything it
+ * kept. It does not close or free the connection underneath, which is the
+ * caller's. Close c first, and free it once no goroutine is in a call on it
+ * or will make one. NULL does nothing. */
+void tls_conn_free(TlsConn *c);
+
 #ifdef __cplusplus
 }
 #endif

@@ -21,6 +21,7 @@
 #include "burrow/bytes.h"
 #include "burrow/chan.h"
 #include "burrow/context.h"
+#include "burrow/crypto/ecdh.h"
 #include "burrow/crypto/ecdsa.h"
 #include "burrow/crypto/elliptic.h"
 #include "burrow/crypto/tls.h"
@@ -3006,6 +3007,236 @@ static void TestLargeCertMsg(TestingT *t) {
     arena_free(&ar);
 }
 
+/* marshalECHConfig in TestECH, with the cryptobyte builder's length prefixes
+ * written out. */
+static Slice marshal_ech_config(Alloc *a, uint16_t version, uint8_t id, Slice pub_key,
+                                Str public_name, uint8_t max_name_len) {
+    Int body = 1 + 2 + 2 + pub_key.len + 2 + 4 + 1 + 1 + public_name.len + 2;
+    Slice out = slice_make(a, TYPE_BYTE, 4 + body, 4 + body);
+    if (out.p == NULL)
+        return out;
+    Byte *p = out.p;
+    *p++ = (Byte)(version >> 8);
+    *p++ = (Byte)version;
+    *p++ = (Byte)(body >> 8);
+    *p++ = (Byte)body;
+    *p++ = id;
+    *p++ = 0x00; /* DHKEM(X25519, HKDF-SHA256) */
+    *p++ = 0x20;
+    *p++ = (Byte)(pub_key.len >> 8);
+    *p++ = (Byte)pub_key.len;
+    memcpy(p, pub_key.p, (size_t)pub_key.len);
+    p += pub_key.len;
+    static const Byte suites[6] = {0x00, 0x04, 0x00, 0x01 /* HKDF-SHA256 */,
+                                   0x00, 0x01 /* AES-128-GCM */};
+    memcpy(p, suites, sizeof suites);
+    p += sizeof suites;
+    *p++ = max_name_len;
+    *p++ = (Byte)public_name.len;
+    memcpy(p, public_name.p, (size_t)public_name.len);
+    p += public_name.len;
+    *p++ = 0x00; /* extensions */
+    *p++ = 0x00;
+    return out;
+}
+
+/* An X25519 ECH key, as its private and public key bytes. */
+typedef struct ECHTestKey {
+    Slice priv, pub;
+} ECHTestKey;
+
+static ECHTestKey ech_test_key(Alloc *a, Error *err) {
+    ECHTestKey out = {slice_nil(TYPE_BYTE), slice_nil(TYPE_BYTE)};
+    EcdhPrivateKey *k = ecdh_curve_generate_key(ecdh_x25519(), a, (IoReader){0}, err);
+    if (k == NULL)
+        return out;
+    out.priv = ecdh_private_key_bytes(k, a);
+    out.pub = ecdh_public_key_bytes(ecdh_private_key_public_key(k), a);
+    ecdh_private_key_free(k);
+    if (out.priv.p == NULL || out.pub.p == NULL)
+        BURROW_OUT(err, burrow_err_out_of_memory);
+    return out;
+}
+
+typedef struct ECHCheck {
+    TlsConfig *client_config, *server_config;
+    const X509Certificate *secret_cert;
+} ECHCheck;
+
+static void ech_check(TestingT *t, const ECHCheck *c) {
+    Handshake h;
+    test_handshake(t, c->client_config, c->server_config, &h);
+    if (BURROW_FAILED(h.err)) {
+        testing_t_errorf_v(t, "unexpected failure: %s", error_text(h.err));
+        handshake_free(&h);
+        testing_t_fail_now(t);
+    }
+    const TlsConnectionState *ss = &h.server_state, *cs = &h.client_state;
+    Str secret = BURROW_S("secret.example");
+    const char *bad = NULL;
+    if (!ss->ech_accepted)
+        bad = "server ConnectionState shows ECH not accepted";
+    else if (!cs->ech_accepted)
+        bad = "client ConnectionState shows ECH not accepted";
+    else if (!str_eq(cs->server_name, secret) || !str_eq(ss->server_name, secret))
+        testing_t_errorf_v(t,
+                           "unexpected ConnectionState.ServerName, want %q, got "
+                           "server:%q, client: %q",
+                           secret, ss->server_name, cs->server_name);
+    else if (cs->verified_chains.len != 1)
+        bad = "unexpected number of certificate chains";
+    else if (((const Slice *)cs->verified_chains.p)[0].len != 1)
+        bad = "unexpected number of certificates";
+    else if (!x509_certificate_equal(
+                 ((X509Certificate *const *)((const Slice *)cs->verified_chains.p)[0]
+                      .p)[0],
+                 c->secret_cert))
+        bad = "unexpected certificate";
+    bool failed = testing_t_failed(t);
+    handshake_free(&h);
+    if (bad != NULL)
+        testing_t_fatal_v(t, str_from_cstr(bad));
+    if (failed)
+        testing_t_fail_now(t);
+}
+
+static Slice ech_get_keys(void *env, TlsClientHelloInfo *chi, Error *err) {
+    (void)chi;
+    (void)err;
+    return *(const Slice *)env;
+}
+
+static void TestECH(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    EcdsaPrivateKey *k = ecdsa_generate_key(a, elliptic_p256(), (IoReader){0}, &err);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        testing_t_fatal_v(t, err);
+    }
+    Str dns_names[1] = {BURROW_S("public.example")};
+    X509Certificate tmpl;
+    memset(&tmpl, 0, sizeof tmpl);
+    tmpl.serial_number = big_new_int(a, 1);
+    tmpl.dns_names = slice_from(dns_names, 1, 1, TYPE_STRING);
+    tmpl.not_before = time_add(time_now(), -TIME_HOUR);
+    tmpl.not_after = time_add(time_now(), TIME_HOUR);
+    Slice public_cert_der = x509_create_certificate(a, (IoReader){0}, &tmpl, &tmpl,
+                                                    ecdsa_private_key_public(k),
+                                                    ecdsa_private_key_signer(k), &err);
+    X509Certificate *public_cert = NULL, *secret_cert = NULL;
+    if (!BURROW_FAILED(err))
+        public_cert = x509_parse_certificate(a, public_cert_der, &err);
+    dns_names[0] = BURROW_S("secret.example");
+    Slice secret_cert_der = slice_nil(TYPE_BYTE);
+    if (!BURROW_FAILED(err))
+        secret_cert_der = x509_create_certificate(a, (IoReader){0}, &tmpl, &tmpl,
+                                                  ecdsa_private_key_public(k),
+                                                  ecdsa_private_key_signer(k), &err);
+    if (!BURROW_FAILED(err))
+        secret_cert = x509_parse_certificate(a, secret_cert_der, &err);
+    ECHTestKey ech_key = {slice_nil(TYPE_BYTE), slice_nil(TYPE_BYTE)};
+    if (!BURROW_FAILED(err))
+        ech_key = ech_test_key(a, &err);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        testing_t_fatal_v(t, err);
+    }
+
+    Slice ech_config = marshal_ech_config(a, TLS_EXTENSION_ENCRYPTED_CLIENT_HELLO, 123,
+                                          ech_key.pub, BURROW_S("public.example"), 32);
+    Slice ech_config_list =
+        slice_make(a, TYPE_BYTE, 2 + ech_config.len, 2 + ech_config.len);
+    X509CertPool *root_cas = x509_new_cert_pool(a);
+    if (ech_config.p == NULL || ech_config_list.p == NULL || root_cas == NULL) {
+        arena_free(&ar);
+        testing_t_fatal_v(t, "out of memory");
+    }
+    Byte *l = ech_config_list.p;
+    l[0] = (Byte)(ech_config.len >> 8);
+    l[1] = (Byte)ech_config.len;
+    memcpy(l + 2, ech_config.p, (size_t)ech_config.len);
+
+    TlsConfig client_config = test_config_client(a);
+    TlsConfig server_config = test_config_server(a);
+    client_config.time = (TlsTimeFunc){0};
+    client_config.min_version = TLS_VERSION_TLS13;
+    client_config.server_name = BURROW_S("secret.example");
+    client_config.root_cas = root_cas;
+    x509_cert_pool_add_cert(root_cas, secret_cert);
+    x509_cert_pool_add_cert(root_cas, public_cert);
+    client_config.encrypted_client_hello_config_list = ech_config_list;
+    client_config.client_session_cache = tls_new_lru_client_session_cache(a, 2);
+    server_config.insecure_skip_verify = false;
+    server_config.time = (TlsTimeFunc){0};
+    server_config.min_version = TLS_VERSION_TLS13;
+    server_config.server_name = BURROW_S("public.example");
+    TlsCertificate certs[2];
+    memset(certs, 0, sizeof certs);
+    certs[0].certificate = slice_from(&public_cert_der, 1, 1, TYPE_BYTES);
+    certs[0].private_key = BURROW_ANY(TYPE_ECDSA_PRIVATE_KEY, k);
+    certs[1].certificate = slice_from(&secret_cert_der, 1, 1, TYPE_BYTES);
+    certs[1].private_key = BURROW_ANY(TYPE_ECDSA_PRIVATE_KEY, k);
+    server_config.certificates = slice_from(certs, 2, 2, TYPE_TLS_CERTIFICATE);
+    TlsEncryptedClientHelloKey keys[2] = {{ech_config, ech_key.priv, true},
+                                          {ech_config, ech_key.priv, true}};
+    server_config.encrypted_client_hello_keys =
+        slice_from(keys, 1, 1, TYPE_TLS_ENCRYPTED_CLIENT_HELLO_KEY);
+    if (client_config.client_session_cache.vt == NULL) {
+        arena_free(&ar);
+        testing_t_fatal_v(t, "out of memory");
+    }
+
+    ECHCheck check = {&client_config, &server_config, secret_cert};
+    ech_check(t, &check);
+
+    Slice callback_keys =
+        slice_from(&keys[1], 1, 1, TYPE_TLS_ENCRYPTED_CLIENT_HELLO_KEY);
+    server_config.get_encrypted_client_hello_keys =
+        (TlsGetEncryptedClientHelloKeysFunc){ech_get_keys, &callback_keys};
+    ECHTestKey rand_key = ech_test_key(a, &err);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        testing_t_fatal_v(t, err);
+    }
+    Slice rand_config =
+        marshal_ech_config(a, TLS_EXTENSION_ENCRYPTED_CLIENT_HELLO, 32, rand_key.pub,
+                           BURROW_S("random.example"), 32);
+    keys[0] = (TlsEncryptedClientHelloKey){rand_config, rand_key.priv, true};
+    server_config.encrypted_client_hello_keys =
+        slice_from(keys, 1, 1, TYPE_TLS_ENCRYPTED_CLIENT_HELLO_KEY);
+
+    ech_check(t, &check);
+
+    /* A server configured with an unsupported-version ECHConfig ahead of a
+     * usable one must skip the unusable entry (per RFC 9849 §4) and
+     * trial-decrypt against the next key, rather than aborting the handshake
+     * on the first entry. */
+    ECHTestKey unsupported_key = ech_test_key(a, &err);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        testing_t_fatal_v(t, err);
+    }
+    Slice unsupported_config = marshal_ech_config(a, 0xbadd, 99, unsupported_key.pub,
+                                                  BURROW_S("public.example"), 32);
+    server_config.get_encrypted_client_hello_keys =
+        (TlsGetEncryptedClientHelloKeysFunc){0};
+    keys[0] =
+        (TlsEncryptedClientHelloKey){unsupported_config, unsupported_key.priv, true};
+    keys[1] = (TlsEncryptedClientHelloKey){ech_config, ech_key.priv, true};
+    server_config.encrypted_client_hello_keys =
+        slice_from(keys, 2, 2, TYPE_TLS_ENCRYPTED_CLIENT_HELLO_KEY);
+
+    ech_check(t, &check);
+
+    tls_lru_client_session_cache_free(client_config.client_session_cache);
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    arena_free(&ar);
+}
+
 /* Not in Go: messageOnlySigner, a crypto.Signer whose Sign fails, found to be
  * a crypto.MessageSigner through the SignMessage in its type's method set. */
 #define MESSAGE_ONLY_SIGNER_FIELDS(F, T) F(T, CryptoSigner, Signer, "")
@@ -4323,6 +4554,7 @@ static void TestHandshakeMLDSA(TestingT *t) {
     X(TestPKCS1OnlyCert)                                                               \
     X(TestEarlyLargeCertMsg)                                                           \
     X(TestLargeCertMsg)                                                                \
+    X(TestECH)                                                                         \
     X(TestMessageSigner)                                                               \
     X(TestInvalidHandshakeSignature)                                                   \
     X(TestLocalCertificate)                                                            \

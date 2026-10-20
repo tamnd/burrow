@@ -1663,7 +1663,7 @@ extern const Type burrow__tls_ech_config_type;
 
 /* parseECHConfig. Not in Go: what is parsed points into enc, and the lists are
  * made in a. */
-Error burrow__tls_parse_ech_config(Alloc *a, Slice enc, bool *skip, TlsECHConfig *ec);
+Error burrow__tls_parse_ech_config(Alloc *a, Slice enc, bool *skip, TlsECHConfig *out);
 
 /* parseECHConfigList parses a RFC 9849 ECHConfigList, returning a slice of
  * parsed ECHConfigs, in the same order they were parsed, or an error if the

@@ -208,8 +208,9 @@ Slice burrow__tls_parse_ech_config_list(Alloc *a, Slice data, Error *err) {
             BURROW_OUT(err, tech_err_malformed_ech_config);
             return none;
         }
-        const Byte *p = s.p;
-        uint16_t config_len = (uint16_t)((uint16_t)(p[2] << 8) | p[3]);
+        CryptobyteString head = slice_sub(s, 2, 4);
+        uint16_t config_len = 0;
+        (void)cryptobyte_string_read_uint16(&head, &config_len);
         bool skip = false;
         TlsECHConfig ec;
         Error e = burrow__tls_parse_ech_config(a, s, &skip, &ec);
@@ -606,10 +607,8 @@ Error burrow__tls_compute_and_update_outer_ech_extension(TlsClientHelloMsg *oute
     Slice serialized_outer = burrow__tls_client_hello_msg_marshal(outer, a, &err);
     if (BURROW_FAILED(err))
         return err;
-    serialized_outer =
-        slice_sub(serialized_outer, 4, serialized_outer.len); /* strip the
-                                                                                four byte
-                                                                                prefix */
+    /* strip the four byte prefix */
+    serialized_outer = slice_sub(serialized_outer, 4, serialized_outer.len);
     Slice encrypted_inner =
         hpke_sender_seal(ech->hpke_context, a, serialized_outer, encoded_inner, &err);
     if (BURROW_FAILED(err))

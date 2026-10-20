@@ -2,8 +2,8 @@
  * Go source: go1.27.1.
  *
  * The tests that listen and dial do it over loopback TCP, so they skip where
- * there is no readiness poll FD. TestConnectionStateMarshal, the ML-KEM and
- * ML-DSA handshakes and ECH are still to come. Where Go compares with
+ * there is no readiness poll FD. TestConnectionStateMarshal, the ML-DSA
+ * handshakes and ECH are still to come. Where Go compares with
  * reflect.DeepEqual, the certificates here are compared by their DER. The PEMs
  * TestX509KeyPair declares are in tls_test_gen.h, and the ML-DSA ones are
  * always tried, as there is no FIPS 140-3 module here to be v1.0.0. Go ranges
@@ -3699,6 +3699,303 @@ static void TestVerifyCertificates(TestingT *t) {
                   BURROW_FN(TestingTFunc, verify_certificates_tls13, NULL));
 }
 
+/* Not in Go: a list of curves for the table below, ended by a 0. */
+#define MLKEM_CURVES(...) ((const TlsCurveID[]){__VA_ARGS__, 0})
+
+#define MLKEM_DEFAULT_WITH_PQ                                                          \
+    TLS_X25519MLKEM768, TLS_SEC_P256_R1_MLKEM768, TLS_SEC_P384_R1_MLKEM1024,           \
+        TLS_X25519, TLS_CURVE_P256, TLS_CURVE_P384, TLS_CURVE_P521
+#define MLKEM_DEFAULT_WITHOUT_PQ                                                       \
+    TLS_X25519, TLS_CURVE_P256, TLS_CURVE_P384, TLS_CURVE_P521
+
+/* Not in Go: Go's clientConfig and serverConfig funcs only ever set
+ * CurvePreferences or MaxVersion, and its preparation funcs only set GODEBUG,
+ * so a case here holds what they set. */
+typedef struct MLKEMTest {
+    const char *name;
+    const TlsCurveID *client_curves;
+    uint16_t client_max_version;
+    const TlsCurveID *server_curves;
+    uint16_t server_max_version;
+    const char *godebug;
+    const TlsCurveID *expect_client;
+    TlsCurveID expect_selected;
+    bool expect_hrr;
+} MLKEMTest;
+
+static const MLKEMTest mlkem_tests[] = {
+    {.name = "Default",
+     .expect_client = MLKEM_CURVES(MLKEM_DEFAULT_WITH_PQ),
+     .expect_selected = TLS_X25519MLKEM768},
+    {.name = "ClientCurvePreferences",
+     .client_curves = MLKEM_CURVES(TLS_X25519),
+     .expect_client = MLKEM_CURVES(TLS_X25519),
+     .expect_selected = TLS_X25519},
+    {.name = "ServerCurvePreferencesX25519",
+     .server_curves = MLKEM_CURVES(TLS_X25519),
+     .expect_client = MLKEM_CURVES(MLKEM_DEFAULT_WITH_PQ),
+     .expect_selected = TLS_X25519},
+    {.name = "ServerCurvePreferencesHRR",
+     .server_curves = MLKEM_CURVES(TLS_CURVE_P256),
+     .expect_client = MLKEM_CURVES(MLKEM_DEFAULT_WITH_PQ),
+     .expect_selected = TLS_CURVE_P256,
+     .expect_hrr = true},
+    {.name = "SecP256r1MLKEM768-Only",
+     .client_curves = MLKEM_CURVES(TLS_SEC_P256_R1_MLKEM768),
+     .expect_client = MLKEM_CURVES(TLS_SEC_P256_R1_MLKEM768),
+     .expect_selected = TLS_SEC_P256_R1_MLKEM768},
+    {.name = "SecP256r1MLKEM768-HRR",
+     .server_curves = MLKEM_CURVES(TLS_SEC_P256_R1_MLKEM768, TLS_CURVE_P256),
+     .expect_client = MLKEM_CURVES(MLKEM_DEFAULT_WITH_PQ),
+     .expect_selected = TLS_SEC_P256_R1_MLKEM768,
+     .expect_hrr = true},
+    {.name = "SecP384r1MLKEM1024",
+     .client_curves = MLKEM_CURVES(TLS_SEC_P384_R1_MLKEM1024, TLS_CURVE_P384),
+     .expect_client = MLKEM_CURVES(TLS_SEC_P384_R1_MLKEM1024, TLS_CURVE_P384),
+     .expect_selected = TLS_SEC_P384_R1_MLKEM1024},
+    {.name = "CurveP256NoHRR",
+     .client_curves = MLKEM_CURVES(TLS_SEC_P256_R1_MLKEM768, TLS_CURVE_P256),
+     .server_curves = MLKEM_CURVES(TLS_CURVE_P256),
+     .expect_client = MLKEM_CURVES(TLS_SEC_P256_R1_MLKEM768, TLS_CURVE_P256),
+     .expect_selected = TLS_CURVE_P256},
+    {.name = "CurveP384HRR",
+     .client_curves = MLKEM_CURVES(TLS_SEC_P256_R1_MLKEM768, TLS_CURVE_P384),
+     .server_curves = MLKEM_CURVES(TLS_CURVE_P384),
+     .expect_client = MLKEM_CURVES(TLS_SEC_P256_R1_MLKEM768, TLS_CURVE_P384),
+     .expect_selected = TLS_CURVE_P384,
+     .expect_hrr = true},
+    {.name = "ClientMLKEMOnly",
+     .client_curves = MLKEM_CURVES(TLS_X25519MLKEM768),
+     .expect_client = MLKEM_CURVES(TLS_X25519MLKEM768),
+     .expect_selected = TLS_X25519MLKEM768},
+    {.name = "ClientSortedCurvePreferences",
+     .client_curves = MLKEM_CURVES(TLS_CURVE_P256, TLS_X25519MLKEM768),
+     .expect_client = MLKEM_CURVES(TLS_X25519MLKEM768, TLS_CURVE_P256),
+     .expect_selected = TLS_X25519MLKEM768},
+    {.name = "ClientTLSv12",
+     .client_max_version = TLS_VERSION_TLS12,
+     .expect_client = MLKEM_CURVES(MLKEM_DEFAULT_WITHOUT_PQ),
+     .expect_selected = TLS_X25519},
+    {.name = "ServerTLSv12",
+     .server_max_version = TLS_VERSION_TLS12,
+     .expect_client = MLKEM_CURVES(MLKEM_DEFAULT_WITH_PQ),
+     .expect_selected = TLS_X25519},
+    {.name = "GODEBUG tlsmlkem=0",
+     .godebug = "tlsmlkem=0",
+     .expect_client = MLKEM_CURVES(MLKEM_DEFAULT_WITHOUT_PQ),
+     .expect_selected = TLS_X25519},
+    {.name = "GODEBUG tlssecpmlkem=0",
+     .godebug = "tlssecpmlkem=0",
+     .expect_client = MLKEM_CURVES(TLS_X25519MLKEM768, TLS_X25519, TLS_CURVE_P256,
+                                   TLS_CURVE_P384, TLS_CURVE_P521),
+     .expect_selected = TLS_X25519MLKEM768},
+    {.name = "CurvePreferences override GODEBUG",
+     .godebug = "tlsmlkem=0,tlssecpmlkem=0",
+     .client_curves =
+         MLKEM_CURVES(TLS_CURVE_P256, TLS_SEC_P256_R1_MLKEM768, TLS_MLKEM1024),
+     .server_curves =
+         MLKEM_CURVES(TLS_CURVE_P256, TLS_SEC_P256_R1_MLKEM768, TLS_MLKEM1024),
+     .expect_client =
+         MLKEM_CURVES(TLS_SEC_P256_R1_MLKEM768, TLS_MLKEM1024, TLS_CURVE_P256),
+     .expect_selected = TLS_SEC_P256_R1_MLKEM768},
+    {.name = "ClientMLKEM1024Only",
+     .client_curves = MLKEM_CURVES(TLS_MLKEM1024),
+     .server_curves = MLKEM_CURVES(MLKEM_DEFAULT_WITH_PQ, TLS_MLKEM1024),
+     .expect_client = MLKEM_CURVES(TLS_MLKEM1024),
+     .expect_selected = TLS_MLKEM1024},
+    {.name = "ServerMLKEM1024Only",
+     .client_curves = MLKEM_CURVES(MLKEM_DEFAULT_WITH_PQ, TLS_MLKEM1024),
+     .server_curves = MLKEM_CURVES(TLS_MLKEM1024),
+     .expect_client = MLKEM_CURVES(TLS_X25519MLKEM768, TLS_SEC_P256_R1_MLKEM768,
+                                   TLS_SEC_P384_R1_MLKEM1024, TLS_MLKEM1024, TLS_X25519,
+                                   TLS_CURVE_P256, TLS_CURVE_P384, TLS_CURVE_P521),
+     .expect_selected = TLS_MLKEM1024,
+     .expect_hrr = true},
+    {.name = "MLKEM1024NotPreferredOverHybrid",
+     .client_curves = MLKEM_CURVES(TLS_MLKEM1024, TLS_X25519MLKEM768),
+     .server_curves = MLKEM_CURVES(TLS_MLKEM1024, TLS_X25519MLKEM768),
+     .expect_client = MLKEM_CURVES(TLS_X25519MLKEM768, TLS_MLKEM1024),
+     .expect_selected = TLS_X25519MLKEM768},
+    {.name = "MLKEM1024PreferredOverECC",
+     .client_curves = MLKEM_CURVES(TLS_X25519, TLS_MLKEM1024),
+     .server_curves = MLKEM_CURVES(TLS_X25519, TLS_MLKEM1024),
+     .expect_client = MLKEM_CURVES(TLS_MLKEM1024, TLS_X25519),
+     .expect_selected = TLS_MLKEM1024},
+};
+
+enum { MLKEM_MAX_CURVES = 16 };
+
+/* Not in Go: the curves of a 0-ended list, copied into buf, as a Slice. */
+static Slice mlkem_curves(const TlsCurveID *curves, TlsCurveID *buf) {
+    Int n = 0;
+    while (curves[n] != 0) {
+        buf[n] = curves[n];
+        n++;
+    }
+    return slice_from(buf, n, n, TYPE_UINT16);
+}
+
+/* Not in Go: a []CurveID as %v prints it, as in [X25519 P256]. */
+static Str mlkem_curves_string(Alloc *a, Slice curves) {
+    StringsBuilder b = STRINGS_BUILDER(a);
+    Error err = BURROW_NO_ERROR;
+    strings_builder_write_byte(&b, '[');
+    for (Int i = 0; i < curves.len; i++) {
+        if (i > 0)
+            strings_builder_write_byte(&b, ' ');
+        TlsCurveID id = *(const TlsCurveID *)slice_at(curves, i);
+        strings_builder_write_string(&b, tls_curve_id_string(id, a), &err);
+    }
+    strings_builder_write_byte(&b, ']');
+    return strings_builder_string(&b);
+}
+
+typedef struct MLKEMEnv {
+    TestingT *t;
+    const MLKEMTest *test;
+    Alloc *a;
+} MLKEMEnv;
+
+static TlsConfig *mlkem_get_config_for_client(void *envp, TlsClientHelloInfo *hello,
+                                              Error *err) {
+    (void)err;
+    MLKEMEnv *env = (MLKEMEnv *)envp;
+    TlsCurveID buf[MLKEM_MAX_CURVES];
+    Slice expect_client = mlkem_curves(env->test->expect_client, buf);
+    bool equal = hello->supported_curves.len == expect_client.len;
+    for (Int i = 0; equal && i < expect_client.len; i++)
+        equal = *(const TlsCurveID *)slice_at(hello->supported_curves, i) == buf[i];
+    if (!equal)
+        testing_t_errorf_v(env->t, "got client curves %s, expected %s",
+                           mlkem_curves_string(env->a, hello->supported_curves),
+                           mlkem_curves_string(env->a, expect_client));
+    return NULL;
+}
+
+static void handshake_mlkem(void *envp, TestingT *t) {
+    const MLKEMTest *test = (const MLKEMTest *)envp;
+    /* There is no FIPS mode here, so X25519 is never skipped or taken out of
+     * the expected client curves. */
+    if (test->godebug != NULL)
+        burrow__tls_godebug_set(test->godebug);
+    else
+        testing_t_parallel(t);
+
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    MLKEMEnv env = {t, test, a};
+    TlsCurveID server_buf[MLKEM_MAX_CURVES], client_buf[MLKEM_MAX_CURVES];
+    TlsConfig server_config = test_config_server(a);
+    if (test->server_curves != NULL)
+        server_config.curve_preferences = mlkem_curves(test->server_curves, server_buf);
+    if (test->server_max_version != 0)
+        server_config.max_version = test->server_max_version;
+    server_config.get_config_for_client =
+        BURROW_FN(TlsGetConfigForClientFunc, mlkem_get_config_for_client, &env);
+    TlsConfig client_config = test_config_client(a);
+    if (test->client_curves != NULL)
+        client_config.curve_preferences = mlkem_curves(test->client_curves, client_buf);
+    if (test->client_max_version != 0)
+        client_config.max_version = test->client_max_version;
+
+    Handshake h;
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_FAILED(h.err)) {
+        if (test->godebug != NULL)
+            burrow__tls_godebug_set(NULL);
+        testing_t_fatal_v(t, h.err);
+    }
+    TlsConnectionState *ss = &h.server_state, *cs = &h.client_state;
+    if (ss->curve_id != test->expect_selected)
+        testing_t_errorf_v(t, "server selected curve %s, expected %s",
+                           tls_curve_id_string(ss->curve_id, a),
+                           tls_curve_id_string(test->expect_selected, a));
+    if (cs->curve_id != test->expect_selected)
+        testing_t_errorf_v(t, "client selected curve %s, expected %s",
+                           tls_curve_id_string(cs->curve_id, a),
+                           tls_curve_id_string(test->expect_selected, a));
+    if (test->expect_hrr) {
+        if (!ss->hello_retry_request)
+            testing_t_error_v(t, "server did not use HRR");
+        if (!cs->hello_retry_request)
+            testing_t_error_v(t, "client did not use HRR");
+    } else {
+        if (ss->hello_retry_request)
+            testing_t_error_v(t, "server used HRR");
+        if (cs->hello_retry_request)
+            testing_t_error_v(t, "client used HRR");
+    }
+    handshake_free(&h);
+    if (test->godebug != NULL)
+        burrow__tls_godebug_set(NULL);
+    tls_config_release(&client_config);
+    tls_config_release(&server_config);
+    arena_free(&ar);
+}
+
+static void TestHandshakeMLKEM(TestingT *t) {
+    Int n = (Int)(sizeof mlkem_tests / sizeof mlkem_tests[0]);
+    for (Int i = 0; i < n; i++)
+        testing_t_run(t, str_from_cstr(mlkem_tests[i].name),
+                      BURROW_FN(TestingTFunc, handshake_mlkem,
+                                (void *)(uintptr_t)&mlkem_tests[i]));
+}
+
+static bool mldsa_contains(Slice schemes, TlsSignatureScheme s) {
+    for (Int i = 0; i < schemes.len; i++)
+        if (*(const TlsSignatureScheme *)slice_at(schemes, i) == s)
+            return true;
+    return false;
+}
+
+/* TestSupportedSignatureAlgorithmsMLDSAGating asserts the spec-mandated
+ * version-level gating of ML-DSA. Outside the FIPS 140-3 v1.0.0 module:
+ * ML-DSA MUST NOT appear in the TLS 1.2 advertised list, MUST appear in
+ * the TLS 1.3 advertised list. Under FIPS 140-3 v1.0.0 (which doesn't include
+ * ML-DSA), ML-DSA MUST NOT be advertised in either extension. */
+static void TestSupportedSignatureAlgorithmsMLDSAGating(TestingT *t) {
+    static const TlsSignatureScheme mldsa_schemes[] = {TLS_MLDSA44, TLS_MLDSA65,
+                                                       TLS_MLDSA87};
+    /* There is no FIPS 140-3 module here to be v1.0.0. */
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Slice tls12_only = burrow__tls_supported_signature_algorithms(a, TLS_VERSION_TLS12,
+                                                                  TLS_VERSION_TLS12);
+    Slice tls12_only_cert = burrow__tls_supported_signature_algorithms_cert(
+        a, TLS_VERSION_TLS12, TLS_VERSION_TLS12);
+    for (int i = 0; i < 3; i++) {
+        Str s = tls_signature_scheme_string(mldsa_schemes[i], a);
+        if (mldsa_contains(tls12_only, mldsa_schemes[i]))
+            testing_t_errorf_v(
+                t,
+                "supportedSignatureAlgorithms(TLS12, TLS12) contains %s; "
+                "ML-DSA must not be advertised in TLS 1.2",
+                s);
+        if (mldsa_contains(tls12_only_cert, mldsa_schemes[i]))
+            testing_t_errorf_v(
+                t,
+                "supportedSignatureAlgorithmsCert(TLS12, TLS12) contains "
+                "%s; ML-DSA must not be advertised in TLS 1.2",
+                s);
+    }
+    Slice tls13_only = burrow__tls_supported_signature_algorithms(a, TLS_VERSION_TLS13,
+                                                                  TLS_VERSION_TLS13);
+    Slice tls13_only_cert = burrow__tls_supported_signature_algorithms_cert(
+        a, TLS_VERSION_TLS13, TLS_VERSION_TLS13);
+    for (int i = 0; i < 3; i++) {
+        Str s = tls_signature_scheme_string(mldsa_schemes[i], a);
+        if (!mldsa_contains(tls13_only, mldsa_schemes[i]))
+            testing_t_errorf_v(
+                t, "supportedSignatureAlgorithms(TLS13, TLS13) is missing %s", s);
+        if (!mldsa_contains(tls13_only_cert, mldsa_schemes[i]))
+            testing_t_errorf_v(
+                t, "supportedSignatureAlgorithmsCert(TLS13, TLS13) is missing %s", s);
+    }
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestX509KeyPair)                                                                 \
     X(TestCipherSuites)                                                                \
@@ -3728,6 +4025,8 @@ static void TestVerifyCertificates(TestingT *t) {
     X(TestInvalidHandshakeSignature)                                                   \
     X(TestLocalCertificate)                                                            \
     X(TestLocalCertificateResumption)                                                  \
-    X(TestVerifyCertificates)
+    X(TestVerifyCertificates)                                                          \
+    X(TestHandshakeMLKEM)                                                              \
+    X(TestSupportedSignatureAlgorithmsMLDSAGating)
 
 TESTING_MAIN(TESTS)

@@ -242,7 +242,7 @@ static TlsCurveID ts13_select_group(TlsConn *c, const TlsClientHelloMsg *ch) {
     }
     if (k == 0)
         return 0;
-    bool front[8];
+    bool front[8] = {0};
     for (Int i = 0; i < k; i++)
         front[i] = ts13_has_key_share(ch->key_shares, preferred_groups[i]);
     ts13_move_to_front(preferred_groups, k, front);

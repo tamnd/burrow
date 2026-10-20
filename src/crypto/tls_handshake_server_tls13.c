@@ -1,10 +1,9 @@
 /* crypto/tls: handshake_server_tls13.go, the server side of a TLS 1.3
  * handshake. It starts once readClientHello has picked TLS 1.3.
  *
- * QUIC comes with quic.go and Encrypted Client Hello with ech.go. Until then
- * there is never a QUIC connection or an echContext here, and the parts of
- * Go's code that only run with one are left out, with a note where they would
- * go.
+ * QUIC comes with quic.go. Until then there is never a QUIC connection here,
+ * and the parts of Go's code that only run with one are left out, with a note
+ * where they would go.
  *
  * As in tls_handshake_server.c, what only lasts the handshake is made in its
  * scratch arena, and what the Conn keeps is copied into the Conn's own.
@@ -63,6 +62,18 @@ BURROW_SENTINEL_ERROR(ts13_err_invalid_key_share, "tls: invalid client key share
 BURROW_SENTINEL_ERROR(ts13_err_quic_params, "tls: client sent an unexpected "
                                             "quic_transport_parameters extension");
 BURROW_SENTINEL_ERROR(ts13_err_psk_binders, "tls: invalid or missing PSK binders");
+BURROW_SENTINEL_ERROR(ts13_err_ech_missing, "tls: second client hello missing "
+                                            "encrypted client hello extension");
+BURROW_SENTINEL_ERROR(ts13_err_ech_invalid,
+                      "tls: client sent invalid encrypted client hello extension");
+BURROW_SENTINEL_ERROR(ts13_err_ech_switch, "tls: unexpected switch in encrypted client "
+                                           "hello extension type");
+BURROW_SENTINEL_ERROR(ts13_err_ech_mismatch,
+                      "tls: second client hello encrypted client "
+                      "hello extension does not match");
+BURROW_SENTINEL_ERROR(ts13_err_ech_decrypt,
+                      "tls: failed to decrypt second client hello "
+                      "encrypted client hello extension payload");
 BURROW_SENTINEL_ERROR(ts13_err_clone_hash, "tls: internal error: failed to clone hash");
 BURROW_SENTINEL_ERROR(ts13_err_psk_binder, "tls: invalid PSK binder");
 BURROW_SENTINEL_ERROR(ts13_err_hand_not_empty, "tls: handshake buffer not empty "
@@ -775,6 +786,75 @@ static const TlsKeyShare *ts13_check_second_hello(TlsServerHandshakeStateTLS13 *
     return ks;
 }
 
+/* Not in Go. The part of doHelloRetryRequest that checks the second
+ * ClientHello's ECH extension, and decrypts it when it is an outer one. msg is
+ * the second ClientHello, and what comes back is the one to carry on with. */
+static TlsHandshakeMsg *ts13_second_ech_hello(TlsServerHandshakeStateTLS13 *hs,
+                                              TlsHandshakeMsg *msg, Error *err) {
+    TlsConn *c = hs->c;
+    Alloc *a = hs->a;
+    const TlsClientHelloMsg *client_hello = &msg->client_hello;
+    if (client_hello->encrypted_client_hello.len == 0) {
+        (void)burrow__tls_conn_send_alert(c, TLS_ALERT_MISSING_EXTENSION);
+        BURROW_OUT(err, ts13_err_ech_missing);
+        return NULL;
+    }
+
+    uint8_t ech_type;
+    TlsECHCipher ech_ciphersuite;
+    uint8_t config_id;
+    Slice encap, payload;
+    Error e =
+        burrow__tls_parse_ech_ext(a, client_hello->encrypted_client_hello, &ech_type,
+                                  &ech_ciphersuite, &config_id, &encap, &payload);
+    if (BURROW_FAILED(e)) {
+        /* Not in Go: running out of memory is not the client's doing. */
+        if (errors_is(e, burrow_err_out_of_memory)) {
+            BURROW_OUT(err, e);
+            return NULL;
+        }
+        (void)burrow__tls_conn_send_alert(c, TLS_ALERT_DECODE_ERROR);
+        BURROW_OUT(err, ts13_err_ech_invalid);
+        return NULL;
+    }
+
+    if ((ech_type == TLS_OUTER_ECH_EXT && hs->ech_context->inner) ||
+        (ech_type == TLS_INNER_ECH_EXT && !hs->ech_context->inner)) {
+        (void)burrow__tls_conn_send_alert(c, TLS_ALERT_DECODE_ERROR);
+        BURROW_OUT(err, ts13_err_ech_switch);
+        return NULL;
+    }
+
+    if (ech_type == TLS_OUTER_ECH_EXT) {
+        if (ech_ciphersuite.kdf_id != hs->ech_context->ciphersuite.kdf_id ||
+            ech_ciphersuite.aead_id != hs->ech_context->ciphersuite.aead_id ||
+            config_id != hs->ech_context->config_id || encap.len != 0) {
+            (void)burrow__tls_conn_send_alert(c, TLS_ALERT_ILLEGAL_PARAMETER);
+            BURROW_OUT(err, ts13_err_ech_mismatch);
+            return NULL;
+        }
+
+        Slice encoded_inner = burrow__tls_decrypt_ech_payload(
+            hs->ech_context->hpke_context, a, client_hello->original, payload, &e);
+        if (BURROW_FAILED(e)) {
+            (void)burrow__tls_conn_send_alert(c, TLS_ALERT_DECRYPT_ERROR);
+            BURROW_OUT(err, ts13_err_ech_decrypt);
+            return NULL;
+        }
+
+        TlsHandshakeMsg *ech_inner =
+            burrow__tls_decode_inner_client_hello(client_hello, a, encoded_inner, &e);
+        if (BURROW_FAILED(e)) {
+            (void)burrow__tls_conn_send_alert(c, TLS_ALERT_ILLEGAL_PARAMETER);
+            BURROW_OUT(err, ts13_err_ech_invalid);
+            return NULL;
+        }
+
+        return ech_inner;
+    }
+    return msg;
+}
+
 /* Not in Go: the key share is NULL when there is an error. */
 static const TlsKeyShare *ts13_do_hello_retry_request(TlsServerHandshakeStateTLS13 *hs,
                                                       TlsCurveID selected_group,
@@ -823,7 +903,35 @@ static const TlsKeyShare *ts13_do_hello_retry_request(TlsServerHandshakeStateTLS
     hello_retry_request->supported_version = hs->hello->supported_version;
     hello_retry_request->selected_group = selected_group;
 
-    /* The ECH acceptance message comes with ech.go. */
+    if (hs->ech_context != NULL) {
+        /* Compute the acceptance message. */
+        hello_retry_request->encrypted_client_hello = slice_make(a, TYPE_BYTE, 8, 8);
+        if (hello_retry_request->encrypted_client_hello.p == NULL) {
+            BURROW_OUT(err, burrow_err_out_of_memory);
+            return NULL;
+        }
+        Hash conf_transcript =
+            burrow__tls_clone_hash(a, hs->transcript, hs->suite->hash);
+        if (conf_transcript.vt == NULL) {
+            (void)burrow__tls_conn_send_alert(c, TLS_ALERT_INTERNAL_ERROR);
+            BURROW_OUT(err, ts13_err_clone_hash);
+            return NULL;
+        }
+        e = burrow__tls_transcript_msg(hrr_msg, hash_as_io_writer(conf_transcript), a);
+        if (BURROW_FAILED(e)) {
+            BURROW_OUT(err, e);
+            return NULL;
+        }
+        Slice accept_confirmation = burrow__tls_ech_accept_confirmation(
+            a, hs->suite, hs->client_hello->random,
+            BURROW_S("hrr ech accept confirmation"), conf_transcript, &e);
+        if (BURROW_FAILED(e)) {
+            (void)burrow__tls_conn_send_alert(c, TLS_ALERT_INTERNAL_ERROR);
+            BURROW_OUT(err, e);
+            return NULL;
+        }
+        hello_retry_request->encrypted_client_hello = accept_confirmation;
+    }
 
     e = ts13_write(hs, hrr_msg);
     if (BURROW_FAILED(e)) {
@@ -857,7 +965,12 @@ static const TlsKeyShare *ts13_do_hello_retry_request(TlsServerHandshakeStateTLS
     }
     TlsClientHelloMsg *client_hello = &msg->client_hello;
 
-    /* The second hello of Encrypted Client Hello comes with ech.go. */
+    if (hs->ech_context != NULL) {
+        msg = ts13_second_ech_hello(hs, msg, err);
+        if (msg == NULL)
+            return NULL;
+        client_hello = &msg->client_hello;
+    }
 
     const TlsKeyShare *ks =
         ts13_check_second_hello(hs, client_hello, selected_group, err);
@@ -868,6 +981,36 @@ static const TlsKeyShare *ts13_do_hello_retry_request(TlsServerHandshakeStateTLS
     hs->client_hello = client_hello;
     hs->client_hello_msg = msg;
     return ks;
+}
+
+/* Not in Go. sendServerParameters' acceptance message: the last eight bytes of
+ * the ServerHello's random, computed over a transcript that ends in the
+ * ServerHello with those eight bytes zeroed. */
+static Error ts13_ech_accept(TlsServerHandshakeStateTLS13 *hs) {
+    TlsConn *c = hs->c;
+    Alloc *a = hs->a;
+    Byte *random = hs->hello->random.p;
+    memset(random + 32 - 8, 0, 8);
+    Hash ech_transcript = burrow__tls_clone_hash(a, hs->transcript, hs->suite->hash);
+    if (ech_transcript.vt == NULL) {
+        (void)burrow__tls_conn_send_alert(c, TLS_ALERT_INTERNAL_ERROR);
+        return ts13_err_clone_hash;
+    }
+    (void)hash_write(ech_transcript, hs->client_hello->original, NULL);
+    Error err =
+        burrow__tls_transcript_msg(hs->hello_msg, hash_as_io_writer(ech_transcript), a);
+    if (BURROW_FAILED(err))
+        return err;
+    /* compute the acceptance message */
+    Slice accept_confirmation = burrow__tls_ech_accept_confirmation(
+        a, hs->suite, hs->client_hello->random, BURROW_S("ech accept confirmation"),
+        ech_transcript, &err);
+    if (BURROW_FAILED(err)) {
+        (void)burrow__tls_conn_send_alert(c, TLS_ALERT_INTERNAL_ERROR);
+        return err;
+    }
+    memcpy(random + 32 - 8, accept_confirmation.p, 8);
+    return BURROW_NO_ERROR;
 }
 
 /* Not in Go. writeKeyLog for both secrets of a stage, with an internal_error
@@ -939,7 +1082,11 @@ static Error ts13_send_server_parameters(TlsServerHandshakeStateTLS13 *hs) {
     TlsConn *c = hs->c;
     Alloc *a = hs->a;
 
-    /* The ECH acceptance message comes with ech.go. */
+    if (hs->ech_context != NULL) {
+        Error err = ts13_ech_accept(hs);
+        if (BURROW_FAILED(err))
+            return err;
+    }
 
     Error err = burrow__tls_transcript_msg(hs->client_hello_msg,
                                            hash_as_io_writer(hs->transcript), a);
@@ -969,17 +1116,23 @@ static Error ts13_send_server_parameters(TlsServerHandshakeStateTLS13 *hs) {
         encrypted_extensions->server_name_ack = true;
 
     /* If client sent ECH extension, but we didn't accept it, send retry
-     * configs, if available.
-     *
-     * Not in Go: until ech.go, readClientHello ends the handshake for an outer
-     * ECH extension when there are keys, so there are never retry configs to
-     * send. GetEncryptedClientHelloKeys is still called, as Go calls it. */
+     * configs, if available. */
+    Slice ech_keys = c->config->encrypted_client_hello_keys;
     if (c->config->get_encrypted_client_hello_keys.f != NULL) {
         TlsClientHelloInfo *chi =
             burrow__tls_client_hello_info(a, hs->ctx, c, hs->client_hello);
         if (chi == NULL)
             return burrow_err_out_of_memory;
-        (void)BURROW_CALLF(c->config->get_encrypted_client_hello_keys, chi, &err);
+        ech_keys = BURROW_CALLF(c->config->get_encrypted_client_hello_keys, chi, &err);
+        if (BURROW_FAILED(err)) {
+            (void)burrow__tls_conn_send_alert(c, TLS_ALERT_INTERNAL_ERROR);
+            return err;
+        }
+    }
+    if (ech_keys.len > 0 && hs->client_hello->encrypted_client_hello.len > 0 &&
+        hs->ech_context == NULL) {
+        encrypted_extensions->ech_retry_configs =
+            burrow__tls_build_retry_config_list(a, ech_keys, &err);
         if (BURROW_FAILED(err)) {
             (void)burrow__tls_conn_send_alert(c, TLS_ALERT_INTERNAL_ERROR);
             return err;

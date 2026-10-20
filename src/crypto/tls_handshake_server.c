@@ -2,7 +2,7 @@
  * and the reading of the ClientHello every server handshake starts with.
  *
  * The TLS 1.3 server handshake is in tls_handshake_server_tls13.c. QUIC comes
- * with quic.go and Encrypted Client Hello with ech.go.
+ * with quic.go, and Encrypted Client Hello is in tls_ech.c.
  *
  * As on the client, what the handshake only needs while it runs is made in a
  * scratch arena that goes when it ends, and what the Conn keeps afterwards is
@@ -45,10 +45,8 @@
 #include <stdint.h>
 #include <string.h>
 
-BURROW_SENTINEL_ERROR(tsv_err_invalid_ech_ext, "tls: client sent invalid "
-                                               "encrypted_client_hello extension");
-BURROW_SENTINEL_ERROR(tsv_err_ech_not_here, "tls: Encrypted Client Hello is not "
-                                            "supported yet");
+BURROW_SENTINEL_ERROR(tsv_err_ech_pre_tls13,
+                      "tls: Encrypted Client Hello cannot be used pre-TLS 1.3");
 BURROW_SENTINEL_ERROR(tsv_err_compression,
                       "tls: client does not support uncompressed connections");
 BURROW_SENTINEL_ERROR(tsv_err_initial_renegotiation, "tls: initial handshake had "
@@ -84,7 +82,8 @@ Error burrow__tls_server_handshake(TlsConn *c, Context ctx) {
     Alloc *a = arena_allocator(&ar);
 
     TlsHandshakeMsg *client_hello = NULL;
-    Error err = burrow__tls_conn_read_client_hello(c, ctx, a, &client_hello);
+    TlsECHServerContext *ech = NULL;
+    Error err = burrow__tls_conn_read_client_hello(c, ctx, a, &client_hello, &ech);
     if (BURROW_FAILED(err) || client_hello == NULL) {
         arena_free(&ar);
         return err;
@@ -97,6 +96,7 @@ Error burrow__tls_server_handshake(TlsConn *c, Context ctx) {
         hs.ctx = ctx;
         hs.client_hello_msg = client_hello;
         hs.client_hello = &client_hello->client_hello;
+        hs.ech_context = ech;
         hs.a = a;
         err = burrow__tls_server_handshake_state_tls13_handshake(&hs);
         arena_free(&ar);
@@ -201,47 +201,13 @@ Error burrow__tls_server_handshake_state_handshake(TlsServerHandshakeState *hs) 
     return BURROW_NO_ERROR;
 }
 
-/* Not in Go. The part of processECHClientHello that runs before any keys are
- * needed: the extension is checked the way parseECHExt checks it, with the
- * alerts Go sends. */
-static Error tsv_check_ech_ext(TlsConn *c, Slice ext) {
-    const Byte *p = ext.p;
-    bool malformed = false;
-    if (p[0] == 1) {
-        /* innerECHExt */
-        malformed = ext.len != 1;
-    } else if (p[0] == 0) {
-        /* outerECHExt: the KDF and AEAD IDs, the config ID, then encap and
-         * payload, each with a two byte length. */
-        Int i = 6;
-        for (int field = 0; field < 2 && !malformed; field++) {
-            if (ext.len - i < 2) {
-                malformed = true;
-                break;
-            }
-            Int n = (Int)p[i] << 8 | (Int)p[i + 1];
-            i += 2;
-            if (ext.len - i < n)
-                malformed = true;
-            i += n;
-        }
-        if (ext.len < 6)
-            malformed = true;
-    } else {
-        (void)burrow__tls_conn_send_alert(c, TLS_ALERT_ILLEGAL_PARAMETER);
-        return tsv_err_invalid_ech_ext;
-    }
-    if (malformed) {
-        (void)burrow__tls_conn_send_alert(c, TLS_ALERT_DECODE_ERROR);
-        return tsv_err_invalid_ech_ext;
-    }
-    return BURROW_NO_ERROR;
-}
-
 /* readClientHello reads a ClientHello message and selects the protocol
  * version. */
 Error burrow__tls_conn_read_client_hello(TlsConn *c, Context ctx, Alloc *a,
-                                         TlsHandshakeMsg **out) {
+                                         TlsHandshakeMsg **out,
+                                         TlsECHServerContext **ech_out) {
+    *out = NULL;
+    *ech_out = NULL;
     /* clientHelloMsg is included in the transcript, but we haven't initialized
      * it yet. The respective handshake functions will record it themselves. */
     TlsHandshakeMsg *msg = BURROW_NEW(a, TlsHandshakeMsg);
@@ -260,20 +226,26 @@ Error burrow__tls_conn_read_client_hello(TlsConn *c, Context ctx, Alloc *a,
     /* ECH processing has to be done before we do any other negotiation based
      * on the contents of the client hello, since we may swap it out
      * completely. */
+    TlsECHServerContext *ech = NULL;
     if (client_hello->encrypted_client_hello.len != 0) {
-        err = tsv_check_ech_ext(c, client_hello->encrypted_client_hello);
+        Slice ech_keys = c->config->encrypted_client_hello_keys;
+        if (c->config->get_encrypted_client_hello_keys.f != NULL) {
+            TlsClientHelloInfo *chi =
+                burrow__tls_client_hello_info(a, ctx, c, client_hello);
+            if (chi == NULL)
+                return burrow_err_out_of_memory;
+            ech_keys =
+                BURROW_CALLF(c->config->get_encrypted_client_hello_keys, chi, &err);
+            if (BURROW_FAILED(err)) {
+                (void)burrow__tls_conn_send_alert(c, TLS_ALERT_INTERNAL_ERROR);
+                return err;
+            }
+        }
+        err =
+            burrow__tls_conn_process_ech_client_hello(c, a, msg, ech_keys, &msg, &ech);
         if (BURROW_FAILED(err))
             return err;
-        /* Not in Go: an outer ClientHello the server has keys for would be
-         * decrypted here, which comes with ech.go. Until then the handshake
-         * ends with an alert. */
-        const Byte *ech_type = client_hello->encrypted_client_hello.p;
-        if (ech_type[0] == 0 &&
-            (c->config->encrypted_client_hello_keys.len != 0 ||
-             c->config->get_encrypted_client_hello_keys.f != NULL)) {
-            (void)burrow__tls_conn_send_alert(c, TLS_ALERT_INTERNAL_ERROR);
-            return tsv_err_ech_not_here;
-        }
+        client_hello = &msg->client_hello;
     }
 
     TlsConfig *config_for_client = NULL;
@@ -324,10 +296,22 @@ Error burrow__tls_conn_read_client_hello(TlsConn *c, Context ctx, Alloc *a,
     c->in.version = c->vers;
     c->out.version = c->vers;
 
-    /* Go checks here that a hello with an outer ECH, which it decrypted,
-     * negotiated TLS 1.3. That comes with ech.go. */
+    /* This check reflects some odd specification implied behavior.
+     * Client-facing servers are supposed to reject hellos with outer ECH and
+     * inner ECH that offers 1.2, but backend servers are allowed to accept
+     * hellos with inner ECH that offer 1.2, since they cannot expect
+     * client-facing servers to behave properly. Since we act as both a
+     * client-facing and backend server, we only enforce 1.3 being negotiated
+     * if we saw a hello with outer ECH first. The spec probably should've
+     * made this an error, but it didn't, and this matches the boringssl
+     * behavior. */
+    if (c->vers != TLS_VERSION_TLS13 && (ech != NULL && !ech->inner)) {
+        (void)burrow__tls_conn_send_alert(c, TLS_ALERT_ILLEGAL_PARAMETER);
+        return tsv_err_ech_pre_tls13;
+    }
 
     *out = msg;
+    *ech_out = ech;
     return BURROW_NO_ERROR;
 }
 

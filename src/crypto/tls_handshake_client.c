@@ -2,7 +2,7 @@
  * and the ClientHello every client handshake starts with.
  *
  * The TLS 1.3 handshake is in tls_handshake_client_tls13.c. QUIC comes with
- * quic.go and Encrypted Client Hello with ech.go.
+ * quic.go, and Encrypted Client Hello is in tls_ech.c.
  *
  * Everything the handshake only needs while it runs is made in a scratch
  * arena that goes when it ends. What the Conn keeps afterwards, the server's
@@ -21,6 +21,7 @@
 #include "burrow/crypto.h"
 #include "burrow/crypto/ecdsa.h"
 #include "burrow/crypto/ed25519.h"
+#include "burrow/crypto/hpke.h"
 #include "burrow/crypto/mldsa.h"
 #include "burrow/crypto/rsa.h"
 #include "burrow/crypto/subtle.h"
@@ -66,8 +67,9 @@ BURROW_SENTINEL_ERROR(tcl_err_ech_max_version, "tls: MaxVersion must be >= "
                                                "VersionTLS13 if "
                                                "EncryptedClientHelloConfigList is "
                                                "populated");
-BURROW_SENTINEL_ERROR(tcl_err_ech_not_here, "tls: Encrypted Client Hello is not "
-                                            "supported yet");
+BURROW_SENTINEL_ERROR(tcl_err_ech_no_valid_configs,
+                      "tls: EncryptedClientHelloConfigList "
+                      "contains no valid configs");
 BURROW_SENTINEL_ERROR(tcl_err_downgrade, "tls: downgrade attempt detected, possibly "
                                          "due to a MitM attack or a broken middlebox");
 BURROW_SENTINEL_ERROR(tcl_err_echoed_session_id, "tls: server echoed TLS 1.3 "
@@ -201,11 +203,11 @@ static bool tcl_contains_curve(Slice list, TlsCurveID want) {
     return false;
 }
 
-/* Not in Go: what makeClientHello returns besides the hello. Go's
- * echClientContext comes with ech.go. */
+/* Not in Go: what makeClientHello returns besides the hello. */
 typedef struct TclHello {
     TlsHandshakeMsg msg;
     TlsKeySharePrivateKeys key_share_keys;
+    TlsECHClientContext *ech;
 } TclHello;
 
 static Error tcl_make_client_hello(TlsConn *c, Alloc *a, TclHello *out) {
@@ -357,9 +359,52 @@ static Error tcl_make_client_hello(TlsConn *c, Alloc *a, TclHello *out) {
             return tcl_err_ech_min_version;
         if (config->max_version != 0 && config->max_version <= TLS_VERSION_TLS12)
             return tcl_err_ech_max_version;
-        /* Not in Go: the rest of this, from parseECHConfigList on, comes with
-         * ech.go, and until then a config list is an error. */
-        return tcl_err_ech_not_here;
+        Slice ech_configs = burrow__tls_parse_ech_config_list(
+            a, config->encrypted_client_hello_config_list, &err);
+        if (BURROW_FAILED(err))
+            return err;
+        HpkePublicKey *ech_pk;
+        const HpkeKDF *kdf;
+        const HpkeAEAD *aead;
+        const TlsECHConfig *ech_config =
+            burrow__tls_pick_ech_config(a, ech_configs, &ech_pk, &kdf, &aead);
+        if (ech_config == NULL)
+            return tcl_err_ech_no_valid_configs;
+        TlsECHClientContext *ech = BURROW_NEW(a, TlsECHClientContext);
+        if (ech == NULL) {
+            hpke_public_key_free(ech_pk);
+            return burrow_err_out_of_memory;
+        }
+        ech->config = ech_config;
+        ech->kdf_id = hpke_kdf_id(kdf);
+        ech->aead_id = hpke_aead_id(aead);
+        out->ech = ech;
+        /* indicate inner hello */
+        static const Byte inner[1] = {TLS_INNER_ECH_EXT};
+        hello->encrypted_client_hello =
+            slice_from((Byte *)(uintptr_t)inner, 1, 1, TYPE_BYTE);
+        /* We need to explicitly set these 1.2 fields to nil, as we do not
+         * marshal them when encoding the inner hello, otherwise transcripts
+         * will later mismatch. */
+        hello->supported_points = slice_nil(TYPE_BYTE);
+        hello->ticket_supported = false;
+        hello->secure_renegotiation_supported = false;
+        hello->extended_master_secret = false;
+
+        Slice info =
+            slice_make(a, TYPE_BYTE, 8 + ech_config->raw.len, 8 + ech_config->raw.len);
+        if (info.p == NULL) {
+            hpke_public_key_free(ech_pk);
+            return burrow_err_out_of_memory;
+        }
+        memcpy(info.p, "tls ech\0", 8);
+        if (ech_config->raw.len > 0)
+            memcpy((Byte *)info.p + 8, ech_config->raw.p, (size_t)ech_config->raw.len);
+        ech->encapsulated_key =
+            hpke_new_sender(a, ech_pk, kdf, aead, info, &ech->hpke_context, &err);
+        hpke_public_key_free(ech_pk);
+        if (BURROW_FAILED(err))
+            return err;
     }
 
     return BURROW_NO_ERROR;
@@ -602,7 +647,37 @@ static Error tcl_handshake(TclState *hs);
  * when this fails. */
 static Error tcl_client_handshake_with(TlsConn *c, Context ctx, Alloc *a, TclHello *h,
                                        TclLoaded *l) {
-    /* Encrypted Client Hello comes with ech.go. */
+    TlsClientHelloMsg *hello = &h->msg.client_hello;
+    TlsECHClientContext *ech = h->ech;
+    if (ech != NULL) {
+        /* Split hello into inner and outer */
+        ech->inner_hello_msg = BURROW_NEW(a, TlsHandshakeMsg);
+        if (ech->inner_hello_msg == NULL)
+            return burrow_err_out_of_memory;
+        burrow__tls_handshake_msg_init(ech->inner_hello_msg, TLS_MSG_CLIENT_HELLO);
+        ech->inner_hello = &ech->inner_hello_msg->client_hello;
+        if (!burrow__tls_client_hello_msg_clone(hello, a, ech->inner_hello))
+            return burrow_err_out_of_memory;
+
+        /* Overwrite the server name in the outer hello with the public facing
+         * name. */
+        hello->server_name =
+            str_from_bytes(ech->config->public_name.p, ech->config->public_name.len);
+        /* Generate a new random for the outer hello. */
+        Error e = BURROW_NO_ERROR;
+        hello->random = tcl_random(a, c->config, 32, &e);
+        if (BURROW_FAILED(e))
+            return e;
+
+        /* NOTE: we don't do PSK GREASE, in line with boringssl, it's meant to
+         * work around _possibly_ broken middleboxes, but there is little-to-no
+         * evidence that this is actually a problem. */
+
+        e = burrow__tls_compute_and_update_outer_ech_extension(hello, ech->inner_hello,
+                                                               ech, true, a);
+        if (BURROW_FAILED(e))
+            return e;
+    }
 
     if (!burrow__tls_clone_str(tcl_keep(c), h->msg.client_hello.server_name,
                                &c->server_name))
@@ -664,6 +739,7 @@ static Error tcl_client_handshake_with(TlsConn *c, Context ctx, Alloc *a, TclHel
         hs.server_hello_msg = msg;
         hs.hello_msg = &h->msg;
         hs.cs = l->cs;
+        hs.ech_context = ech;
         hs.a = a;
         err = burrow__tls_client_handshake_state_tls13_handshake(&hs);
         /* Not in Go: a resumption may have moved the session to c. */

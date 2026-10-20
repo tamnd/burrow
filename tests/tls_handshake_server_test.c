@@ -103,7 +103,8 @@ static void test_client_hello_failure(TestingT *t, TlsConfig *server_config,
         return;
     }
     TlsHandshakeMsg *ch = NULL;
-    Error err = burrow__tls_conn_read_client_hello(conn, ctx, a, &ch);
+    TlsECHServerContext *ech = NULL;
+    Error err = burrow__tls_conn_read_client_hello(conn, ctx, a, &ch, &ech);
     if (conn->vers == TLS_VERSION_TLS13) {
         TlsServerHandshakeStateTLS13 hs;
         memset(&hs, 0, sizeof hs);
@@ -113,6 +114,7 @@ static void test_client_hello_failure(TestingT *t, TlsConfig *server_config,
         if (!BURROW_FAILED(err)) {
             hs.client_hello_msg = ch;
             hs.client_hello = &ch->client_hello;
+            hs.ech_context = ech;
             err = burrow__tls_server_handshake_state_tls13_process_client_hello(&hs);
         }
         if (!BURROW_FAILED(err))
@@ -1052,7 +1054,9 @@ static void TestSNIGivenOnFailure(TestingT *t) {
     }
     Context ctx = context_background();
     TlsHandshakeMsg *ch = NULL;
-    Error err = burrow__tls_conn_read_client_hello(conn, ctx, a, &ch);
+    TlsECHServerContext *ech = NULL;
+    Error err = burrow__tls_conn_read_client_hello(conn, ctx, a, &ch, &ech);
+    (void)ech;
     TlsServerHandshakeState hs;
     memset(&hs, 0, sizeof hs);
     hs.c = conn;

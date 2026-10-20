@@ -1276,6 +1276,29 @@ tls_client_session_state_retain(TlsClientSessionState *cs);
  * and cs with it. Nothing for NULL. */
 void tls_client_session_state_release(TlsClientSessionState *cs);
 
+/* --------------------------------------------------------------------- ECH */
+
+/* ECHRejectionError is the error type returned when ECH is rejected by a
+ * remote server. If the server offered a ECHConfigList to use for retries, the
+ * RetryConfigList field will contain this list.
+ *
+ * The client may treat an ECHRejectionError with an empty set of RetryConfigs
+ * as a secure signal from the server. */
+typedef struct TlsECHRejectionError {
+    Slice retry_config_list;
+} TlsECHRejectionError;
+
+extern const Type *const TYPE_TLS_ECH_REJECTION_ERROR;
+
+/* ECHRejectionError.Error: "tls: server rejected ECH". */
+BURROW_STATIC(ret) Str tls_ech_rejection_error_error(const TlsECHRejectionError *e);
+
+/* An Error for e, which errors_as with TYPE_TLS_ECH_REJECTION_ERROR gives back.
+ * retry_config_list is copied into a. Out of memory gives
+ * burrow_err_out_of_memory. */
+BURROW_OWNS(ret) Error tls_ech_rejection_error_as_error(const TlsECHRejectionError *e,
+                                                        Alloc *a);
+
 /* -------------------------------------------------------------------- Conn */
 
 /* RecordHeaderError is returned when a TLS record header is invalid. */

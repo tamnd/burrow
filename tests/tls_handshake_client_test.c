@@ -131,23 +131,24 @@ typedef struct HostnameInSNITest {
 
 static const HostnameInSNITest hostname_in_sni_tests[] = {
     /* Opaque string */
-    {BURROW_S(""), BURROW_S("")},
-    {BURROW_S("localhost"), BURROW_S("localhost")},
-    {BURROW_S("foo, bar, baz and qux"), BURROW_S("foo, bar, baz and qux")},
+    {BURROW_S_INIT(""), BURROW_S_INIT("")},
+    {BURROW_S_INIT("localhost"), BURROW_S_INIT("localhost")},
+    {BURROW_S_INIT("foo, bar, baz and qux"), BURROW_S_INIT("foo, bar, baz and qux")},
 
     /* DNS hostname */
-    {BURROW_S("golang.org"), BURROW_S("golang.org")},
-    {BURROW_S("golang.org."), BURROW_S("golang.org")},
+    {BURROW_S_INIT("golang.org"), BURROW_S_INIT("golang.org")},
+    {BURROW_S_INIT("golang.org."), BURROW_S_INIT("golang.org")},
 
     /* Literal IPv4 address */
-    {BURROW_S("1.2.3.4"), BURROW_S("")},
+    {BURROW_S_INIT("1.2.3.4"), BURROW_S_INIT("")},
 
     /* Literal IPv6 address */
-    {BURROW_S("::1"), BURROW_S("")},
-    {BURROW_S("::1%lo0"), BURROW_S("")}, /* with zone identifier */
-    {BURROW_S("[::1]"), BURROW_S("")},   /* as per RFC 5952 we allow the [] style as
-                                            IPv6 literal */
-    {BURROW_S("[::1%lo0]"), BURROW_S("")},
+    {BURROW_S_INIT("::1"), BURROW_S_INIT("")},
+    /* with zone identifier */
+    {BURROW_S_INIT("::1%lo0"), BURROW_S_INIT("")},
+    /* as per RFC 5952 we allow the [] style as IPv6 literal */
+    {BURROW_S_INIT("[::1]"), BURROW_S_INIT("")},
+    {BURROW_S_INIT("[::1%lo0]"), BURROW_S_INIT("")},
 };
 
 /* localPipe is a net.Pipe. Go leaves the client goroutine running, and here it

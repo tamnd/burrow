@@ -1920,12 +1920,19 @@ static Error thc_handshake_locked(TlsConn *c, Context handshake_ctx) {
     return err;
 }
 
-/* What the AfterFunc closes. Not in Go: it is a copy, so that the Conn can be
- * freed while the close still runs, and the close frees it. */
+/* Not in Go: what the AfterFunc closes, and the group it is done in. Go's
+ * collector keeps the connection alive while the close runs; here the
+ * handshake waits for it, so that whoever frees the connection after the
+ * handshake returns does not free it under the close. */
+typedef struct ThcCanceler {
+    NetConn conn;
+    SyncWaitGroup wg;
+} ThcCanceler;
+
 static void thc_close_on_cancel(void *env) {
-    NetConn *conn = (NetConn *)env;
-    (void)thc_conn_close(*conn);
-    mem_free(heap_allocator(), conn, sizeof *conn, _Alignof(NetConn));
+    ThcCanceler *k = (ThcCanceler *)env;
+    (void)thc_conn_close(k->conn);
+    sync_wait_group_done(&k->wg);
 }
 
 Error tls_conn_handshake_context(TlsConn *c, Context ctx) {
@@ -1944,19 +1951,20 @@ Error tls_conn_handshake_context(TlsConn *c, Context ctx) {
     memset(&reg, 0, sizeof reg);
     StopFunc stop;
     memset(&stop, 0, sizeof stop);
-    NetConn *conn = NULL;
+    ThcCanceler *k = NULL;
     if (context_done(ctx) != NULL) {
         /* Close the connection if ctx is canceled before the function
          * returns. */
-        conn = BURROW_NEW(heap_allocator(), NetConn);
-        if (conn != NULL) {
-            *conn = c->conn;
+        k = BURROW_NEW(heap_allocator(), ThcCanceler);
+        if (k != NULL) {
+            k->conn = c->conn;
+            sync_wait_group_add(&k->wg, 1);
             reg = context_after_func(heap_allocator(), ctx,
-                                     BURROW_FN(Func, thc_close_on_cancel, conn), &stop);
+                                     BURROW_FN(Func, thc_close_on_cancel, k), &stop);
         }
         if (BURROW_CONTEXT_IS_NIL(reg)) {
-            if (conn != NULL)
-                mem_free(heap_allocator(), conn, sizeof *conn, _Alignof(NetConn));
+            if (k != NULL)
+                mem_free(heap_allocator(), k, sizeof *k, _Alignof(ThcCanceler));
             BURROW_CALLF0(cancel);
             context_release(handshake_ctx);
             return burrow_err_out_of_memory;
@@ -1965,11 +1973,12 @@ Error tls_conn_handshake_context(TlsConn *c, Context ctx) {
 
     Error ret = thc_handshake_locked(c, handshake_ctx);
 
-    if (conn != NULL) {
-        if (BURROW_CALLF0(stop))
-            mem_free(heap_allocator(), conn, sizeof *conn, _Alignof(NetConn));
-        else
+    if (k != NULL) {
+        if (!BURROW_CALLF0(stop)) {
             ret = context_err(ctx); /* Return context error to user. */
+            sync_wait_group_wait(&k->wg);
+        }
+        mem_free(heap_allocator(), k, sizeof *k, _Alignof(ThcCanceler));
         context_release(reg);
     }
     BURROW_CALLF0(cancel);

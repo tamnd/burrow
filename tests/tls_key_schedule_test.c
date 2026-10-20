@@ -179,8 +179,164 @@ static void TestTrafficKey(TestingT *t) {
     arena_free(&ar);
 }
 
+/* Not in Go. Go tests the key exchanges through its handshakes, which are not
+ * here yet. This runs keyShares, serverSharedSecret and clientSharedSecret for
+ * each group and checks the sizes against RFC 8446, FIPS 203 and
+ * draft-ietf-tls-ecdhe-mlkem-02. */
+static void TestKeyExchanges(TestingT *t) {
+    struct {
+        TlsCurveID id, fallback;
+        Int client_share, server_share, shared_key, fallback_share;
+    } tests[] = {
+        {TLS_X25519, 0, 32, 32, 32, 0},
+        {TLS_CURVE_P256, 0, 65, 65, 32, 0},
+        {TLS_CURVE_P384, 0, 97, 97, 48, 0},
+        {TLS_CURVE_P521, 0, 133, 133, 66, 0},
+        {TLS_X25519MLKEM768, TLS_X25519, 1184 + 32, 1088 + 32, 32 + 32, 32},
+        {TLS_SEC_P256_R1_MLKEM768, TLS_CURVE_P256, 65 + 1184, 65 + 1088, 32 + 32, 65},
+        {TLS_SEC_P384_R1_MLKEM1024, TLS_CURVE_P384, 97 + 1568, 97 + 1568, 48 + 32, 97},
+        {TLS_MLKEM1024, 0, 1568, 1568, 32, 0},
+    };
+    for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); i++) {
+        Arena ar;
+        arena_init(&ar, NULL, 0);
+        Alloc *a = arena_allocator(&ar);
+        Str name = tls_curve_id_string(tests[i].id, a);
+        Error err = BURROW_NO_ERROR;
+        const TlsKeyExchange *ke =
+            burrow__tls_key_exchange_for_curve_id(tests[i].id, &err);
+        if (ke == NULL) {
+            testing_t_errorf_v(t, "%s: keyExchangeForCurveID: %v", name, err);
+            arena_free(&ar);
+            continue;
+        }
+
+        TlsKeySharePrivateKeys priv;
+        Slice shares;
+        if (!burrow__tls_key_exchange_key_shares(ke, a, (IoReader){0}, &priv, &shares,
+                                                 &err)) {
+            testing_t_errorf_v(t, "%s: keyShares: %v", name, err);
+            arena_free(&ar);
+            continue;
+        }
+        Int want_shares = tests[i].fallback != 0 ? 2 : 1;
+        if (shares.len != want_shares)
+            testing_t_fatalf_v(t, "%s: got %d key shares, want %d", name, shares.len,
+                               want_shares);
+        TlsKeyShare share = BURROW_AT(TlsKeyShare, shares, 0);
+        if (share.group != tests[i].id || share.data.len != tests[i].client_share)
+            testing_t_errorf_v(t, "%s: key share is group %d with %d bytes, want %d",
+                               name, (Int)share.group, share.data.len,
+                               tests[i].client_share);
+        if (want_shares == 2) {
+            TlsKeyShare fallback = BURROW_AT(TlsKeyShare, shares, 1);
+            if (fallback.group != tests[i].fallback ||
+                fallback.data.len != tests[i].fallback_share)
+                testing_t_errorf_v(t, "%s: fallback share is group %d with %d bytes",
+                                   name, (Int)fallback.group, fallback.data.len);
+            /* The ML-KEM key comes first only for X25519MLKEM768. */
+            Int at = tests[i].id == TLS_X25519MLKEM768
+                         ? share.data.len - fallback.data.len
+                         : 0;
+            if (fallback.data.len == tests[i].fallback_share &&
+                !bytes_equal(slice_sub(share.data, at, at + fallback.data.len),
+                             fallback.data))
+                testing_t_errorf_v(
+                    t, "%s: fallback share is not at %d in the hybrid one", name, at);
+        }
+
+        TlsKeyShare ks = {0};
+        Slice server_key = burrow__tls_key_exchange_server_shared_secret(
+            ke, a, (IoReader){0}, share.data, &ks, &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "%s: serverSharedSecret: %v", name, err);
+        } else {
+            if (ks.group != tests[i].id || ks.data.len != tests[i].server_share)
+                testing_t_errorf_v(t,
+                                   "%s: server key share is group %d with %d bytes, "
+                                   "want %d",
+                                   name, (Int)ks.group, ks.data.len,
+                                   tests[i].server_share);
+            Slice client_key = burrow__tls_key_exchange_client_shared_secret(
+                ke, a, &priv, ks.data, &err);
+            if (BURROW_FAILED(err))
+                testing_t_errorf_v(t, "%s: clientSharedSecret: %v", name, err);
+            else if (server_key.len != tests[i].shared_key ||
+                     !bytes_equal(server_key, client_key))
+                testing_t_errorf_v(t, "%s: shared keys of %d and %d bytes differ", name,
+                                   server_key.len, client_key.len);
+        }
+        burrow__tls_key_share_private_keys_free(&priv);
+        arena_free(&ar);
+    }
+}
+
+/* Not in Go. The errors the key exchanges give for groups they do not know
+ * and for shares of the wrong size. */
+static void TestKeyExchangeErrors(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    if (burrow__tls_key_exchange_for_curve_id(0x0a0a, &err) != NULL ||
+        !str_eq(error_text(err), BURROW_S("tls: unsupported key exchange")))
+        testing_t_errorf_v(t, "keyExchangeForCurveID(0x0a0a): got %v", err);
+
+    struct {
+        TlsCurveID id;
+        bool client;
+        Int len;
+        const char *want;
+    } tests[] = {
+        {TLS_X25519MLKEM768, false, 1184 + 31,
+         "tls: invalid client key share length for hybrid key exchange"},
+        {TLS_X25519MLKEM768, true, 1088 + 33,
+         "tls: invalid server key share length for hybrid key exchange"},
+        {TLS_SEC_P384_R1_MLKEM1024, false, 0,
+         "tls: invalid client key share length for hybrid key exchange"},
+        {TLS_SEC_P256_R1_MLKEM768, true, 65 + 1184,
+         "tls: invalid server key share length for hybrid key exchange"},
+        {TLS_MLKEM1024, false, 1567, "mlkem: invalid encapsulation key length"},
+        {TLS_CURVE_P256, false, 64, "crypto/ecdh: invalid public key"},
+        {TLS_CURVE_P384, true, 65, "crypto/ecdh: invalid public key"},
+    };
+    for (size_t i = 0; i < sizeof(tests) / sizeof(tests[0]); i++) {
+        err = BURROW_NO_ERROR;
+        const TlsKeyExchange *ke =
+            burrow__tls_key_exchange_for_curve_id(tests[i].id, &err);
+        CHECK(ke != NULL);
+        Slice share = slice_make(a, TYPE_BYTE, tests[i].len, tests[i].len);
+        CHECK(tests[i].len == 0 || share.p != NULL);
+        Slice key;
+        if (tests[i].client) {
+            TlsKeySharePrivateKeys priv;
+            Slice shares;
+            CHECK(burrow__tls_key_exchange_key_shares(ke, a, (IoReader){0}, &priv,
+                                                      &shares, &err));
+            key = burrow__tls_key_exchange_client_shared_secret(ke, a, &priv, share,
+                                                                &err);
+            burrow__tls_key_share_private_keys_free(&priv);
+        } else {
+            TlsKeyShare ks = {0};
+            key = burrow__tls_key_exchange_server_shared_secret(ke, a, (IoReader){0},
+                                                                share, &ks, &err);
+        }
+        if (key.p != NULL || !BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "#%d: got a shared key, want %q", (Int)i,
+                               str_from_cstr(tests[i].want));
+            continue;
+        }
+        if (!str_eq(error_text(err), str_from_cstr(tests[i].want)))
+            testing_t_errorf_v(t, "#%d: got %v, want %q", (Int)i, err,
+                               str_from_cstr(tests[i].want));
+    }
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestACVPVectors)                                                                 \
-    X(TestTrafficKey)
+    X(TestTrafficKey)                                                                  \
+    X(TestKeyExchanges)                                                                \
+    X(TestKeyExchangeErrors)
 
 TESTING_MAIN(TESTS)

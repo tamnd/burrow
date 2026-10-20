@@ -4,6 +4,27 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API, and none of it has been through a security review yet.
 
+## v0.3.0 (2026-10-20)
+
+The end of P5 (#7): go/types and the importers, html/template, the profilers, net/http/pprof, the execution tracer and `burrow-gen from-go`. Every item on its checklist is now merged.
+
+### Added
+
+- `html/template`: contexts, content types and the escapers (#491), escaping, `Template` and the escape tests (#492), and Go's exec and multi tests (#500).
+- `go/types`: the type model, objects, scopes and predicates (#494), `LookupFieldOrMethod`, selections, method sets and `MissingMethod` (#495), `Sizes`, `StdSizes` and `SizesFor` (#496), `ExprString` and `WriteExpr` (#497), `Hasher` and `HasherIgnoreTags` (#498), `Instantiate`, the API predicates and the error types (#499), `AssignableTo` and `ConvertibleTo` (#501), and the type checker (#503). It checks the standard library through the source importer (#505), and the rest of Go's tests are ported (#507, #508, #509).
+- `go/importer`: the source importer (#504) and the gc export data importer (#511).
+- `examples/sqlite`, a `database/sql` driver over SQLite (#510).
+- `internal/profile` (#513), and `runtime/pprof`: labels, custom profiles and the proto builder (#514), the goroutine and threadcreate profiles (#516), the CPU profiler (#518), the heap and allocs profiles (#519), and the block and mutex profiles (#521).
+- `runtime_stack` walks every goroutine (#517).
+- The testing package writes the profiles that `-test.cpuprofile`, `-test.memprofile`, `-test.blockprofile` and `-test.mutexprofile` ask for (#522).
+- `net/http/pprof` (#523).
+- The execution tracer, `runtime/trace` with the flight recorder, `-test.trace` and `/debug/pprof/trace` (#524).
+- `burrow-gen from-go`, which writes C types, constants and descriptors for a Go package (#520).
+
+### Fixed
+
+- The leaks, races and platform failures CI found (#493), string literals in setjmp frames in `go/parser` and `log/slog` (#502), the amalgamation, cosmo, MSVC and macOS failures on main (#506), the package lines of the pkgbits and gcimporter headers (#512), and the MSVC, cmake Release and macOS amalgamation builds of `internal/profile` and the platform layer (#515).
+
 ## v0.2.5 (2026-10-14)
 
 All of reflect, and text/template on top of it.

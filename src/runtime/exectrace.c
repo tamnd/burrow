@@ -416,7 +416,7 @@ static void writer_flush(Writer *w) {
 
 /* ------------------------------------------------------------------- strings */
 
-static uint64_t hash_bytes(const void *p, size_t n) {
+static uint64_t trace_hash_bytes(const void *p, size_t n) {
     return runtime_memhash(p, n, 0x9e3779b97f4a7c15U);
 }
 
@@ -464,7 +464,7 @@ static uint64_t string_put(uint64_t gen, const void *s, Int n) {
     if (n > MAX_STRING_SIZE)
         n = MAX_STRING_SIZE;
     TraceStrings *t = &trace.strings[gen % 2];
-    uint64_t h = hash_bytes(s, (size_t)n);
+    uint64_t h = trace_hash_bytes(s, (size_t)n);
 
     burrow__lock(&t->lock);
     if (t->n * 2 >= t->cap && !strings_grow(t)) {
@@ -572,7 +572,7 @@ static uint64_t stack_put(uint64_t gen, const Uintptr *pcs, Int n) {
         return 0;
     TraceStacks *t = &trace.stacks[gen % 2];
     size_t bytes = (size_t)n * sizeof(Uintptr);
-    uint64_t h = hash_bytes(pcs, bytes);
+    uint64_t h = trace_hash_bytes(pcs, bytes);
 
     burrow__lock(&t->lock);
     if (t->n * 2 >= t->cap && !stacks_grow(t)) {
@@ -650,7 +650,7 @@ static void stacks_dump(uint64_t gen) {
 
 /* ------------------------------------------------------------------- threads */
 
-static burrow__TraceThread *tt_get(void) {
+static burrow__TraceThread *trace_tt_get(void) {
     burrow__lock(&trace.tt_lock);
     burrow__TraceThread *tt = trace.tt_free;
     if (tt != NULL)
@@ -678,7 +678,7 @@ bool burrow__trace_acquire_slow(burrow__TraceLocker *tl) {
     if (m != NULL) {
         tt = m->trace;
         if (tt == NULL) {
-            tt = tt_get();
+            tt = trace_tt_get();
             if (tt == NULL)
                 return false;
             m->trace = tt;
@@ -717,7 +717,7 @@ BURROW_NOINLINE void burrow__trace_capture(int why) {
     if (m == NULL)
         return;
     if (m->trace == NULL)
-        m->trace = tt_get();
+        m->trace = trace_tt_get();
     burrow__TraceThread *tt = m->trace;
     if (tt == NULL)
         return;
@@ -1189,7 +1189,7 @@ uint64_t burrow__trace_clock_units_per_second(void) {
     return (uint64_t)(1.0 / (double)TIME_DIV * 1e9);
 }
 
-static void free_list(TraceBuf *b) {
+static void trace_free_list(TraceBuf *b) {
     while (b != NULL) {
         TraceBuf *next = b->link;
         mem_free(heap_allocator(), b, sizeof(TraceBuf), _Alignof(TraceBuf));
@@ -1207,7 +1207,7 @@ static void drop_buffers(void) {
             tt = &trace.foreign;
         burrow__lock(&tt->lock);
         for (int i = 0; i < 2; i++) {
-            free_list(tt->buf[i]);
+            trace_free_list(tt->buf[i]);
             tt->buf[i] = NULL;
         }
         burrow__unlock(&tt->lock);
@@ -1216,13 +1216,13 @@ static void drop_buffers(void) {
     }
     burrow__lock(&trace.lock);
     for (int i = 0; i < 2; i++) {
-        free_list(trace.full_head[i]);
+        trace_free_list(trace.full_head[i]);
         trace.full_head[i] = NULL;
         trace.full_tail[i] = NULL;
     }
-    free_list(trace.reading);
+    trace_free_list(trace.reading);
     trace.reading = NULL;
-    free_list(trace.empty);
+    trace_free_list(trace.empty);
     trace.empty = NULL;
     burrow__unlock(&trace.lock);
 }
@@ -1347,7 +1347,7 @@ void runtime_stop_trace(void) {
     }
 
     burrow__lock(&trace.lock);
-    free_list(trace.empty);
+    trace_free_list(trace.empty);
     trace.empty = NULL;
     burrow__unlock(&trace.lock);
 

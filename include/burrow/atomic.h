@@ -331,6 +331,12 @@ uint64_t burrow__atomic64_or(uint64_t *p, uint64_t v);
 uint64_t burrow__atomic64_swap(uint64_t *p, uint64_t v);
 bool burrow__atomic64_cas(uint64_t *p, uint64_t *expected, uint64_t desired);
 
+/* Whether the calling thread is inside one of the functions above, holding a
+ * slot of the table or waiting for one. For a signal handler, which must not
+ * use a 64 bit atomic when it is, on a machine where those take the table. Not
+ * in Go: Go answers the same question by looking at the interrupted pc. */
+bool burrow__atomic64_locked_here(void);
+
 /* ---------------------------------------------------------- the operations */
 
 /* One macro writes the whole set for an integer width. It is a macro because

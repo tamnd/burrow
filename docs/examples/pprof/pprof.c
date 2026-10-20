@@ -47,6 +47,28 @@ static void look(void *env) {
 }
 // doc: end
 
+// doc: cpu
+/* Something to sample: a loop that keeps the CPU busy for d. */
+static Int spin(Duration d) {
+    Time start = time_now();
+    Int n = 0;
+    while (time_since(start) < d)
+        n++;
+    return n;
+}
+
+static void profile_cpu(void *env) {
+    Alloc *a = (Alloc *)env;
+    BytesBuffer buf = BYTES_BUFFER(a);
+    Error err = pprof_start_cpu_profile(bytes_buffer_as_io_writer(&buf));
+    if (BURROW_FAILED(err))
+        return;
+    (void)spin(200 * TIME_MILLISECOND);
+    pprof_stop_cpu_profile();
+    fmt_printf_v("cpu profile written: %t\n", (bool)(bytes_buffer_len(&buf) > 0));
+}
+// doc: end
+
 int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -80,6 +102,7 @@ int main(void) {
     // doc: main
     runtime_main(BURROW_FN(Func, look, a));
     // doc: end
+    runtime_main(BURROW_FN(Func, profile_cpu, a));
     arena_free(&ar);
     return 0;
 }
@@ -89,4 +112,5 @@ handling /users
 example.com/conns has 2
 example.com/conns profile: total 2
 goroutine profile: total 4
+cpu profile written: true
 */

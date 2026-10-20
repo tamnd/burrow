@@ -245,6 +245,22 @@ const void *pal_signal_fault_addr(const void *info) {
     return (const void *)rec->ExceptionInformation[1];
 }
 
+bool pal_signal_context_pc_fp(const void *ctx, uintptr_t *pc, uintptr_t *fp) {
+    (void)ctx;
+    *pc = 0;
+    *fp = 0;
+    return false;
+}
+
+bool pal_profile_timer(int32_t hz, PalErrno *err) {
+    /* Windows has no SIGPROF. Go profiles there from a thread of its own that
+     * suspends the others and reads their contexts, which burrow does not do
+     * yet. */
+    (void)hz;
+    BURROW_OUT(err, PAL_ENOTSUP);
+    return false;
+}
+
 /* ---------------------------------------------------------------- relaying */
 
 bool pal_signal_relay_init(PalSignalRelay send, PalErrno *err) {

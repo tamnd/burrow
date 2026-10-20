@@ -39,7 +39,17 @@
 #include <signal.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/time.h>
 #include <unistd.h>
+
+/* For the interrupted registers in pal_signal_context_pc_fp. OpenBSD has no
+ * ucontext_t of its own, only struct sigcontext from <signal.h>, and
+ * Cosmopolitan keeps it in the other header. */
+#if defined(BURROW_OS_COSMO)
+#include <ucontext.h>
+#elif !defined(BURROW_OS_OPENBSD)
+#include <sys/ucontext.h>
+#endif
 
 /* How many native signal numbers this file will keep a row for.
  *
@@ -178,6 +188,7 @@ static SIGNAL_PAIRS_CONST struct {
      * is to ignore it, and it does not interrupt a system call in a way that
      * loses data. */
     {PAL_SIGPREEMPT, SIGURG},
+    {PAL_SIGPROF, SIGPROF},
 };
 
 /* One of ours to one of the platform's, or -1. */
@@ -528,6 +539,125 @@ const void *pal_signal_fault_addr(const void *info) {
      * says to only ask inside a PAL_SIGFAULT handler. */
     const siginfo_t *si = (const siginfo_t *)info;
     return si->si_addr;
+}
+
+/* --------------------------------------------------------------- profiling */
+
+/* One branch per system and chip, because each of them names the registers its
+ * own way. The Linux numbers are glibc's REG_RIP, REG_RBP, REG_EIP and REG_EBP,
+ * written out because the names need _GNU_SOURCE, and they are the same on
+ * musl. On arm64 the frame pointer is x29 everywhere. Darwin's arm64 state goes
+ * through the macros the SDK provides, because the fields are opaque when
+ * pointer authentication is on and the macros are what strip the signature. */
+#if defined(BURROW_OS_COSMO) && defined(BURROW_ARCH_AMD64)
+#define CONTEXT_PC(uc) ((uc)->uc_mcontext.rip)
+#define CONTEXT_FP(uc) ((uc)->uc_mcontext.rbp)
+#elif defined(BURROW_OS_COSMO) && defined(BURROW_ARCH_ARM64)
+#define CONTEXT_PC(uc) ((uc)->uc_mcontext.pc)
+#define CONTEXT_FP(uc) ((uc)->uc_mcontext.regs[29])
+#elif defined(BURROW_OS_LINUX) && defined(BURROW_ARCH_AMD64)
+#define CONTEXT_PC(uc) ((uc)->uc_mcontext.gregs[16])
+#define CONTEXT_FP(uc) ((uc)->uc_mcontext.gregs[10])
+#elif defined(BURROW_OS_LINUX) && defined(BURROW_ARCH_ARM64)
+#define CONTEXT_PC(uc) ((uc)->uc_mcontext.pc)
+#define CONTEXT_FP(uc) ((uc)->uc_mcontext.regs[29])
+#elif defined(BURROW_OS_LINUX) && defined(BURROW_ARCH_386)
+#define CONTEXT_PC(uc) ((uc)->uc_mcontext.gregs[14])
+#define CONTEXT_FP(uc) ((uc)->uc_mcontext.gregs[6])
+#elif (defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)) &&                         \
+    defined(BURROW_ARCH_AMD64)
+#define CONTEXT_PC(uc) ((uc)->uc_mcontext->__ss.__rip)
+#define CONTEXT_FP(uc) ((uc)->uc_mcontext->__ss.__rbp)
+#elif (defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)) &&                         \
+    defined(BURROW_ARCH_ARM64)
+#define CONTEXT_PC(uc) __darwin_arm_thread_state64_get_pc((uc)->uc_mcontext->__ss)
+#define CONTEXT_FP(uc) __darwin_arm_thread_state64_get_fp((uc)->uc_mcontext->__ss)
+#elif (defined(BURROW_OS_FREEBSD) || defined(BURROW_OS_DRAGONFLY)) &&                  \
+    defined(BURROW_ARCH_AMD64)
+#define CONTEXT_PC(uc) ((uc)->uc_mcontext.mc_rip)
+#define CONTEXT_FP(uc) ((uc)->uc_mcontext.mc_rbp)
+#elif defined(BURROW_OS_FREEBSD) && defined(BURROW_ARCH_ARM64)
+#define CONTEXT_PC(uc) ((uc)->uc_mcontext.mc_gpregs.gp_elr)
+#define CONTEXT_FP(uc) ((uc)->uc_mcontext.mc_gpregs.gp_x[29])
+#elif defined(BURROW_OS_FREEBSD) && defined(BURROW_ARCH_386)
+#define CONTEXT_PC(uc) ((uc)->uc_mcontext.mc_eip)
+#define CONTEXT_FP(uc) ((uc)->uc_mcontext.mc_ebp)
+#elif defined(BURROW_OS_OPENBSD) && defined(BURROW_ARCH_AMD64)
+#define CONTEXT_SIGCONTEXT 1
+#define CONTEXT_PC(sc) ((sc)->sc_rip)
+#define CONTEXT_FP(sc) ((sc)->sc_rbp)
+#elif defined(BURROW_OS_OPENBSD) && defined(BURROW_ARCH_ARM64)
+#define CONTEXT_SIGCONTEXT 1
+#define CONTEXT_PC(sc) ((sc)->sc_elr)
+#define CONTEXT_FP(sc) ((sc)->sc_x[29])
+#elif defined(BURROW_OS_OPENBSD) && defined(BURROW_ARCH_386)
+#define CONTEXT_SIGCONTEXT 1
+#define CONTEXT_PC(sc) ((sc)->sc_eip)
+#define CONTEXT_FP(sc) ((sc)->sc_ebp)
+#elif defined(BURROW_OS_NETBSD) && defined(_UC_MACHINE_PC) &&                          \
+    defined(_UC_MACHINE_FP) &&                                                         \
+    (defined(BURROW_ARCH_AMD64) || defined(BURROW_ARCH_ARM64) ||                       \
+     defined(BURROW_ARCH_386))
+#define CONTEXT_PC(uc) _UC_MACHINE_PC(uc)
+#define CONTEXT_FP(uc) _UC_MACHINE_FP(uc)
+#endif
+
+bool pal_signal_context_pc_fp(const void *ctx, uintptr_t *pc, uintptr_t *fp) {
+    *pc = 0;
+    *fp = 0;
+    if (ctx == NULL)
+        return false;
+#if defined(CONTEXT_SIGCONTEXT)
+    const struct sigcontext *sc = (const struct sigcontext *)ctx;
+    *pc = (uintptr_t)CONTEXT_PC(sc);
+    *fp = (uintptr_t)CONTEXT_FP(sc);
+    return true;
+#elif defined(CONTEXT_PC)
+#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
+    /* The ucontext_t a handler is given here can be at an address only 8 byte
+     * aligned, where the type asks for 16, so it and the machine context it
+     * points at are read from aligned copies. */
+    ucontext_t ucv;
+    struct __darwin_mcontext64 mcv;
+    memcpy(&ucv, ctx, sizeof ucv);
+    if (ucv.uc_mcontext == NULL)
+        return false;
+    memcpy(&mcv, ucv.uc_mcontext, sizeof mcv);
+    ucv.uc_mcontext = &mcv;
+    const ucontext_t *uc = &ucv;
+#else
+    const ucontext_t *uc = (const ucontext_t *)ctx;
+#endif
+    *pc = (uintptr_t)CONTEXT_PC(uc);
+    *fp = (uintptr_t)CONTEXT_FP(uc);
+    return true;
+#else
+    return false;
+#endif
+}
+
+bool pal_profile_timer(int32_t hz, PalErrno *err) {
+    BURROW_OUT(err, PAL_OK);
+
+    if (hz < 0) {
+        BURROW_OUT(err, PAL_EINVAL);
+        return false;
+    }
+    if (hz > 1000000)
+        hz = 1000000;
+
+    /* Zero for both halves is what stops it. */
+    struct itimerval it;
+    memset(&it, 0, sizeof it);
+    if (hz > 0) {
+        it.it_interval.tv_usec = (suseconds_t)(1000000 / hz);
+        it.it_value = it.it_interval;
+    }
+    if (setitimer(ITIMER_PROF, &it, NULL) != 0) {
+        BURROW_OUT(err, burrow__pal_errno(errno));
+        return false;
+    }
+    return true;
 }
 
 /* ---------------------------------------------------------------- relaying */

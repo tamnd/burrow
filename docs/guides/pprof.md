@@ -1,6 +1,6 @@
 # Profiling
 
-`burrow/runtime/pprof.h` is Go's `runtime/pprof`. So far it has profiling labels, profiles of your own, the goroutine and threadcreate profiles, and the writer for the profile format that `go tool pprof` reads. The CPU, heap, allocs, block and mutex profiles are not ported yet.
+`burrow/runtime/pprof.h` is Go's `runtime/pprof`. So far it has profiling labels, profiles of your own, the goroutine and threadcreate profiles, the CPU profile, and the writer for the profile format that `go tool pprof` reads. The heap, allocs, block and mutex profiles are not ported yet.
 
 ## Labels
 
@@ -115,3 +115,40 @@ goroutine profile: total 4
 ```
 
 The stack of a goroutine that is waiting is read from where it stopped, on amd64 and arm64 outside Windows. On other systems, and for a goroutine still running after the profile has waited twenty milliseconds for it to stop, the stack is the function the goroutine was started with. With debug 2 the goroutine profile is what `runtime_stack` prints with all set, which reads the stacks the same way.
+
+## The CPU profile
+
+`pprof_start_cpu_profile` samples the stacks of whatever the program is running a hundred times a second of CPU time it uses, and `pprof_stop_cpu_profile` stops it and writes the samples to the writer as the gzipped protocol buffer that `go tool pprof` reads. The profile is written by a goroutine, so both have to be called from inside `runtime_main`.
+
+<!-- example: ../examples/pprof/pprof.c#cpu -->
+```c
+/* Something to sample: a loop that keeps the CPU busy for d. */
+static Int spin(Duration d) {
+    Time start = time_now();
+    Int n = 0;
+    while (time_since(start) < d)
+        n++;
+    return n;
+}
+
+static void profile_cpu(void *env) {
+    Alloc *a = (Alloc *)env;
+    BytesBuffer buf = BYTES_BUFFER(a);
+    Error err = pprof_start_cpu_profile(bytes_buffer_as_io_writer(&buf));
+    if (BURROW_FAILED(err))
+        return;
+    (void)spin(200 * TIME_MILLISECOND);
+    pprof_stop_cpu_profile();
+    fmt_printf_v("cpu profile written: %t\n", (bool)(bytes_buffer_len(&buf) > 0));
+}
+```
+
+That prints:
+
+```text
+cpu profile written: true
+```
+
+A real program would write to a file from `os_create` and give the file to `go tool pprof`. A second `pprof_start_cpu_profile` while one is running returns an error, as in Go.
+
+The samples come from SIGPROF, sent by setitimer's ITIMER_PROF timer. The handler is installed the first time a profile starts and stays installed, so a program with its own SIGPROF handler loses it. Each sample is the stack of the goroutine the signal interrupted, walked from where it stopped. That walk needs frame pointers, and it works on amd64, arm64 and 386. On other machines the handler can't read where the thread stopped, so every sample is a single frame, `burrow__prof_system`. A sample taken while a thread was in the scheduler, or on a thread that runs no goroutine, has the address it stopped at and `burrow__prof_system` or `burrow__prof_external_code` under it, the way Go uses `runtime._System` and `runtime._ExternalCode`. Windows and wasip1 have no SIGPROF, so a profile there is written with no samples in it. Names come from burrow's symbol table, which covers the library and not your program, so `go tool pprof` shows your own functions as addresses.

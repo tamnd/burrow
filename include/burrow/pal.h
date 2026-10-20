@@ -1086,6 +1086,9 @@ enum {
     /* The one the runtime sends itself, to take a goroutine off a core it has
      * been on too long. Go uses SIGURG for this. */
     PAL_SIGPREEMPT = 23,
+    /* The CPU profiler's, sent by the timer pal_profile_timer starts. Linux's
+     * number. os/signal may not have it, the same as in Go. */
+    PAL_SIGPROF = 27,
     /* Not a signal, and the number is outside the range the others come from so
      * that nobody reads it as one. It means a bad memory access, which is two
      * signals on POSIX and none at all on Windows.
@@ -1486,6 +1489,27 @@ void pal_signal_stack_remove(void);
  * Only meaningful inside a PAL_SIGFAULT handler and only for the info pointer
  * that handler was handed. */
 BURROW_BORROWS(ret) const void *pal_signal_fault_addr(const void *info);
+
+/* The program counter and the frame pointer of the code a signal interrupted,
+ * out of the ctx pointer its handler was called with. For the CPU profiler,
+ * which walks the interrupted stack from there the way Go's sigprof starts
+ * from sigctxt.sigpc and sigctxt.sigsp.
+ *
+ * False, with both set to zero, where this layer does not know where the
+ * platform keeps them. That is everything but amd64, arm64 and 386, which are
+ * also the only machines src/runtime/trace.c can walk, on Linux, macOS, the
+ * BSDs and Cosmopolitan, and it is always false on Windows and wasip1, which
+ * have no handler for this to be called from. Safe in a handler. */
+bool pal_signal_context_pc_fp(const void *ctx, uintptr_t *pc, uintptr_t *fp);
+
+/* Starts the timer that sends PAL_SIGPROF hz times a second of CPU time the
+ * process uses, on whichever of its threads is running when it fires, or stops
+ * it when hz is zero. hz over a million is a million. Go's
+ * setProcessCPUProfilerTimer, which is setitimer with ITIMER_PROF.
+ *
+ * The handler is the caller's to install first, because the default for
+ * SIGPROF ends the process. PAL_ENOTSUP on Windows and wasip1. */
+bool pal_profile_timer(int32_t hz, PalErrno *err);
 
 /* ------------------------------------------------------ relaying to os/signal
  *

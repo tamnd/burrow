@@ -856,7 +856,10 @@ typedef struct TlsConfig {
      * rotated if they are automatically managed). WARNING: this allows session
      * resumption of connections originally established with the parent (or a
      * sibling) Config, which may bypass the VerifyPeerCertificate value of the
-     * returned Config. */
+     * returned Config.
+     *
+     * Not in Go: the connection goes on using the returned Config after the
+     * handshake, so it has to outlive the connection. */
     TlsGetConfigForClientFunc get_config_for_client;
 
     /* VerifyPeerCertificate, if not nil, is called after normal certificate
@@ -943,7 +946,11 @@ typedef struct TlsConfig {
      *
      * If UnwrapSession returns an error, the connection is terminated. If it
      * returns (nil, nil), the session is ignored. crypto/tls may still choose
-     * not to resume the returned session. */
+     * not to resume the returned session.
+     *
+     * Not in Go: the connection takes the returned session and frees it with
+     * tls_session_state_free, so each call has to return a session of its
+     * own. */
     TlsUnwrapSessionFunc unwrap_session;
 
     /* WrapSession is called on the server to produce a session
@@ -960,7 +967,9 @@ typedef struct TlsConfig {
      * plaintext. The application is in charge of encrypting and authenticating
      * it (and rotating keys) or returning high-entropy identifiers. Failing to
      * do so correctly can compromise current, previous, and future connections
-     * depending on the protocol version. */
+     * depending on the protocol version.
+     *
+     * Not in Go: the ticket is made in a, and ss only lasts for the call. */
     TlsWrapSessionFunc wrap_session;
 
     /* CurvePreferences contains a set of supported key exchange mechanisms.
@@ -1327,6 +1336,15 @@ BURROW_OWNS(ret) Error tls_certificate_verification_error_as_error(
  * last until tls_conn_free. Any other error comes from the calling
  * goroutine's error_allocator. */
 typedef struct TlsConn TlsConn;
+
+/* Server returns a new TLS server side connection using conn as the
+ * underlying transport. The configuration config must be non-nil and must
+ * include at least one certificate or else set GetCertificate.
+ *
+ * Not in Go: the Conn comes from a, which has to be one that two goroutines
+ * can use at once, and tls_conn_free gives it back. config has to outlive it.
+ * NULL when a is out of memory. */
+BURROW_OWNS(ret) TlsConn *tls_server(Alloc *a, NetConn conn, TlsConfig *config);
 
 /* Client returns a new TLS client side connection using conn as the
  * underlying transport. The config cannot be nil: users must set either

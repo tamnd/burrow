@@ -803,6 +803,8 @@ void tls_conn_free(TlsConn *c) {
         burrow__tls_ticket_keys_release(c->ticket_keys);
     if (c->resumed_session != NULL)
         tls_client_session_state_release(c->resumed_session);
+    if (c->server_session != NULL)
+        tls_session_state_free(c->server_session);
     arena_free(&c->state);
     arena_free(&c->out_bufs);
     mem_free(c->a, c, sizeof *c, _Alignof(TlsConn));

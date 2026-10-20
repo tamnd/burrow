@@ -1,8 +1,11 @@
 /* Derived from Go's src/crypto/tls/tls_test.go.
  * Go source: go1.27.1.
  *
- * Only TestCipherSuites and TestVersionName for now. The rest of the file
- * needs connections and handshakes, which come in later. Go ranges over the
+ * Only TestX509KeyPair, TestCipherSuites, TestVersionName and
+ * TestX509KeyPairPopulateCertificate for now. The rest of the file needs
+ * connections and handshakes, which come in later. The PEMs TestX509KeyPair
+ * declares are in tls_test_gen.h, and the ML-DSA ones are always tried, as
+ * there is no FIPS 140-3 module here to be v1.0.0. Go ranges over the
  * disabledCipherSuites map; here that map is a predicate, so the test asks it
  * about every suite there is.
  *
@@ -15,11 +18,126 @@
 
 #include "../src/crypto/tls_internal.h"
 #include "burrow/burrow.h"
+#include "burrow/bytes.h"
+#include "burrow/crypto/ecdsa.h"
+#include "burrow/crypto/elliptic.h"
 #include "burrow/crypto/tls.h"
+#include "burrow/crypto/x509.h"
+#include "burrow/encoding/pem.h"
+#include "burrow/math/big.h"
 #include "burrow/panic.h"
 #include "burrow/strings.h"
+#include "tls_test_gen.h"
 
 #include <stdint.h>
+
+/* testingKey, from a. */
+static Slice testing_key(Alloc *a, Slice s) {
+    static Byte testing[] = "TESTING KEY";
+    static Byte private_[] = "PRIVATE KEY";
+    return bytes_replace_all(a, s, slice_from(testing, 11, 11, TYPE_BYTE),
+                             slice_from(private_, 11, 11, TYPE_BYTE));
+}
+
+/* Not in Go: the PEM of one test joined to another, the + of two Go strings. */
+static Slice pem_cat(Alloc *a, Slice x, Slice y) {
+    Slice b = slice_make(a, TYPE_BYTE, 0, x.len + y.len);
+    b = slice_append(a, b, x.p, x.len);
+    return slice_append(a, b, y.p, y.len);
+}
+
+typedef struct KeyPairTest {
+    const char *algo;
+    Slice cert;
+    Slice key;
+} KeyPairTest;
+
+static void TestX509KeyPair(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Slice rsa_cert_pem = tls_test_pem(a, x509_key_pair_rsa_cert_pem);
+    Slice rsa_key_pem = testing_key(a, tls_test_pem(a, x509_key_pair_rsa_key_pem));
+    /* keyPEM is the same as rsaKeyPEM, but declares itself as just
+     * "PRIVATE KEY", not "RSA PRIVATE KEY".  https://golang.org/issue/4477 */
+    Slice key_pem = testing_key(a, tls_test_pem(a, x509_key_pair_key_pem));
+    Slice ecdsa_cert_pem = tls_test_pem(a, x509_key_pair_ecdsa_cert_pem);
+    Slice ecdsa_key_pem = testing_key(a, tls_test_pem(a, x509_key_pair_ecdsa_key_pem));
+
+    KeyPairTest key_pair_tests[] = {
+        {"ECDSA", ecdsa_cert_pem, ecdsa_key_pem},
+        {"RSA", rsa_cert_pem, rsa_key_pem},
+        {"RSA-untyped", rsa_cert_pem, key_pem}, /* golang.org/issue/4477 */
+        {"ML-DSA-44", tls_test_pem(a, test_mldsa44_cert_pem),
+         testing_key(a, tls_test_pem(a, test_mldsa44_key_pem))},
+        {"ML-DSA-65", tls_test_pem(a, test_mldsa65_cert_pem),
+         testing_key(a, tls_test_pem(a, test_mldsa65_key_pem))},
+        {"ML-DSA-87", tls_test_pem(a, test_mldsa87_cert_pem),
+         testing_key(a, tls_test_pem(a, test_mldsa87_key_pem))},
+    };
+
+    Error err = BURROW_NO_ERROR;
+    for (size_t i = 0; i < sizeof key_pair_tests / sizeof key_pair_tests[0]; i++) {
+        const KeyPairTest *test = &key_pair_tests[i];
+        Slice pem = pem_cat(a, test->cert, test->key);
+        (void)tls_x509_key_pair(a, pem, pem, &err);
+        if (BURROW_FAILED(err))
+            testing_t_errorf_v(t, "Failed to load %s cert followed by %s key: %s",
+                               test->algo, test->algo, err);
+        pem = pem_cat(a, test->key, test->cert);
+        (void)tls_x509_key_pair(a, pem, pem, &err);
+        if (BURROW_FAILED(err))
+            testing_t_errorf_v(t, "Failed to load %s key followed by %s cert: %s",
+                               test->algo, test->algo, err);
+    }
+
+    (void)tls_x509_key_pair(a, rsa_key_pem, rsa_cert_pem, &err);
+    if (!BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "X509KeyPair didn't return an error when arguments were "
+                              "switched");
+    Str sub_str = BURROW_S("been switched");
+    if (!strings_contains(error_text(err), sub_str))
+        testing_t_fatalf_v(t,
+                           "Expected %q in the error when switching arguments to "
+                           "X509KeyPair, but the error was %q",
+                           sub_str, err);
+
+    (void)tls_x509_key_pair(a, rsa_cert_pem, rsa_cert_pem, &err);
+    if (!BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "X509KeyPair didn't return an error when both arguments "
+                              "were certificates");
+    sub_str = BURROW_S("certificate");
+    if (!strings_contains(error_text(err), sub_str))
+        testing_t_fatalf_v(
+            t,
+            "Expected %q in the error when both arguments to X509KeyPair "
+            "were certificates, but the error was %q",
+            sub_str, err);
+
+    Slice nonsense_pem = tls_test_pem(a, x509_key_pair_nonsense_pem);
+
+    (void)tls_x509_key_pair(a, nonsense_pem, nonsense_pem, &err);
+    if (!BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "X509KeyPair didn't return an error when both arguments "
+                              "were nonsense");
+    sub_str = BURROW_S("NONSENSE");
+    if (!strings_contains(error_text(err), sub_str))
+        testing_t_fatalf_v(
+            t,
+            "Expected %q in the error when both arguments to X509KeyPair "
+            "were nonsense, but the error was %q",
+            sub_str, err);
+
+    (void)tls_x509_key_pair(a, rsa_cert_pem, ecdsa_key_pem, &err);
+    if (!BURROW_FAILED(err))
+        testing_t_error_v(t,
+                          "Load of RSA certificate succeeded with ECDSA private key");
+    (void)tls_x509_key_pair(a, ecdsa_cert_pem, rsa_key_pem, &err);
+    if (!BURROW_FAILED(err))
+        testing_t_error_v(t,
+                          "Load of ECDSA certificate succeeded with RSA private key");
+    arena_free(&ar);
+}
 
 static const TlsCipherSuite *cipher_suite_in(Slice list, uint16_t id) {
     TlsCipherSuitePtr *p = (TlsCipherSuitePtr *)list.p;
@@ -322,8 +440,43 @@ static void TestVersionName(TestingT *t) {
     arena_free(&ar);
 }
 
+static void TestX509KeyPairPopulateCertificate(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    EcdsaPrivateKey *key = ecdsa_generate_key(a, elliptic_p256(), (IoReader){0}, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    Slice key_der = x509_marshal_pkcs8_private_key(
+        a, BURROW_ANY(TYPE_ECDSA_PRIVATE_KEY, key), &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    PemBlock key_block = {BURROW_S("PRIVATE KEY"), NULL, key_der, 0};
+    Slice key_pem = pem_encode_to_memory(a, &key_block);
+    X509Certificate tmpl = {0};
+    tmpl.serial_number = big_new_int(a, 1);
+    tmpl.subject.common_name = BURROW_S("test");
+    Slice cert_der = x509_create_certificate(a, (IoReader){0}, &tmpl, &tmpl,
+                                             ecdsa_private_key_public(key),
+                                             ecdsa_private_key_signer(key), &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    PemBlock cert_block = {BURROW_S("CERTIFICATE"), NULL, cert_der, 0};
+    Slice cert_pem = pem_encode_to_memory(a, &cert_block);
+
+    TlsCertificate cert = tls_x509_key_pair(a, cert_pem, key_pem, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    if (cert.leaf == NULL)
+        testing_t_fatal_v(t, "Leaf should be populated");
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
+    X(TestX509KeyPair)                                                                 \
     X(TestCipherSuites)                                                                \
-    X(TestVersionName)
+    X(TestVersionName)                                                                 \
+    X(TestX509KeyPairPopulateCertificate)
 
 TESTING_MAIN(TESTS)

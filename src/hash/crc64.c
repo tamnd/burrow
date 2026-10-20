@@ -361,7 +361,7 @@ static uint64_t table_sum64(const Crc64Table *t) {
     Byte a[2048];
     Int n = 0;
     if (t != NULL) {
-        for (int i = 0; i < 256; i++)
+        for (Int i = 0; i < 256; i++)
             crc64_put_be64(a + 8 * i, t->v[i]);
         n = 2048;
     }

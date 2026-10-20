@@ -299,7 +299,7 @@ static uint32_t table_sum32(const Crc32Table *t) {
     Byte a[1024];
     Int n = 0;
     if (t != NULL) {
-        for (int i = 0; i < 256; i++)
+        for (Int i = 0; i < 256; i++)
             crc32_put_be32(a + 4 * i, t->v[i]);
         n = 1024;
     }

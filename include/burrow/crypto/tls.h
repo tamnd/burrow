@@ -221,7 +221,11 @@ typedef struct TlsCertificate {
      * an RSA PublicKey.
      *
      * If it implements crypto.MessageSigner, SignMessage will be used instead
-     * of Sign for TLS 1.2 and later. */
+     * of Sign for TLS 1.2 and later.
+     *
+     * Here that means an RSA, ECDSA, Ed25519 or ML-DSA private key, as
+     * x509_parse_pkcs8_private_key returns one, or a TYPE_CRYPTO_SIGNER
+     * pointing at any other CryptoSigner. */
     CryptoPrivateKey private_key;
     /* SupportedSignatureAlgorithms is an optional list restricting what
      * signature algorithms the PrivateKey can be used for. A

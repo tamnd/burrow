@@ -139,6 +139,13 @@ typedef struct CryptoSigner {
     void *data;
 } CryptoSigner;
 
+/* The descriptor of a CryptoSigner, for an Any that holds a pointer to one.
+ * That is how a CryptoPrivateKey can be a signer of a type with no descriptor
+ * of its own, such as a key in a hardware module. Not in Go, where any type
+ * with the methods is a crypto.Signer. */
+extern const Type burrow_type_CryptoSigner;
+#define TYPE_CRYPTO_SIGNER TYPE_OF(CryptoSigner)
+
 static inline CryptoPublicKey crypto_signer_public(CryptoSigner s) {
     return s.vt->public_key(s.data);
 }

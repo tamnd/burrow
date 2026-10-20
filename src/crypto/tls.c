@@ -417,6 +417,10 @@ static uint32_t tls_debug_load(void) {
     return f;
 }
 
+bool burrow__tls_godebug_sha1(void) {
+    return (tls_debug_load() & TLS_DEBUG_SHA1_ON) != 0;
+}
+
 void burrow__tls_godebug_set(const char *value) {
     burrow__atomic_store_relaxed_u32(&tls_debug_flags,
                                      value != NULL ? tls_debug_parse(value) : 0);

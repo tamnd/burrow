@@ -14,6 +14,7 @@
 #include "burrow/core.h"
 #include "burrow/crypto.h"
 #include "burrow/crypto/cipher.h"
+#include "burrow/crypto/ed25519.h"
 #include "burrow/error.h"
 #include "burrow/hash.h"
 #include "burrow/mem.h"
@@ -177,6 +178,9 @@ Str burrow__tls_alert_text(uint8_t e);
  * again. For tests. */
 void burrow__tls_godebug_set(const char *value);
 
+/* Whether GODEBUG has tlssha1=1. */
+bool burrow__tls_godebug_sha1(void);
+
 /* --------------------------------------------------------- cipher suites */
 
 #define TLS_SUITE_ECDHE (1 << 0)
@@ -314,6 +318,66 @@ Slice burrow__tls_supported_signature_algorithms_cert(Alloc *a, uint16_t min_ver
  * []SignatureScheme. */
 bool burrow__tls_is_supported_signature_algorithm(TlsSignatureScheme sig_alg,
                                                   Slice supported);
+
+/* ------------------------------------------------------------------ auth.go */
+
+/* verifyHandshakeSignature verifies a signature against unhashed handshake
+ * contents. */
+BURROW_STATIC(ret) Error burrow__tls_verify_handshake_signature(uint8_t sig_type,
+                                                                CryptoPublicKey pubkey,
+                                                                CryptoHash hash_func,
+                                                                Slice signed_,
+                                                                Slice sig);
+
+/* verifyLegacyHandshakeSignature verifies a TLS 1.0 and 1.1 signature against
+ * pre-hashed handshake contents. */
+BURROW_STATIC(ret) Error burrow__tls_verify_legacy_handshake_signature(
+    uint8_t sig_type, CryptoPublicKey pubkey, CryptoHash hash_func, Slice hashed,
+    Slice sig);
+
+/* serverSignatureContext and clientSignatureContext, each with the zero byte
+ * at the end that is part of it. */
+#define TLS_SERVER_SIGNATURE_CONTEXT "TLS 1.3, server CertificateVerify\0"
+#define TLS_CLIENT_SIGNATURE_CONTEXT "TLS 1.3, client CertificateVerify\0"
+
+/* signedMessage returns the (unhashed) message to be signed by certificate
+ * keys in TLS 1.3. See RFC 8446, Section 4.4.3. context is one of the two
+ * above, and the message is from a. */
+BURROW_OWNS(ret) Slice burrow__tls_signed_message(Alloc *a, Str context,
+                                                  Hash transcript);
+
+/* legacyTypeAndHashFromPublicKey returns the fixed signature type and
+ * crypto.Hash for a given public key used with TLS 1.0 and 1.1, before the
+ * introduction of signature algorithm negotiation. False, with zeroes and Go's
+ * error in err when err is not NULL, for a key it cannot be used with. */
+bool burrow__tls_legacy_type_and_hash_from_public_key(CryptoPublicKey pub,
+                                                      uint8_t *sig_type,
+                                                      CryptoHash *hash, Error *err);
+
+/* signatureSchemesForPublicKey: the schemes pub can sign with at version, a
+ * []SignatureScheme from a, nil for a key it does not know. */
+BURROW_OWNS(ret) Slice burrow__tls_signature_schemes_for_public_key(
+    Alloc *a, uint16_t version, CryptoPublicKey pub);
+
+/* The private key of a certificate as a crypto.Signer: the RSA, ECDSA, Ed25519
+ * and ML-DSA keys, and a TYPE_CRYPTO_SIGNER, which is copied out. es is where
+ * the signer of an Ed25519 key is kept, so it has to outlive *out. False for
+ * any other key, which Go's c.PrivateKey.(crypto.Signer) would not take. */
+bool burrow__tls_private_key_signer(CryptoPrivateKey key, Ed25519Signer *es,
+                                    CryptoSigner *out);
+
+/* selectSignatureScheme picks a SignatureScheme from the peer's preference
+ * list that works with the selected certificate. It's only called for protocol
+ * versions that support signature algorithms, so TLS 1.2 and 1.3. peer_algs is
+ * a []SignatureScheme. Zero, with the reason in err, when there is none. */
+TlsSignatureScheme burrow__tls_select_signature_scheme(uint16_t vers,
+                                                       const TlsCertificate *c,
+                                                       Slice peer_algs, Error *err);
+
+/* unsupportedCertificateError returns a helpful error for certificates with
+ * an unsupported private key. */
+BURROW_STATIC(ret) Error
+burrow__tls_unsupported_certificate_error(const TlsCertificate *cert);
 
 /* cipherSuiteByID and cipherSuiteTLS13ByID, NULL when there is none. */
 const TlsSuite *burrow__tls_cipher_suite_by_id(uint16_t id);

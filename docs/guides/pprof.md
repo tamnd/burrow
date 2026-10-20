@@ -257,3 +257,67 @@ mutex profile has records: true
 In the text form, debug 1, a profile starts with `--- contention:` for block and `--- mutex:` for mutex, then `cycles/second=`, and each record is the time spent waiting, the number of waits and the stack. Go counts CPU cycles, and burrow counts nanoseconds, so cycles/second is always 1000000000. With debug 0 the profile is the protocol buffer `go tool pprof` reads, with contentions and delay in nanoseconds. `runtime_block_profile` and `runtime_mutex_profile` hand back the same records as structs.
 
 The stack of a block record starts at the function that blocked, such as `chan_recv` or `burrow__sync_mutex_lock_slow`, and the stack of a mutex record starts at the unlock, `burrow__sync_mutex_unlock_slow` or the `sync_rw_mutex` function that let the lock go. When an unlock wakes one goroutine and others are still queued, the unlock is charged an estimate of their waiting as well, as Go does. Go's mutex profile also has contention on the runtime's own locks, and burrow's scheduler locks are not profiled.
+
+## Serving the profiles over HTTP
+
+`burrow/net/http/pprof.h` is Go's `net/http/pprof`. In Go, importing the package puts its handlers on `http.DefaultServeMux`. C has nothing that runs on import, so a program calls `http_pprof_register` instead, and from then on a server for the default mux answers under `/debug/pprof/`. This example sends it a few requests through a recorder:
+
+<!-- example: ../examples/pprof/http.c#serve -->
+```c
+http_pprof_register();
+
+get(a, "/debug/pprof/");
+get(a, "/debug/pprof/heap");
+get(a, "/debug/pprof/heap?debug=1");
+get(a, "/debug/pprof/nothing");
+```
+
+That prints:
+
+```text
+/debug/pprof/ 200 text/html; charset=utf-8
+/debug/pprof/heap 200 application/octet-stream attachment; filename="heap"
+/debug/pprof/heap?debug=1 200 text/plain; charset=utf-8
+/debug/pprof/nothing 404 text/plain; charset=utf-8
+```
+
+With a real server, `go tool pprof http://localhost:6060/debug/pprof/heap` reads the heap profile straight from the program, and `/debug/pprof/profile?seconds=30` runs the CPU profiler for 30 seconds and sends what it got. `seconds=N` on the allocs, block, goroutine, heap, mutex and threadcreate profiles sends a delta instead: the profile is taken twice, N seconds apart, and the first is taken away from the second, so what is left is what happened in between. `debug=N` sends the text form, and `/debug/pprof/symbol` turns program counters into function names.
+
+`/debug/pprof/` itself is an HTML page with a line for each profile. `http_pprof_index` is the handler behind it, and the profile names on that page come out like this:
+
+<!-- example: ../examples/pprof/http.c#index -->
+```c
+HttpRequest *r = httptest_new_request(a, BURROW_S("GET"), BURROW_S("/debug/pprof/"),
+                                      (IoReader){0});
+HttptestResponseRecorder *rec = httptest_new_recorder(a);
+if (r == NULL || rec == NULL)
+    return 1;
+http_pprof_index(NULL, httptest_response_recorder_as_response_writer(rec), r);
+Slice body = bytes_buffer_bytes(rec->body);
+Str rest = str_from_bytes(body.p, body.len);
+while (rest.len > 0) {
+    bool found;
+    Str line = strings_cut(rest, BURROW_S("\n"), &rest, &found);
+    Str name =
+        strings_cut_prefix(line, BURROW_S("<li><div class=profile-name>"), &found);
+    if (found)
+        fmt_printf_v("%s\n", strings_cut(name, BURROW_S(":"), NULL, &found));
+}
+httptest_response_recorder_free(rec);
+http_request_free(r);
+```
+
+```text
+allocs
+block
+cmdline
+goroutine
+heap
+mutex
+profile
+symbol
+threadcreate
+trace
+```
+
+A program that serves its own mux puts the handlers on it with `http_serve_mux_handle_func`, and `http_pprof_handler` makes a handler for one profile by name. Two things differ from Go. burrow has no `runtime/trace` yet, so `/debug/pprof/trace` answers 500 with "Could not enable tracing", which is what Go does when the tracer will not start. And `gc=N` on the heap profile is accepted and does nothing, since there is no collector to run first.

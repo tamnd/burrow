@@ -3,10 +3,12 @@
  *
  * The checks every hash in the standard library has to pass, shared by the
  * hash tests the way Go shares them through internal/testhash.
- * testhash_without_clone is TestHashWithoutClone, and testhash_with_clone is
- * TestHash, which adds the Clone check for a hash that is a hash.Cloner.
+ * testhash_without_clone is TestHashWithoutClone, and testhash_hash is
+ * TestHash, which asserts the hash to hash.Cloner and adds the Clone check.
+ * testhash_with_clone runs the same checks on a hash that is made as a
+ * hash.Cloner to begin with, as maphash's is.
  *
- * The last two helpers are not from Go. Go's golden tables spell a long input
+ * testhash_repeat and testhash_show are not from Go. Go's golden tables spell a long input
  * as strings.Repeat(rep, count) + tail, and testhash_repeat builds one of those
  * so the tables here can say it the same way. testhash_show cuts an input down
  * for an error message the way Go's tests do.
@@ -268,11 +270,7 @@ static inline bool testhash_do_clone(TestingT *t, Alloc *a, HashCloner h,
 }
 
 /* Whether the results after cloning are consistent. */
-static inline void testhash_clone_consistent(void *env, TestingT *t) {
-    Arena ar;
-    arena_init(&ar, NULL, 0);
-    Alloc *a = arena_allocator(&ar);
-    HashCloner h = ((TesthashClonerEnv *)env)->mh(a);
+static inline void testhash_clone_check(TestingT *t, Alloc *a, HashCloner h) {
     HashCloner h2, h3;
     Slice none = slice_nil(TYPE_BYTE);
     Byte pre[3] = {'t', 'm', 'p'};
@@ -281,13 +279,13 @@ static inline void testhash_clone_consistent(void *env, TestingT *t) {
     Slice prefix = slice_from(pre, 3, 3, TYPE_BYTE);
     Slice suffix = slice_from(suf, 4, 4, TYPE_BYTE);
 
-    if (h.vt == NULL || !testhash_do_clone(t, a, h, &h3))
-        goto done;
+    if (!testhash_do_clone(t, a, h, &h3))
+        return;
     Hash hh = {&h.vt->hash, h.data};
     Hash hh3 = {&h3.vt->hash, h3.data};
     testhash_write(t, a, hh, prefix);
     if (!testhash_do_clone(t, a, h, &h2))
-        goto done;
+        return;
     Hash hh2 = {&h2.vt->hash, h2.data};
     Slice prefix_sum = hash_sum(a, hh, none);
     if (!testhash_equal(prefix_sum, hash_sum(a, hh2, none)))
@@ -304,7 +302,34 @@ static inline void testhash_clone_consistent(void *env, TestingT *t) {
         testing_t_fatalf_v(t, "Clone results are inconsistent");
     if (!testhash_equal(hash_sum(a, hh2, none), composite_sum))
         testing_t_fatalf_v(t, "Clone results are inconsistent");
-done:
+}
+
+static inline void testhash_clone_consistent(void *env, TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    HashCloner h = ((TesthashClonerEnv *)env)->mh(a);
+    if (h.vt == NULL)
+        testing_t_fatalf_v(t, "the hash could not be made");
+    testhash_clone_check(t, a, h);
+    arena_free(&ar);
+}
+
+/* Go's TestHash takes one constructor and asserts its hash to hash.Cloner.
+ * hash_clone is that assertion and a Clone in one, so the checks run on the
+ * clone of a new hash, which starts in the same state. */
+static inline void testhash_clone_asserted(void *env, TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Hash h = ((TesthashEnv *)env)->mh(a);
+    if (!hash_is_cloner(h))
+        testing_t_fatalf_v(t, "testhash.MakeHash does not implement hash.Cloner");
+    Error err = BURROW_NO_ERROR;
+    HashCloner c = hash_clone(a, h, &err);
+    if (BURROW_FAILED(err) || c.vt == NULL)
+        testing_t_fatalf_v(t, "Clone failed: %v", err);
+    testhash_clone_check(t, a, c);
     arena_free(&ar);
 }
 
@@ -314,6 +339,13 @@ static inline void testhash_with_clone(TestingT *t, TesthashMake mh,
     TesthashClonerEnv env = {mc};
     testing_t_run(t, BURROW_S("Clone"),
                   BURROW_FN(TestingTFunc, testhash_clone_consistent, &env));
+}
+
+static inline void testhash_hash(TestingT *t, TesthashMake mh) {
+    testhash_without_clone(t, mh);
+    TesthashEnv env = {mh};
+    testing_t_run(t, BURROW_S("Clone"),
+                  BURROW_FN(TestingTFunc, testhash_clone_asserted, &env));
 }
 
 #endif /* BURROW_TESTS_TESTHASH_H */

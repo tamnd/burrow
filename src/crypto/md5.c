@@ -12,7 +12,11 @@
 #include "burrow/crypto/md5.h"
 
 #include "burrow/core.h"
+#include "burrow/declare.h"
+#include "burrow/encoding.h"
+#include "burrow/error.h"
 #include "burrow/hash.h"
+#include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
@@ -203,16 +207,128 @@ static Int md5_block_size(void *self) {
     return MD5_BLOCK_SIZE;
 }
 
-static const HashVT md5_vt = {
-    {NULL, md5_write}, md5_sum_append, md5_reset, md5_size, md5_block_size,
+#define MD5_MAGIC "md5\x01"
+enum { md5_marshaled_size = 4 + 4 * 4 + MD5_BLOCK_SIZE + 8 };
+
+BURROW_SENTINEL_ERROR(md5_err_identifier, "crypto/md5: invalid hash state identifier");
+BURROW_SENTINEL_ERROR(md5_err_size, "crypto/md5: invalid hash state size");
+
+static inline uint32_t md5_be32(const Byte *p) {
+    return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 |
+           (uint32_t)p[3];
+}
+
+static inline void md5_put_be32(Byte *b, uint32_t v) {
+    b[0] = (Byte)(v >> 24);
+    b[1] = (Byte)(v >> 16);
+    b[2] = (Byte)(v >> 8);
+    b[3] = (Byte)v;
+}
+
+static Slice md5_append_binary(Md5Digest *d, Alloc *a, Slice b, Error *err) {
+    Byte st[md5_marshaled_size];
+    memcpy(st, MD5_MAGIC, 4);
+    for (Int i = 0; i < 4; i++)
+        md5_put_be32(st + 4 + 4 * i, d->s[i]);
+    memcpy(st + 20, d->x, (size_t)d->nx);
+    memset(st + 20 + d->nx, 0, (size_t)(MD5_BLOCK_SIZE - d->nx));
+    md5_put_be32(st + 20 + MD5_BLOCK_SIZE, (uint32_t)(d->len >> 32));
+    md5_put_be32(st + 24 + MD5_BLOCK_SIZE, (uint32_t)d->len);
+    if (b.elem == NULL)
+        b = slice_nil(TYPE_BYTE);
+    Int len = b.len;
+    Slice r = slice_append(a, b, st, md5_marshaled_size);
+    BURROW_OUT(err, r.len == len + md5_marshaled_size ? BURROW_NO_ERROR
+                                                      : burrow_err_out_of_memory);
+    return r;
+}
+
+static Slice md5_marshal_binary(Md5Digest *d, Alloc *a, Error *err) {
+    Slice b = slice_make(a, TYPE_BYTE, 0, md5_marshaled_size);
+    if (b.p == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return slice_nil(TYPE_BYTE);
+    }
+    return md5_append_binary(d, a, b, err);
+}
+
+static Error md5_unmarshal_binary(Md5Digest *d, Alloc *a, Slice b) {
+    (void)a;
+    const Byte *p = b.p;
+    if (b.len < 4 || memcmp(p, MD5_MAGIC, 4) != 0)
+        return md5_err_identifier;
+    if (b.len != md5_marshaled_size)
+        return md5_err_size;
+    for (Int i = 0; i < 4; i++)
+        d->s[i] = md5_be32(p + 4 + 4 * i);
+    memcpy(d->x, p + 20, MD5_BLOCK_SIZE);
+    const Byte *n = p + 20 + MD5_BLOCK_SIZE;
+    d->len = (uint64_t)md5_be32(n) << 32 | md5_be32(n + 4);
+    d->nx = (Int)(d->len % MD5_BLOCK_SIZE);
+    return BURROW_NO_ERROR;
+}
+
+static HashCloner md5_clone(void *self, Alloc *a, Error *err);
+
+/* The method set of Go's *md5.digest, so that a Hash from here answers
+ * h.(hash.Cloner) and h.(encoding.BinaryMarshaler) as Go's does. */
+#define MD5_METHODS(M, T)                                                              \
+    M(T, AppendBinary, md5_append_binary, ENCODING_SIG_APPEND_BINARY)                  \
+    M(T, BlockSize, md5_block_size, HASH_SIG_BLOCK_SIZE)                               \
+    M(T, Clone, md5_clone, HASH_SIG_CLONE)                                             \
+    M(T, MarshalBinary, md5_marshal_binary, ENCODING_SIG_MARSHAL_BINARY)               \
+    M(T, Reset, md5_reset, HASH_SIG_RESET)                                             \
+    M(T, Size, md5_size, HASH_SIG_SIZE)                                                \
+    M(T, Sum, md5_sum_append, HASH_SIG_SUM)                                            \
+    M(T, UnmarshalBinary, md5_unmarshal_binary, ENCODING_SIG_UNMARSHAL_BINARY)         \
+    M(T, Write, md5_write, IO_SIG_WRITE)
+
+BURROW_METHODS_DEFINE(Md5Digest, MD5_METHODS);
+
+static const Type md5_digest_type = {
+    {(const Byte *)"digest", 6},
+    {(const Byte *)"crypto/md5", 10},
+    KIND_STRUCT,
+    (uint32_t)sizeof(Md5Digest),
+    (uint16_t)_Alignof(Md5Digest),
+    0,
+    (uint16_t)(sizeof burrow__methods_Md5Digest / sizeof burrow__methods_Md5Digest[0]),
+    NULL,
+    burrow__methods_Md5Digest,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
 };
+
+static const HashClonerVT md5_vt = {
+    {{&md5_digest_type, md5_write},
+     md5_sum_append,
+     md5_reset,
+     md5_size,
+     md5_block_size},
+    md5_clone,
+};
+
+static HashCloner md5_clone(void *self, Alloc *a, Error *err) {
+    Md5Digest *r = BURROW_NEW(a, Md5Digest);
+    if (r == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return (HashCloner){NULL, NULL};
+    }
+    *r = *(Md5Digest *)self;
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    HashCloner h = {&md5_vt, r};
+    return h;
+}
 
 Hash md5_new(Alloc *a) {
     Md5Digest *d = BURROW_NEW(a, Md5Digest);
     if (d == NULL)
         return (Hash){NULL, NULL};
     md5_reset(d);
-    Hash h = {&md5_vt, d};
+    Hash h = {&md5_vt.hash, d};
     return h;
 }
 

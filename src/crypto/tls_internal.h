@@ -1800,16 +1800,17 @@ typedef struct TlsServerHandshakeStateTLS13 {
     Hash transcript;
     Slice client_finished;
 
-    /* Not in Go: the messages client_hello and hello are in, the hash of the
-     * first ClientHello and the HelloRetryRequest when one was sent, which
-     * cloneHash writes again, and the scratch allocator everything that only
-     * lasts the handshake is made in. Go's echContext comes with ech.go. */
+    /* Not in Go: the messages client_hello and hello are in, and the scratch
+     * allocator everything that only lasts the handshake is made in. Go's
+     * echContext comes with ech.go. */
     TlsHandshakeMsg *client_hello_msg;
     TlsHandshakeMsg *hello_msg;
-    Slice ch_hash;
-    TlsHandshakeMsg *hello_retry_request_msg;
     Alloc *a;
 } TlsServerHandshakeStateTLS13;
+
+/* cloneHash: in cloned through hash.Cloner, or else through MarshalBinary
+ * into a new h, allocated from a. A nil Hash when neither works. */
+Hash burrow__tls_clone_hash(Alloc *a, Hash in, CryptoHash h);
 
 /* Not in Go. The TLS 1.3 handshake once the ClientHello is read: hs.c, hs.ctx,
  * hs.client_hello, hs.client_hello_msg and hs.a have to be set. */

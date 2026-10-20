@@ -38,6 +38,7 @@
 #include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/slice.h"
+#include "burrow/type.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -222,6 +223,61 @@ static inline IoReader hash_xof_as_io_reader(HashXOF h) {
     }
     return r;
 }
+
+/* ------------------------------------------------------------ method sets
+ *
+ * Go's hashes are more than a Hash. Every one in the standard library is also
+ * a Cloner and an encoding.BinaryMarshaler, BinaryAppender and
+ * BinaryUnmarshaler, and code that holds a Hash asks for those with a type
+ * assertion, as crypto/tls does with h.(hash.Cloner). A vtable cannot be asked
+ * that, so a hash lists its methods in the descriptor its vtable names as
+ * self_type, the same way io_copy finds WriterTo:
+ *
+ *     #define MY_HASH_METHODS(M, T)                                            \
+ *         M(T, AppendBinary, my_append, ENCODING_SIG_APPEND_BINARY)            \
+ *         M(T, BlockSize, my_block_size, HASH_SIG_BLOCK_SIZE)                  \
+ *         M(T, Clone, my_clone, HASH_SIG_CLONE)                                \
+ *         ...
+ *
+ * The C functions take the receiver as a pointer and then:
+ *
+ *     Int write(T *self, Slice p, Error *err);
+ *     Slice sum(T *self, Alloc *a, Slice b);
+ *     void reset(T *self);
+ *     Int size(T *self);
+ *     Int block_size(T *self);
+ *     HashCloner clone(T *self, Alloc *a, Error *err);
+ *
+ * Write's shape is io's IO_SIG_WRITE. The marshaling methods have the shapes
+ * in burrow/encoding.h, and an Any holding the Hash finds them:
+ *
+ *     Slice state = encoding_marshal_binary(a, BURROW_ANY(TYPE_OF(Hash), &h), &err);
+ *
+ * The descriptors of Hash and Cloner list Go's methods for them, so reflect
+ * can tell which methods a hash has beyond the interface's. */
+extern const Type burrow_type_Hash;
+extern const Type burrow_type_HashCloner;
+
+/* Alloc * under one word, since a signature list names its types by a single
+ * token. */
+typedef Alloc *HashAllocArg;
+extern const Type burrow_type_HashAllocArg;
+
+#define HASH_SIG_SUM(IN, OUT) IN(0, HashAllocArg) IN(1, Bytes) OUT(Bytes)
+#define HASH_SIG_RESET(IN, OUT)
+#define HASH_SIG_SIZE(IN, OUT) OUT(Int)
+#define HASH_SIG_BLOCK_SIZE(IN, OUT) OUT(Int)
+#define HASH_SIG_CLONE(IN, OUT) IN(0, HashAllocArg) OUT(HashCloner) OUT(ErrorResult)
+
+/* Go's h.(hash.Cloner), the comma ok form: whether the type behind h lists a
+ * Clone method of HASH_SIG_CLONE's shape. A nil h is not a Cloner. */
+bool hash_is_cloner(Hash h);
+
+/* h.(hash.Cloner).Clone(): an independent hash that carries on from where h
+ * is, allocated from a. When h is not a Cloner this returns a nil HashCloner
+ * and Go's type assertion error rather than panicking, which is the rule
+ * burrow/encoding.h follows too. */
+BURROW_OWNS(ret) HashCloner hash_clone(Alloc *a, Hash h, Error *err);
 
 #ifdef __cplusplus
 }

@@ -21,15 +21,26 @@
 #include "testhash.h"
 
 #include "burrow/burrow.h"
+#include "burrow/encoding.h"
 #include "burrow/encoding/hex.h"
+#include "burrow/hash.h"
 #include "burrow/mem/arena.h"
 
 #include <string.h>
 
+/* half_state is the marshaled state after the first half of in is written,
+ * which Go's TestGoldenMarshal checks. It holds NUL bytes, so it is a Str. */
 typedef struct Golden {
     const char *out;
     const char *in;
+    Str half_state;
 } Golden;
+
+/* A state that has seen more than 4GiB, and the sum it has to finish with. */
+typedef struct UnmarshalTest {
+    Str state;
+    const char *sum;
+} UnmarshalTest;
 
 /* The one shot function under test, which writes the digest to out and
  * returns its length. */
@@ -121,7 +132,171 @@ out:
 }
 
 static inline void testdigest_run_testhash(void *env, TestingT *t) {
-    testhash_without_clone(t, *(TesthashMake *)env);
+    testhash_hash(t, *(TesthashMake *)env);
+}
+
+/* Go's TestGoldenMarshal for one table: marshal after half of each input,
+ * unmarshal into a new hash, and finish both. name is what the messages call
+ * the hash, and plus says whether they quote with %+q, as sha1's do. */
+static inline void testdigest_golden_marshal(TestingT *t, const char *name, bool plus,
+                                             TesthashMake mh, const Golden *gold,
+                                             size_t n) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Str hn = str_from_cstr(name);
+    for (size_t i = 0; i < n; i++) {
+        const Golden *g = &gold[i];
+        Str in = str_from_cstr(g->in);
+        Hash h = mh(a);
+        Hash h2 = mh(a);
+        Any ha = BURROW_ANY(TYPE_OF(Hash), &h);
+        Any ha2 = BURROW_ANY(TYPE_OF(Hash), &h2);
+
+        testdigest_write_str(h, in.p, in.len / 2);
+
+        Error err = BURROW_NO_ERROR;
+        Slice state = encoding_marshal_binary(a, ha, &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "could not marshal: %v", err);
+            continue;
+        }
+
+        Slice state_append =
+            encoding_append_binary(a, ha, slice_make(a, TYPE_BYTE, 4, 32), &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "could not marshal: %v", err);
+            continue;
+        }
+        state_append = slice_sub(state_append, 4, state_append.len);
+
+        Str st = {(const Byte *)state.p, state.len};
+        Str sa = {(const Byte *)state_append.p, state_append.len};
+        if (!str_eq(st, g->half_state)) {
+            if (plus)
+                testing_t_errorf_v(t, "%s(%q) state = %+q, want %+q", hn, in, st,
+                                   g->half_state);
+            else
+                testing_t_errorf_v(t, "%s(%q) state = %q, want %q", hn, in, st,
+                                   g->half_state);
+            continue;
+        }
+
+        if (!str_eq(sa, g->half_state)) {
+            if (plus)
+                testing_t_errorf_v(t, "%s(%q) stateAppend = %+q, want %+q", hn, in, sa,
+                                   g->half_state);
+            else
+                testing_t_errorf_v(t, "%s(%q) stateAppend = %q, want %q", hn, in, sa,
+                                   g->half_state);
+            continue;
+        }
+
+        err = encoding_unmarshal_binary(a, ha2, state);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "could not unmarshal: %v", err);
+            continue;
+        }
+
+        testdigest_write_str(h, in.p + in.len / 2, in.len - in.len / 2);
+        testdigest_write_str(h2, in.p + in.len / 2, in.len - in.len / 2);
+
+        Slice actual = hash_sum(a, h, slice_nil(TYPE_BYTE));
+        Slice actual2 = hash_sum(a, h2, slice_nil(TYPE_BYTE));
+        if (!testhash_equal(actual, actual2))
+            testing_t_errorf_v(t, "%s(%q) = 0x%x != marshaled 0x%x", hn, in, actual,
+                               actual2);
+    }
+    arena_free(&ar);
+}
+
+/* One subtest of a TestGoldenMarshal that runs a table per variant. */
+typedef struct TestdigestMarshalCase {
+    const char *name;
+    const char *hash_name;
+    TesthashMake mh;
+    const Golden *gold;
+    size_t n;
+} TestdigestMarshalCase;
+
+static inline void testdigest_run_golden_marshal(void *env, TestingT *t) {
+    const TestdigestMarshalCase *c = (const TestdigestMarshalCase *)env;
+    testdigest_golden_marshal(t, c->hash_name, false, c->mh, c->gold, c->n);
+}
+
+/* Go's safeSum: the sum, or the panic it raised as an error. */
+static inline Slice testdigest_safe_sum(Alloc *a, Hash h, Error *err) {
+    Slice sum = slice_nil(TYPE_BYTE);
+    *err = BURROW_NO_ERROR;
+    BURROW_TRY {
+        sum = hash_sum(a, h, slice_nil(TYPE_BYTE));
+    }
+    BURROW_CATCH(r) {
+        *err = fmt_errorf_v("sum panic: %s", panic_text(r));
+    }
+    BURROW_TRY_END;
+    return sum;
+}
+
+/* Go's TestLargeHashes. */
+static inline void testdigest_large_hashes(TestingT *t, TesthashMake mh,
+                                           const UnmarshalTest *tests, size_t n) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    for (size_t i = 0; i < n; i++) {
+        const UnmarshalTest *test = &tests[i];
+        Hash h = mh(a);
+        Slice state = slice_from((void *)(uintptr_t)test->state.p, test->state.len,
+                                 test->state.len, TYPE_BYTE);
+        Error err = encoding_unmarshal_binary(a, BURROW_ANY(TYPE_OF(Hash), &h), state);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "test %d could not unmarshal: %v", (Int)i, err);
+            continue;
+        }
+
+        Slice sum = testdigest_safe_sum(a, h, &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "test %d could not sum: %v", (Int)i, err);
+            continue;
+        }
+
+        Str got = hex_encode_to_string(a, sum);
+        if (!str_eq(got, str_from_cstr(test->sum)))
+            testing_t_errorf_v(t, "test %d sum mismatch: expect %s got %x", (Int)i,
+                               str_from_cstr(test->sum), sum);
+    }
+    arena_free(&ar);
+}
+
+/* Go's cryptotest.NoExtraMethods, on a hash it asserts to hash.Cloner the way
+ * maybeCloner does: the exported methods of the hash's type that the
+ * interface does not have have to be in allowed. */
+static inline void testdigest_no_extra_methods(TestingT *t, TesthashMake mh,
+                                               const char *const *allowed,
+                                               size_t nallowed) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Hash h = mh(arena_allocator(&ar));
+    const Type *it = hash_is_cloner(h) ? TYPE_OF(HashCloner) : TYPE_OF(Hash);
+    const Type *ct = h.vt == NULL ? NULL : h.vt->writer.self_type;
+    if (ct == NULL) {
+        testing_t_fatalf_v(t, "argument must be a pointer to a non-nil interface");
+        return;
+    }
+    for (uint16_t i = 0; i < ct->nmethod; i++) {
+        Str m = ct->methods[i].name;
+        if (m.len == 0 || m.p[0] < 'A' || m.p[0] > 'Z')
+            continue;
+        if (type_method_by_name(it, m) != NULL)
+            continue;
+        bool ok = false;
+        for (size_t j = 0; j < nallowed && !ok; j++)
+            ok = str_eq(m, str_from_cstr(allowed[j]));
+        if (!ok)
+            testing_t_errorf_v(t, "unexpected method %q", m);
+    }
+    arena_free(&ar);
 }
 
 /* Go's TestSize and TestBlockSize for one constructor. */

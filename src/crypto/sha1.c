@@ -9,7 +9,11 @@
 #include "burrow/crypto/sha1.h"
 
 #include "burrow/core.h"
+#include "burrow/declare.h"
+#include "burrow/encoding.h"
+#include "burrow/error.h"
 #include "burrow/hash.h"
+#include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
@@ -486,16 +490,119 @@ static Int sha1_size(void *self) {
     return SHA1_SIZE;
 }
 
-static const HashVT sha1_vt = {
-    {NULL, sha1_write}, sha1_sum_append, sha1_reset, sha1_size, sha1_block_size,
+#define SHA1_MAGIC "sha\x01"
+enum { sha1_marshaled_size = 4 + 5 * 4 + SHA1_BLOCK_SIZE + 8 };
+
+BURROW_SENTINEL_ERROR(sha1_err_identifier,
+                      "crypto/sha1: invalid hash state identifier");
+BURROW_SENTINEL_ERROR(sha1_err_size, "crypto/sha1: invalid hash state size");
+
+static Slice sha1_append_binary(Sha1Digest *d, Alloc *a, Slice b, Error *err) {
+    Byte st[sha1_marshaled_size];
+    memcpy(st, SHA1_MAGIC, 4);
+    for (Int i = 0; i < 5; i++)
+        sha1_put_be32(st + 4 + 4 * i, d->h[i]);
+    memcpy(st + 24, d->x, (size_t)d->nx);
+    memset(st + 24 + d->nx, 0, (size_t)(SHA1_BLOCK_SIZE - d->nx));
+    sha1_put_be64(st + 24 + SHA1_BLOCK_SIZE, d->len);
+    if (b.elem == NULL)
+        b = slice_nil(TYPE_BYTE);
+    Int len = b.len;
+    Slice r = slice_append(a, b, st, sha1_marshaled_size);
+    BURROW_OUT(err, r.len == len + sha1_marshaled_size ? BURROW_NO_ERROR
+                                                       : burrow_err_out_of_memory);
+    return r;
+}
+
+static Slice sha1_marshal_binary(Sha1Digest *d, Alloc *a, Error *err) {
+    Slice b = slice_make(a, TYPE_BYTE, 0, sha1_marshaled_size);
+    if (b.p == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return slice_nil(TYPE_BYTE);
+    }
+    return sha1_append_binary(d, a, b, err);
+}
+
+static Error sha1_unmarshal_binary(Sha1Digest *d, Alloc *a, Slice b) {
+    (void)a;
+    const Byte *p = b.p;
+    if (b.len < 4 || memcmp(p, SHA1_MAGIC, 4) != 0)
+        return sha1_err_identifier;
+    if (b.len != sha1_marshaled_size)
+        return sha1_err_size;
+    for (Int i = 0; i < 5; i++)
+        d->h[i] = sha1_be32(p + 4 + 4 * i);
+    memcpy(d->x, p + 24, SHA1_BLOCK_SIZE);
+    const Byte *n = p + 24 + SHA1_BLOCK_SIZE;
+    d->len = (uint64_t)sha1_be32(n) << 32 | sha1_be32(n + 4);
+    d->nx = (Int)(d->len % SHA1_BLOCK_SIZE);
+    return BURROW_NO_ERROR;
+}
+
+static HashCloner sha1_clone(void *self, Alloc *a, Error *err);
+static Slice sha1_const_sum_append(void *self, Alloc *a, Slice in);
+
+/* The method set of Go's *sha1.digest, so that a Hash from here answers
+ * h.(hash.Cloner) and h.(encoding.BinaryMarshaler) as Go's does. */
+#define SHA1_METHODS(M, T)                                                             \
+    M(T, AppendBinary, sha1_append_binary, ENCODING_SIG_APPEND_BINARY)                 \
+    M(T, BlockSize, sha1_block_size, HASH_SIG_BLOCK_SIZE)                              \
+    M(T, Clone, sha1_clone, HASH_SIG_CLONE)                                            \
+    M(T, ConstantTimeSum, sha1_const_sum_append, HASH_SIG_SUM)                         \
+    M(T, MarshalBinary, sha1_marshal_binary, ENCODING_SIG_MARSHAL_BINARY)              \
+    M(T, Reset, sha1_reset, HASH_SIG_RESET)                                            \
+    M(T, Size, sha1_size, HASH_SIG_SIZE)                                               \
+    M(T, Sum, sha1_sum_append, HASH_SIG_SUM)                                           \
+    M(T, UnmarshalBinary, sha1_unmarshal_binary, ENCODING_SIG_UNMARSHAL_BINARY)        \
+    M(T, Write, sha1_write, IO_SIG_WRITE)
+
+BURROW_METHODS_DEFINE(Sha1Digest, SHA1_METHODS);
+
+static const Type sha1_digest_type = {
+    {(const Byte *)"digest", 6},
+    {(const Byte *)"crypto/sha1", 11},
+    KIND_STRUCT,
+    (uint32_t)sizeof(Sha1Digest),
+    (uint16_t)_Alignof(Sha1Digest),
+    0,
+    (uint16_t)(sizeof burrow__methods_Sha1Digest /
+               sizeof burrow__methods_Sha1Digest[0]),
+    NULL,
+    burrow__methods_Sha1Digest,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
 };
+
+static const HashClonerVT sha1_vt = {
+    {{&sha1_digest_type, sha1_write},
+     sha1_sum_append,
+     sha1_reset,
+     sha1_size,
+     sha1_block_size},
+    sha1_clone,
+};
+
+static HashCloner sha1_clone(void *self, Alloc *a, Error *err) {
+    Sha1Digest *r = BURROW_NEW(a, Sha1Digest);
+    if (r == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return (HashCloner){NULL, NULL};
+    }
+    *r = *(Sha1Digest *)self;
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    HashCloner h = {&sha1_vt, r};
+    return h;
+}
 
 Hash sha1_new(Alloc *a) {
     Sha1Digest *d = BURROW_NEW(a, Sha1Digest);
     if (d == NULL)
         return (Hash){NULL, NULL};
     sha1_reset(d);
-    Hash h = {&sha1_vt, d};
+    Hash h = {&sha1_vt.hash, d};
     return h;
 }
 

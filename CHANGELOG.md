@@ -4,6 +4,14 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API, and none of it has been through a security review yet.
 
+## v0.3.1 (2026-10-20)
+
+The v0.3.0 Release workflow failed, so this is the first release of the P5 work with binaries.
+
+### Fixed
+
+- The release builds: a `-Wstringop-overflow` warning from gcc on arm64 in the HTTP transport, an MSVC C4189 error in `net/http/pprof`, `TestBlockProfileBias` under `-O3`, `TestDeltaProfile` on Windows without a readiness poll, and `TestBlockProfile` in the amalgamation, where gcc split `chan_select` (#527).
+
 ## v0.3.0 (2026-10-20)
 
 The end of P5 (#7): go/types and the importers, html/template, the profilers, net/http/pprof, the execution tracer and `burrow-gen from-go`. Every item on its checklist is now merged.

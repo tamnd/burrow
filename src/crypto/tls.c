@@ -194,81 +194,85 @@ Str tls_client_auth_type_string(TlsClientAuthType i, Alloc *a) {
     }
 }
 
+Str tls_quic_encryption_level_string(TlsQuicEncryptionLevel l, Alloc *a) {
+    switch (l) {
+    case TLS_QUIC_ENCRYPTION_LEVEL_INITIAL:
+        return BURROW_S("Initial");
+    case TLS_QUIC_ENCRYPTION_LEVEL_EARLY:
+        return BURROW_S("Early");
+    case TLS_QUIC_ENCRYPTION_LEVEL_HANDSHAKE:
+        return BURROW_S("Handshake");
+    case TLS_QUIC_ENCRYPTION_LEVEL_APPLICATION:
+        return BURROW_S("Application");
+    default:
+        return tls_number_string(a, "QUICEncryptionLevel(", l, ")");
+    }
+}
+
 /* ------------------------------------------------------------------ alerts */
 
-Str burrow__tls_alert_text(uint8_t e) {
-    switch (e) {
-    case TLS_ALERT_CLOSE_NOTIFY:
-        return BURROW_S("close notify");
-    case TLS_ALERT_UNEXPECTED_MESSAGE:
-        return BURROW_S("unexpected message");
-    case TLS_ALERT_BAD_RECORD_MAC:
-        return BURROW_S("bad record MAC");
-    case TLS_ALERT_DECRYPTION_FAILED:
-        return BURROW_S("decryption failed");
-    case TLS_ALERT_RECORD_OVERFLOW:
-        return BURROW_S("record overflow");
-    case TLS_ALERT_DECOMPRESSION_FAILURE:
-        return BURROW_S("decompression failure");
-    case TLS_ALERT_HANDSHAKE_FAILURE:
-        return BURROW_S("handshake failure");
-    case TLS_ALERT_BAD_CERTIFICATE:
-        return BURROW_S("bad certificate");
-    case TLS_ALERT_UNSUPPORTED_CERTIFICATE:
-        return BURROW_S("unsupported certificate");
-    case TLS_ALERT_CERTIFICATE_REVOKED:
-        return BURROW_S("revoked certificate");
-    case TLS_ALERT_CERTIFICATE_EXPIRED:
-        return BURROW_S("expired certificate");
-    case TLS_ALERT_CERTIFICATE_UNKNOWN:
-        return BURROW_S("unknown certificate");
-    case TLS_ALERT_ILLEGAL_PARAMETER:
-        return BURROW_S("illegal parameter");
-    case TLS_ALERT_UNKNOWN_CA:
-        return BURROW_S("unknown certificate authority");
-    case TLS_ALERT_ACCESS_DENIED:
-        return BURROW_S("access denied");
-    case TLS_ALERT_DECODE_ERROR:
-        return BURROW_S("error decoding message");
-    case TLS_ALERT_DECRYPT_ERROR:
-        return BURROW_S("error decrypting message");
-    case TLS_ALERT_EXPORT_RESTRICTION:
-        return BURROW_S("export restriction");
-    case TLS_ALERT_PROTOCOL_VERSION:
-        return BURROW_S("protocol version not supported");
-    case TLS_ALERT_INSUFFICIENT_SECURITY:
-        return BURROW_S("insufficient security level");
-    case TLS_ALERT_INTERNAL_ERROR:
-        return BURROW_S("internal error");
-    case TLS_ALERT_INAPPROPRIATE_FALLBACK:
-        return BURROW_S("inappropriate fallback");
-    case TLS_ALERT_USER_CANCELED:
-        return BURROW_S("user canceled");
-    case TLS_ALERT_NO_RENEGOTIATION:
-        return BURROW_S("no renegotiation");
-    case TLS_ALERT_MISSING_EXTENSION:
-        return BURROW_S("missing extension");
-    case TLS_ALERT_UNSUPPORTED_EXTENSION:
-        return BURROW_S("unsupported extension");
-    case TLS_ALERT_CERTIFICATE_UNOBTAINABLE:
-        return BURROW_S("certificate unobtainable");
-    case TLS_ALERT_UNRECOGNIZED_NAME:
-        return BURROW_S("unrecognized name");
-    case TLS_ALERT_BAD_CERTIFICATE_STATUS_RESPONSE:
-        return BURROW_S("bad certificate status response");
-    case TLS_ALERT_BAD_CERTIFICATE_HASH_VALUE:
-        return BURROW_S("bad certificate hash value");
-    case TLS_ALERT_UNKNOWN_PSK_IDENTITY:
-        return BURROW_S("unknown PSK identity");
-    case TLS_ALERT_CERTIFICATE_REQUIRED:
-        return BURROW_S("certificate required");
-    case TLS_ALERT_NO_APPLICATION_PROTOCOL:
-        return BURROW_S("no application protocol");
-    case TLS_ALERT_ECH_REQUIRED:
-        return BURROW_S("encrypted client hello required");
-    default:
-        return BURROW_S("");
+/* An alert and what alert.String says about it. */
+typedef struct TlsAlertEntry {
+    uint8_t e;
+    Str message;
+} TlsAlertEntry;
+
+/* alertText, each with the "tls: " that alert.String puts in front, so that
+ * the message of an alert as an error is already here. */
+#define TLS_ALERT_ENTRY(e, text)                                                       \
+    {(e), {(const Byte *)("tls: " text), (Int)sizeof("tls: " text) - 1}}
+
+static const TlsAlertEntry tls_alerts[] = {
+    TLS_ALERT_ENTRY(TLS_ALERT_CLOSE_NOTIFY, "close notify"),
+    TLS_ALERT_ENTRY(TLS_ALERT_UNEXPECTED_MESSAGE, "unexpected message"),
+    TLS_ALERT_ENTRY(TLS_ALERT_BAD_RECORD_MAC, "bad record MAC"),
+    TLS_ALERT_ENTRY(TLS_ALERT_DECRYPTION_FAILED, "decryption failed"),
+    TLS_ALERT_ENTRY(TLS_ALERT_RECORD_OVERFLOW, "record overflow"),
+    TLS_ALERT_ENTRY(TLS_ALERT_DECOMPRESSION_FAILURE, "decompression failure"),
+    TLS_ALERT_ENTRY(TLS_ALERT_HANDSHAKE_FAILURE, "handshake failure"),
+    TLS_ALERT_ENTRY(TLS_ALERT_BAD_CERTIFICATE, "bad certificate"),
+    TLS_ALERT_ENTRY(TLS_ALERT_UNSUPPORTED_CERTIFICATE, "unsupported certificate"),
+    TLS_ALERT_ENTRY(TLS_ALERT_CERTIFICATE_REVOKED, "revoked certificate"),
+    TLS_ALERT_ENTRY(TLS_ALERT_CERTIFICATE_EXPIRED, "expired certificate"),
+    TLS_ALERT_ENTRY(TLS_ALERT_CERTIFICATE_UNKNOWN, "unknown certificate"),
+    TLS_ALERT_ENTRY(TLS_ALERT_ILLEGAL_PARAMETER, "illegal parameter"),
+    TLS_ALERT_ENTRY(TLS_ALERT_UNKNOWN_CA, "unknown certificate authority"),
+    TLS_ALERT_ENTRY(TLS_ALERT_ACCESS_DENIED, "access denied"),
+    TLS_ALERT_ENTRY(TLS_ALERT_DECODE_ERROR, "error decoding message"),
+    TLS_ALERT_ENTRY(TLS_ALERT_DECRYPT_ERROR, "error decrypting message"),
+    TLS_ALERT_ENTRY(TLS_ALERT_EXPORT_RESTRICTION, "export restriction"),
+    TLS_ALERT_ENTRY(TLS_ALERT_PROTOCOL_VERSION, "protocol version not supported"),
+    TLS_ALERT_ENTRY(TLS_ALERT_INSUFFICIENT_SECURITY, "insufficient security level"),
+    TLS_ALERT_ENTRY(TLS_ALERT_INTERNAL_ERROR, "internal error"),
+    TLS_ALERT_ENTRY(TLS_ALERT_INAPPROPRIATE_FALLBACK, "inappropriate fallback"),
+    TLS_ALERT_ENTRY(TLS_ALERT_USER_CANCELED, "user canceled"),
+    TLS_ALERT_ENTRY(TLS_ALERT_NO_RENEGOTIATION, "no renegotiation"),
+    TLS_ALERT_ENTRY(TLS_ALERT_MISSING_EXTENSION, "missing extension"),
+    TLS_ALERT_ENTRY(TLS_ALERT_UNSUPPORTED_EXTENSION, "unsupported extension"),
+    TLS_ALERT_ENTRY(TLS_ALERT_CERTIFICATE_UNOBTAINABLE, "certificate unobtainable"),
+    TLS_ALERT_ENTRY(TLS_ALERT_UNRECOGNIZED_NAME, "unrecognized name"),
+    TLS_ALERT_ENTRY(TLS_ALERT_BAD_CERTIFICATE_STATUS_RESPONSE,
+                    "bad certificate status response"),
+    TLS_ALERT_ENTRY(TLS_ALERT_BAD_CERTIFICATE_HASH_VALUE, "bad certificate hash value"),
+    TLS_ALERT_ENTRY(TLS_ALERT_UNKNOWN_PSK_IDENTITY, "unknown PSK identity"),
+    TLS_ALERT_ENTRY(TLS_ALERT_CERTIFICATE_REQUIRED, "certificate required"),
+    TLS_ALERT_ENTRY(TLS_ALERT_NO_APPLICATION_PROTOCOL, "no application protocol"),
+    TLS_ALERT_ENTRY(TLS_ALERT_ECH_REQUIRED, "encrypted client hello required"),
+};
+
+static const TlsAlertEntry *tls_alert_entry(uint8_t e) {
+    for (size_t i = 0; i < sizeof tls_alerts / sizeof tls_alerts[0]; i++) {
+        if (tls_alerts[i].e == e)
+            return &tls_alerts[i];
     }
+    return NULL;
+}
+
+Str burrow__tls_alert_text(uint8_t e) {
+    const TlsAlertEntry *t = tls_alert_entry(e);
+    if (t == NULL)
+        return BURROW_S("");
+    return str_from_bytes(t->message.p + 5, t->message.len - 5);
 }
 
 /* alert.String: "tls: " and the text, or "tls: alert(N)". Writes it to p, or
@@ -360,6 +364,59 @@ Str tls_alert_error_error(TlsAlertError e, Alloc *a) {
         return BURROW_STR_EMPTY;
     tls_alert_message(p, e);
     return str_from_bytes(p, mlen);
+}
+
+/* The package's own alert type, which is an error too. Its data is a
+ * TlsAlertEntry, one of the table's or one made for an alert Go has no text
+ * for. */
+
+static Str tls_alert_text_of(const void *self) {
+    return ((const TlsAlertEntry *)self)->message;
+}
+
+static bool tls_alert_is(const void *self, Error target);
+
+static Error tls_alert_clone(const void *self, Alloc *a);
+
+static const ErrorVT tls_alert_vt = {
+    .message = tls_alert_text_of,
+    .is = tls_alert_is,
+    .clone = tls_alert_clone,
+};
+
+/* Go compares alerts by value, and two made for the same unknown alert are
+ * different memory. */
+static bool tls_alert_is(const void *self, Error target) {
+    return target.vt == &tls_alert_vt &&
+           ((const TlsAlertEntry *)target.data)->e == ((const TlsAlertEntry *)self)->e;
+}
+
+static Error tls_alert_clone(const void *self, Alloc *a) {
+    return burrow__tls_alert(a, ((const TlsAlertEntry *)self)->e);
+}
+
+Error burrow__tls_alert(Alloc *a, uint8_t e) {
+    const TlsAlertEntry *t = tls_alert_entry(e);
+    if (t != NULL)
+        return (Error){&tls_alert_vt, (void *)(uintptr_t)t};
+    Int mlen = tls_alert_message(NULL, e);
+    TlsAlertEntry *b = (TlsAlertEntry *)mem_alloc_nozero(
+        a, sizeof(TlsAlertEntry) + (size_t)mlen, _Alignof(TlsAlertEntry));
+    if (b == NULL)
+        return burrow_err_out_of_memory;
+    Byte *p = (Byte *)(b + 1);
+    tls_alert_message(p, e);
+    b->e = e;
+    b->message = str_from_bytes(p, mlen);
+    return (Error){&tls_alert_vt, b};
+}
+
+bool burrow__tls_is_alert(Error err, uint8_t *e) {
+    if (err.vt != &tls_alert_vt)
+        return false;
+    if (e != NULL)
+        *e = ((const TlsAlertEntry *)err.data)->e;
+    return true;
 }
 
 /* ----------------------------------------------------------------- GODEBUG */

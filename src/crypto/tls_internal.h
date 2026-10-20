@@ -17,8 +17,11 @@
 #include "burrow/crypto/ed25519.h"
 #include "burrow/error.h"
 #include "burrow/hash.h"
+#include "burrow/io.h"
 #include "burrow/mem.h"
+#include "burrow/mem/arena.h"
 #include "burrow/slice.h"
+#include "burrow/sync.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -170,6 +173,16 @@ Str burrow__tls_hex4_string(Alloc *a, uint16_t v);
 /* alert.String without the "tls: " in front, or an empty string for an alert
  * Go has no text for. Static. */
 Str burrow__tls_alert_text(uint8_t e);
+
+/* e as Go's alert type, which is an error whose message is alert.String. One
+ * Go has text for is static and a is not used. Any other is made in a, and is
+ * burrow_err_out_of_memory when that fails. errors_is matches two alerts with
+ * the same value. */
+Error burrow__tls_alert(Alloc *a, uint8_t e);
+
+/* err.(alert): whether err is an alert, and which one in *e if e is not
+ * NULL. */
+bool burrow__tls_is_alert(Error err, uint8_t *e);
 
 /* ---------------------------------------------------------------- GODEBUG */
 
@@ -1040,5 +1053,95 @@ Error burrow__tls_config_write_key_log(const TlsConfig *c, Str label,
 bool burrow__tls_supports_ecdhe(const TlsConfig *c, uint16_t version,
                                 Slice supported_curves, Slice supported_points,
                                 Error *err);
+
+/* ----------------------------------------------------------- record layer */
+
+/* A halfConn represents one direction of the record layer connection, either
+ * sending or receiving.
+ *
+ * Not in Go: the ciphers and MACs live in arenas of their own, made from the
+ * allocator given to burrow__tls_half_conn_init, and each arena goes when the
+ * state in it is replaced or the halfConn is freed. A halfConn that has not
+ * been through init works as one made with heap_allocator. */
+typedef struct TlsHalfConn {
+    SyncMutex mu;
+
+    Error err;        /* first permanent error */
+    uint16_t version; /* protocol version */
+    TlsCipher cipher; /* cipher algorithm */
+    Hash mac;
+    Byte seq[8]; /* 64-bit sequence number */
+
+    TlsCipher next_cipher; /* next encryption state */
+    Hash next_mac;         /* next MAC algorithm */
+
+    TlsQuicEncryptionLevel level; /* current QUIC encryption level */
+    Slice traffic_secret;         /* current TLS 1.3 traffic secret */
+
+    Alloc *parent;
+    Arena *keys;      /* where cipher, mac and traffic_secret are */
+    Arena *next_keys; /* where next_cipher and next_mac are */
+} TlsHalfConn;
+
+/* Not in Go. Sets hc up to make its arenas from a, which NULL means
+ * heap_allocator. */
+void burrow__tls_half_conn_init(TlsHalfConn *hc, Alloc *a);
+
+/* Not in Go. Gives back both arenas. */
+void burrow__tls_half_conn_free(TlsHalfConn *hc);
+
+/* Not in Go. The allocator to make the cipher and MAC for the next
+ * burrow__tls_half_conn_prepare_cipher_spec in, which is a new arena that
+ * replaces any earlier one. NULL when the memory ran out. */
+Alloc *burrow__tls_half_conn_next_alloc(TlsHalfConn *hc);
+
+/* prepareCipherSpec sets the encryption and MAC states that a subsequent
+ * changeCipherSpec will use. cipher and mac come from
+ * burrow__tls_half_conn_next_alloc. */
+void burrow__tls_half_conn_prepare_cipher_spec(TlsHalfConn *hc, uint16_t version,
+                                               TlsCipher cipher, Hash mac);
+
+/* changeCipherSpec changes the encryption and MAC states to the ones previously
+ * passed to prepareCipherSpec. */
+Error burrow__tls_half_conn_change_cipher_spec(TlsHalfConn *hc);
+
+/* setTrafficSecret sets the traffic secret for the given encryption level.
+ * setTrafficSecret should not be called directly, but rather through the Conn
+ * setWriteTrafficSecret and setReadTrafficSecret wrapper methods.
+ *
+ * The secret is copied. When the memory runs out, hc keeps its old state and
+ * burrow_err_out_of_memory goes to hc->err as well as being returned, so that
+ * the connection goes no further. */
+Error burrow__tls_half_conn_set_traffic_secret(TlsHalfConn *hc,
+                                               const TlsSuiteTLS13 *suite,
+                                               TlsQuicEncryptionLevel level,
+                                               Slice secret);
+
+/* incSeq increments the sequence number. */
+void burrow__tls_half_conn_inc_seq(TlsHalfConn *hc);
+
+/* explicitNonceLen returns the number of bytes of explicit nonce or IV included
+ * in each record. Explicit nonces are present only in CBC modes after TLS 1.0
+ * and in certain AEAD modes in TLS 1.2. */
+Int burrow__tls_half_conn_explicit_nonce_len(const TlsHalfConn *hc);
+
+/* extractPadding returns, in constant time, the length of the padding to remove
+ * from the end of payload. It also returns a byte which is equal to 255 if the
+ * padding was valid and 0 otherwise. See RFC 2246, Section 6.2.3.2. */
+Int burrow__tls_extract_padding(Slice payload, Byte *good);
+
+Int burrow__tls_round_up(Int a, Int b);
+
+/* decrypt authenticates and decrypts the record if protection is active at
+ * this stage. The returned plaintext might overlap with the input. The record
+ * type goes to *typ, and an alert to *err. */
+Slice burrow__tls_half_conn_decrypt(TlsHalfConn *hc, Slice record, uint8_t *typ,
+                                    Error *err);
+
+/* encrypt encrypts payload, adding the appropriate nonce and/or MAC, and
+ * appends it to record, which must already contain the record header. A
+ * record without room for it grows in a. */
+Slice burrow__tls_half_conn_encrypt(TlsHalfConn *hc, Alloc *a, Slice record,
+                                    Slice payload, IoReader rand, Error *err);
 
 #endif /* BURROW_SRC_CRYPTO_TLS_INTERNAL_H */

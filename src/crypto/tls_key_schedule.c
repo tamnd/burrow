@@ -6,6 +6,8 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#include "burrow/crypto/tls.h"
+
 #include "burrow/core.h"
 #include "burrow/crypto/hkdf.h"
 #include "burrow/crypto/hmac.h"

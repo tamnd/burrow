@@ -11,8 +11,10 @@
 
 #include "burrow/atomic.h"
 #include "burrow/core.h"
+#include "burrow/crypto.h"
 #include "burrow/declare.h"
 #include "burrow/error.h"
+#include "burrow/fmt.h"
 #include "burrow/mem.h"
 #include "burrow/pal.h"
 #include "burrow/type.h"
@@ -366,6 +368,7 @@ enum {
     TLS_DEBUG_KNOWN = 1 << 0,
     TLS_DEBUG_MLKEM_OFF = 1 << 1,      /* tlsmlkem=0 */
     TLS_DEBUG_SECP_MLKEM_OFF = 1 << 2, /* tlssecpmlkem=0 */
+    TLS_DEBUG_SHA1_ON = 1 << 3,        /* tlssha1=1 */
 };
 
 static uint32_t tls_debug_flags;
@@ -394,6 +397,8 @@ static uint32_t tls_debug_parse(const char *value) {
         f |= TLS_DEBUG_MLKEM_OFF;
     if (tls_godebug_is(value, "tlssecpmlkem", "0"))
         f |= TLS_DEBUG_SECP_MLKEM_OFF;
+    if (tls_godebug_is(value, "tlssha1", "1"))
+        f |= TLS_DEBUG_SHA1_ON;
     return f;
 }
 
@@ -465,6 +470,157 @@ const TlsSignatureScheme burrow__tls_default_supported_signature_algorithms[15] 
     TLS_PKCS1_WITH_SHA1,
     TLS_ECDSA_WITH_SHA1,
 };
+
+/* -------------------------------------------------------- signature schemes */
+
+bool burrow__tls_type_and_hash_from_signature_scheme(TlsSignatureScheme s,
+                                                     uint8_t *sig_type,
+                                                     CryptoHash *hash, Error *err) {
+    uint8_t t;
+    CryptoHash h;
+    switch (s) {
+    case TLS_PKCS1_WITH_SHA1:
+    case TLS_PKCS1_WITH_SHA256:
+    case TLS_PKCS1_WITH_SHA384:
+    case TLS_PKCS1_WITH_SHA512:
+        t = TLS_SIGNATURE_PKCS1V15;
+        break;
+    case TLS_PSS_WITH_SHA256:
+    case TLS_PSS_WITH_SHA384:
+    case TLS_PSS_WITH_SHA512:
+        t = TLS_SIGNATURE_RSAPSS;
+        break;
+    case TLS_ECDSA_WITH_SHA1:
+    case TLS_ECDSA_WITH_P256_AND_SHA256:
+    case TLS_ECDSA_WITH_P384_AND_SHA384:
+    case TLS_ECDSA_WITH_P521_AND_SHA512:
+        t = TLS_SIGNATURE_ECDSA;
+        break;
+    case TLS_ED25519:
+        t = TLS_SIGNATURE_ED25519;
+        break;
+    case TLS_MLDSA44:
+    case TLS_MLDSA65:
+    case TLS_MLDSA87:
+        t = TLS_SIGNATURE_MLDSA;
+        break;
+    default:
+        goto unsupported;
+    }
+    switch (s) {
+    case TLS_PKCS1_WITH_SHA1:
+    case TLS_ECDSA_WITH_SHA1:
+        h = CRYPTO_SHA1;
+        break;
+    case TLS_PKCS1_WITH_SHA256:
+    case TLS_PSS_WITH_SHA256:
+    case TLS_ECDSA_WITH_P256_AND_SHA256:
+        h = CRYPTO_SHA256;
+        break;
+    case TLS_PKCS1_WITH_SHA384:
+    case TLS_PSS_WITH_SHA384:
+    case TLS_ECDSA_WITH_P384_AND_SHA384:
+        h = CRYPTO_SHA384;
+        break;
+    case TLS_PKCS1_WITH_SHA512:
+    case TLS_PSS_WITH_SHA512:
+    case TLS_ECDSA_WITH_P521_AND_SHA512:
+        h = CRYPTO_SHA512;
+        break;
+    default:
+        h = TLS_DIRECT_SIGNING;
+        break;
+    }
+    BURROW_OUT(sig_type, t);
+    BURROW_OUT(hash, h);
+    return true;
+
+unsupported:
+    BURROW_OUT(sig_type, 0);
+    BURROW_OUT(hash, 0);
+    if (err != NULL)
+        *err = fmt_errorf_v("unsupported signature algorithm: %s",
+                            tls_signature_scheme_string(s, error_allocator()));
+    return false;
+}
+
+bool burrow__tls_is_disabled_signature_algorithm(uint16_t version, TlsSignatureScheme s,
+                                                 bool is_cert) {
+    switch (s) {
+    case TLS_MLDSA44:
+    case TLS_MLDSA65:
+    case TLS_MLDSA87:
+        /* ML-DSA codepoints are only defined for TLS 1.3. */
+        if (version < TLS_VERSION_TLS13)
+            return true;
+        break;
+    default:
+        break;
+    }
+
+    /* For the _cert extension we include all algorithms, including SHA-1 and
+     * PKCS#1 v1.5, because it's more likely that something on our side will be
+     * willing to accept a *-with-SHA1 certificate (e.g. with a custom
+     * VerifyConnection or by a direct match with the CertPool), than that the
+     * peer would have a better certificate but is just choosing not to send it.
+     * crypto/x509 will refuse to verify important SHA-1 signatures anyway. */
+    if (is_cert)
+        return false;
+
+    /* TLS 1.3 removed support for PKCS#1 v1.5 and SHA-1 signatures, and Go 1.25
+     * removed support for SHA-1 signatures in TLS 1.2. */
+    uint8_t sig_type;
+    CryptoHash sig_hash;
+    (void)burrow__tls_type_and_hash_from_signature_scheme(s, &sig_type, &sig_hash,
+                                                          NULL);
+    if (version > TLS_VERSION_TLS12)
+        return sig_type == TLS_SIGNATURE_PKCS1V15 || sig_hash == CRYPTO_SHA1;
+    if ((tls_debug_load() & TLS_DEBUG_SHA1_ON) == 0)
+        return sig_hash == CRYPTO_SHA1;
+    return false;
+}
+
+/* The default signature algorithms with the ones that are disabled at every
+ * version from min_vers to max_vers taken out, from a. */
+static Slice tls_signature_algorithms_for(Alloc *a, uint16_t min_vers,
+                                          uint16_t max_vers, bool is_cert) {
+    Int n = (Int)(sizeof(burrow__tls_default_supported_signature_algorithms) /
+                  sizeof(burrow__tls_default_supported_signature_algorithms[0]));
+    Slice out = slice_make(a, TYPE_UINT16, 0, n);
+    if (out.p == NULL)
+        return out;
+    TlsSignatureScheme *p = (TlsSignatureScheme *)out.p;
+    for (Int i = 0; i < n; i++) {
+        TlsSignatureScheme s = burrow__tls_default_supported_signature_algorithms[i];
+        for (uint32_t v = min_vers; v <= max_vers; v++) {
+            if (!burrow__tls_is_disabled_signature_algorithm((uint16_t)v, s, is_cert)) {
+                p[out.len++] = s;
+                break;
+            }
+        }
+    }
+    return out;
+}
+
+Slice burrow__tls_supported_signature_algorithms(Alloc *a, uint16_t min_vers,
+                                                 uint16_t max_vers) {
+    return tls_signature_algorithms_for(a, min_vers, max_vers, false);
+}
+
+Slice burrow__tls_supported_signature_algorithms_cert(Alloc *a, uint16_t min_vers,
+                                                      uint16_t max_vers) {
+    return tls_signature_algorithms_for(a, min_vers, max_vers, true);
+}
+
+bool burrow__tls_is_supported_signature_algorithm(TlsSignatureScheme sig_alg,
+                                                  Slice supported) {
+    const TlsSignatureScheme *p = (const TlsSignatureScheme *)supported.p;
+    for (Int i = 0; i < supported.len; i++) {
+        if (p[i] == sig_alg)
+            return true;
+    }
+    return false;
+}
 
 /* ------------------------------------------------------------- descriptors */
 

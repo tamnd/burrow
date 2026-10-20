@@ -280,6 +280,41 @@ extern const TlsCurveID burrow__tls_curve_preference_order[8];
  * and in a TLS 1.2+ CertificateRequest. Fifteen of them. */
 extern const TlsSignatureScheme burrow__tls_default_supported_signature_algorithms[15];
 
+/* directSigning is a standard Hash value that signals that no pre-hashing
+ * should be performed, and that the input should be signed directly. It is the
+ * hash function associated with the Ed25519 signature scheme. */
+#define TLS_DIRECT_SIGNING ((CryptoHash)0)
+
+/* typeAndHashFromSignatureScheme returns the corresponding signature type and
+ * crypto.Hash for a given TLS SignatureScheme. False, with zeroes and Go's
+ * error in err when err is not NULL, for a scheme it does not know. */
+bool burrow__tls_type_and_hash_from_signature_scheme(TlsSignatureScheme s,
+                                                     uint8_t *sig_type,
+                                                     CryptoHash *hash, Error *err);
+
+/* isDisabledSignatureAlgorithm, which reads tlssha1 from GODEBUG. There is no
+ * FIPS 140-3 mode here, so the checks Go makes for one never fire. */
+bool burrow__tls_is_disabled_signature_algorithm(uint16_t version, TlsSignatureScheme s,
+                                                 bool is_cert);
+
+/* supportedSignatureAlgorithms returns the supported signature algorithms for
+ * the given range of TLS versions, to advertise in ClientHello and
+ * CertificateRequest messages. An algorithm is included if it is enabled at any
+ * version in the range. A []SignatureScheme from a, nil when a is out of
+ * memory. */
+Slice burrow__tls_supported_signature_algorithms(Alloc *a, uint16_t min_vers,
+                                                 uint16_t max_vers);
+
+/* supportedSignatureAlgorithmsCert returns the supported algorithms for
+ * signatures in certificates. From a, as above. */
+Slice burrow__tls_supported_signature_algorithms_cert(Alloc *a, uint16_t min_vers,
+                                                      uint16_t max_vers);
+
+/* isSupportedSignatureAlgorithm: whether sig_alg is in supported, a
+ * []SignatureScheme. */
+bool burrow__tls_is_supported_signature_algorithm(TlsSignatureScheme sig_alg,
+                                                  Slice supported);
+
 /* cipherSuiteByID and cipherSuiteTLS13ByID, NULL when there is none. */
 const TlsSuite *burrow__tls_cipher_suite_by_id(uint16_t id);
 const TlsSuiteTLS13 *burrow__tls_cipher_suite_tls13_by_id(uint16_t id);
@@ -531,5 +566,282 @@ bool burrow__tls13_traffic_key(const TlsSuiteTLS13 *c, Alloc *a, Slice traffic_s
  * selection. */
 Slice burrow__tls13_finished_hash(const TlsSuiteTLS13 *c, Alloc *a, Slice base_key,
                                   Hash transcript);
+
+/* ------------------------------------------------------ handshake messages
+ *
+ * Go's handshake_messages.go. Each message has a marshal that gives its bytes
+ * from a, or a nil slice and the error in err, and an unmarshal that reports
+ * whether data parsed. What unmarshal reads is not copied: the byte slices in
+ * the message point into data, as they do in Go, except where Go copies too.
+ * Lists that grow, and strings, come from a, and running out of memory makes
+ * unmarshal report false. The _zero functions give a message whose slices are
+ * nil but typed, which the lists unmarshal appends to need, and a nil slice
+ * stays nil the way Go's does, because the difference between nil and empty is
+ * part of what the messages mean. */
+
+/* innerECHExt, the ECH extension type that says a ClientHello is the inner
+ * one. */
+#define TLS_INNER_ECH_EXT 1
+
+/* TLS 1.3 Key Share. See RFC 8446, Section 4.2.8. */
+typedef struct TlsKeyShare {
+    TlsCurveID group;
+    Slice data;
+} TlsKeyShare;
+
+/* TLS 1.3 PSK Identity. Can be a Session Ticket, or a reference to a saved
+ * session. See RFC 8446, Section 4.2.11. */
+typedef struct TlsPskIdentity {
+    Slice label;
+    uint32_t obfuscated_ticket_age;
+} TlsPskIdentity;
+
+/* The element types of a []keyShare and a []pskIdentity. */
+extern const Type burrow__tls_key_share_type;
+extern const Type burrow__tls_psk_identity_type;
+
+typedef struct TlsClientHelloMsg {
+    Slice original;
+    uint16_t vers;
+    Slice random;
+    Slice session_id;
+    Slice cipher_suites; /* []uint16 */
+    Slice compression_methods;
+    Str server_name;
+    bool ocsp_stapling;
+    Slice supported_curves; /* []CurveID */
+    Slice supported_points;
+    bool ticket_supported;
+    Slice session_ticket;
+    Slice supported_signature_algorithms;      /* []SignatureScheme */
+    Slice supported_signature_algorithms_cert; /* []SignatureScheme */
+    bool secure_renegotiation_supported;
+    Slice secure_renegotiation;
+    bool extended_master_secret;
+    Slice alpn_protocols; /* []string */
+    bool scts;
+    Slice supported_versions; /* []uint16 */
+    Slice cookie;
+    Slice key_shares; /* []keyShare */
+    bool early_data;
+    Slice psk_modes;
+    Slice psk_identities; /* []pskIdentity */
+    Slice psk_binders;    /* [][]byte */
+    Slice quic_transport_parameters;
+    Slice encrypted_client_hello;
+    /* extensions are only populated on the server-side of a handshake. A
+     * []uint16. */
+    Slice extensions;
+} TlsClientHelloMsg;
+
+/* A clientHelloMsg{} with every slice nil and typed. */
+TlsClientHelloMsg burrow__tls_client_hello_msg_zero(void);
+Slice burrow__tls_client_hello_msg_marshal_msg(const TlsClientHelloMsg *m, Alloc *a,
+                                               bool ech_inner, Error *err);
+Slice burrow__tls_client_hello_msg_marshal(const TlsClientHelloMsg *m, Alloc *a,
+                                           Error *err);
+
+/* marshalWithoutBinders returns the ClientHello through the
+ * PreSharedKeyExtension.identities field, according to RFC 8446, Section
+ * 4.2.11.2. Note that m.pskBinders must be set to slices of the correct
+ * length. */
+Slice burrow__tls_client_hello_msg_marshal_without_binders(const TlsClientHelloMsg *m,
+                                                           Alloc *a, Error *err);
+
+/* updateBinders updates the m.pskBinders field. The supplied binders must have
+ * the same length as the current m.pskBinders. */
+bool burrow__tls_client_hello_msg_update_binders(TlsClientHelloMsg *m,
+                                                 Slice psk_binders, Error *err);
+bool burrow__tls_client_hello_msg_unmarshal(TlsClientHelloMsg *m, Alloc *a, Slice data);
+
+/* clone, a copy of every slice in m from a. False when a is out of memory. */
+bool burrow__tls_client_hello_msg_clone(const TlsClientHelloMsg *m, Alloc *a,
+                                        TlsClientHelloMsg *out);
+
+typedef struct TlsServerHelloMsg {
+    Slice original;
+    uint16_t vers;
+    Slice random;
+    Slice session_id;
+    uint16_t cipher_suite;
+    uint8_t compression_method;
+    bool ocsp_stapling;
+    bool ticket_supported;
+    bool secure_renegotiation_supported;
+    Slice secure_renegotiation;
+    bool extended_master_secret;
+    Str alpn_protocol;
+    Slice scts; /* [][]byte */
+    uint16_t supported_version;
+    TlsKeyShare server_share;
+    bool selected_identity_present;
+    uint16_t selected_identity;
+    Slice supported_points;
+    Slice encrypted_client_hello;
+    bool server_name_ack;
+
+    /* HelloRetryRequest extensions */
+    Slice cookie;
+    TlsCurveID selected_group;
+} TlsServerHelloMsg;
+
+TlsServerHelloMsg burrow__tls_server_hello_msg_zero(void);
+Slice burrow__tls_server_hello_msg_marshal(const TlsServerHelloMsg *m, Alloc *a,
+                                           Error *err);
+bool burrow__tls_server_hello_msg_unmarshal(TlsServerHelloMsg *m, Alloc *a, Slice data);
+
+typedef struct TlsEncryptedExtensionsMsg {
+    Str alpn_protocol;
+    Slice quic_transport_parameters;
+    bool early_data;
+    Slice ech_retry_configs;
+    bool server_name_ack;
+} TlsEncryptedExtensionsMsg;
+
+TlsEncryptedExtensionsMsg burrow__tls_encrypted_extensions_msg_zero(void);
+Slice burrow__tls_encrypted_extensions_msg_marshal(const TlsEncryptedExtensionsMsg *m,
+                                                   Alloc *a, Error *err);
+bool burrow__tls_encrypted_extensions_msg_unmarshal(TlsEncryptedExtensionsMsg *m,
+                                                    Alloc *a, Slice data);
+
+/* endOfEarlyDataMsg and serverHelloDoneMsg have nothing in them, and neither
+ * does helloRequestMsg. */
+Slice burrow__tls_end_of_early_data_msg_marshal(Alloc *a, Error *err);
+bool burrow__tls_end_of_early_data_msg_unmarshal(Slice data);
+
+typedef struct TlsKeyUpdateMsg {
+    bool update_requested;
+} TlsKeyUpdateMsg;
+
+Slice burrow__tls_key_update_msg_marshal(const TlsKeyUpdateMsg *m, Alloc *a,
+                                         Error *err);
+bool burrow__tls_key_update_msg_unmarshal(TlsKeyUpdateMsg *m, Slice data);
+
+typedef struct TlsNewSessionTicketMsgTLS13 {
+    uint32_t lifetime;
+    uint32_t age_add;
+    Slice nonce;
+    Slice label;
+    uint32_t max_early_data;
+} TlsNewSessionTicketMsgTLS13;
+
+TlsNewSessionTicketMsgTLS13 burrow__tls_new_session_ticket_msg_tls13_zero(void);
+Slice burrow__tls_new_session_ticket_msg_tls13_marshal(
+    const TlsNewSessionTicketMsgTLS13 *m, Alloc *a, Error *err);
+bool burrow__tls_new_session_ticket_msg_tls13_unmarshal(TlsNewSessionTicketMsgTLS13 *m,
+                                                        Slice data);
+
+typedef struct TlsCertificateRequestMsgTLS13 {
+    bool ocsp_stapling;
+    bool scts;
+    Slice supported_signature_algorithms;      /* []SignatureScheme */
+    Slice supported_signature_algorithms_cert; /* []SignatureScheme */
+    Slice certificate_authorities;             /* [][]byte */
+} TlsCertificateRequestMsgTLS13;
+
+TlsCertificateRequestMsgTLS13 burrow__tls_certificate_request_msg_tls13_zero(void);
+Slice burrow__tls_certificate_request_msg_tls13_marshal(
+    const TlsCertificateRequestMsgTLS13 *m, Alloc *a, Error *err);
+bool burrow__tls_certificate_request_msg_tls13_unmarshal(
+    TlsCertificateRequestMsgTLS13 *m, Alloc *a, Slice data);
+
+typedef struct TlsCertificateMsg {
+    Slice certificates; /* [][]byte */
+} TlsCertificateMsg;
+
+Slice burrow__tls_certificate_msg_marshal(const TlsCertificateMsg *m, Alloc *a,
+                                          Error *err);
+bool burrow__tls_certificate_msg_unmarshal(TlsCertificateMsg *m, Alloc *a, Slice data);
+
+typedef struct TlsCertificateMsgTLS13 {
+    TlsCertificate certificate;
+    bool ocsp_stapling;
+    bool scts;
+} TlsCertificateMsgTLS13;
+
+/* A Certificate{} with its slices nil and typed. */
+TlsCertificate burrow__tls_certificate_zero(void);
+TlsCertificateMsgTLS13 burrow__tls_certificate_msg_tls13_zero(void);
+Slice burrow__tls_certificate_msg_tls13_marshal(const TlsCertificateMsgTLS13 *m,
+                                                Alloc *a, Error *err);
+bool burrow__tls_certificate_msg_tls13_unmarshal(TlsCertificateMsgTLS13 *m, Alloc *a,
+                                                 Slice data);
+
+typedef struct TlsServerKeyExchangeMsg {
+    Slice key;
+} TlsServerKeyExchangeMsg;
+
+Slice burrow__tls_server_key_exchange_msg_marshal(const TlsServerKeyExchangeMsg *m,
+                                                  Alloc *a, Error *err);
+bool burrow__tls_server_key_exchange_msg_unmarshal(TlsServerKeyExchangeMsg *m,
+                                                   Slice data);
+
+typedef struct TlsCertificateStatusMsg {
+    Slice response;
+} TlsCertificateStatusMsg;
+
+Slice burrow__tls_certificate_status_msg_marshal(const TlsCertificateStatusMsg *m,
+                                                 Alloc *a, Error *err);
+bool burrow__tls_certificate_status_msg_unmarshal(TlsCertificateStatusMsg *m,
+                                                  Slice data);
+
+Slice burrow__tls_server_hello_done_msg_marshal(Alloc *a, Error *err);
+bool burrow__tls_server_hello_done_msg_unmarshal(Slice data);
+
+typedef struct TlsClientKeyExchangeMsg {
+    Slice ciphertext;
+} TlsClientKeyExchangeMsg;
+
+Slice burrow__tls_client_key_exchange_msg_marshal(const TlsClientKeyExchangeMsg *m,
+                                                  Alloc *a, Error *err);
+bool burrow__tls_client_key_exchange_msg_unmarshal(TlsClientKeyExchangeMsg *m,
+                                                   Slice data);
+
+typedef struct TlsFinishedMsg {
+    Slice verify_data;
+} TlsFinishedMsg;
+
+Slice burrow__tls_finished_msg_marshal(const TlsFinishedMsg *m, Alloc *a, Error *err);
+bool burrow__tls_finished_msg_unmarshal(TlsFinishedMsg *m, Slice data);
+
+typedef struct TlsCertificateRequestMsg {
+    /* hasSignatureAlgorithm indicates whether this message includes a list of
+     * supported signature algorithms. This change was introduced with TLS
+     * 1.2. */
+    bool has_signature_algorithm;
+
+    Slice certificate_types;
+    Slice supported_signature_algorithms; /* []SignatureScheme */
+    Slice certificate_authorities;        /* [][]byte */
+} TlsCertificateRequestMsg;
+
+TlsCertificateRequestMsg burrow__tls_certificate_request_msg_zero(void);
+Slice burrow__tls_certificate_request_msg_marshal(const TlsCertificateRequestMsg *m,
+                                                  Alloc *a, Error *err);
+bool burrow__tls_certificate_request_msg_unmarshal(TlsCertificateRequestMsg *m,
+                                                   Alloc *a, Slice data);
+
+typedef struct TlsCertificateVerifyMsg {
+    bool has_signature_algorithm; /* format change introduced in TLS 1.2 */
+    TlsSignatureScheme signature_algorithm;
+    Slice signature;
+} TlsCertificateVerifyMsg;
+
+Slice burrow__tls_certificate_verify_msg_marshal(const TlsCertificateVerifyMsg *m,
+                                                 Alloc *a, Error *err);
+bool burrow__tls_certificate_verify_msg_unmarshal(TlsCertificateVerifyMsg *m,
+                                                  Slice data);
+
+typedef struct TlsNewSessionTicketMsg {
+    Slice ticket;
+} TlsNewSessionTicketMsg;
+
+Slice burrow__tls_new_session_ticket_msg_marshal(const TlsNewSessionTicketMsg *m,
+                                                 Alloc *a, Error *err);
+bool burrow__tls_new_session_ticket_msg_unmarshal(TlsNewSessionTicketMsg *m,
+                                                  Slice data);
+
+Slice burrow__tls_hello_request_msg_marshal(Alloc *a, Error *err);
+bool burrow__tls_hello_request_msg_unmarshal(Slice data);
 
 #endif /* BURROW_SRC_CRYPTO_TLS_INTERNAL_H */

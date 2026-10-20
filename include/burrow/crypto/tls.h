@@ -22,6 +22,7 @@
 #define BURROW_CRYPTO_TLS_H
 
 #include "burrow/core.h"
+#include "burrow/crypto.h"
 #include "burrow/declare.h"
 #include "burrow/error.h"
 #include "burrow/mem.h"
@@ -203,6 +204,41 @@ typedef uint16_t TlsSignatureScheme;
 /* SignatureScheme.String: Go's name for the constant, such as
  * "PSSWithSHA256", or "SignatureScheme(7)" from a. */
 BURROW_OWNS(ret) Str tls_signature_scheme_string(TlsSignatureScheme i, Alloc *a);
+
+/* ------------------------------------------------------------ certificates */
+
+struct X509Certificate;
+
+/* A Certificate is a chain of one or more certificates, leaf first. */
+typedef struct TlsCertificate {
+    /* [][]byte, each an ASN.1 DER certificate. */
+    Slice certificate;
+    /* PrivateKey contains the private key corresponding to the public key in
+     * Leaf. This must implement crypto.Signer with an RSA, ECDSA, Ed25519 (TLS
+     * 1.2+), or ML-DSA (TLS 1.3) PublicKey.
+     *
+     * For a server up to TLS 1.2, it can also implement crypto.Decrypter with
+     * an RSA PublicKey.
+     *
+     * If it implements crypto.MessageSigner, SignMessage will be used instead
+     * of Sign for TLS 1.2 and later. */
+    CryptoPrivateKey private_key;
+    /* SupportedSignatureAlgorithms is an optional list restricting what
+     * signature algorithms the PrivateKey can be used for. A
+     * []SignatureScheme. */
+    Slice supported_signature_algorithms;
+    /* OCSPStaple contains an optional OCSP response which will be served to
+     * clients that request it. */
+    Slice ocsp_staple;
+    /* SignedCertificateTimestamps contains an optional list of Signed
+     * Certificate Timestamps which will be served to clients that request it.
+     * A [][]byte. */
+    Slice signed_certificate_timestamps;
+    /* Leaf is the parsed form of the leaf certificate, which may be
+     * initialized using x509_parse_certificate to reduce per-handshake
+     * processing. If NULL, the leaf certificate will be parsed as needed. */
+    struct X509Certificate *leaf;
+} TlsCertificate;
 
 /* ---------------------------------------------------- client auth policies */
 

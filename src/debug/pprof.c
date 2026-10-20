@@ -854,7 +854,9 @@ static void ppr_add_max_rss(IoWriter w) {
 #else
     Uintptr rss_to_bytes = 1024;
 #endif
-    SyscallRusage rusage;
+    /* Zeroed first because the call goes straight to the kernel, so
+     * MemorySanitizer never sees it fill the struct in. */
+    SyscallRusage rusage = {0};
     Error err = syscall_getrusage(SYSCALL_RUSAGE_SELF, &rusage);
     if (BURROW_OK(err))
         fmt_fprintf_v(w, "# MaxRSS = %d\n", (Uintptr)rusage.maxrss * rss_to_bytes);

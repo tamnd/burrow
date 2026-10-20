@@ -296,6 +296,46 @@ A type Go cannot compare, such as a slice, panics with Go's message, `runtime er
 
 The hash is burrow's runtime hash and not Go's, so the numbers differ from a Go program's, the same as they would between two runs of either. Its quality is checked by Go's smhasher tests, which look at collisions over sparse, cyclic, permuted and windowed keys and at how well each input bit flips each output bit. All of them pass.
 
+## Saving and copying a hash
+
+As in Go, the hashes from md5, sha1, sha256, sha512, adler32, crc32, crc64 and fnv are also `encoding.BinaryMarshaler`, `BinaryAppender` and `BinaryUnmarshaler`. Go finds those with a type assertion. Here you put the `Hash` in an `Any` and hand it to the `encoding` calls, which find the method the same way:
+
+<!-- example: ../examples/hash/hash.c#marshal -->
+```c
+Hash h = sha256_new(a);
+hash_write(h, slice_from_str(a, BURROW_S("hello, ")), NULL);
+Error err = BURROW_NO_ERROR;
+Slice state = encoding_marshal_binary(a, BURROW_ANY(TYPE_OF(Hash), &h), &err);
+if (BURROW_FAILED(err))
+    return;
+```
+
+For SHA-256 that is 108 bytes, laid out byte for byte the way Go lays it out, so a state saved by a Go program can be picked up here and the other way round. A new hash of the same kind picks it up and carries on:
+
+<!-- example: ../examples/hash/hash.c#unmarshal -->
+```c
+Hash h2 = sha256_new(a);
+err = encoding_unmarshal_binary(a, BURROW_ANY(TYPE_OF(Hash), &h2), state);
+if (BURROW_FAILED(err))
+    return;
+hash_write(h2, slice_from_str(a, BURROW_S("world")), NULL);
+```
+
+Its sum is `09ca7e4e...`, the same as hashing `hello, world` in one go. A state that does not fit is refused with Go's error, such as `hash/crc32: tables do not match` for a CRC-32 state from another polynomial.
+
+To copy a hash in memory, `hash_is_cloner` is Go's `h.(hash.Cloner)` check, and `hash_clone` returns a `HashCloner` with the same state that is written to separately from the original:
+
+<!-- example: ../examples/hash/hash.c#clone -->
+```c
+if (hash_is_cloner(h)) {
+    Hash h3 = hash_cloner_as_hash(hash_clone(a, h, &err));
+    if (BURROW_FAILED(err))
+        return;
+    hash_write(h3, slice_from_str(a, BURROW_S("world")), NULL);
+    print_hex(a, hash_sum(a, h3, slice_nil(TYPE_BYTE)));
+}
+```
+
 ## Memory
 
 A hash made by one of the `_new` functions comes from the allocator you pass and holds no other memory, so it goes away with the arena. The IEEE and Castagnoli tables and their faster variants are built once, the first time they are used, from whichever thread gets there first. Nothing else is shared, and a single hash is not safe to write from two threads at once, the same as in Go.
@@ -308,4 +348,4 @@ As in Go, `GODEBUG` turns them off. `GODEBUG=cpu.all=off` runs the portable code
 
 ## What is not here yet
 
-Apart from SHA-3, Go's hashes can save their state with `MarshalBinary` and pick it up again with `UnmarshalBinary`, and the newer ones can `Clone` themselves. Those need a way to ask a `Hash` whether it also implements another interface, which comes with the `encoding` package (#185). CRC-32 in Go uses the SSE 4.2 and ARMv8 CRC instructions when it can, and burrow uses slicing by 8 tables for now, which is what Go falls back to on machines without them. SHA-512 on x86 is the portable code too, where Go has an AVX2 version. SHA-3 is portable everywhere, and it is close anyway: its portable code runs at about 90% of the speed Go gets from the SHA-3 instructions on Apple chips, and at about twice the speed of Go's portable code.
+SHA-3 and maphash have clone calls of their own, `sha3_clone` and `maphash_hash_as_cloner`, but a `Hash` made from either does not answer `hash_is_cloner` or the `encoding` calls yet. CRC-32 in Go uses the SSE 4.2 and ARMv8 CRC instructions when it can, and burrow uses slicing by 8 tables for now, which is what Go falls back to on machines without them. SHA-512 on x86 is the portable code too, where Go has an AVX2 version. SHA-3 is portable everywhere, and it is close anyway: its portable code runs at about 90% of the speed Go gets from the SHA-3 instructions on Apple chips, and at about twice the speed of Go's portable code.

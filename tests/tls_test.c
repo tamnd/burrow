@@ -2,13 +2,12 @@
  * Go source: go1.27.1.
  *
  * The tests that listen and dial do it over loopback TCP, so they skip where
- * there is no readiness poll FD. TestConnectionStateMarshal, the ML-DSA
- * handshakes and ECH are still to come. Where Go compares with
- * reflect.DeepEqual, the certificates here are compared by their DER. The PEMs
- * TestX509KeyPair declares are in tls_test_gen.h, and the ML-DSA ones are
- * always tried, as there is no FIPS 140-3 module here to be v1.0.0. Go ranges
- * over the disabledCipherSuites map; here that map is a predicate, so the test
- * asks it about every suite there is.
+ * there is no readiness poll FD. TestConnectionStateMarshal and ECH are still
+ * to come. Where Go compares with reflect.DeepEqual, the certificates here are
+ * compared by their DER. The PEMs TestX509KeyPair declares are in
+ * tls_test_gen.h, and the ML-DSA ones are always tried, as there is no FIPS
+ * 140-3 module here to be v1.0.0. Go ranges over the disabledCipherSuites map;
+ * here that map is a predicate, so the test asks it about every suite there is.
  *
  * Copyright 2012 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -3996,6 +3995,271 @@ static void TestSupportedSignatureAlgorithmsMLDSAGating(TestingT *t) {
     arena_free(&ar);
 }
 
+/* Not in Go: what a subtest of TestHandshakeMLDSA does. */
+typedef enum MLDSASubtest {
+    MLDSA_SERVER_AUTH,
+    MLDSA_CLIENT_AUTH,
+    MLDSA_MUTUAL_AUTH,
+    MLDSA_REJECTED_SERVER,
+    MLDSA_REJECTED_CLIENT,
+    MLDSA_CORRUPTED_SERVER,
+    MLDSA_CORRUPTED_CLIENT,
+} MLDSASubtest;
+
+/* Not in Go: a subtest of TestHandshakeMLDSA, which runs in parallel, so the
+ * cases are a table that outlives the function that starts them. */
+typedef struct MLDSACase {
+    int param; /* 0, 1 and 2 for MLDSA44, MLDSA65 and MLDSA87 */
+    MLDSASubtest subtest;
+    uint16_t version; /* the v of the RejectedVersion subtests */
+} MLDSACase;
+
+#define MLDSA_CASES(p)                                                                 \
+    {p, MLDSA_SERVER_AUTH, 0}, {p, MLDSA_CLIENT_AUTH, 0}, {p, MLDSA_MUTUAL_AUTH, 0},   \
+        {p, MLDSA_REJECTED_SERVER, TLS_VERSION_TLS10},                                 \
+        {p, MLDSA_REJECTED_CLIENT, TLS_VERSION_TLS10},                                 \
+        {p, MLDSA_REJECTED_SERVER, TLS_VERSION_TLS12},                                 \
+        {p, MLDSA_REJECTED_CLIENT, TLS_VERSION_TLS12}, {p, MLDSA_CORRUPTED_SERVER, 0}, \
+        {p, MLDSA_CORRUPTED_CLIENT, 0}
+
+static const MLDSACase mldsa_cases[] = {MLDSA_CASES(0), MLDSA_CASES(1), MLDSA_CASES(2)};
+
+static const char *const mldsa_names[] = {"MLDSA44", "MLDSA65", "MLDSA87"};
+
+/* Not in Go: testMLDSA44Cert and the rest, made in a. */
+static TlsCertificate mldsa_cert(Alloc *a, int param, bool client) {
+    switch (param) {
+    case 0:
+        return client ? parse_test_cert(a, test_client_mldsa44_cert_pem,
+                                        test_client_mldsa44_key_pem)
+                      : parse_test_cert(a, test_mldsa44_cert_pem, test_mldsa44_key_pem);
+    case 1:
+        return client ? parse_test_cert(a, test_client_mldsa65_cert_pem,
+                                        test_client_mldsa65_key_pem)
+                      : parse_test_cert(a, test_mldsa65_cert_pem, test_mldsa65_key_pem);
+    default:
+        return client ? parse_test_cert(a, test_client_mldsa87_cert_pem,
+                                        test_client_mldsa87_key_pem)
+                      : parse_test_cert(a, test_mldsa87_cert_pem, test_mldsa87_key_pem);
+    }
+}
+
+static Any mldsa_peer_public_key(const TlsConnectionState *s) {
+    return ((X509Certificate *const *)s->peer_certificates.p)[0]->public_key;
+}
+
+/* Not in Go: the two handshakes of a RejectedVersion subtest. */
+static void mldsa_rejected_version(TestingT *t, const MLDSACase *c, TlsConfig *server,
+                                   TlsConfig *client) {
+    bool on_server = c->subtest == MLDSA_REJECTED_SERVER;
+    Handshake h;
+    if (on_server)
+        server->max_version = c->version;
+    else
+        client->max_version = c->version;
+    test_handshake(t, client, server, &h);
+    if (BURROW_OK(h.err)) {
+        handshake_free(&h);
+        if (on_server)
+            testing_t_fatal_v(t, "expected handshake failure when ML-DSA is the only "
+                                 "server cert and the negotiation is not TLS 1.3");
+        testing_t_fatal_v(t, "expected handshake failure when ML-DSA is the only "
+                             "client cert and the negotiation is not TLS 1.3");
+    }
+    if (on_server && !strings_contains(error_text(h.err), BURROW_S("ML-DSA")))
+        testing_t_errorf_v(t, "error message should mention ML-DSA, got %q", h.err);
+    handshake_free(&h);
+
+    /* The error message on the client can't be helpful because we don't know
+     * if the server requires a certificate until/unless the server aborts
+     * later in the handshake, by which time we lost track of which certificate
+     * we didn't offer and why. */
+    if (on_server) {
+        server->max_version = 0;
+        client->max_version = c->version;
+    } else {
+        client->max_version = 0;
+        server->max_version = c->version;
+    }
+    test_handshake(t, client, server, &h);
+    if (BURROW_OK(h.err)) {
+        handshake_free(&h);
+        if (on_server)
+            testing_t_fatal_v(t, "expected handshake failure when ML-DSA is the only "
+                                 "server cert and the negotiation is not TLS 1.3");
+        testing_t_fatal_v(t, "expected handshake failure when ML-DSA is the only "
+                             "client cert and the negotiation is not TLS 1.3");
+    }
+    if (on_server && !strings_contains(error_text(h.err), BURROW_S("ML-DSA")))
+        testing_t_errorf_v(t, "error message should mention ML-DSA, got %q", h.err);
+    handshake_free(&h);
+}
+
+static void handshake_mldsa(void *env, TestingT *t) {
+    const MLDSACase *c = (const MLDSACase *)env;
+    /* There is no FIPS 140-3 module here, so nothing is skipped, and the
+     * branches for module v1.0.0 never run. */
+    testing_t_parallel(t);
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsCertificate cert = mldsa_cert(a, c->param, false);
+    TlsCertificate client_cert = mldsa_cert(a, c->param, true);
+    TlsCertificate ecdsa_cert =
+        parse_test_cert(a, test_ecdsap256_cert_pem, test_ecdsap256_key_pem);
+    TlsConfig server_config = test_config_server(a);
+    TlsConfig client_config = test_config_client(a);
+    BitFlippingSigner flip;
+    CryptoSigner signer = {&bit_flipping_signer_vt, &flip};
+    TlsCertificate flipped;
+    memset(&flipped, 0, sizeof flipped);
+    Handshake h;
+
+    switch (c->subtest) {
+    case MLDSA_SERVER_AUTH:
+        server_config.certificates = slice_from(&cert, 1, 1, TYPE_TLS_CERTIFICATE);
+        break;
+    case MLDSA_CLIENT_AUTH:
+        server_config.certificates =
+            slice_from(&ecdsa_cert, 1, 1, TYPE_TLS_CERTIFICATE);
+        server_config.client_auth = TLS_REQUIRE_AND_VERIFY_CLIENT_CERT;
+        client_config.certificates =
+            slice_from(&client_cert, 1, 1, TYPE_TLS_CERTIFICATE);
+        break;
+    case MLDSA_MUTUAL_AUTH:
+        server_config.certificates = slice_from(&cert, 1, 1, TYPE_TLS_CERTIFICATE);
+        server_config.client_auth = TLS_REQUIRE_AND_VERIFY_CLIENT_CERT;
+        client_config.certificates =
+            slice_from(&client_cert, 1, 1, TYPE_TLS_CERTIFICATE);
+        break;
+    case MLDSA_REJECTED_SERVER:
+        server_config.min_version = TLS_VERSION_TLS10;
+        server_config.certificates = slice_from(&cert, 1, 1, TYPE_TLS_CERTIFICATE);
+        client_config.min_version = TLS_VERSION_TLS10;
+        break;
+    case MLDSA_REJECTED_CLIENT:
+        server_config.min_version = TLS_VERSION_TLS10;
+        server_config.client_auth = TLS_REQUIRE_AND_VERIFY_CLIENT_CERT;
+        client_config.min_version = TLS_VERSION_TLS10;
+        client_config.certificates =
+            slice_from(&client_cert, 1, 1, TYPE_TLS_CERTIFICATE);
+        break;
+    case MLDSA_CORRUPTED_SERVER:
+        flip.signer = mldsa_private_key_signer(cert.private_key.data);
+        flipped.certificate = cert.certificate;
+        flipped.private_key = BURROW_ANY(TYPE_CRYPTO_SIGNER, &signer);
+        server_config.certificates = slice_from(&flipped, 1, 1, TYPE_TLS_CERTIFICATE);
+        break;
+    case MLDSA_CORRUPTED_CLIENT:
+        server_config.client_auth = TLS_REQUIRE_AND_VERIFY_CLIENT_CERT;
+        flip.signer = mldsa_private_key_signer(client_cert.private_key.data);
+        flipped.certificate = client_cert.certificate;
+        flipped.private_key = BURROW_ANY(TYPE_CRYPTO_SIGNER, &signer);
+        client_config.certificates = slice_from(&flipped, 1, 1, TYPE_TLS_CERTIFICATE);
+        break;
+    default:
+        break;
+    }
+
+    if (c->subtest == MLDSA_REJECTED_SERVER || c->subtest == MLDSA_REJECTED_CLIENT) {
+        mldsa_rejected_version(t, c, &server_config, &client_config);
+    } else if (c->subtest == MLDSA_CORRUPTED_SERVER ||
+               c->subtest == MLDSA_CORRUPTED_CLIENT) {
+        test_handshake(t, &client_config, &server_config, &h);
+        if (BURROW_OK(h.err)) {
+            handshake_free(&h);
+            testing_t_fatal_v(t, "handshake unexpectedly succeeded with corrupted "
+                                 "ML-DSA signature");
+        }
+        /* The client returns the verification error; the server returns
+         * "remote error: tls: decrypt_error" reflecting the alert. */
+        Str msg = error_text(h.err);
+        if (!strings_contains(msg, BURROW_S("decrypt")) &&
+            !strings_contains(msg, BURROW_S("ML-DSA verification failure")))
+            testing_t_errorf_v(
+                t,
+                "error = %q; want one mentioning decrypt_error or ML-DSA "
+                "verification",
+                h.err);
+        handshake_free(&h);
+    } else {
+        test_handshake(t, &client_config, &server_config, &h);
+        if (BURROW_FAILED(h.err))
+            testing_t_fatalf_v(t, "handshake: %v", h.err);
+        if (c->subtest != MLDSA_CLIENT_AUTH &&
+            mldsa_peer_public_key(&h.client_state).t != TYPE_MLDSA_PUBLIC_KEY) {
+            if (c->subtest == MLDSA_SERVER_AUTH)
+                testing_t_errorf_v(t,
+                                   "server peer cert public key = %T, want "
+                                   "*mldsa.PublicKey",
+                                   mldsa_peer_public_key(&h.client_state));
+            else
+                testing_t_errorf_v(t,
+                                   "client-side peer cert public key = %T, want "
+                                   "*mldsa.PublicKey",
+                                   mldsa_peer_public_key(&h.client_state));
+        }
+        if (c->subtest != MLDSA_SERVER_AUTH &&
+            mldsa_peer_public_key(&h.server_state).t != TYPE_MLDSA_PUBLIC_KEY) {
+            if (c->subtest == MLDSA_CLIENT_AUTH)
+                testing_t_errorf_v(t,
+                                   "client peer cert public key = %T, want "
+                                   "*mldsa.PublicKey",
+                                   mldsa_peer_public_key(&h.server_state));
+            else
+                testing_t_errorf_v(t,
+                                   "server-side peer cert public key = %T, want "
+                                   "*mldsa.PublicKey",
+                                   mldsa_peer_public_key(&h.server_state));
+        }
+        handshake_free(&h);
+    }
+    tls_config_release(&client_config);
+    tls_config_release(&server_config);
+    arena_free(&ar);
+}
+
+static void TestHandshakeMLDSA(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Int n = (Int)(sizeof mldsa_cases / sizeof mldsa_cases[0]);
+    for (Int i = 0; i < n; i++) {
+        const MLDSACase *c = &mldsa_cases[i];
+        Str name = str_from_cstr(mldsa_names[c->param]);
+        switch (c->subtest) {
+        case MLDSA_SERVER_AUTH:
+            name = fmt_sprintf_v(a, "%s/ServerAuth", name);
+            break;
+        case MLDSA_CLIENT_AUTH:
+            name = fmt_sprintf_v(a, "%s/ClientAuth", name);
+            break;
+        case MLDSA_MUTUAL_AUTH:
+            name = fmt_sprintf_v(a, "%s/MutualAuth", name);
+            break;
+        case MLDSA_REJECTED_SERVER:
+            name = fmt_sprintf_v(a, "%s/RejectedVersion/%s/Server", name,
+                                 tls_version_name(a, c->version));
+            break;
+        case MLDSA_REJECTED_CLIENT:
+            name = fmt_sprintf_v(a, "%s/RejectedVersion/%s/Client", name,
+                                 tls_version_name(a, c->version));
+            break;
+        case MLDSA_CORRUPTED_SERVER:
+            name = fmt_sprintf_v(a, "%s/CorruptedSignature/Server", name);
+            break;
+        case MLDSA_CORRUPTED_CLIENT:
+            name = fmt_sprintf_v(a, "%s/CorruptedSignature/Client", name);
+            break;
+        default:
+            break;
+        }
+        testing_t_run(t, name,
+                      BURROW_FN(TestingTFunc, handshake_mldsa, (void *)(uintptr_t)c));
+    }
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestX509KeyPair)                                                                 \
     X(TestCipherSuites)                                                                \
@@ -4027,6 +4291,7 @@ static void TestSupportedSignatureAlgorithmsMLDSAGating(TestingT *t) {
     X(TestLocalCertificateResumption)                                                  \
     X(TestVerifyCertificates)                                                          \
     X(TestHandshakeMLKEM)                                                              \
-    X(TestSupportedSignatureAlgorithmsMLDSAGating)
+    X(TestSupportedSignatureAlgorithmsMLDSAGating)                                     \
+    X(TestHandshakeMLDSA)
 
 TESTING_MAIN(TESTS)

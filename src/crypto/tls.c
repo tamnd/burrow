@@ -646,3 +646,39 @@ const Type burrow_type_TlsCipherSuite = {
 };
 
 BURROW_PTR_TYPE_DEFINE(TlsCipherSuitePtr, TlsCipherSuite);
+
+const Type burrow_type_TlsCertificate = {
+    {(const Byte *)"Certificate", 11},
+    {(const Byte *)"crypto/tls", 10},
+    KIND_STRUCT,
+    (uint32_t)sizeof(TlsCertificate),
+    (uint16_t)_Alignof(TlsCertificate),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
+BURROW_PTR_TYPE_DEFINE(TlsCertificatePtr, TlsCertificate);
+
+const Type burrow_type_TlsEncryptedClientHelloKey = {
+    {(const Byte *)"EncryptedClientHelloKey", 23},
+    {(const Byte *)"crypto/tls", 10},
+    KIND_STRUCT,
+    (uint32_t)sizeof(TlsEncryptedClientHelloKey),
+    (uint16_t)_Alignof(TlsEncryptedClientHelloKey),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};

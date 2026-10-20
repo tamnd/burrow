@@ -8,8 +8,12 @@
 
 #include "burrow/hash/crc32.h"
 #include "burrow/core.h"
+#include "burrow/declare.h"
+#include "burrow/encoding.h"
+#include "burrow/error.h"
 #include "burrow/func.h"
 #include "burrow/hash.h"
+#include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/platform.h"
 #include "burrow/slice.h"
@@ -270,14 +274,139 @@ static uint32_t digest32_sum32(void *self) {
     return ((Digest32 *)self)->crc;
 }
 
+#define CRC32_MAGIC "crc\x01"
+enum { crc32_marshaled_size = 4 + 4 + 4 };
+
+BURROW_SENTINEL_ERROR(crc32_err_identifier,
+                      "hash/crc32: invalid hash state identifier");
+BURROW_SENTINEL_ERROR(crc32_err_size, "hash/crc32: invalid hash state size");
+BURROW_SENTINEL_ERROR(crc32_err_tables, "hash/crc32: tables do not match");
+
+static void crc32_put_be32(Byte *b, uint32_t v) {
+    b[0] = (Byte)(v >> 24);
+    b[1] = (Byte)(v >> 16);
+    b[2] = (Byte)(v >> 8);
+    b[3] = (Byte)v;
+}
+
+static uint32_t crc32_be32(const Byte *p) {
+    return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 |
+           (uint32_t)p[3];
+}
+
+/* tableSum returns the IEEE checksum of table t. */
+static uint32_t table_sum32(const Crc32Table *t) {
+    Byte a[1024];
+    Int n = 0;
+    if (t != NULL) {
+        for (int i = 0; i < 256; i++)
+            crc32_put_be32(a + 4 * i, t->v[i]);
+        n = 1024;
+    }
+    return update32(0, &ieee_table, slice_from(a, n, 1024, TYPE_BYTE));
+}
+
+static Slice digest32_append_binary(Digest32 *d, Alloc *a, Slice b, Error *err) {
+    Byte st[crc32_marshaled_size];
+    memcpy(st, CRC32_MAGIC, 4);
+    crc32_put_be32(st + 4, table_sum32(d->tab));
+    crc32_put_be32(st + 8, d->crc);
+    if (b.elem == NULL)
+        b = slice_nil(TYPE_BYTE);
+    Int len = b.len;
+    Slice r = slice_append(a, b, st, crc32_marshaled_size);
+    BURROW_OUT(err, r.len == len + crc32_marshaled_size ? BURROW_NO_ERROR
+                                                        : burrow_err_out_of_memory);
+    return r;
+}
+
+static Slice digest32_marshal_binary(Digest32 *d, Alloc *a, Error *err) {
+    Slice b = slice_make(a, TYPE_BYTE, 0, crc32_marshaled_size);
+    if (b.p == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return slice_nil(TYPE_BYTE);
+    }
+    return digest32_append_binary(d, a, b, err);
+}
+
+static Error digest32_unmarshal_binary(Digest32 *d, Alloc *a, Slice b) {
+    (void)a;
+    const Byte *p = b.p;
+    if (b.len < 4 || memcmp(p, CRC32_MAGIC, 4) != 0)
+        return crc32_err_identifier;
+    if (b.len != crc32_marshaled_size)
+        return crc32_err_size;
+    if (table_sum32(d->tab) != crc32_be32(p + 4))
+        return crc32_err_tables;
+    d->crc = crc32_be32(p + 8);
+    return BURROW_NO_ERROR;
+}
+
+static HashCloner digest32_clone(void *self, Alloc *a, Error *err);
+
+/* The method set of Go's *crc32.digest, so that a Hash from here answers
+ * h.(hash.Cloner) and h.(encoding.BinaryMarshaler) as Go's does. */
+#define DIGEST32_METHODS(M, T)                                                         \
+    M(T, AppendBinary, digest32_append_binary, ENCODING_SIG_APPEND_BINARY)             \
+    M(T, BlockSize, digest32_block_size, HASH_SIG_BLOCK_SIZE)                          \
+    M(T, Clone, digest32_clone, HASH_SIG_CLONE)                                        \
+    M(T, MarshalBinary, digest32_marshal_binary, ENCODING_SIG_MARSHAL_BINARY)          \
+    M(T, Reset, digest32_reset, HASH_SIG_RESET)                                        \
+    M(T, Size, digest32_size, HASH_SIG_SIZE)                                           \
+    M(T, Sum, digest32_sum, HASH_SIG_SUM)                                              \
+    M(T, Sum32, digest32_sum32, HASH_SIG_SUM32)                                        \
+    M(T, UnmarshalBinary, digest32_unmarshal_binary, ENCODING_SIG_UNMARSHAL_BINARY)    \
+    M(T, Write, digest32_write, IO_SIG_WRITE)
+
+BURROW_METHODS_DEFINE(Digest32, DIGEST32_METHODS);
+
+static const Type digest32_type = {
+    {(const Byte *)"digest", 6},
+    {(const Byte *)"hash/crc32", 10},
+    KIND_STRUCT,
+    (uint32_t)sizeof(Digest32),
+    (uint16_t)_Alignof(Digest32),
+    0,
+    (uint16_t)(sizeof burrow__methods_Digest32 / sizeof burrow__methods_Digest32[0]),
+    NULL,
+    burrow__methods_Digest32,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
 static const HashHash32VT digest32_vt = {
-    {{NULL, digest32_write},
+    {{&digest32_type, digest32_write},
      digest32_sum,
      digest32_reset,
      digest32_size,
      digest32_block_size},
     digest32_sum32,
 };
+
+/* The same digest, seen as the hash.Cloner Clone returns. */
+static const HashClonerVT digest32_cloner_vt = {
+    {{&digest32_type, digest32_write},
+     digest32_sum,
+     digest32_reset,
+     digest32_size,
+     digest32_block_size},
+    digest32_clone,
+};
+
+static HashCloner digest32_clone(void *self, Alloc *a, Error *err) {
+    Digest32 *r = BURROW_NEW(a, Digest32);
+    if (r == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return (HashCloner){NULL, NULL};
+    }
+    *r = *(Digest32 *)self;
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    HashCloner h = {&digest32_cloner_vt, r};
+    return h;
+}
 
 HashHash32 crc32_new(Alloc *a, const Crc32Table *tab) {
     if (tab == &ieee_table)

@@ -58,7 +58,9 @@ BURROW_OWNS(ret) const Crc32Table *crc32_make_table(Alloc *a, uint32_t poly);
 
 /* A new Hash32 computing the CRC-32 with tab, allocated from a. Sum appends the
  * checksum big endian, the way the network and every file format write it. The
- * hash keeps a pointer to tab, which has to outlive it. */
+ * hash keeps a pointer to tab, which has to outlive it. The returned Hash32
+ * also implements encoding.BinaryMarshaler and encoding.BinaryUnmarshaler to
+ * marshal and unmarshal the internal state of the hash. */
 BURROW_OWNS(ret) BURROW_BORROWS(ret, tab) HashHash32 crc32_new(Alloc *a,
                                                                const Crc32Table *tab);
 

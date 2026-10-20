@@ -38,6 +38,7 @@ category	sema-table	The wait queues behind sync, keyed on the address of the cou
 category	futex	The wait queues that stand in for a futex on the platforms that have no such call, keyed on the address being waited on, which is what makes them one per process by definition.
 category	reclaim	The epoch and the handover lists behind lock free reading. One epoch per process is the whole idea, since a reader on any thread has to be able to hold any of them back.
 category	pool	sync.Pool's registry and the lock over it, which is one per process because the sweep has to be able to find every pool from the system monitor's thread.
+category	exec-trace	The execution tracer's generation, buffers and tables. Go keeps the same state in the runtime's trace variable, and it is one per process because a trace is of the whole program: every thread writes into it and one reader takes it all out.
 category	clock	The conversion factor between what the machine's counter counts and nanoseconds. Fixed at boot, so it is asked for once.
 category	machine	What the machine is: the page size and how many cores the process may run on. Both are fixed for the life of the process, so both are asked for once.
 category	coverage	The compiler's coverage counters. The compiler lays them out once per module and calls in to register them before main, so there is one set per process by construction.
@@ -484,3 +485,5 @@ global	src/expvar/expvar.c	ev_register_once	package-vars	Makes expvar_register p
 global	src/text/template_parse.c	burrow__parse_max_stack_depth	package-vars	Go's maxStackDepth, a variable there too, which only the tests change, before any parse starts.
 global	src/text/template_parse_node.c	burrow__parse_text_format_q	package-vars	Go's textFormat, which only the tests change, around parses and String calls on the same thread, as Go's do.
 global	src/html/template_escape.c	hte_debug_flags	godebug	The htmlmetacontenturlescape setting, read from GODEBUG on first use. Relaxed atomic loads and stores only, and two racing first loads store the same value. burrow__ht_godebug_set changes it for the tests, as t.Setenv does in Go.
+global	src/runtime/exectrace.c	burrow__trace_gen	exec-trace	Go's trace.gen. Atomic. Written only with adv_lock held, read by every hook without a lock.
+global	src/runtime/exectrace.c	trace	exec-trace	Go's trace. Each part is under the lock its comment names: ctl, adv_lock, trace.lock, tt_lock, or the lock of the thread or table it belongs to.

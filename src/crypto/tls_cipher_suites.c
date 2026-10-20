@@ -50,13 +50,13 @@ static const uint16_t tls_supported_only_tls13[] = {TLS_VERSION_TLS13};
 enum { TLS_UP_TO_12, TLS_ONLY_12, TLS_ONLY_13 };
 
 typedef struct TlsPublicSuite {
-    uint16_t id;
     const char *name;
     int versions;
+    uint16_t id;
     bool insecure;
 } TlsPublicSuite;
 
-#define TLS_PUBLIC(id, versions, insecure) {TLS_##id, #id, versions, insecure}
+#define TLS_PUBLIC(id, versions, insecure) {#id, versions, TLS_##id, insecure}
 
 static const TlsPublicSuite tls_public_suites[] = {
     TLS_PUBLIC(TLS_AES_128_GCM_SHA256, TLS_ONLY_13, false),

@@ -1,9 +1,6 @@
 /* Derived from Go's src/hash/fnv/fnv_test.go.
  * Go source: go1.27.1.
  *
- * TestGoldenMarshal waits for hash state marshaling (#185), and the marshaled states
- * are dropped from the golden tables until then.
- *
  * Copyright 2011 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -13,6 +10,7 @@
 #include "testhash.h"
 
 #include "burrow/burrow.h"
+#include "burrow/encoding.h"
 #include "burrow/hash/fnv.h"
 #include "burrow/mem/arena.h"
 
@@ -35,7 +33,7 @@ static Hash make64a(Alloc *a) {
 }
 
 static void run_testhash(void *env, TestingT *t) {
-    testhash_without_clone(t, *(TesthashMake *)env);
+    testhash_hash(t, *(TesthashMake *)env);
 }
 
 static void TestHashInterface(TestingT *t) {
@@ -50,50 +48,67 @@ typedef struct Golden {
     const char *out;
     Int out_len;
     const char *in;
+    Str half_state; /* marshaled hash state after first half of in written */
 } Golden;
 
-#define G(out, in) {(out), (Int)sizeof(out) - 1, (in)}
+#define G(out, in, half) {(out), (Int)sizeof(out) - 1, (in), half}
 
 static const Golden golden32[] = {
-    G("\x81\x1c\x9d\xc5", ""),
-    G("\x05\x0c\x5d\x7e", "a"),
-    G("\x70\x77\x2d\x38", "ab"),
-    G("\x43\x9c\x2f\x4b", "abc"),
+    G("\x81\x1c\x9d\xc5", "", BURROW_S_INIT("fnv\x01\x81\x1c\x9d\xc5")),
+    G("\x05\x0c\x5d\x7e", "a", BURROW_S_INIT("fnv\x01\x81\x1c\x9d\xc5")),
+    G("\x70\x77\x2d\x38", "ab", BURROW_S_INIT("fnv\x01\x05\x0c]~")),
+    G("\x43\x9c\x2f\x4b", "abc", BURROW_S_INIT("fnv\x01\x05\x0c]~")),
 };
 
 static const Golden golden32a[] = {
-    G("\x81\x1c\x9d\xc5", ""),
-    G("\xe4\x0c\x29\x2c", "a"),
-    G("\x4d\x25\x05\xca", "ab"),
-    G("\x1a\x47\xe9\x0b", "abc"),
+    G("\x81\x1c\x9d\xc5", "", BURROW_S_INIT("fnv\x02\x81\x1c\x9d\xc5")),
+    G("\xe4\x0c\x29\x2c", "a", BURROW_S_INIT("fnv\x02\x81\x1c\x9d\xc5")),
+    G("\x4d\x25\x05\xca", "ab", BURROW_S_INIT("fnv\x02\xe4\x0c),")),
+    G("\x1a\x47\xe9\x0b", "abc", BURROW_S_INIT("fnv\x02\xe4\x0c),")),
 };
 
 static const Golden golden64[] = {
-    G("\xcb\xf2\x9c\xe4\x84\x22\x23\x25", ""),
-    G("\xaf\x63\xbd\x4c\x86\x01\xb7\xbe", "a"),
-    G("\x08\x32\x67\x07\xb4\xeb\x37\xb8", "ab"),
-    G("\xd8\xdc\xca\x18\x6b\xaf\xad\xcb", "abc"),
+    G("\xcb\xf2\x9c\xe4\x84\x22\x23\x25", "",
+      BURROW_S_INIT("fnv\x03\xcb\xf2\x9c\xe4\x84\"#%")),
+    G("\xaf\x63\xbd\x4c\x86\x01\xb7\xbe", "a",
+      BURROW_S_INIT("fnv\x03\xcb\xf2\x9c\xe4\x84\"#%")),
+    G("\x08\x32\x67\x07\xb4\xeb\x37\xb8", "ab",
+      BURROW_S_INIT("fnv\x03\xaf\x63\xbdL\x86\x01\xb7\xbe")),
+    G("\xd8\xdc\xca\x18\x6b\xaf\xad\xcb", "abc",
+      BURROW_S_INIT("fnv\x03\xaf\x63\xbdL\x86\x01\xb7\xbe")),
 };
 
 static const Golden golden64a[] = {
-    G("\xcb\xf2\x9c\xe4\x84\x22\x23\x25", ""),
-    G("\xaf\x63\xdc\x4c\x86\x01\xec\x8c", "a"),
-    G("\x08\x9c\x44\x07\xb5\x45\x98\x6a", "ab"),
-    G("\xe7\x1f\xa2\x19\x05\x41\x57\x4b", "abc"),
+    G("\xcb\xf2\x9c\xe4\x84\x22\x23\x25", "",
+      BURROW_S_INIT("fnv\x04\xcb\xf2\x9c\xe4\x84\"#%")),
+    G("\xaf\x63\xdc\x4c\x86\x01\xec\x8c", "a",
+      BURROW_S_INIT("fnv\x04\xcb\xf2\x9c\xe4\x84\"#%")),
+    G("\x08\x9c\x44\x07\xb5\x45\x98\x6a", "ab",
+      BURROW_S_INIT("fnv\x04\xaf\x63\xdcL\x86\x01\xec\x8c")),
+    G("\xe7\x1f\xa2\x19\x05\x41\x57\x4b", "abc",
+      BURROW_S_INIT("fnv\x04\xaf\x63\xdcL\x86\x01\xec\x8c")),
 };
 
 static const Golden golden128[] = {
-    G("\x6c\x62\x27\x2e\x07\xbb\x01\x42\x62\xb8\x21\x75\x62\x95\xc5\x8d", ""),
-    G("\xd2\x28\xcb\x69\x10\x1a\x8c\xaf\x78\x91\x2b\x70\x4e\x4a\x14\x1e", "a"),
-    G("\x08\x80\x94\x5a\xee\xab\x1b\xe9\x5a\xa0\x73\x30\x55\x26\xc0\x88", "ab"),
-    G("\xa6\x8b\xb2\xa4\x34\x8b\x58\x22\x83\x6d\xbc\x78\xc6\xae\xe7\x3b", "abc"),
+    G("\x6c\x62\x27\x2e\x07\xbb\x01\x42\x62\xb8\x21\x75\x62\x95\xc5\x8d", "",
+      BURROW_S_INIT("fnv\x05lb'.\x07\xbb\x01\x42\x62\xb8!ub\x95\xc5\x8d")),
+    G("\xd2\x28\xcb\x69\x10\x1a\x8c\xaf\x78\x91\x2b\x70\x4e\x4a\x14\x1e", "a",
+      BURROW_S_INIT("fnv\x05lb'.\x07\xbb\x01\x42\x62\xb8!ub\x95\xc5\x8d")),
+    G("\x08\x80\x94\x5a\xee\xab\x1b\xe9\x5a\xa0\x73\x30\x55\x26\xc0\x88", "ab",
+      BURROW_S_INIT("fnv\x05\xd2(\xcbi\x10\x1a\x8c\xafx\x91+pNJ\x14\x1e")),
+    G("\xa6\x8b\xb2\xa4\x34\x8b\x58\x22\x83\x6d\xbc\x78\xc6\xae\xe7\x3b", "abc",
+      BURROW_S_INIT("fnv\x05\xd2(\xcbi\x10\x1a\x8c\xafx\x91+pNJ\x14\x1e")),
 };
 
 static const Golden golden128a[] = {
-    G("\x6c\x62\x27\x2e\x07\xbb\x01\x42\x62\xb8\x21\x75\x62\x95\xc5\x8d", ""),
-    G("\xd2\x28\xcb\x69\x6f\x1a\x8c\xaf\x78\x91\x2b\x70\x4e\x4a\x89\x64", "a"),
-    G("\x08\x80\x95\x44\xbb\xab\x1b\xe9\x5a\xa0\x73\x30\x55\xb6\x9a\x62", "ab"),
-    G("\xa6\x8d\x62\x2c\xec\x8b\x58\x22\x83\x6d\xbc\x79\x77\xaf\x7f\x3b", "abc"),
+    G("\x6c\x62\x27\x2e\x07\xbb\x01\x42\x62\xb8\x21\x75\x62\x95\xc5\x8d", "",
+      BURROW_S_INIT("fnv\x06lb'.\x07\xbb\x01\x42\x62\xb8!ub\x95\xc5\x8d")),
+    G("\xd2\x28\xcb\x69\x6f\x1a\x8c\xaf\x78\x91\x2b\x70\x4e\x4a\x89\x64", "a",
+      BURROW_S_INIT("fnv\x06lb'.\x07\xbb\x01\x42\x62\xb8!ub\x95\xc5\x8d")),
+    G("\x08\x80\x95\x44\xbb\xab\x1b\xe9\x5a\xa0\x73\x30\x55\xb6\x9a\x62", "ab",
+      BURROW_S_INIT("fnv\x06\xd2(\xcbio\x1a\x8c\xafx\x91+pNJ\x89\x64")),
+    G("\xa6\x8d\x62\x2c\xec\x8b\x58\x22\x83\x6d\xbc\x79\x77\xaf\x7f\x3b", "abc",
+      BURROW_S_INIT("fnv\x06\xd2(\xcbio\x1a\x8c\xafx\x91+pNJ\x89\x64")),
 };
 
 #define NGOLD(g) (sizeof(g) / sizeof((g)[0]))
@@ -161,6 +176,91 @@ static uint64_t be(Slice b) {
     for (Int i = 0; i < b.len; i++)
         v = v << 8 | ((const Byte *)b.p)[i];
     return v;
+}
+
+/* Not in Go: the body of one TestGoldenMarshal subtest. */
+typedef struct MarshalCase {
+    TesthashMake new_hash;
+    const Golden *gold;
+    size_t n;
+} MarshalCase;
+
+static void golden_marshal(void *env, TestingT *t) {
+    const MarshalCase *tt = env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    for (size_t i = 0; i < tt->n; i++) {
+        const Golden *g = &tt->gold[i];
+        Str in = str_from_cstr(g->in);
+        Slice p = slice_from_str(a, in);
+        Hash h = tt->new_hash(a);
+        Hash h2 = tt->new_hash(a);
+        Any ha = BURROW_ANY(TYPE_OF(Hash), &h);
+        Any ha2 = BURROW_ANY(TYPE_OF(Hash), &h2);
+
+        hash_write(h, slice_sub(p, 0, p.len / 2), NULL);
+
+        Error err = BURROW_NO_ERROR;
+        Slice state = encoding_marshal_binary(a, ha, &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "could not marshal: %v", err);
+            continue;
+        }
+
+        Slice state_append =
+            encoding_append_binary(a, ha, slice_make(a, TYPE_BYTE, 4, 32), &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "could not marshal: %v", err);
+            continue;
+        }
+        state_append = slice_sub(state_append, 4, state_append.len);
+
+        Str st = {(const Byte *)state.p, state.len};
+        Str sa = {(const Byte *)state_append.p, state_append.len};
+        if (!str_eq(st, g->half_state)) {
+            testing_t_errorf_v(t, "checksum(%q) state = %q, want %q", in, st,
+                               g->half_state);
+            continue;
+        }
+
+        if (!str_eq(sa, g->half_state)) {
+            testing_t_errorf_v(t, "checksum(%q) state = %q, want %q", in, sa,
+                               g->half_state);
+            continue;
+        }
+
+        err = encoding_unmarshal_binary(a, ha2, state);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "could not unmarshal: %v", err);
+            continue;
+        }
+
+        hash_write(h, slice_sub(p, p.len / 2, p.len), NULL);
+        hash_write(h2, slice_sub(p, p.len / 2, p.len), NULL);
+
+        Slice actual = hash_sum(a, h, slice_nil(TYPE_BYTE));
+        Slice actual2 = hash_sum(a, h2, slice_nil(TYPE_BYTE));
+        if (!testhash_equal(actual, actual2))
+            testing_t_errorf_v(t, "hash(%q) = 0x%x != marshaled 0x%x", in, actual,
+                               actual2);
+    }
+    arena_free(&ar);
+}
+
+static void TestGoldenMarshal(TestingT *t) {
+    static const char *names[] = {"32", "32a", "64", "64a", "128", "128a"};
+    MarshalCase tests[] = {
+        {make32, golden32, NGOLD(golden32)},
+        {make32a, golden32a, NGOLD(golden32a)},
+        {make64, golden64, NGOLD(golden64)},
+        {make64a, golden64a, NGOLD(golden64a)},
+        {fnv_new128, golden128, NGOLD(golden128)},
+        {fnv_new128a, golden128a, NGOLD(golden128a)},
+    };
+    for (int i = 0; i < 6; i++)
+        testing_t_run(t, str_from_cstr(names[i]),
+                      BURROW_FN(TestingTFunc, golden_marshal, &tests[i]));
 }
 
 /* Go asserts the Hash to Hash32 or Hash64 by its size. There is no assertion
@@ -308,6 +408,7 @@ static void BenchmarkFnv128aKB(TestingB *b) {
     X(TestGolden64a)                                                                   \
     X(TestGolden128)                                                                   \
     X(TestGolden128a)                                                                  \
+    X(TestGoldenMarshal)                                                               \
     X(TestIntegrity32)                                                                 \
     X(TestIntegrity32a)                                                                \
     X(TestIntegrity64)                                                                 \

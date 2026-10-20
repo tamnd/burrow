@@ -10,7 +10,10 @@
  *     hash_write(hash_hash64_as_hash(h), key, NULL);
  *     uint64_t bucket = hash_hash64_sum64(h) % nbuckets;
  *
- * Every hash is allocated from a and belongs to the caller.
+ * Every hash is allocated from a and belongs to the caller. All the hash.Hash
+ * implementations returned by this package also implement
+ * encoding.BinaryMarshaler and encoding.BinaryUnmarshaler to marshal and
+ * unmarshal the internal state of the hash.
  *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found

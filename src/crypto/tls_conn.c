@@ -727,6 +727,16 @@ BURROW_SENTINEL_ERROR(thc_err_pending_data,
                       "tls: internal error: attempted to read record with pending "
                       "application data");
 BURROW_SENTINEL_ERROR(thc_err_too_many_ignored, "tls: too many ignored records");
+BURROW_SENTINEL_ERROR(thc_err_quic_read_record,
+                      "tls: internal error: attempted to read record with QUIC "
+                      "transport");
+BURROW_SENTINEL_ERROR(thc_err_quic_non_handshake,
+                      "tls: internal error: sending non-handshake message to QUIC "
+                      "transport");
+BURROW_SENTINEL_ERROR(thc_err_quic_key_update,
+                      "tls: received unexpected key update message");
+BURROW_SENTINEL_ERROR(thc_err_quic_early_data,
+                      "tls: invalid early data for QUIC connection");
 BURROW_SENTINEL_ERROR(thc_err_too_many_non_advancing,
                       "tls: too many non-advancing records");
 BURROW_SENTINEL_ERROR(thc_err_unexpected_renegotiation,
@@ -927,6 +937,9 @@ static Error thc_read_record_or_ccs(TlsConn *c, bool expect_change_cipher_spec) 
         return burrow__tls_half_conn_set_error_locked(&c->in, thc_err_pending_data);
     c->input = slice_nil(TYPE_BYTE);
 
+    if (c->quic != NULL)
+        return burrow__tls_half_conn_set_error_locked(&c->in, thc_err_quic_read_record);
+
     NetConn none;
     memset(&none, 0, sizeof none);
 
@@ -1035,6 +1048,8 @@ static Error thc_read_record_or_ccs(TlsConn *c, bool expect_change_cipher_spec) 
     const Byte *d = (const Byte *)data.p;
     switch (typ) {
     case TLS_RECORD_TYPE_ALERT:
+        if (c->quic != NULL)
+            return thc_in_alert(c, TLS_ALERT_UNEXPECTED_MESSAGE);
         if (data.len != 2)
             return thc_in_alert(c, TLS_ALERT_UNEXPECTED_MESSAGE);
         if (d[1] == TLS_ALERT_CLOSE_NOTIFY)
@@ -1115,6 +1130,10 @@ static Error thc_read_record_or_ccs(TlsConn *c, bool expect_change_cipher_spec) 
 }
 
 Error burrow__tls_conn_send_alert_locked(TlsConn *c, uint8_t err) {
+    if (c->quic != NULL)
+        return burrow__tls_half_conn_set_error_locked(
+            &c->out, thc_op_alert(BURROW_S("local error"), err));
+
     switch (err) {
     case TLS_ALERT_NO_RENEGOTIATION:
     case TLS_ALERT_CLOSE_NOTIFY:
@@ -1211,6 +1230,28 @@ Int burrow__tls_conn_flush(TlsConn *c, Error *err) {
 
 Int burrow__tls_conn_write_record_locked(TlsConn *c, uint8_t typ, Slice data,
                                          Error *err) {
+    if (c->quic != NULL) {
+        if (typ != TLS_RECORD_TYPE_HANDSHAKE) {
+            BURROW_OUT(err, thc_err_quic_non_handshake);
+            return 0;
+        }
+        /* Not in Go: the copy can run out of memory. */
+        Error e = burrow__tls_conn_quic_write_crypto_data(c, c->out.level, data);
+        if (BURROW_FAILED(e)) {
+            BURROW_OUT(err, e);
+            return 0;
+        }
+        if (!c->buffering) {
+            Error ferr = BURROW_NO_ERROR;
+            (void)burrow__tls_conn_flush(c, &ferr);
+            if (BURROW_FAILED(ferr)) {
+                BURROW_OUT(err, ferr);
+                return 0;
+            }
+        }
+        return data.len;
+    }
+
     Int n = 0;
     while (data.len > 0) {
         Int m = data.len;
@@ -1314,6 +1355,8 @@ Error burrow__tls_conn_write_change_cipher_record(TlsConn *c) {
 /* readHandshakeBytes reads handshake data until c.hand contains at least n
  * bytes. */
 static Error thc_read_handshake_bytes(TlsConn *c, Int n) {
+    if (c->quic != NULL)
+        return burrow__tls_conn_quic_read_handshake_bytes(c, n);
     while (bytes_buffer_len(&c->hand) < n) {
         Error err = burrow__tls_conn_read_record(c);
         if (BURROW_FAILED(err))
@@ -1515,7 +1558,7 @@ Int tls_conn_write(TlsConn *c, Slice b, Error *err) {
 
 /* c.handshakeErr = err, kept where the Conn keeps what lasts as long as it
  * does. handshake_mutex has to be held. */
-static void thc_set_handshake_err(TlsConn *c, Error err) {
+void burrow__tls_conn_set_handshake_err(TlsConn *c, Error err) {
     c->handshake_err =
         BURROW_OK(err) ? err : error_retain(arena_allocator(&c->state), err);
 }
@@ -1562,7 +1605,7 @@ static Error thc_handle_renegotiation(TlsConn *c) {
     sync_mutex_lock(&c->handshake_mutex);
 
     sync_atomic_bool_store(&c->is_handshake_complete, false);
-    thc_set_handshake_err(c, c->handshake_fn(c, context_background()));
+    burrow__tls_conn_set_handshake_err(c, c->handshake_fn(c, context_background()));
     if (BURROW_OK(c->handshake_err))
         c->handshakes++;
     Error ret = c->handshake_err;
@@ -1581,8 +1624,7 @@ Str burrow__tls_conn_client_session_cache_key(TlsConn *c, Alloc *a) {
     return BURROW_STR_EMPTY;
 }
 
-/* handleNewSessionTicket, from handshake_client_tls13.go. The QUIC checks come
- * with quic.go.
+/* handleNewSessionTicket, from handshake_client_tls13.go.
  *
  * Not in Go: with no memory for the session, the ticket is dropped, which a
  * client is free to do, and the connection goes on. */
@@ -1609,6 +1651,13 @@ static Error thc_handle_new_session_ticket(TlsConn *c,
     if (msg->label.len == 0) {
         (void)burrow__tls_conn_send_alert(c, TLS_ALERT_DECODE_ERROR);
         return thc_err_ticket_empty_label;
+    }
+
+    /* RFC 9001, Section 4.6.1 */
+    if (c->quic != NULL && msg->max_early_data != 0 &&
+        msg->max_early_data != 0xffffffff) {
+        (void)burrow__tls_conn_send_alert(c, TLS_ALERT_ILLEGAL_PARAMETER);
+        return thc_err_quic_early_data;
     }
 
     const TlsSuiteTLS13 *cipher_suite =
@@ -1645,12 +1694,17 @@ static Error thc_handle_new_session_ticket(TlsConn *c,
     session->use_by =
         (uint64_t)time_unix(time_add(burrow__tls_config_time(c->config), lifetime));
     session->age_add = msg->age_add;
-    /* RFC 9001, Section 4.6.1. Only for QUIC, which is not here yet. */
-    session->early_data = false;
+    session->early_data =
+        c->quic != NULL &&
+        msg->max_early_data == 0xffffffff; /* RFC 9001, Section 4.6.1 */
     TlsClientSessionState *cs = tls_new_resumption_state(msg->label, session, &err);
     if (cs == NULL) {
         arena_free(&tmp);
         return BURROW_NO_ERROR;
+    }
+    if (c->quic != NULL && c->quic->enable_session_events) {
+        arena_free(&tmp);
+        return burrow__tls_conn_quic_store_session(c, cs);
     }
     Str cache_key = burrow__tls_conn_client_session_cache_key(c, ta);
     if (cache_key.len > 0)
@@ -1662,6 +1716,11 @@ static Error thc_handle_new_session_ticket(TlsConn *c,
 }
 
 static Error thc_handle_key_update(TlsConn *c, const TlsKeyUpdateMsg *key_update) {
+    if (c->quic != NULL) {
+        (void)burrow__tls_conn_send_alert(c, TLS_ALERT_UNEXPECTED_MESSAGE);
+        return burrow__tls_half_conn_set_error_locked(&c->in, thc_err_quic_key_update);
+    }
+
     const TlsSuiteTLS13 *cipher_suite =
         burrow__tls_cipher_suite_tls13_by_id(c->cipher_suite);
     if (cipher_suite == NULL) {
@@ -1725,7 +1784,7 @@ static Error thc_handle_key_update(TlsConn *c, const TlsKeyUpdateMsg *key_update
 /* handlePostHandshakeMessage processes a handshake message arrived after the
  * handshake is complete. Up to TLS 1.2, it indicates the start of a
  * renegotiation. */
-static Error thc_handle_post_handshake_message(TlsConn *c) {
+Error burrow__tls_conn_handle_post_handshake_message(TlsConn *c) {
     if (c->vers != TLS_VERSION_TLS13)
         return thc_handle_renegotiation(c);
 
@@ -1787,7 +1846,7 @@ Int tls_conn_read(TlsConn *c, Slice b, Error *err) {
     while (c->input.len == 0) {
         e = burrow__tls_conn_read_record(c);
         while (BURROW_OK(e) && bytes_buffer_len(&c->hand) > 0)
-            e = thc_handle_post_handshake_message(c);
+            e = burrow__tls_conn_handle_post_handshake_message(c);
         if (BURROW_FAILED(e)) {
             sync_mutex_unlock(&c->in.mu);
             BURROW_OUT(err, e);
@@ -1912,8 +1971,41 @@ static Error thc_handshake_locked(TlsConn *c, Context handshake_ctx) {
             BURROW_S("tls: internal error: handshake returned an error but is marked "
                      "successful"));
     }
-    thc_set_handshake_err(c, err);
+    burrow__tls_conn_set_handshake_err(c, err);
     err = c->handshake_err;
+
+    if (c->quic != NULL) {
+        if (BURROW_OK(c->handshake_err)) {
+            /* Not in Go: the event can run out of memory. */
+            err = burrow__tls_conn_quic_handshake_complete(c);
+            /* Provide the 1-RTT read secret now that the handshake is complete.
+             * The QUIC layer MUST NOT decrypt 1-RTT packets prior to completing
+             * the handshake (RFC 9001, Section 5.7). */
+            if (BURROW_OK(err))
+                err = burrow__tls_conn_quic_set_read_secret(
+                    c, TLS_QUIC_ENCRYPTION_LEVEL_APPLICATION, c->cipher_suite,
+                    c->in.traffic_secret);
+            if (BURROW_FAILED(err)) {
+                sync_mutex_unlock(&c->in.mu);
+                sync_mutex_unlock(&c->handshake_mutex);
+                return err;
+            }
+        } else {
+            sync_mutex_lock(&c->out.mu);
+            uint8_t a = TLS_ALERT_INTERNAL_ERROR;
+            (void)burrow__tls_as_alert(c->out.err, &a);
+            sync_mutex_unlock(&c->out.mu);
+            /* Return an error which wraps both the handshake error and any
+             * alert error we may have sent, or alertInternalError if we didn't
+             * send an alert. Truncate the text of the alert to 0 characters. */
+            Error ae = tls_alert_error_as_error(a, error_allocator());
+            burrow__tls_conn_set_handshake_err(
+                c, fmt_errorf_v("%w%.0w", c->handshake_err, ae));
+            err = c->handshake_err;
+        }
+        chan_close(c->quic->blockedc);
+        chan_close(c->quic->signalc);
+    }
 
     sync_mutex_unlock(&c->in.mu);
     sync_mutex_unlock(&c->handshake_mutex);
@@ -1935,6 +2027,16 @@ static void thc_close_on_cancel(void *env) {
     sync_wait_group_done(&k->wg);
 }
 
+/* Not in Go: the end of the handshake for a QUICConn when there is no memory
+ * to start it with. */
+static void thc_quic_out_of_memory(TlsConn *c) {
+    sync_mutex_lock(&c->handshake_mutex);
+    burrow__tls_conn_set_handshake_err(c, burrow_err_out_of_memory);
+    chan_close(c->quic->blockedc);
+    chan_close(c->quic->signalc);
+    sync_mutex_unlock(&c->handshake_mutex);
+}
+
 Error tls_conn_handshake_context(TlsConn *c, Context ctx) {
     /* Fast sync/atomic-based exit if there is no handshake in flight and the
      * last one succeeded without an error. Avoids the expensive context setup
@@ -1944,15 +2046,24 @@ Error tls_conn_handshake_context(TlsConn *c, Context ctx) {
 
     ContextCancelFunc cancel;
     Context handshake_ctx = context_with_cancel(heap_allocator(), ctx, &cancel);
-    if (BURROW_CONTEXT_IS_NIL(handshake_ctx))
+    if (BURROW_CONTEXT_IS_NIL(handshake_ctx)) {
+        /* Not in Go: a QUICConn waits for the handshake to say it is over. */
+        if (c->quic != NULL)
+            thc_quic_out_of_memory(c);
         return burrow_err_out_of_memory;
+    }
 
     Context reg;
     memset(&reg, 0, sizeof reg);
     StopFunc stop;
     memset(&stop, 0, sizeof stop);
     ThcCanceler *k = NULL;
-    if (context_done(ctx) != NULL) {
+    if (c->quic != NULL) {
+        /* Not in Go: the QUICConn releases handshake_ctx, which it can cancel
+         * after this returns. */
+        c->quic->ctx = handshake_ctx;
+        c->quic->cancel = cancel;
+    } else if (context_done(ctx) != NULL) {
         /* Close the connection if ctx is canceled before the function
          * returns. */
         k = BURROW_NEW(heap_allocator(), ThcCanceler);
@@ -1982,7 +2093,8 @@ Error tls_conn_handshake_context(TlsConn *c, Context ctx) {
         context_release(reg);
     }
     BURROW_CALLF0(cancel);
-    context_release(handshake_ctx);
+    if (c->quic == NULL)
+        context_release(handshake_ctx);
     return ret;
 }
 

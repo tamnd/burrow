@@ -189,6 +189,10 @@ Error burrow__tls_alert(Alloc *a, uint8_t e);
  * NULL. */
 bool burrow__tls_is_alert(Error err, uint8_t *e);
 
+/* errors.AsType[alert](err): the first alert in err's chain, in *e if e is not
+ * NULL. */
+bool burrow__tls_as_alert(Error err, uint8_t *e);
+
 /* ---------------------------------------------------------------- GODEBUG */
 
 /* Reads the GODEBUG settings from value as if it were the environment's, or
@@ -1425,9 +1429,58 @@ Slice burrow__tls_half_conn_encrypt(TlsHalfConn *hc, Alloc *a, Slice record,
  * handshake_mutex and in.mu held. */
 typedef Error (*TlsHandshakeFn)(TlsConn *c, Context ctx);
 
+/* quicState, from quic.go. */
+typedef struct TlsQuicState {
+    /* Not in Go: events is events[:n_events] of Go's slice. It is event_arr,
+     * or comes from event_data once there are more than fit there. */
+    TlsQuicEvent *events;
+    Int n_events;
+    Int cap_events;
+    Int next_event;
+
+    /* eventArr is a statically allocated event array, large enough to handle
+     * the usual maximum number of events resulting from a single call:
+     * transport parameters, Initial data, Early read secret, Handshake write
+     * and read secrets, Handshake data, Application write secret, Application
+     * data. */
+    TlsQuicEvent event_arr[8];
+
+    bool started;
+    Chan *signalc;  /* handshake data is available to be read */
+    Chan *blockedc; /* handshake is waiting for data, closed when done */
+    Context ctx;    /* handshake context */
+    ContextCancelFunc cancel;
+
+    bool waiting_for_drain;
+    bool error_returned;
+
+    /* readbuf is shared between HandleData and the handshake goroutine.
+     * HandshakeCryptoData passes ownership to the handshake goroutine by
+     * reading from signalc, and reclaims ownership by reading from blockedc. */
+    Slice readbuf;
+
+    Slice transport_params; /* to send to the peer */
+
+    bool enable_session_events;
+    NetConn client_hello_info_conn;
+
+    /* Not in Go. event_data is what the data of the events is copied into,
+     * and the events too once event_arr is full. It is reset once they have
+     * all been read. params keeps the copies SetTransportParameters makes.
+     * stored holds the ClientSessionStates whose sessions QUICStoreSession
+     * events handed out, n_stored of them, which last as long as the QUICConn
+     * does. */
+    Arena event_data;
+    Arena params;
+    TlsClientSessionState **stored;
+    Int n_stored;
+    Int cap_stored;
+} TlsQuicState;
+
 struct TlsConn {
     /* constant */
     NetConn conn;
+    TlsQuicState *quic; /* nil for non-QUIC connections */
     bool is_client;
     TlsHandshakeFn handshake_fn;
 
@@ -1620,6 +1673,42 @@ Str burrow__tls_conn_client_session_cache_key(TlsConn *c, Alloc *a);
 
 /* connectionStateLocked, with handshake_mutex held. */
 TlsConnectionState burrow__tls_conn_connection_state_locked(TlsConn *c);
+
+/* Not in Go: c.handshakeErr = err, kept in c->state. handshake_mutex has to be
+ * held. */
+void burrow__tls_conn_set_handshake_err(TlsConn *c, Error err);
+
+/* handlePostHandshakeMessage processes a handshake message arrived after the
+ * handshake is complete. Up to TLS 1.2, it indicates the start of a
+ * renegotiation. */
+Error burrow__tls_conn_handle_post_handshake_message(TlsConn *c);
+
+/* ------------------------------------------------------------------- QUIC */
+
+/* quicError ensures err is an AlertError. If err is not already, quicError
+ * wraps it with alertInternalError. */
+Error burrow__tls_quic_error(Error err);
+
+/* The Conn half of quic.go. Each of these is only for a connection with
+ * c->quic set, and runs on the handshake goroutine with handshake_mutex held,
+ * as Go's do, apart from those a QUICConn method calls. Not in Go: the data
+ * and secrets are copied, and those that can run out of memory say so. */
+Error burrow__tls_conn_quic_read_handshake_bytes(TlsConn *c, Int n);
+Error burrow__tls_conn_quic_set_read_secret(TlsConn *c, TlsQuicEncryptionLevel level,
+                                            uint16_t suite, Slice secret);
+Error burrow__tls_conn_quic_set_write_secret(TlsConn *c, TlsQuicEncryptionLevel level,
+                                             uint16_t suite, Slice secret);
+Error burrow__tls_conn_quic_write_crypto_data(TlsConn *c, TlsQuicEncryptionLevel level,
+                                              Slice data);
+Error burrow__tls_conn_quic_resume_session(TlsConn *c, TlsSessionState *session);
+/* Not in Go: the event hands out cs's session, and q keeps the reference to
+ * cs that comes in. */
+Error burrow__tls_conn_quic_store_session(TlsConn *c, TlsClientSessionState *cs);
+Error burrow__tls_conn_quic_set_transport_parameters(TlsConn *c, Slice params);
+/* Not in Go: the parameters belong to c->quic. */
+Slice burrow__tls_conn_quic_get_transport_parameters(TlsConn *c, Error *err);
+Error burrow__tls_conn_quic_handshake_complete(TlsConn *c);
+Error burrow__tls_conn_quic_rejected_early_data(TlsConn *c);
 
 /* sessionState returns a partially filled-out SessionState with information
  * from the current connection.

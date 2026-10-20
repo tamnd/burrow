@@ -1595,6 +1595,206 @@ BURROW_BORROWS(ret) TlsConn *tls_conn_from_net_conn(NetConn c);
  * goroutine is in a call on it or will make one. NULL does nothing. */
 void tls_conn_free(TlsConn *c);
 
+/* ---------------------------------------------------------------- QUICConn */
+
+/* A QUICConn represents a connection which uses a QUIC implementation as the
+ * underlying transport as described in RFC 9001.
+ *
+ * Methods of QUICConn are not safe for concurrent use.
+ *
+ * Not in Go: tls_quic_conn_free gives it back. */
+typedef struct TlsQuicConn TlsQuicConn;
+
+/* A QUICConfig configures a [QUICConn]. */
+typedef struct TlsQuicConfig {
+    TlsConfig *tls_config;
+
+    /* EnableSessionEvents may be set to true to enable the [QUICStoreSession]
+     * and [QUICResumeSession] events for client connections. When this event
+     * is enabled, sessions are not automatically stored in the client session
+     * cache. The application should use [QUICConn.StoreSession] to store
+     * sessions. */
+    bool enable_session_events;
+
+    /* ClientHelloInfoConn is the net.Conn to use for the ClientHelloInfo.Conn
+     * field. */
+    NetConn client_hello_info_conn;
+} TlsQuicConfig;
+
+/* A QUICEventKind is a type of operation on a QUIC connection. */
+typedef Int TlsQuicEventKind;
+
+/* QUICNoEvent indicates that there are no events available. */
+#define TLS_QUIC_NO_EVENT ((TlsQuicEventKind)0)
+
+/* QUICSetReadSecret and QUICSetWriteSecret provide the read and write secrets
+ * for a given encryption level. QUICEvent.Level, QUICEvent.Data, and
+ * QUICEvent.Suite are set.
+ *
+ * Secrets for the Initial encryption level are derived from the initial
+ * destination connection ID, and are not provided by the QUICConn. */
+#define TLS_QUIC_SET_READ_SECRET ((TlsQuicEventKind)1)
+#define TLS_QUIC_SET_WRITE_SECRET ((TlsQuicEventKind)2)
+
+/* QUICWriteData provides data to send to the peer in CRYPTO frames.
+ * QUICEvent.Data is set. */
+#define TLS_QUIC_WRITE_DATA ((TlsQuicEventKind)3)
+
+/* QUICTransportParameters provides the peer's QUIC transport parameters.
+ * QUICEvent.Data is set. */
+#define TLS_QUIC_TRANSPORT_PARAMETERS ((TlsQuicEventKind)4)
+
+/* QUICTransportParametersRequired indicates that the caller must provide QUIC
+ * transport parameters to send to the peer. The caller should set the
+ * transport parameters with QUICConn.SetTransportParameters and call
+ * QUICConn.NextEvent again.
+ *
+ * If transport parameters are set before calling QUICConn.Start, the
+ * connection will never generate a QUICTransportParametersRequired event. */
+#define TLS_QUIC_TRANSPORT_PARAMETERS_REQUIRED ((TlsQuicEventKind)5)
+
+/* QUICRejectedEarlyData indicates that the server rejected 0-RTT data even if
+ * we offered it. It's returned before QUICEncryptionLevelApplication keys are
+ * returned. This event only occurs on client connections. */
+#define TLS_QUIC_REJECTED_EARLY_DATA ((TlsQuicEventKind)6)
+
+/* QUICHandshakeDone indicates that the TLS handshake has completed. */
+#define TLS_QUIC_HANDSHAKE_DONE ((TlsQuicEventKind)7)
+
+/* QUICResumeSession indicates that a client is attempting to resume a
+ * previous session. [QUICEvent.SessionState] is set.
+ *
+ * For client connections, this event occurs when the session ticket is
+ * selected. For server connections, this event occurs when receiving the
+ * client's session ticket.
+ *
+ * The application may set [QUICEvent.SessionState.EarlyData] to false before
+ * the next call to [QUICConn.NextEvent] to decline 0-RTT even if the session
+ * supports it. */
+#define TLS_QUIC_RESUME_SESSION ((TlsQuicEventKind)8)
+
+/* QUICStoreSession indicates that the server has provided state permitting the
+ * client to resume the session. [QUICEvent.SessionState] is set. The
+ * application should use [QUICConn.StoreSession] session to store the
+ * [SessionState]. The application may modify the [SessionState] before
+ * storing it. This event only occurs on client connections. */
+#define TLS_QUIC_STORE_SESSION ((TlsQuicEventKind)9)
+
+/* QUICErrorEvent indicates that a fatal error has occurred. The handshake
+ * cannot proceed and the connection must be closed. QUICEvent.Err is set. */
+#define TLS_QUIC_ERROR_EVENT ((TlsQuicEventKind)10)
+
+/* A QUICEvent is an event occurring on a QUIC connection.
+ *
+ * The type of event is specified by the Kind field. The contents of the other
+ * fields are kind-specific. */
+typedef struct TlsQuicEvent {
+    TlsQuicEventKind kind;
+
+    /* Set for QUICSetReadSecret, QUICSetWriteSecret, and QUICWriteData. */
+    TlsQuicEncryptionLevel level;
+
+    /* Set for QUICTransportParameters, QUICSetReadSecret, QUICSetWriteSecret,
+     * and QUICWriteData. The contents are owned by crypto/tls, and are valid
+     * until the next NextEvent call. */
+    Slice data;
+
+    /* Set for QUICSetReadSecret and QUICSetWriteSecret. */
+    uint16_t suite;
+
+    /* Set for QUICResumeSession and QUICStoreSession.
+     *
+     * Not in Go: the session belongs to the QUICConn. One from a
+     * QUICResumeSession event lasts until the next NextEvent call, and one
+     * from a QUICStoreSession event as long as the QUICConn. */
+    TlsSessionState *session_state;
+
+    /* Set for QUICErrorEvent. The error will wrap AlertError.
+     *
+     * Not in Go: the error belongs to the QUICConn. */
+    Error err;
+} TlsQuicEvent;
+
+typedef struct TlsQuicSessionTicketOptions {
+    /* EarlyData specifies whether the ticket may be used for 0-RTT. */
+    bool early_data;
+    /* Not in Go: a slice of Bytes. */
+    Slice extra;
+} TlsQuicSessionTicketOptions;
+
+/* QUICClient returns a new TLS client side connection using QUICTransport as
+ * the underlying transport. The config cannot be nil.
+ *
+ * Not in Go: the QUICConn comes from a, which has to be one that two
+ * goroutines can use at once, as the heap can, since the handshake runs on a
+ * goroutine of its own. config->tls_config has to outlive it, and so does
+ * config->client_hello_info_conn. NULL when a is out of memory. */
+BURROW_OWNS(ret) TlsQuicConn *tls_quic_client(Alloc *a, const TlsQuicConfig *config);
+
+/* QUICServer returns a new TLS server side connection using QUICTransport as
+ * the underlying transport. The config cannot be nil.
+ *
+ * Not in Go: as tls_quic_client. */
+BURROW_OWNS(ret) TlsQuicConn *tls_quic_server(Alloc *a, const TlsQuicConfig *config);
+
+/* Start starts the client or server handshake protocol. It may produce
+ * connection events, which may be read with [QUICConn.NextEvent].
+ *
+ * Start must be called at most once.
+ *
+ * Not in Go: ctx has to outlive the handshake, which is over once
+ * tls_quic_conn_close returns. */
+BURROW_BORROWS(ret, q) Error tls_quic_conn_start(TlsQuicConn *q, Context ctx);
+
+/* NextEvent returns the next event occurring on the connection. It returns an
+ * event with a Kind of [QUICNoEvent] when no events are available. */
+TlsQuicEvent tls_quic_conn_next_event(TlsQuicConn *q);
+
+/* Close closes the connection and stops any in-progress handshake. */
+BURROW_BORROWS(ret, q) Error tls_quic_conn_close(TlsQuicConn *q);
+
+/* HandleData handles handshake bytes received from the peer. It may produce
+ * connection events, which may be read with [QUICConn.NextEvent].
+ *
+ * Not in Go: data is copied, and not kept after this returns. */
+BURROW_BORROWS(ret, q) Error tls_quic_conn_handle_data(TlsQuicConn *q,
+                                                       TlsQuicEncryptionLevel level,
+                                                       Slice data);
+
+/* SendSessionTicket sends a session ticket to the client. It produces
+ * connection events, which may be read with [QUICConn.NextEvent]. Currently,
+ * it can only be called once. */
+BURROW_BORROWS(ret, q) Error
+tls_quic_conn_send_session_ticket(TlsQuicConn *q, TlsQuicSessionTicketOptions opts);
+
+/* StoreSession stores a session previously received in a QUICStoreSession
+ * event in the ClientSessionCache. The application may process additional
+ * events or modify the SessionState before storing the session.
+ *
+ * Not in Go: a session from a QUICStoreSession event stays with q, and the
+ * cache gets a reference to it. Any other session is handed over, to go in
+ * the cache or to be freed. */
+BURROW_BORROWS(ret, q) Error tls_quic_conn_store_session(TlsQuicConn *q,
+                                                         TlsSessionState *session);
+
+/* ConnectionState returns basic TLS details about the connection.
+ *
+ * Not in Go: what the state points at belongs to q. */
+TlsConnectionState tls_quic_conn_connection_state(TlsQuicConn *q);
+
+/* SetTransportParameters sets the transport parameters to send to the peer.
+ *
+ * Server connections may delay setting the transport parameters until after
+ * receiving the client's transport parameters. See
+ * [QUICTransportParametersRequired].
+ *
+ * Not in Go: params is copied. */
+void tls_quic_conn_set_transport_parameters(TlsQuicConn *q, Slice params);
+
+/* Not in Go: closes q, waits for its handshake to be over, and gives it back
+ * to the allocator it came from with everything it kept. NULL does nothing. */
+void tls_quic_conn_free(TlsQuicConn *q);
+
 #ifdef __cplusplus
 }
 #endif

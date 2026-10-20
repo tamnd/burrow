@@ -8,6 +8,7 @@
 
 #include "burrow/crypto/tls.h"
 
+#include "burrow/bytes.h"
 #include "burrow/core.h"
 #include "burrow/crypto.h"
 #include "burrow/crypto/hmac.h"
@@ -268,11 +269,28 @@ bool burrow__tls_finished_hash_write(TlsFinishedHash *h, Slice msg) {
 
     if (!slice_is_nil(h->buffer)) {
         Slice b = slice_append_slice(h->a, h->buffer, msg);
-        if (b.p == NULL && msg.len > 0)
+        if (b.p == NULL && msg.len > 0) {
+            h->oom = true;
             return false;
+        }
         h->buffer = b;
     }
     return true;
+}
+
+static Int tls_finished_hash_io_write(void *self, Slice p, Error *err) {
+    if (!burrow__tls_finished_hash_write((TlsFinishedHash *)self, p)) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return 0;
+    }
+    return p.len;
+}
+
+static const IoWriterVT tls_finished_hash_writer_vt = {NULL,
+                                                       tls_finished_hash_io_write};
+
+IoWriter burrow__tls_finished_hash_writer(TlsFinishedHash *h) {
+    return (IoWriter){&tls_finished_hash_writer_vt, h};
 }
 
 Slice burrow__tls_finished_hash_sum(const TlsFinishedHash *h, Alloc *a) {
@@ -381,4 +399,27 @@ Slice burrow__tls_ekm_from_master_secret(const TlsEkmMaster *m, Alloc *a, Str la
     if (out.p == NULL && length > 0)
         BURROW_OUT(err, burrow_err_out_of_memory);
     return out;
+}
+
+static Slice tls_ekm_call(void *env, Alloc *a, Str label, Slice context, Int length,
+                          Error *err) {
+    return burrow__tls_ekm_from_master_secret((const TlsEkmMaster *)env, a, label,
+                                              context, length, err);
+}
+
+TlsEkmFunc burrow__tls_ekm_func(Alloc *a, const TlsEkmMaster *m) {
+    TlsEkmFunc f = {0};
+    TlsEkmMaster *c = BURROW_NEW(a, TlsEkmMaster);
+    if (c == NULL)
+        return f;
+    c->version = m->version;
+    c->suite = m->suite;
+    c->master_secret = bytes_clone(a, m->master_secret);
+    c->client_random = bytes_clone(a, m->client_random);
+    c->server_random = bytes_clone(a, m->server_random);
+    if ((c->master_secret.p == NULL && m->master_secret.len > 0) ||
+        (c->client_random.p == NULL && m->client_random.len > 0) ||
+        (c->server_random.p == NULL && m->server_random.len > 0))
+        return f;
+    return BURROW_FN(TlsEkmFunc, tls_ekm_call, c);
 }

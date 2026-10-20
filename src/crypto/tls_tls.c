@@ -1,4 +1,5 @@
-/* crypto/tls: tls.go, the loading of a certificate and its key from PEM.
+/* crypto/tls: tls.go, Client and the loading of a certificate and its key from
+ * PEM.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -22,7 +23,14 @@
 #include "burrow/strings.h"
 #include "burrow/type.h"
 
+#include "tls_internal.h"
+
 #include <stdbool.h>
+
+TlsConn *tls_client(Alloc *a, NetConn conn, TlsConfig *config) {
+    return burrow__tls_conn_new(a, conn, config, TLS_ROLE_CLIENT,
+                                burrow__tls_client_handshake);
+}
 
 static Error tls_key_pair_error(const char *msg) {
     return errors_new(error_allocator(), str_from_cstr(msg));

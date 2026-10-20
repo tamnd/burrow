@@ -1289,6 +1289,31 @@ BURROW_OWNS(ret) Str tls_record_header_error_error(const TlsRecordHeaderError *e
 BURROW_OWNS(ret) Error tls_record_header_error_as_error(const TlsRecordHeaderError *e,
                                                         Alloc *a);
 
+/* CertificateVerificationError is returned when certificate verification fails
+ * during the handshake.
+ *
+ * Not in Go: unverified_certificates is a []*x509.Certificate, and the
+ * certificates in it belong to the Conn that failed. */
+typedef struct TlsCertificateVerificationError {
+    /* UnverifiedCertificates and its contents should not be modified. */
+    Slice unverified_certificates;
+    Error err;
+} TlsCertificateVerificationError;
+
+extern const Type *const TYPE_TLS_CERTIFICATE_VERIFICATION_ERROR;
+
+/* CertificateVerificationError.Error: "tls: failed to verify certificate: "
+ * and the text of e->err, built in a. */
+BURROW_OWNS(ret) Str tls_certificate_verification_error_error(
+    const TlsCertificateVerificationError *e, Alloc *a);
+
+/* An Error for e, which errors_as with TYPE_TLS_CERTIFICATE_VERIFICATION_ERROR
+ * gives back and errors_unwrap takes to e->err. e->err is kept with
+ * error_retain in a, and the certificates are not copied. Out of memory gives
+ * burrow_err_out_of_memory. */
+BURROW_OWNS(ret) Error tls_certificate_verification_error_as_error(
+    const TlsCertificateVerificationError *e, Alloc *a);
+
 /* A Conn represents a secured connection. It implements the net.Conn
  * interface.
  *
@@ -1302,6 +1327,15 @@ BURROW_OWNS(ret) Error tls_record_header_error_as_error(const TlsRecordHeaderErr
  * last until tls_conn_free. Any other error comes from the calling
  * goroutine's error_allocator. */
 typedef struct TlsConn TlsConn;
+
+/* Client returns a new TLS client side connection using conn as the
+ * underlying transport. The config cannot be nil: users must set either
+ * ServerName or InsecureSkipVerify in the config.
+ *
+ * Not in Go: the Conn comes from a, which has to be one that two goroutines
+ * can use at once, and tls_conn_free gives it back. config has to outlive it.
+ * NULL when a is out of memory. */
+BURROW_OWNS(ret) TlsConn *tls_client(Alloc *a, NetConn conn, TlsConfig *config);
 
 /* LocalAddr returns the local network address. */
 NetAddr tls_conn_local_addr(TlsConn *c);

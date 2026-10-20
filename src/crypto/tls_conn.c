@@ -801,6 +801,8 @@ void tls_conn_free(TlsConn *c) {
     bytes_buffer_free(&c->send_buf);
     if (c->ticket_keys != NULL)
         burrow__tls_ticket_keys_release(c->ticket_keys);
+    if (c->resumed_session != NULL)
+        tls_client_session_state_release(c->resumed_session);
     arena_free(&c->state);
     arena_free(&c->out_bufs);
     mem_free(c->a, c, sizeof *c, _Alignof(TlsConn));
@@ -1986,7 +1988,7 @@ static Slice thc_no_ekm_no_ems(void *env, Alloc *a, Str label, Slice context,
     return slice_nil(TYPE_BYTE);
 }
 
-static TlsConnectionState thc_connection_state_locked(TlsConn *c) {
+TlsConnectionState burrow__tls_conn_connection_state_locked(TlsConn *c) {
     TlsConnectionState state;
     memset(&state, 0, sizeof state);
     state.handshake_complete = sync_atomic_bool_load(&c->is_handshake_complete);
@@ -2023,7 +2025,7 @@ static TlsConnectionState thc_connection_state_locked(TlsConn *c) {
 
 TlsConnectionState tls_conn_connection_state(TlsConn *c) {
     sync_mutex_lock(&c->handshake_mutex);
-    TlsConnectionState state = thc_connection_state_locked(c);
+    TlsConnectionState state = burrow__tls_conn_connection_state_locked(c);
     sync_mutex_unlock(&c->handshake_mutex);
     return state;
 }

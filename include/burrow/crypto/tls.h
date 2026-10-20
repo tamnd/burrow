@@ -332,6 +332,22 @@ typedef Int TlsRenegotiationSupport;
  * renegotiation. */
 #define TLS_RENEGOTIATE_FREELY_AS_CLIENT ((TlsRenegotiationSupport)2)
 
+/* -------------------------------------------------------------------- QUIC */
+
+/* QUICEncryptionLevel represents a QUIC encryption level used to transmit
+ * handshake messages. */
+typedef Int TlsQuicEncryptionLevel;
+
+#define TLS_QUIC_ENCRYPTION_LEVEL_INITIAL ((TlsQuicEncryptionLevel)0)
+#define TLS_QUIC_ENCRYPTION_LEVEL_EARLY ((TlsQuicEncryptionLevel)1)
+#define TLS_QUIC_ENCRYPTION_LEVEL_HANDSHAKE ((TlsQuicEncryptionLevel)2)
+#define TLS_QUIC_ENCRYPTION_LEVEL_APPLICATION ((TlsQuicEncryptionLevel)3)
+
+/* QUICEncryptionLevel.String: "Initial", "Early", "Handshake" or
+ * "Application", or "QUICEncryptionLevel(7)" from a for any other value. */
+BURROW_OWNS(ret) Str tls_quic_encryption_level_string(TlsQuicEncryptionLevel l,
+                                                      Alloc *a);
+
 /* ------------------------------------------------------------------ alerts */
 
 /* An AlertError is a TLS alert.

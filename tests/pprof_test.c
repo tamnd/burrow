@@ -2441,7 +2441,9 @@ static void TestBlockProfileBias(TestingT *t) {
         return;
     }
 
-    Int rate = 1000; /* arbitrary value */
+    /* Not in Go: volatile, or gcc -O3 calls a copy of blockFrequentShort with
+     * the rate folded in, and its address is not the one looked for below. */
+    volatile Int rate = 1000; /* arbitrary value */
     runtime_set_block_profile_rate(rate);
     testing_t_cleanup(t, BURROW_FN(Func, reset_block_profile_rate, NULL));
 

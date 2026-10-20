@@ -289,6 +289,23 @@ const Type burrow_type_CryptoErrorArg = {
     NULL,
 };
 
+const Type burrow_type_CryptoSigner = {
+    {(const Byte *)"Signer", 6},
+    {(const Byte *)"crypto", 6},
+    KIND_INTERFACE,
+    (uint32_t)sizeof(CryptoSigner),
+    (uint16_t)_Alignof(CryptoSigner),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
 const Type burrow_type_CryptoSignerOpts = {
     {(const Byte *)"SignerOpts", 10},
     {(const Byte *)"crypto", 6},

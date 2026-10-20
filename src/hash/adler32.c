@@ -8,12 +8,18 @@
 
 #include "burrow/hash/adler32.h"
 #include "burrow/core.h"
+#include "burrow/declare.h"
+#include "burrow/encoding.h"
+#include "burrow/error.h"
 #include "burrow/hash.h"
+#include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
 #include "internal.h"
+
+#include <string.h>
 
 enum {
     /* adler_mod is the largest prime that is less than 65536. */
@@ -89,14 +95,114 @@ static uint32_t adler32_sum32(void *self) {
     return ((Adler32Digest *)self)->d;
 }
 
+#define ADLER32_MAGIC "adl\x01"
+enum { adler32_marshaled_size = 4 + 4 };
+
+BURROW_SENTINEL_ERROR(adler32_err_identifier,
+                      "hash/adler32: invalid hash state identifier");
+BURROW_SENTINEL_ERROR(adler32_err_size, "hash/adler32: invalid hash state size");
+
+static Slice adler32_append_binary(Adler32Digest *d, Alloc *a, Slice b, Error *err) {
+    uint32_t s = d->d;
+    Byte st[adler32_marshaled_size] = {
+        'a', 'd', 'l', 1, (Byte)(s >> 24), (Byte)(s >> 16), (Byte)(s >> 8), (Byte)s};
+    if (b.elem == NULL)
+        b = slice_nil(TYPE_BYTE);
+    Int len = b.len;
+    Slice r = slice_append(a, b, st, adler32_marshaled_size);
+    BURROW_OUT(err, r.len == len + adler32_marshaled_size ? BURROW_NO_ERROR
+                                                          : burrow_err_out_of_memory);
+    return r;
+}
+
+static Slice adler32_marshal_binary(Adler32Digest *d, Alloc *a, Error *err) {
+    Slice b = slice_make(a, TYPE_BYTE, 0, adler32_marshaled_size);
+    if (b.p == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return slice_nil(TYPE_BYTE);
+    }
+    return adler32_append_binary(d, a, b, err);
+}
+
+static Error adler32_unmarshal_binary(Adler32Digest *d, Alloc *a, Slice b) {
+    (void)a;
+    const Byte *p = b.p;
+    if (b.len < 4 || memcmp(p, ADLER32_MAGIC, 4) != 0)
+        return adler32_err_identifier;
+    if (b.len != adler32_marshaled_size)
+        return adler32_err_size;
+    d->d = (uint32_t)p[4] << 24 | (uint32_t)p[5] << 16 | (uint32_t)p[6] << 8 |
+           (uint32_t)p[7];
+    return BURROW_NO_ERROR;
+}
+
+static HashCloner adler32_clone(void *self, Alloc *a, Error *err);
+
+/* The method set of Go's *adler32.digest, so that a Hash from here answers
+ * h.(hash.Cloner) and h.(encoding.BinaryMarshaler) as Go's does. */
+#define ADLER32_METHODS(M, T)                                                          \
+    M(T, AppendBinary, adler32_append_binary, ENCODING_SIG_APPEND_BINARY)              \
+    M(T, BlockSize, adler32_block_size, HASH_SIG_BLOCK_SIZE)                           \
+    M(T, Clone, adler32_clone, HASH_SIG_CLONE)                                         \
+    M(T, MarshalBinary, adler32_marshal_binary, ENCODING_SIG_MARSHAL_BINARY)           \
+    M(T, Reset, adler32_reset, HASH_SIG_RESET)                                         \
+    M(T, Size, adler32_size, HASH_SIG_SIZE)                                            \
+    M(T, Sum, adler32_sum, HASH_SIG_SUM)                                               \
+    M(T, Sum32, adler32_sum32, HASH_SIG_SUM32)                                         \
+    M(T, UnmarshalBinary, adler32_unmarshal_binary, ENCODING_SIG_UNMARSHAL_BINARY)     \
+    M(T, Write, adler32_write, IO_SIG_WRITE)
+
+BURROW_METHODS_DEFINE(Adler32Digest, ADLER32_METHODS);
+
+/* Go's digest is a uint32, which is what Adler32Digest holds. */
+static const Type adler32_digest_type = {
+    {(const Byte *)"digest", 6},
+    {(const Byte *)"hash/adler32", 12},
+    KIND_UINT32,
+    (uint32_t)sizeof(Adler32Digest),
+    (uint16_t)_Alignof(Adler32Digest),
+    0,
+    (uint16_t)(sizeof burrow__methods_Adler32Digest /
+               sizeof burrow__methods_Adler32Digest[0]),
+    NULL,
+    burrow__methods_Adler32Digest,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
 static const HashHash32VT adler32_vt = {
-    {{NULL, adler32_write},
+    {{&adler32_digest_type, adler32_write},
      adler32_sum,
      adler32_reset,
      adler32_size,
      adler32_block_size},
     adler32_sum32,
 };
+
+/* The same digest, seen as the hash.Cloner Clone returns. */
+static const HashClonerVT adler32_cloner_vt = {
+    {{&adler32_digest_type, adler32_write},
+     adler32_sum,
+     adler32_reset,
+     adler32_size,
+     adler32_block_size},
+    adler32_clone,
+};
+
+static HashCloner adler32_clone(void *self, Alloc *a, Error *err) {
+    Adler32Digest *r = BURROW_NEW(a, Adler32Digest);
+    if (r == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return (HashCloner){NULL, NULL};
+    }
+    *r = *(Adler32Digest *)self;
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    HashCloner h = {&adler32_cloner_vt, r};
+    return h;
+}
 
 HashHash32 adler32_new(Alloc *a) {
     Adler32Digest *d = BURROW_NEW(a, Adler32Digest);

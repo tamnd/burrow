@@ -247,6 +247,8 @@ static inline IoReader hash_xof_as_io_reader(HashXOF h) {
  *     Int size(T *self);
  *     Int block_size(T *self);
  *     HashCloner clone(T *self, Alloc *a, Error *err);
+ *     uint32_t sum32(T *self);
+ *     uint64_t sum64(T *self);
  *
  * Write's shape is io's IO_SIG_WRITE. The marshaling methods have the shapes
  * in burrow/encoding.h, and an Any holding the Hash finds them:
@@ -268,6 +270,8 @@ extern const Type burrow_type_HashAllocArg;
 #define HASH_SIG_SIZE(IN, OUT) OUT(Int)
 #define HASH_SIG_BLOCK_SIZE(IN, OUT) OUT(Int)
 #define HASH_SIG_CLONE(IN, OUT) IN(0, HashAllocArg) OUT(HashCloner) OUT(ErrorResult)
+#define HASH_SIG_SUM32(IN, OUT) OUT(uint32_t)
+#define HASH_SIG_SUM64(IN, OUT) OUT(uint64_t)
 
 /* Go's h.(hash.Cloner), the comma ok form: whether the type behind h lists a
  * Clone method of HASH_SIG_CLONE's shape. A nil h is not a Cloner. */

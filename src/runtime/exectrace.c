@@ -1141,9 +1141,54 @@ static void advance_locked(bool stop) {
 }
 
 void burrow__trace_advance(bool stop) {
-    burrow__lock(&trace.adv_lock);
-    advance_locked(stop);
-    burrow__unlock(&trace.adv_lock);
+    if (stop) {
+        burrow__lock(&trace.adv_lock);
+        advance_locked(true);
+        burrow__unlock(&trace.adv_lock);
+        return;
+    }
+
+    /* The reader only ends a generation once it has read everything before
+     * it, since the generation after next fills the same buffers, so this
+     * waits for it to get that far too. */
+    uint64_t gen;
+    for (;;) {
+        burrow__lock(&trace.adv_lock);
+        gen = burrow__atomic_load_acquire_u64(&burrow__trace_gen);
+        burrow__lock(&trace.lock);
+        bool live = gen != 0 && trace.session;
+        bool caught_up = trace.reader_gen == gen;
+        burrow__unlock(&trace.lock);
+        if (live && caught_up)
+            advance_locked(false);
+        burrow__unlock(&trace.adv_lock);
+        if (!live)
+            return;
+        if (caught_up)
+            break;
+        time_sleep(POLL);
+    }
+
+    /* Block until the trace reader has finished processing the last
+     * generation, as Go does on trace.doneSema. A trace that ended with its
+     * runtime_main has no reader left to wait for. */
+    for (;;) {
+        burrow__lock(&trace.lock);
+        bool done = !trace.session || trace.reader_gen != gen;
+        burrow__unlock(&trace.lock);
+        if (done)
+            return;
+        time_sleep(POLL);
+    }
+}
+
+uint64_t burrow__trace_clock_now(void) {
+    return trace_now();
+}
+
+uint64_t burrow__trace_clock_units_per_second(void) {
+    /* Our clock is nanotime, so it's just the constant time division. */
+    return (uint64_t)(1.0 / (double)TIME_DIV * 1e9);
 }
 
 static void free_list(TraceBuf *b) {

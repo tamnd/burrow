@@ -151,8 +151,14 @@ void burrow__trace_run_end(uint64_t ngoid);
 void burrow__sched_walk_gs(void (*fn)(burrow__G *g, void *arg), void *arg);
 
 /* Not in Go: makes the current generation end now rather than at the next
- * second. Go's runtime/trace has this as runtime_traceAdvance. */
+ * second. Go's runtime/trace has this as runtime_traceAdvance. Without stop it
+ * returns once the reader has read the generation it ended, as Go's does. */
 void burrow__trace_advance(bool stop);
+
+/* Go's traceClockNow and traceClockUnitsPerSecond: the time in the units a
+ * trace counts in, and how many of those make a second. */
+uint64_t burrow__trace_clock_now(void);
+uint64_t burrow__trace_clock_units_per_second(void);
 
 #ifdef __cplusplus
 }

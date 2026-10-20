@@ -1,8 +1,8 @@
 /* runtime/trace: the tracer's public face, over the runtime's
  * runtime_start_trace, runtime_stop_trace and runtime_read_trace.
  *
- * Derived from Go's src/runtime/trace: trace.go, annotation.go and
- * subscribe.go.
+ * Derived from Go's src/runtime/trace: trace.go, annotation.go, subscribe.go,
+ * flightrecorder.go, recorder.go, batch.go and encoding.go.
  * Go source: go1.27.1.
  *
  * Copyright 2015 The Go Authors. All rights reserved.
@@ -28,16 +28,249 @@
 #include "burrow/sched.h"
 #include "burrow/sync.h"
 #include "burrow/thread.h"
+#include "burrow/time.h"
 #include "burrow/trace.h"
 #include "burrow/type.h"
 
 #include <stdbool.h>
 #include <stdint.h>
+#include <string.h>
+
+/* ----------------------------------------------------------- the recorder
+ *
+ * Go's recorder and rawGeneration. A generation is shared between the ring and
+ * any trace_flight_recorder_write_to that is writing it out, where Go has the
+ * collector keep it, so it counts who holds it. */
+
+typedef struct FrBatch {
+    Byte *p;
+    Int len;
+} FrBatch;
+
+typedef struct FrGeneration {
+    uint64_t gen;
+    Int size;
+    int64_t min_time; /* eventTime, in nanoseconds */
+    FrBatch *batches;
+    Int n, cap;
+    int refs; /* ring_mu held */
+} FrGeneration;
+
+struct TraceFlightRecorder {
+    Alloc *a;
+
+    /* State specific to the recorder. */
+    Byte header[16];
+    bool header_received;
+    FrGeneration *active;
+    SyncMutex ring_mu;
+    FrGeneration **ring;
+    Int ring_len;
+    double freq; /* timestamp conversion factor, from the runtime */
+
+    /* Externally-set options. */
+    uint64_t target_size;
+    Duration target_period;
+
+    uint32_t enabled;  /* whether the flight recorder is enabled, atomic */
+    SyncMutex writing; /* protects concurrent calls to WriteTo */
+
+    /* The values of target_size and target_period we've committed to since
+     * the last Start. */
+    uint64_t want_size;
+    Duration want_dur;
+};
+
+static FrGeneration *fr_generation_new(void) {
+    FrGeneration *g =
+        mem_alloc(heap_allocator(), sizeof(FrGeneration), _Alignof(FrGeneration));
+    if (g == NULL)
+        runtime_throw(BURROW_S("runtime/trace: out of memory"));
+    g->refs = 1;
+    return g;
+}
+
+static void fr_generation_release(FrGeneration *g) {
+    if (g == NULL || --g->refs > 0)
+        return;
+    Alloc *h = heap_allocator();
+    for (Int i = 0; i < g->n; i++)
+        mem_free(h, g->batches[i].p, (size_t)g->batches[i].len, 1);
+    if (g->batches != NULL)
+        mem_free(h, g->batches, (size_t)g->cap * sizeof(FrBatch), _Alignof(FrBatch));
+    mem_free(h, g, sizeof(FrGeneration), _Alignof(FrGeneration));
+}
+
+/* Lets go of the ring and the active generation. Nothing may be recording. */
+static void fr_drop(TraceFlightRecorder *r) {
+    sync_mutex_lock(&r->ring_mu);
+    for (Int i = 0; i < r->ring_len; i++)
+        fr_generation_release(r->ring[i]);
+    if (r->ring != NULL)
+        mem_free(heap_allocator(), r->ring,
+                 (size_t)r->ring_len * sizeof(FrGeneration *),
+                 _Alignof(FrGeneration *));
+    r->ring = NULL;
+    r->ring_len = 0;
+    fr_generation_release(r->active);
+    r->active = NULL;
+    sync_mutex_unlock(&r->ring_mu);
+}
+
+/* readUvarint. */
+static bool fr_read_uvarint(const Byte *b, Int len, Int *at, uint64_t *v) {
+    uint64_t x = 0;
+    unsigned s = 0;
+    for (Int i = 0; i < 10 && *at + i < len; i++) {
+        Byte byt = b[*at + i];
+        if (byt < 0x80) {
+            if (i == 9 && byt > 1)
+                return false;
+            *v = x | (uint64_t)byt << s;
+            *at += i + 1;
+            return true;
+        }
+        x |= (uint64_t)(byt & 0x7f) << s;
+        s += 7;
+    }
+    return false;
+}
+
+enum {
+    FR_EV_EVENT_BATCH = 1,         /* tracev2.EvEventBatch */
+    FR_EV_EXPERIMENTAL_BATCH = 51, /* tracev2.EvExperimentalBatch */
+    FR_EV_END_OF_GENERATION = 52,  /* tracev2.EvEndOfGeneration */
+    FR_MAX_BATCH_SIZE = 64 << 10   /* tracev2.MaxBatchSize */
+};
+
+/* readBatch: the batch header in b, which is a whole batch or the end of a
+ * generation. Go's says what was wrong, and the copier drops it; this only
+ * says whether anything was. */
+static bool fr_read_batch(const Byte *b, Int len, uint64_t *gen, uint64_t *ts) {
+    *gen = 0;
+    *ts = 0;
+    if (len == 0)
+        return false;
+    if (b[0] == FR_EV_END_OF_GENERATION)
+        return len == 1;
+    if (b[0] != FR_EV_EVENT_BATCH && b[0] != FR_EV_EXPERIMENTAL_BATCH)
+        return false;
+    Int at = 1;
+    uint64_t m, size;
+    if (!fr_read_uvarint(b, len, &at, gen) || !fr_read_uvarint(b, len, &at, &m) ||
+        !fr_read_uvarint(b, len, &at, ts) || !fr_read_uvarint(b, len, &at, &size))
+        return false;
+    return size <= FR_MAX_BATCH_SIZE && (uint64_t)at + size == (uint64_t)len;
+}
+
+/* frequency.mul: an unprocessed timestamp in nanoseconds. */
+static int64_t fr_mul(double freq, uint64_t t) {
+    return (int64_t)((double)t * freq);
+}
+
+/* recorder.Write. */
+static void fr_write(TraceFlightRecorder *r, Bytes data) {
+    const Byte *b = data.p;
+    Int n = 0;
+    if (!r->header_received) {
+        if (data.len < (Int)sizeof r->header)
+            return;
+        memcpy(r->header, b, sizeof r->header);
+        n += 16;
+        r->header_received = true;
+    }
+    if (data.len == n)
+        return;
+    /* Every write from the runtime is guaranteed to be a complete batch. */
+    uint64_t gen, ts;
+    if (!fr_read_batch(b + n, data.len - n, &gen, &ts))
+        return;
+    Alloc *h = heap_allocator();
+    Int len = data.len - n;
+    Byte *copy = mem_alloc_nozero(h, (size_t)len, 1);
+    if (copy == NULL)
+        runtime_throw(BURROW_S("runtime/trace: out of memory"));
+    memcpy(copy, b + n, (size_t)len);
+
+    /* Append the batch to the current generation. */
+    FrGeneration *g = r->active;
+    if (gen != 0 && g->gen == 0)
+        g->gen = gen;
+    if (ts != 0 && (g->min_time == 0 || g->min_time > fr_mul(r->freq, ts)))
+        g->min_time = fr_mul(r->freq, ts);
+    g->size += len;
+    if (g->n == g->cap) {
+        Int cap = g->cap == 0 ? 16 : g->cap * 2;
+        FrBatch *nb = mem_alloc(h, (size_t)cap * sizeof(FrBatch), _Alignof(FrBatch));
+        if (nb == NULL)
+            runtime_throw(BURROW_S("runtime/trace: out of memory"));
+        if (g->n > 0)
+            memcpy(nb, g->batches, (size_t)g->n * sizeof(FrBatch));
+        if (g->batches != NULL)
+            mem_free(h, g->batches, (size_t)g->cap * sizeof(FrBatch),
+                     _Alignof(FrBatch));
+        g->batches = nb;
+        g->cap = cap;
+    }
+    g->batches[g->n++] = (FrBatch){copy, len};
+}
+
+/* recorder.endGeneration. */
+static void fr_end_generation(TraceFlightRecorder *r) {
+    Alloc *h = heap_allocator();
+
+    /* Check if we're entering a new generation. */
+    sync_mutex_lock(&r->ring_mu);
+
+    /* Get the current trace clock time. */
+    int64_t now = fr_mul(r->freq, burrow__trace_clock_now());
+
+    /* Add the current generation to the ring. Make sure we always have at
+     * least one complete generation by putting the active generation onto the
+     * new list, regardless of whatever our settings are.
+     *
+     * N.B. Let's completely replace the ring here, so that WriteTo can just
+     * make a copy and not worry about aliasing. */
+    FrGeneration **ring =
+        mem_alloc(h, (size_t)(r->ring_len + 1) * sizeof(FrGeneration *),
+                  _Alignof(FrGeneration *));
+    if (ring == NULL)
+        runtime_throw(BURROW_S("runtime/trace: out of memory"));
+    ring[0] = r->active;
+    Int n = 1;
+    Int size = r->active->size;
+    Int i = r->ring_len - 1;
+    for (; i >= 0; i--) {
+        /* Stop adding older generations if the new ring already exceeds the
+         * thresholds. This ensures we keep generations that cross a
+         * threshold, but not any that lie entirely outside it. */
+        if ((uint64_t)size > r->want_size || now - ring[n - 1]->min_time > r->want_dur)
+            break;
+        size += r->ring[i]->size;
+        ring[n++] = r->ring[i];
+    }
+    for (; i >= 0; i--)
+        fr_generation_release(r->ring[i]);
+    for (Int lo = 0, hi = n - 1; lo < hi; lo++, hi--) {
+        FrGeneration *t = ring[lo];
+        ring[lo] = ring[hi];
+        ring[hi] = t;
+    }
+    if (r->ring != NULL)
+        mem_free(h, r->ring, (size_t)r->ring_len * sizeof(FrGeneration *),
+                 _Alignof(FrGeneration *));
+    r->ring = ring;
+    r->ring_len = n;
+    sync_mutex_unlock(&r->ring_mu);
+
+    /* Start a new active generation. */
+    r->active = fr_generation_new();
+}
 
 /* ------------------------------------------------------------- the multiplexer
  *
- * Go's traceMultiplexer, with the one subscriber there is so far: the writer
- * trace_start was given. The flight recorder will be the other. */
+ * Go's traceMultiplexer, with its two subscribers: the writer trace_start was
+ * given and the flight recorder. */
 
 typedef struct TraceMultiplexer {
     SyncMutex mu;
@@ -47,11 +280,14 @@ typedef struct TraceMultiplexer {
     SyncMutex subscribers_mu;
     bool has_writer;
     IoWriter start_writer;
+    TraceFlightRecorder *flight_recorder;
 
-    /* The copier: the writer it was started with, whether it is a thread rather
-     * than a goroutine, and the gate it waits at until the trace is on. */
+    /* The copier: the subscribers it was started with, whether it is a thread
+     * rather than a goroutine, and the gate it waits at until the trace is
+     * on. */
     bool copier_has_writer;
     IoWriter copier_writer;
+    TraceFlightRecorder *copier_flight_recorder;
     bool on_thread;
     burrow__Thread thread;
     SyncMutex gate;
@@ -59,10 +295,6 @@ typedef struct TraceMultiplexer {
 } TraceMultiplexer;
 
 static TraceMultiplexer tracing;
-
-/* tracev2.EvEndOfGeneration, the one-byte chunk the reader gets at the end of
- * each generation. */
-enum { RTR_EV_END_OF_GENERATION = 52 };
 
 BURROW_SENTINEL_ERROR(rtr_err_enabled, "execution tracer already enabled");
 
@@ -84,29 +316,41 @@ static void rtr_copy(void *env) {
     if (cancelled)
         return;
 
+    TraceFlightRecorder *fr = tracing.copier_flight_recorder;
     bool has_writer = tracing.copier_has_writer;
     IoWriter w = tracing.copier_writer;
 
     Bytes header = runtime_read_trace();
     if (has_writer)
         rtr_write(w, header);
+    if (fr != NULL)
+        fr_write(fr, header);
     for (;;) {
         Bytes data = runtime_read_trace();
         if (data.p == NULL)
             break;
         if (has_writer)
             rtr_write(w, data);
-        if (data.len == 1 && ((const uint8_t *)data.p)[0] == RTR_EV_END_OF_GENERATION) {
+        if (fr != NULL)
+            fr_write(fr, data);
+        if (data.len == 1 && ((const uint8_t *)data.p)[0] == FR_EV_END_OF_GENERATION) {
+            if (fr != NULL)
+                fr_end_generation(fr);
             /* Pick up any changes. */
             sync_mutex_lock(&tracing.subscribers_mu);
-            bool is_new = tracing.has_writer &&
-                          (!has_writer || tracing.start_writer.data != w.data ||
-                           tracing.start_writer.vt != w.vt);
+            bool fr_is_new =
+                fr != tracing.flight_recorder && tracing.flight_recorder != NULL;
+            bool tr_is_new = tracing.has_writer &&
+                             (!has_writer || tracing.start_writer.data != w.data ||
+                              tracing.start_writer.vt != w.vt);
+            fr = tracing.flight_recorder;
             has_writer = tracing.has_writer;
             w = tracing.start_writer;
             sync_mutex_unlock(&tracing.subscribers_mu);
-            if (is_new)
+            if (tr_is_new)
                 rtr_write(w, header);
+            if (fr_is_new)
+                fr_write(fr, header);
         }
     }
 }
@@ -120,6 +364,7 @@ static Error rtr_start_locked(void) {
 
     /* Grab the trace reader goroutine's subscribers. */
     sync_mutex_lock(&tracing.subscribers_mu);
+    tracing.copier_flight_recorder = tracing.flight_recorder;
     tracing.copier_has_writer = tracing.has_writer;
     tracing.copier_writer = tracing.start_writer;
     sync_mutex_unlock(&tracing.subscribers_mu);
@@ -232,6 +477,181 @@ void trace_stop(void) {
 
 bool trace_is_enabled(void) {
     return burrow__atomic_load_acquire_u32(&tracing.enabled) != 0;
+}
+
+/* ----------------------------------------------------------- flight recorder */
+
+BURROW_SENTINEL_ERROR(rtr_err_fr_enabled, "flight recorder already enabled");
+BURROW_SENTINEL_ERROR(rtr_err_fr_start, "cannot enable a enabled flight recorder");
+BURROW_SENTINEL_ERROR(rtr_err_fr_disabled,
+                      "cannot snapshot a disabled flight recorder");
+BURROW_SENTINEL_ERROR(rtr_err_fr_busy,
+                      "call to WriteTo for trace.FlightRecorder already in progress");
+
+static Error rtr_subscribe_flight_recorder(TraceFlightRecorder *r) {
+    sync_mutex_lock(&tracing.mu);
+    sync_mutex_lock(&tracing.subscribers_mu);
+    if (tracing.flight_recorder != NULL) {
+        sync_mutex_unlock(&tracing.subscribers_mu);
+        sync_mutex_unlock(&tracing.mu);
+        return rtr_err_fr_enabled;
+    }
+    tracing.flight_recorder = r;
+    sync_mutex_unlock(&tracing.subscribers_mu);
+
+    Error err = rtr_added_subscriber();
+    if (BURROW_FAILED(err)) {
+        sync_mutex_lock(&tracing.subscribers_mu);
+        tracing.flight_recorder = NULL;
+        sync_mutex_unlock(&tracing.subscribers_mu);
+    }
+    sync_mutex_unlock(&tracing.mu);
+    return err;
+}
+
+static void rtr_unsubscribe_flight_recorder(void) {
+    sync_mutex_lock(&tracing.mu);
+    rtr_removing_subscriber();
+    sync_mutex_lock(&tracing.subscribers_mu);
+    if (tracing.flight_recorder == NULL) {
+        sync_mutex_unlock(&tracing.subscribers_mu);
+        sync_mutex_unlock(&tracing.mu);
+        return;
+    }
+    tracing.flight_recorder = NULL;
+    sync_mutex_unlock(&tracing.subscribers_mu);
+    rtr_removed_subscriber();
+    sync_mutex_unlock(&tracing.mu);
+}
+
+TraceFlightRecorder *trace_new_flight_recorder(Alloc *a,
+                                               TraceFlightRecorderConfig cfg) {
+    TraceFlightRecorder *fr =
+        mem_alloc(a, sizeof(TraceFlightRecorder), _Alignof(TraceFlightRecorder));
+    if (fr == NULL)
+        return NULL;
+    fr->a = a;
+    if (cfg.max_bytes != 0)
+        fr->target_size = cfg.max_bytes;
+    else
+        fr->target_size = 10 << 20; /* 10 MiB. */
+    if (cfg.min_age != 0)
+        fr->target_period = cfg.min_age;
+    else
+        fr->target_period = 10 * TIME_SECOND;
+    return fr;
+}
+
+void trace_flight_recorder_free(TraceFlightRecorder *fr) {
+    if (fr == NULL)
+        return;
+    trace_flight_recorder_stop(fr);
+    mem_free(fr->a, fr, sizeof(TraceFlightRecorder), _Alignof(TraceFlightRecorder));
+}
+
+Error trace_flight_recorder_start(TraceFlightRecorder *fr) {
+    if (burrow__atomic_load_acquire_u32(&fr->enabled) != 0)
+        return rtr_err_fr_start;
+    fr->want_size = fr->target_size;
+    fr->want_dur = fr->target_period;
+    fr->freq = 1.0 / ((double)burrow__trace_clock_units_per_second() / 1e9);
+    fr->header_received = false;
+    fr->active = fr_generation_new();
+
+    /* Start tracing, data is sent to a recorder which forwards it to our own
+     * storage. */
+    Error err = rtr_subscribe_flight_recorder(fr);
+    if (BURROW_FAILED(err)) {
+        fr_drop(fr);
+        return err;
+    }
+    burrow__atomic_store_release_u32(&fr->enabled, 1);
+    return BURROW_NO_ERROR;
+}
+
+void trace_flight_recorder_stop(TraceFlightRecorder *fr) {
+    if (burrow__atomic_load_acquire_u32(&fr->enabled) == 0)
+        return;
+    burrow__atomic_store_release_u32(&fr->enabled, 0);
+    rtr_unsubscribe_flight_recorder();
+
+    /* Reset all state. Go's needs no lock because the reader has already
+     * exited, and leaves a WriteTo still going to the collector. Here that
+     * WriteTo holds its own references to what it writes, and this waits for
+     * it, as the documentation says. */
+    sync_mutex_lock(&fr->writing);
+    fr_drop(fr);
+    sync_mutex_unlock(&fr->writing);
+}
+
+bool trace_flight_recorder_enabled(const TraceFlightRecorder *fr) {
+    return burrow__atomic_load_acquire_u32(&fr->enabled) != 0;
+}
+
+int64_t trace_flight_recorder_write_to(TraceFlightRecorder *fr, IoWriter w,
+                                       Error *err) {
+    *err = BURROW_NO_ERROR;
+    if (burrow__atomic_load_acquire_u32(&fr->enabled) == 0) {
+        *err = rtr_err_fr_disabled;
+        return 0;
+    }
+    if (!sync_mutex_try_lock(&fr->writing)) {
+        /* Indicates that a call to WriteTo was made while one was already in
+         * progress. If the caller of WriteTo sees this error, they should use
+         * the result from the other call to WriteTo. */
+        *err = rtr_err_fr_busy;
+        return 0;
+    }
+
+    /* Force a global buffer flush. */
+    burrow__trace_advance(false);
+
+    /* Now that everything has been flushed and written, grab whatever we
+     * have.
+     *
+     * N.B. burrow__trace_advance blocks until the tracer goroutine has
+     * actually written everything out, which means the generation we just
+     * flushed must have been already been observed by the recorder
+     * goroutine. */
+    Alloc *h = heap_allocator();
+    sync_mutex_lock(&fr->ring_mu);
+    Int ngens = fr->ring_len;
+    FrGeneration **gens = NULL;
+    if (ngens > 0) {
+        gens = mem_alloc(h, (size_t)ngens * sizeof(FrGeneration *),
+                         _Alignof(FrGeneration *));
+        if (gens == NULL)
+            runtime_throw(BURROW_S("runtime/trace: out of memory"));
+        for (Int i = 0; i < ngens; i++) {
+            gens[i] = fr->ring[i];
+            gens[i]->refs++;
+        }
+    }
+    sync_mutex_unlock(&fr->ring_mu);
+
+    /* Write the header. */
+    int64_t n = 0;
+    Int nw = w.vt->write(w.data, (Bytes){fr->header, 16, 16, TYPE_BYTE}, err);
+    n += nw;
+
+    /* Write all the data. */
+    for (Int i = 0; i < ngens && BURROW_OK(*err); i++) {
+        for (Int j = 0; j < gens[i]->n && BURROW_OK(*err); j++) {
+            FrBatch d = gens[i]->batches[j];
+            nw = w.vt->write(w.data, (Bytes){d.p, d.len, d.len, TYPE_BYTE}, err);
+            n += nw;
+        }
+    }
+
+    sync_mutex_lock(&fr->ring_mu);
+    for (Int i = 0; i < ngens; i++)
+        fr_generation_release(gens[i]);
+    sync_mutex_unlock(&fr->ring_mu);
+    if (gens != NULL)
+        mem_free(h, gens, (size_t)ngens * sizeof(FrGeneration *),
+                 _Alignof(FrGeneration *));
+    sync_mutex_unlock(&fr->writing);
+    return n;
 }
 
 /* ----------------------------------------------------------------- annotation */

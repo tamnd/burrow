@@ -50,6 +50,7 @@
 #include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/slice.h"
+#include "burrow/time.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -76,7 +77,10 @@ extern "C" {
  * goroutine writing it out ends with it. Stop it first. A trace that ended
  * that way still needs trace_stop before the next trace_start.
  *
- * The flight recorder is not here yet. */
+ * A flight recorder is made from an allocator and given back with
+ * trace_flight_recorder_free, where Go leaves it to the collector. The
+ * generations it keeps come from the heap whatever the allocator, since they
+ * come and go on the goroutine copying the trace out. */
 
 /* Start enables tracing for the current program. While tracing, the trace will
  * be buffered and written to w. Start returns an error if tracing is already
@@ -117,7 +121,8 @@ typedef struct TraceTask {
  * The task and the context come from a and are never given back, the same as
  * the labels of pprof_with_labels, because other goroutines can go on using
  * the task after the context is gone. Use an arena that outlives the task, or
- * gc_allocator in a build with the collector. Returns the nil context, with *task NULL, when a says no. */
+ * gc_allocator in a build with the collector. Returns the nil context, with
+ * *task NULL, when a says no. */
 BURROW_OWNS(ret) Context trace_new_task(Alloc *a, Context pctx, Str task_type,
                                         TraceTask **task);
 
@@ -164,6 +169,73 @@ TraceRegion trace_start_region(Context ctx, Str region_type);
 
 /* End marks the end of the traced code region. */
 void trace_region_end(TraceRegion r);
+
+/* FlightRecorderConfig. */
+typedef struct TraceFlightRecorderConfig {
+    /* MinAge is a lower bound on the age of an event in the flight recorder's
+     * window.
+     *
+     * The flight recorder will strive to promptly discard events older than
+     * the minimum age, but older events may appear in the window snapshot. The
+     * age setting will always be overridden by max_bytes.
+     *
+     * If this is 0, the minimum age is implementation defined, but can be
+     * assumed to be on the order of seconds. */
+    Duration min_age;
+
+    /* MaxBytes is an upper bound on the size of the window in bytes.
+     *
+     * This setting takes precedence over min_age. However, it does not make
+     * any guarantees on the size of the data trace_flight_recorder_write_to
+     * will write, nor does it guarantee memory overheads will always stay
+     * below max_bytes. Treat it as a hint.
+     *
+     * If this is 0, the maximum size is implementation defined. */
+    uint64_t max_bytes;
+} TraceFlightRecorderConfig;
+
+/* FlightRecorder represents a single consumer of a Go execution trace. It
+ * tracks a moving window over the execution trace produced by the runtime,
+ * always containing the most recent trace data.
+ *
+ * At most one flight recorder may be active at any given time, though flight
+ * recording is allowed to be concurrently active with a trace consumer using
+ * trace_start. This restriction of only a single flight recorder may be
+ * removed in the future. */
+typedef struct TraceFlightRecorder TraceFlightRecorder;
+
+/* NewFlightRecorder creates a new flight recorder from the provided
+ * configuration. The recorder comes from a. NULL when a says no. */
+BURROW_OWNS(ret) TraceFlightRecorder *
+trace_new_flight_recorder(Alloc *a, TraceFlightRecorderConfig cfg);
+
+/* Not in Go: stops fr if it is recording and gives back everything it holds.
+ * NULL is fine. */
+void trace_flight_recorder_free(TraceFlightRecorder *fr);
+
+/* Start activates the flight recorder and begins recording trace data. Only
+ * one call to trace_start may be active at any given time. In addition,
+ * currently only one flight recorder may be active in the program. Returns an
+ * error if the flight recorder cannot be started or is already started. */
+BURROW_STATIC(ret) Error trace_flight_recorder_start(TraceFlightRecorder *fr);
+
+/* Stop ends recording of trace data. It blocks until any concurrent
+ * trace_flight_recorder_write_to calls complete. */
+void trace_flight_recorder_stop(TraceFlightRecorder *fr);
+
+/* Enabled returns true if the flight recorder is active. Specifically, it will
+ * return true if trace_flight_recorder_start did not return an error, and
+ * trace_flight_recorder_stop has not yet been called. It is safe to call from
+ * multiple goroutines simultaneously. */
+bool trace_flight_recorder_enabled(const TraceFlightRecorder *fr);
+
+/* WriteTo snapshots the moving window tracked by the flight recorder. The
+ * snapshot is expected to contain data that is up-to-date as of when WriteTo
+ * is called, though this is not a hard guarantee. Only one goroutine may
+ * execute WriteTo at a time. An error is returned upon failure to write to w,
+ * if another WriteTo call is already in-progress, or if the flight recorder is
+ * inactive. */
+int64_t trace_flight_recorder_write_to(TraceFlightRecorder *fr, IoWriter w, Error *err);
 
 #ifdef __cplusplus
 }

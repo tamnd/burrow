@@ -79,8 +79,7 @@ Int runtime_mem_profile_record_stack(const RuntimeMemProfileRecord *r);
  * With inuse_zero true the records include stacks all of whose memory has been
  * freed again. The stacks start with the allocator's own frames, which pprof
  * leaves out when it prints them. */
-Int runtime_mem_profile(RuntimeMemProfileRecord *p, Int len, bool inuse_zero,
-                        bool *ok);
+Int runtime_mem_profile(RuntimeMemProfileRecord *p, Int len, bool inuse_zero, bool *ok);
 
 /* Go's profilerecord.MemProfileRecord, for runtime/pprof. stack lives as long
  * as the program does. */

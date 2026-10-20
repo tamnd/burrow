@@ -159,7 +159,8 @@ static double mprof_fastlog2(double x) {
 
     double low = mprof_fastlog2_table[x_man_index];
     double high = mprof_fastlog2_table[x_man_index + 1];
-    return (double)x_exp + low + (high - low) * (double)x_man_scale * fastlog_scale_ratio;
+    return (double)x_exp + low +
+           (high - low) * (double)x_man_scale * fastlog_scale_ratio;
 }
 
 /* fastexprand returns a random number from an exponential distribution with the
@@ -243,7 +244,8 @@ static MprofBucket *mprof_stkbucket(Uintptr size, const Uintptr *stk, Int nstk) 
 
     Uintptr i = h % MPROF_BUCK_HASH_SIZE;
     for (MprofBucket *b = mprof.buckhash[i]; b != NULL; b = b->next)
-        if (b->hash == h && b->size == size && mprof_eqslice(b->stk, b->nstk, stk, nstk))
+        if (b->hash == h && b->size == size &&
+            mprof_eqslice(b->stk, b->nstk, stk, nstk))
             return b;
 
     /* Create new bucket. */
@@ -295,8 +297,8 @@ static bool mprof_grow_sampled(void) {
         burrow__atomic_store_release_ptr(&mprof.filter, f);
     }
     Int cap = mprof.cap_sampled == 0 ? 256 : mprof.cap_sampled * 2;
-    MprofSampled *t = (MprofSampled *)mem_alloc_array(a, (size_t)cap, sizeof(MprofSampled),
-                                                      _Alignof(MprofSampled));
+    MprofSampled *t = (MprofSampled *)mem_alloc_array(
+        a, (size_t)cap, sizeof(MprofSampled), _Alignof(MprofSampled));
     if (t == NULL)
         return false;
     for (Int i = 0; i < mprof.cap_sampled; i++)
@@ -347,8 +349,8 @@ void burrow__mprof_malloc(void *p, size_t size) {
     Uintptr stk[MPROF_STACK_DEPTH];
     /* Skip runtime_callers and this function, so that the stack starts in the
      * allocator that called it. */
-    Int nstk = runtime_callers(2, slice_from(stk, MPROF_STACK_DEPTH, MPROF_STACK_DEPTH,
-                                             TYPE_UINTPTR));
+    Int nstk = runtime_callers(
+        2, slice_from(stk, MPROF_STACK_DEPTH, MPROF_STACK_DEPTH, TYPE_UINTPTR));
 
     burrow__lock(&mprof.lock);
     MprofBucket *b = mprof_stkbucket((Uintptr)size, stk, nstk);

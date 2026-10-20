@@ -117,7 +117,7 @@ typedef struct TraceTask {
  * The task and the context come from a and are never given back, the same as
  * the labels of pprof_with_labels, because other goroutines can go on using
  * the task after the context is gone. Use an arena that outlives the task, or
- * gc_allocator. Returns the nil context, with *task NULL, when a says no. */
+ * gc_allocator in a build with the collector. Returns the nil context, with *task NULL, when a says no. */
 BURROW_OWNS(ret) Context trace_new_task(Alloc *a, Context pctx, Str task_type,
                                         TraceTask **task);
 

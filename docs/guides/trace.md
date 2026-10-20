@@ -41,8 +41,8 @@ The scheduler's events say what each goroutine did but not why. A program can ad
 <!-- example: ../examples/trace/trace.c#task -->
 ```c
 TraceTask *task;
-Context ctx =
-    trace_new_task(gc_allocator(), context_background(), BURROW_S("orders"), &task);
+Context ctx = trace_new_task(arena_allocator(&ar[1]), context_background(),
+                             BURROW_S("orders"), &task);
 for (int i = 0; i < 3; i++) {
     sync_wait_group_add(&orders, 1);
     (void)go(BURROW_FN(Func, make_cappuccino, &ctx));
@@ -55,13 +55,16 @@ Each goroutine marks what it spends time on with a region and logs what is worth
 
 <!-- example: ../examples/trace/trace.c#order -->
 ```c
-/* One order, made on its own goroutine, inside the task the context carries. */
+/* One order, made on its own goroutine, as a subtask of the task the context
+ * carries. The subtask lives in an arena of the goroutine's own. */
 static SyncWaitGroup orders;
 
 static void make_cappuccino(void *env) {
-    Context ctx = *(Context *)env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
     TraceTask *task;
-    ctx = trace_new_task(gc_allocator(), ctx, BURROW_S("makeCappuccino"), &task);
+    Context ctx = trace_new_task(arena_allocator(&ar), *(Context *)env,
+                                 BURROW_S("makeCappuccino"), &task);
 
     TraceRegion r = trace_start_region(ctx, BURROW_S("steamMilk"));
     time_sleep(TIME_MILLISECOND);
@@ -69,13 +72,14 @@ static void make_cappuccino(void *env) {
 
     trace_logf_v(ctx, BURROW_S("orderID"), BURROW_S("%d"), 1234);
     trace_task_end(task);
+    arena_free(&ar);
     sync_wait_group_done(&orders);
 }
 ```
 
 `trace_with_region` runs a function inside a region, for when the region is exactly one call. Regions have to nest inside each goroutine, and a region has to end on the goroutine that started it.
 
-The task and the context come from the allocator you pass and are never given back, because other goroutines can still be using the task after the context has gone. `gc_allocator` or an arena that outlives the task are the right choices. When no trace is on, the annotations cost a check of one flag, so they can stay in production code.
+The task and the context come from the allocator you pass and are never given back, because other goroutines can still be using the task after the context has gone. An arena that outlives the task is the usual choice, and `gc_allocator` works in a build with the collector. An arena is not safe to share between goroutines, so give each goroutine that makes tasks its own, as `make_cappuccino` does, and do not share one with the trace's buffer either, since another goroutine grows that while the trace is on. When no trace is on, the annotations cost a check of one flag, so they can stay in production code.
 
 ## Where it differs from Go
 

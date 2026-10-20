@@ -13,7 +13,6 @@
 #include "burrow/context.h"
 #include "burrow/io.h"
 #include "burrow/mem/arena.h"
-#include "burrow/mem/gc.h"
 #include "burrow/mem/heap.h"
 #include "burrow/runtime.h"
 #include "burrow/runtime/trace.h"
@@ -58,31 +57,44 @@ static void start_region_parallel(void *env, TestingPB *pb) {
 
 static void BenchmarkStartRegion(TestingB *b) {
     testing_b_report_allocs(b);
+    Arena ar;
+    arena_init(&ar, NULL, 0);
     TraceTask *task;
-    Context ctx =
-        trace_new_task(gc_allocator(), context_background(), S("benchmark"), &task);
+    Context ctx = trace_new_task(arena_allocator(&ar), context_background(),
+                                 S("benchmark"), &task);
 
     testing_b_run_parallel(b, BURROW_FN(TestingPBFunc, start_region_parallel, &ctx));
     trace_task_end(task);
+    arena_free(&ar);
 }
 
+/* Go leaves each task to the collector. Here every goroutine has an arena that
+ * starts again every so often instead. */
 static void new_task_parallel(void *env, TestingPB *pb) {
     Context pctx = *(Context *)env;
-    while (testing_pb_next(pb)) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    for (Int i = 1; testing_pb_next(pb); i++) {
         TraceTask *task;
-        (void)trace_new_task(gc_allocator(), pctx, S("task"), &task);
+        (void)trace_new_task(arena_allocator(&ar), pctx, S("task"), &task);
         trace_task_end(task);
+        if (i % 1024 == 0)
+            arena_reset(&ar);
     }
+    arena_free(&ar);
 }
 
 static void BenchmarkNewTask(TestingB *b) {
     testing_b_report_allocs(b);
+    Arena ar;
+    arena_init(&ar, NULL, 0);
     TraceTask *task;
-    Context pctx =
-        trace_new_task(gc_allocator(), context_background(), S("benchmark"), &task);
+    Context pctx = trace_new_task(arena_allocator(&ar), context_background(),
+                                  S("benchmark"), &task);
 
     testing_b_run_parallel(b, BURROW_FN(TestingPBFunc, new_task_parallel, &pctx));
     trace_task_end(task);
+    arena_free(&ar);
 }
 
 static void BenchmarkLog(TestingB *b) {
@@ -144,11 +156,23 @@ static void TestTraceDoubleStart(TestingT *t) {
         testing_t_fatalf_v(t, "succeed to start tracing second time");
 }
 
+typedef struct Annotate {
+    TestingT *t;
+    Alloc *a;
+    Context ctx;
+    const TraceTask *parent;
+} Annotate;
+
 /* A subtask with a region and a log in it. */
 static void annotate(void *env) {
-    Context ctx = *(Context *)env;
+    Annotate *an = (Annotate *)env;
     TraceTask *task;
-    Context tctx = trace_new_task(gc_allocator(), ctx, S("sub"), &task);
+    Context tctx = trace_new_task(an->a, an->ctx, S("sub"), &task);
+    if (task == NULL)
+        testing_t_fatal_v(an->t, "trace_new_task gave no task");
+    if (task->id <= an->parent->id)
+        testing_t_errorf_v(an->t, "subtask id %d is not after its parent's, %d",
+                           task->id, an->parent->id);
     TraceRegion r = trace_start_region(tctx, S("work"));
     trace_logf_v(tctx, S("cat"), S("value %d"), 42);
     trace_region_end(r);
@@ -172,14 +196,26 @@ static void TestTraceAnnotationsHeader(TestingT *t) {
         }
         if (!trace_is_enabled())
             testing_t_errorf_v(t, "trace_is_enabled() = false while tracing");
+        /* Not the buffer's arena, which the goroutine writing the trace out
+         * grows at the same time. */
+        Arena tasks;
+        arena_init(&tasks, NULL, 0);
         TraceTask *task;
-        Context ctx =
-            trace_new_task(gc_allocator(), context_background(), S("top"), &task);
+        Context ctx = trace_new_task(arena_allocator(&tasks), context_background(),
+                                     S("top"), &task);
+        if (task == NULL) {
+            trace_stop();
+            arena_free(&tasks);
+            arena_free(&ar);
+            testing_t_fatal_v(t, "trace_new_task gave no task");
+        }
+        Annotate an = {t, arena_allocator(&tasks), ctx, task};
         for (int i = 0; i < 4; i++)
-            trace_with_region(ctx, S("region"), BURROW_FN(Func, annotate, &ctx));
+            trace_with_region(ctx, S("region"), BURROW_FN(Func, annotate, &an));
         trace_log(ctx, S("cat"), S("message"));
         trace_task_end(task);
         trace_stop();
+        arena_free(&tasks);
         if (trace_is_enabled())
             testing_t_errorf_v(t, "trace_is_enabled() = true after trace_stop");
 

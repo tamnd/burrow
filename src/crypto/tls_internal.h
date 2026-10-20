@@ -16,6 +16,7 @@
 #include "burrow/core.h"
 #include "burrow/crypto.h"
 #include "burrow/crypto/cipher.h"
+#include "burrow/crypto/ecdh.h"
 #include "burrow/crypto/ed25519.h"
 #include "burrow/error.h"
 #include "burrow/hash.h"
@@ -1145,6 +1146,81 @@ Error burrow__tls_config_write_key_log(const TlsConfig *c, Str label,
 bool burrow__tls_supports_ecdhe(const TlsConfig *c, uint16_t version,
                                 Slice supported_curves, Slice supported_points,
                                 Error *err);
+
+/* ---------------------------------------------------------- key agreement */
+
+/* A keyAgreement implements the client and server side of a TLS 1.0–1.2 key
+ * agreement protocol by generating and processing key exchange messages.
+ *
+ * Not in Go: Go's keyAgreement is an interface over rsaKeyAgreement and
+ * ecdheKeyAgreement. Here one struct holds either, and is_ecdhe says which.
+ * What the functions return comes from the a they are given, and so do ckx
+ * and pre_master_secret. key comes from there too, and
+ * burrow__tls_key_agreement_free frees it. */
+typedef struct TlsKeyAgreement {
+    bool is_ecdhe;
+
+    uint16_t version;
+    bool is_rsa;
+
+    /* ckx and preMasterSecret are generated in processServerKeyExchange
+     * and returned in generateClientKeyExchange. */
+    TlsClientKeyExchangeMsg *ckx;
+    Slice pre_master_secret;
+
+    /* curveID, signatureAlgorithm, and key are set by processServerKeyExchange
+     * and generateServerKeyExchange. */
+    TlsCurveID curve_id;
+    TlsSignatureScheme signature_algorithm;
+    EcdhPrivateKey *key;
+} TlsKeyAgreement;
+
+/* The keyAgreement the ka function of suite makes for version: rsaKA,
+ * ecdheRSAKA or ecdheECDSAKA. */
+void burrow__tls_key_agreement_init(TlsKeyAgreement *ka, const TlsSuite *suite,
+                                    uint16_t version);
+
+/* Not in Go. Frees ka->key. */
+void burrow__tls_key_agreement_free(TlsKeyAgreement *ka);
+
+/* On the server side, the first two methods are called in order.
+ *
+ * In the case that the key agreement protocol doesn't use a
+ * ServerKeyExchange message, generateServerKeyExchange can return nil,
+ * nil. */
+BURROW_OWNS(ret) TlsServerKeyExchangeMsg *
+burrow__tls_key_agreement_generate_server_key_exchange(
+    TlsKeyAgreement *ka, Alloc *a, const TlsConfig *config, const TlsCertificate *cert,
+    const TlsClientHelloMsg *client_hello, const TlsServerHelloMsg *hello, Error *err);
+
+/* processClientKeyExchange: the pre-master secret. */
+BURROW_OWNS(ret) Slice burrow__tls_key_agreement_process_client_key_exchange(
+    TlsKeyAgreement *ka, Alloc *a, const TlsConfig *config, const TlsCertificate *cert,
+    const TlsClientKeyExchangeMsg *ckx, uint16_t version, Error *err);
+
+/* On the client side, the next two methods are called in order.
+ *
+ * This method may not be called if the server doesn't send a
+ * ServerKeyExchange message. */
+BURROW_STATIC(ret) Error burrow__tls_key_agreement_process_server_key_exchange(
+    TlsKeyAgreement *ka, Alloc *a, const TlsConfig *config,
+    const TlsClientHelloMsg *client_hello, const TlsServerHelloMsg *server_hello,
+    const struct X509Certificate *cert, const TlsServerKeyExchangeMsg *skx);
+
+/* generateClientKeyExchange: the pre-master secret, with the message in *ckx. */
+BURROW_OWNS(ret) Slice burrow__tls_key_agreement_generate_client_key_exchange(
+    TlsKeyAgreement *ka, Alloc *a, const TlsConfig *config,
+    const TlsClientHelloMsg *client_hello, const struct X509Certificate *cert,
+    TlsClientKeyExchangeMsg **ckx, Error *err);
+
+/* curveForCurveID: NULL for a curve it does not know. */
+BURROW_STATIC(ret) const EcdhCurve *burrow__tls_curve_for_curve_id(TlsCurveID id);
+
+/* generateECDHEKey returns a PrivateKey that implements Diffie-Hellman
+ * according to RFC 8446, Section 4.2.8.2. The key is from a. */
+BURROW_OWNS(ret) EcdhPrivateKey *burrow__tls_generate_ecdhe_key(Alloc *a, IoReader rand,
+                                                                TlsCurveID curve_id,
+                                                                Error *err);
 
 /* ----------------------------------------------------------- record layer */
 

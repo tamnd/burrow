@@ -9,7 +9,9 @@
 #include "burrow/hash/maphash.h"
 
 #include "burrow/core.h"
+#include "burrow/declare.h"
 #include "burrow/hash.h"
+#include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/panic.h"
 #include "burrow/runtime.h"
@@ -214,7 +216,42 @@ static uint64_t vt_sum64(void *self) {
     return maphash_hash_sum64(self);
 }
 
-#define MAPHASH_HASH_VT {{NULL, vt_write}, vt_sum, vt_reset, vt_size, vt_block_size}
+/* The method set of Go's *maphash.Hash, so that a Hash from here answers
+ * h.(hash.Cloner) as Go's does. Seed, SetSeed and WriteByte are not
+ * listed yet, there being no descriptor for a MaphashSeed or a signature for
+ * io.ByteWriter's WriteByte to give them. */
+#define MAPHASH_METHODS(M, T)                                                          \
+    M(T, BlockSize, maphash_hash_block_size, HASH_SIG_BLOCK_SIZE)                      \
+    M(T, Clone, maphash_hash_clone, HASH_SIG_CLONE)                                    \
+    M(T, Reset, maphash_hash_reset, HASH_SIG_RESET)                                    \
+    M(T, Size, maphash_hash_size, HASH_SIG_SIZE)                                       \
+    M(T, Sum, maphash_hash_sum, HASH_SIG_SUM)                                          \
+    M(T, Sum64, maphash_hash_sum64, HASH_SIG_SUM64)                                    \
+    M(T, Write, maphash_hash_write, IO_SIG_WRITE)                                      \
+    M(T, WriteString, maphash_hash_write_string, IO_SIG_WRITE_STRING)
+
+BURROW_METHODS_DEFINE(MaphashHash, MAPHASH_METHODS);
+
+static const Type maphash_hash_type = {
+    {(const Byte *)"Hash", 4},
+    {(const Byte *)"hash/maphash", 12},
+    KIND_STRUCT,
+    (uint32_t)sizeof(MaphashHash),
+    (uint16_t)_Alignof(MaphashHash),
+    0,
+    (uint16_t)(sizeof burrow__methods_MaphashHash /
+               sizeof burrow__methods_MaphashHash[0]),
+    NULL,
+    burrow__methods_MaphashHash,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
+#define MAPHASH_HASH_VT                                                                \
+    {{&maphash_hash_type, vt_write}, vt_sum, vt_reset, vt_size, vt_block_size}
 
 static const HashHash64VT hash64_vt = {MAPHASH_HASH_VT, vt_sum64};
 

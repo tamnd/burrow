@@ -5,8 +5,6 @@
  * hash tests the way Go shares them through internal/testhash.
  * testhash_without_clone is TestHashWithoutClone, and testhash_hash is
  * TestHash, which asserts the hash to hash.Cloner and adds the Clone check.
- * testhash_with_clone runs the same checks on a hash that is made as a
- * hash.Cloner to begin with, as maphash's is.
  *
  * testhash_repeat and testhash_show are not from Go. Go's golden tables spell a
  * long input as strings.Repeat(rep, count) + tail, and testhash_repeat builds
@@ -252,12 +250,6 @@ static inline void testhash_without_clone(TestingT *t, TesthashMake mh) {
                   BURROW_FN(TestingTFunc, testhash_stateful_write, &env));
 }
 
-typedef HashCloner (*TesthashMakeCloner)(Alloc *a);
-
-typedef struct TesthashClonerEnv {
-    TesthashMakeCloner mh;
-} TesthashClonerEnv;
-
 static inline bool testhash_do_clone(TestingT *t, Alloc *a, HashCloner h,
                                      HashCloner *out) {
     Error err = BURROW_NO_ERROR;
@@ -304,17 +296,6 @@ static inline void testhash_clone_check(TestingT *t, Alloc *a, HashCloner h) {
         testing_t_fatalf_v(t, "Clone results are inconsistent");
 }
 
-static inline void testhash_clone_consistent(void *env, TestingT *t) {
-    Arena ar;
-    arena_init(&ar, NULL, 0);
-    Alloc *a = arena_allocator(&ar);
-    HashCloner h = ((TesthashClonerEnv *)env)->mh(a);
-    if (h.vt == NULL)
-        testing_t_fatalf_v(t, "the hash could not be made");
-    testhash_clone_check(t, a, h);
-    arena_free(&ar);
-}
-
 /* Go's TestHash takes one constructor and asserts its hash to hash.Cloner.
  * hash_clone is that assertion and a Clone in one, so the checks run on the
  * clone of a new hash, which starts in the same state. */
@@ -331,14 +312,6 @@ static inline void testhash_clone_asserted(void *env, TestingT *t) {
         testing_t_fatalf_v(t, "Clone failed: %v", err);
     testhash_clone_check(t, a, c);
     arena_free(&ar);
-}
-
-static inline void testhash_with_clone(TestingT *t, TesthashMake mh,
-                                       TesthashMakeCloner mc) {
-    testhash_without_clone(t, mh);
-    TesthashClonerEnv env = {mc};
-    testing_t_run(t, BURROW_S("Clone"),
-                  BURROW_FN(TestingTFunc, testhash_clone_consistent, &env));
 }
 
 static inline void testhash_hash(TestingT *t, TesthashMake mh) {

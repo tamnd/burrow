@@ -2,13 +2,13 @@
  * Go source: go1.27.1.
  *
  * The tests that listen and dial do it over loopback TCP, so they skip where
- * there is no readiness poll FD. TestConnectionStateMarshal,
- * TestVerifyCertificates, the ML-KEM and ML-DSA handshakes and ECH are still to
- * come. Where Go compares with reflect.DeepEqual, the certificates here are
- * compared by their DER. The PEMs TestX509KeyPair declares are in
- * tls_test_gen.h, and the ML-DSA ones are always tried, as there is no FIPS
- * 140-3 module here to be v1.0.0. Go ranges over the disabledCipherSuites map;
- * here that map is a predicate, so the test asks it about every suite there is.
+ * there is no readiness poll FD. TestConnectionStateMarshal, the ML-KEM and
+ * ML-DSA handshakes and ECH are still to come. Where Go compares with
+ * reflect.DeepEqual, the certificates here are compared by their DER. The PEMs
+ * TestX509KeyPair declares are in tls_test_gen.h, and the ML-DSA ones are
+ * always tried, as there is no FIPS 140-3 module here to be v1.0.0. Go ranges
+ * over the disabledCipherSuites map; here that map is a predicate, so the test
+ * asks it about every suite there is.
  *
  * Copyright 2012 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -3532,6 +3532,173 @@ static void TestLocalCertificateResumption(TestingT *t) {
     local_cert_tests(t, test_local_certificate_resumption);
 }
 
+/* Not in Go: a case of testVerifyCertificates. */
+typedef struct VerifyCertsTest {
+    const char *name;
+
+    bool insecure_skip_verify;
+    TlsClientAuthType client_auth;
+    bool client_certificates;
+} VerifyCertsTest;
+
+static const VerifyCertsTest verify_certs_tests[] = {
+    {"defaults", false, TLS_NO_CLIENT_CERT, false},
+    {"InsecureSkipVerify", true, TLS_NO_CLIENT_CERT, false},
+    {"RequestClientCert with no certs", false, TLS_REQUEST_CLIENT_CERT, false},
+    {"RequestClientCert with certs", false, TLS_REQUEST_CLIENT_CERT, true},
+    {"RequireAnyClientCert", false, TLS_REQUIRE_ANY_CLIENT_CERT, true},
+    {"VerifyClientCertIfGiven with no certs", false, TLS_VERIFY_CLIENT_CERT_IF_GIVEN,
+     false},
+    {"VerifyClientCertIfGiven with certs", false, TLS_VERIFY_CLIENT_CERT_IF_GIVEN,
+     true},
+    {"RequireAndVerifyClientCert", false, TLS_REQUIRE_AND_VERIFY_CLIENT_CERT, true},
+};
+
+/* Not in Go: what each parallel subtest gets. It has to outlive the function
+ * that starts the subtest, as Go's closure does, so it is a table. */
+typedef struct VerifyCertsCase {
+    uint16_t version;
+    const VerifyCertsTest *test;
+} VerifyCertsCase;
+
+#define VERIFY_CERTS_CASES(v)                                                          \
+    {v, &verify_certs_tests[0]}, {v, &verify_certs_tests[1]},                          \
+        {v, &verify_certs_tests[2]}, {v, &verify_certs_tests[3]},                      \
+        {v, &verify_certs_tests[4]}, {v, &verify_certs_tests[5]},                      \
+        {v, &verify_certs_tests[6]}, {                                                 \
+        v, &verify_certs_tests[7]                                                      \
+    }
+
+static const VerifyCertsCase verify_certs_tls12[] = {
+    VERIFY_CERTS_CASES(TLS_VERSION_TLS12)};
+static const VerifyCertsCase verify_certs_tls13[] = {
+    VERIFY_CERTS_CASES(TLS_VERSION_TLS13)};
+
+static Error verify_certs_connection(void *env, const TlsConnectionState *cs) {
+    (void)cs;
+    *(bool *)env = true;
+    return BURROW_NO_ERROR;
+}
+
+static Error verify_certs_peer_certificates(void *env, Slice raw_certs,
+                                            Slice verified_chains) {
+    (void)raw_certs;
+    (void)verified_chains;
+    *(bool *)env = true;
+    return BURROW_NO_ERROR;
+}
+
+static void verify_certificates_case(void *env, TestingT *t) {
+    const VerifyCertsCase *c = (const VerifyCertsCase *)env;
+    const VerifyCertsTest *test = c->test;
+    uint16_t version = c->version;
+    testing_t_parallel(t);
+
+    bool server_verify_connection = false, client_verify_connection = false;
+    bool server_verify_peer_certificates = false,
+         client_verify_peer_certificates = false;
+
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig client_config = test_config_client(a);
+    client_config.max_version = version;
+    client_config.min_version = version;
+    client_config.client_session_cache =
+        tls_new_lru_client_session_cache(heap_allocator(), 1);
+    if (client_config.client_session_cache.vt == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    TlsConfig server_config = test_config_server(a);
+    server_config.max_version = version;
+    server_config.min_version = version;
+
+    client_config.verify_connection = BURROW_FN(
+        TlsVerifyConnectionFunc, verify_certs_connection, &client_verify_connection);
+    client_config.verify_peer_certificate =
+        BURROW_FN(TlsVerifyPeerCertificateFunc, verify_certs_peer_certificates,
+                  &client_verify_peer_certificates);
+    server_config.verify_connection = BURROW_FN(
+        TlsVerifyConnectionFunc, verify_certs_connection, &server_verify_connection);
+    server_config.verify_peer_certificate =
+        BURROW_FN(TlsVerifyPeerCertificateFunc, verify_certs_peer_certificates,
+                  &server_verify_peer_certificates);
+
+    client_config.insecure_skip_verify = test->insecure_skip_verify;
+    server_config.client_auth = test->client_auth;
+    if (!test->client_certificates)
+        client_config.certificates = slice_nil(TYPE_TLS_CERTIFICATE);
+
+    Handshake h;
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_fatal_v(t, h.err);
+    handshake_free(&h);
+
+    bool want = server_config.client_auth != TLS_NO_CLIENT_CERT;
+    if (server_verify_peer_certificates != want)
+        testing_t_errorf_v(t, "VerifyPeerCertificates on the server: got %v, want %v",
+                           server_verify_peer_certificates, want);
+    if (!client_verify_peer_certificates)
+        testing_t_errorf_v(t, "VerifyPeerCertificates not called on the client");
+    if (!server_verify_connection)
+        testing_t_error_v(t, "VerifyConnection did not get called on the server");
+    if (!client_verify_connection)
+        testing_t_error_v(t, "VerifyConnection did not get called on the client");
+
+    server_verify_peer_certificates = client_verify_peer_certificates = false;
+    server_verify_connection = client_verify_connection = false;
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_fatal_v(t, h.err);
+    /* Go names the server's state cs here, and checks that. */
+    if (!h.server_state.did_resume)
+        testing_t_error_v(t, "expected resumption");
+    handshake_free(&h);
+
+    if (server_verify_peer_certificates)
+        testing_t_error_v(t, "VerifyPeerCertificates got called on the server on "
+                             "resumption");
+    if (client_verify_peer_certificates)
+        testing_t_error_v(t, "VerifyPeerCertificates got called on the client on "
+                             "resumption");
+    if (!server_verify_connection)
+        testing_t_error_v(t, "VerifyConnection did not get called on the server on "
+                             "resumption");
+    if (!client_verify_connection)
+        testing_t_error_v(t, "VerifyConnection did not get called on the client on "
+                             "resumption");
+
+    tls_lru_client_session_cache_free(client_config.client_session_cache);
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    arena_free(&ar);
+}
+
+static void test_verify_certificates(TestingT *t, const VerifyCertsCase *cases) {
+    for (int i = 0; i < 8; i++)
+        testing_t_run(t, str_from_cstr(cases[i].test->name),
+                      BURROW_FN(TestingTFunc, verify_certificates_case,
+                                (void *)(uintptr_t)&cases[i]));
+}
+
+static void verify_certificates_tls12(void *env, TestingT *t) {
+    (void)env;
+    test_verify_certificates(t, verify_certs_tls12);
+}
+
+static void verify_certificates_tls13(void *env, TestingT *t) {
+    (void)env;
+    test_verify_certificates(t, verify_certs_tls13);
+}
+
+static void TestVerifyCertificates(TestingT *t) {
+    /* See https://go.dev/issue/31641. */
+    testing_t_run(t, BURROW_S("TLSv12"),
+                  BURROW_FN(TestingTFunc, verify_certificates_tls12, NULL));
+    testing_t_run(t, BURROW_S("TLSv13"),
+                  BURROW_FN(TestingTFunc, verify_certificates_tls13, NULL));
+}
+
 #define TESTS(X)                                                                       \
     X(TestX509KeyPair)                                                                 \
     X(TestCipherSuites)                                                                \
@@ -3560,6 +3727,7 @@ static void TestLocalCertificateResumption(TestingT *t) {
     X(TestMessageSigner)                                                               \
     X(TestInvalidHandshakeSignature)                                                   \
     X(TestLocalCertificate)                                                            \
-    X(TestLocalCertificateResumption)
+    X(TestLocalCertificateResumption)                                                  \
+    X(TestVerifyCertificates)
 
 TESTING_MAIN(TESTS)

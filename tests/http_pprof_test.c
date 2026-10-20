@@ -24,6 +24,7 @@
 #include "burrow/net/http.h"
 #include "burrow/net/http/httptest.h"
 #include "burrow/net/http/pprof.h"
+#include "burrow/netpoll.h"
 #include "burrow/os.h"
 #include "burrow/os/exec.h"
 #include "burrow/runtime.h"
@@ -37,6 +38,10 @@
 #include <string.h>
 
 #define S(lit) BURROW_S(lit)
+
+#if defined(BURROW_NETPOLL_READINESS) && !defined(BURROW_OS_WASI)
+#define HAVE_TCP 1
+#endif
 
 /* TestDescriptions checks that the profile names under runtime/pprof package
  * have a key in the description map. */
@@ -337,6 +342,12 @@ static void hog2_loop(void *env) {
 }
 
 static void TestDeltaProfile(TestingT *t) {
+#if !defined(HAVE_TCP)
+    /* Not in Go: the test server needs TCP, which here needs the readiness poll
+     * FD. */
+    testing_t_skip_v(t, "TCP here needs the readiness poll FD");
+    return;
+#endif
     testing_t_cleanup(t, BURROW_FN(Func, srv_close, NULL));
     /* Not in Go: with no stack walk every sample has an empty stack, which
      * Go's test finds out below and skips for. */

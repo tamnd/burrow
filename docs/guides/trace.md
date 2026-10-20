@@ -81,6 +81,45 @@ static void make_cappuccino(void *env) {
 
 The task and the context come from the allocator you pass and are never given back, because other goroutines can still be using the task after the context has gone. An arena that outlives the task is the usual choice, and `gc_allocator` works in a build with the collector. An arena is not safe to share between goroutines, so give each goroutine that makes tasks its own, as `make_cappuccino` does, and do not share one with the trace's buffer either, since another goroutine grows that while the trace is on. When no trace is on, the annotations cost a check of one flag, so they can stay in production code.
 
+## The flight recorder
+
+A trace of a whole run is large, and the interesting part is usually the last few seconds before something went wrong. A flight recorder keeps only that. It traces all the time but holds just the most recent stretch in memory, throwing older parts away, and writes out what it holds when you ask. `min_age` says how far back to keep and `max_bytes` caps the memory, and `max_bytes` wins when the two disagree. Leave either at zero for the defaults, 10 seconds and 10 MiB.
+
+<!-- example: ../examples/trace/flight.c#start -->
+```c
+TraceFlightRecorderConfig cfg = {.min_age = 5 * TIME_SECOND, .max_bytes = 4 << 20};
+TraceFlightRecorder *fr = trace_new_flight_recorder(a, cfg);
+if (fr == NULL)
+    return;
+Error err = trace_flight_recorder_start(fr);
+if (BURROW_FAILED(err))
+    return;
+fmt_printf_v("recording: %t\n", trace_flight_recorder_enabled(fr));
+```
+
+When the program sees the thing worth looking at, such as a request that took far too long, it takes a snapshot. The snapshot is a complete trace that `go tool trace` opens like any other:
+
+<!-- example: ../examples/trace/flight.c#snapshot -->
+```c
+BytesBuffer buf = BYTES_BUFFER(a);
+int64_t n =
+    trace_flight_recorder_write_to(fr, bytes_buffer_as_io_writer(&buf), &err);
+fmt_printf_v("snapshot written: %t\n", (bool)(n > 0 && !BURROW_FAILED(err)));
+```
+
+Only one snapshot can be taken at a time, and a second `trace_flight_recorder_write_to` while one is running fails. Only one flight recorder can be recording at a time too, but it can record while `trace_start` writes a trace of its own, and the two see the same events.
+
+`trace_flight_recorder_stop` waits for a snapshot in progress to finish. `trace_flight_recorder_free` stops the recorder if it is still recording and gives it back:
+
+<!-- example: ../examples/trace/flight.c#stop -->
+```c
+trace_flight_recorder_stop(fr);
+fmt_printf_v("recording: %t\n", trace_flight_recorder_enabled(fr));
+(void)trace_flight_recorder_write_to(fr, bytes_buffer_as_io_writer(&buf), &err);
+fmt_printf_v("after stop: %v\n", err);
+trace_flight_recorder_free(fr);
+```
+
 ## Where it differs from Go
 
 Frames in a trace have no file names or line numbers, the same as in a profile, and a frame has a function name only when burrow's symbol table has one. That covers the library and not your program, so frames in your own code show as bare addresses.
@@ -91,4 +130,4 @@ A thread the program started itself can call the annotations, but it is not runn
 
 A trace started inside `runtime_main` ends when `runtime_main` returns, since the goroutine writing it ends then too. Call `trace_stop` first. A trace that ended that way still needs `trace_stop` before the next `trace_start`. A trace started before `runtime_main` is written by a thread instead and can span several runs.
 
-The flight recorder is not here yet.
+A flight recorder is made from an allocator and given back with `trace_flight_recorder_free`, where Go leaves it to the collector. The parts of the trace it holds come from the heap whatever allocator you pass, since they are taken and given back on the goroutine that copies the trace out.

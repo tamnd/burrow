@@ -10,7 +10,11 @@
 #include "burrow/crypto/sha512.h"
 
 #include "burrow/core.h"
+#include "burrow/declare.h"
+#include "burrow/encoding.h"
+#include "burrow/error.h"
 #include "burrow/hash.h"
+#include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
@@ -522,10 +526,124 @@ static Int sha512_size(void *self) {
     return ((Sha512Digest *)self)->size;
 }
 
-static const HashVT sha512_vt = {
-    {NULL, sha512_write}, sha512_sum_append, sha512_reset,
-    sha512_size,          sha512_block_size,
+enum { sha512_marshaled_size = 4 + 8 * 8 + SHA512_BLOCK_SIZE + 8 };
+
+BURROW_SENTINEL_ERROR(sha512_err_identifier,
+                      "crypto/sha512: invalid hash state identifier");
+BURROW_SENTINEL_ERROR(sha512_err_size, "crypto/sha512: invalid hash state size");
+
+/* The fourth byte of the magic string, "sha\x04" for SHA-384 to "sha\x07" for
+ * SHA-512. */
+static Byte sha512_magic(Int size) {
+    switch (size) {
+    case SHA512_SIZE384:
+        return 4;
+    case SHA512_SIZE224:
+        return 5;
+    case SHA512_SIZE256:
+        return 6;
+    default:
+        return 7;
+    }
+}
+
+static Slice sha512_append_binary(Sha512Digest *d, Alloc *a, Slice b, Error *err) {
+    Byte st[sha512_marshaled_size];
+    memcpy(st, "sha", 3);
+    st[3] = sha512_magic(d->size);
+    for (Int i = 0; i < 8; i++)
+        sha512_put_be64(st + 4 + 8 * i, d->h[i]);
+    memcpy(st + 68, d->x, (size_t)d->nx);
+    memset(st + 68 + d->nx, 0, (size_t)(SHA512_BLOCK_SIZE - d->nx));
+    sha512_put_be64(st + 68 + SHA512_BLOCK_SIZE, d->len);
+    if (b.elem == NULL)
+        b = slice_nil(TYPE_BYTE);
+    Int len = b.len;
+    Slice r = slice_append(a, b, st, sha512_marshaled_size);
+    BURROW_OUT(err, r.len == len + sha512_marshaled_size ? BURROW_NO_ERROR
+                                                         : burrow_err_out_of_memory);
+    return r;
+}
+
+static Slice sha512_marshal_binary(Sha512Digest *d, Alloc *a, Error *err) {
+    Slice b = slice_make(a, TYPE_BYTE, 0, sha512_marshaled_size);
+    if (b.p == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return slice_nil(TYPE_BYTE);
+    }
+    return sha512_append_binary(d, a, b, err);
+}
+
+static Error sha512_unmarshal_binary(Sha512Digest *d, Alloc *a, Slice b) {
+    (void)a;
+    const Byte *p = b.p;
+    if (b.len < 4 || memcmp(p, "sha", 3) != 0 || p[3] != sha512_magic(d->size))
+        return sha512_err_identifier;
+    if (b.len != sha512_marshaled_size)
+        return sha512_err_size;
+    for (Int i = 0; i < 8; i++)
+        d->h[i] = sha512_be64(p + 4 + 8 * i);
+    memcpy(d->x, p + 68, SHA512_BLOCK_SIZE);
+    d->len = sha512_be64(p + 68 + SHA512_BLOCK_SIZE);
+    d->nx = (Int)(d->len % SHA512_BLOCK_SIZE);
+    return BURROW_NO_ERROR;
+}
+
+static HashCloner sha512_clone(void *self, Alloc *a, Error *err);
+
+/* The method set of Go's *sha512.Digest, so that a Hash from here answers
+ * h.(hash.Cloner) and h.(encoding.BinaryMarshaler) as Go's does. */
+#define SHA512_METHODS(M, T)                                                           \
+    M(T, AppendBinary, sha512_append_binary, ENCODING_SIG_APPEND_BINARY)               \
+    M(T, BlockSize, sha512_block_size, HASH_SIG_BLOCK_SIZE)                            \
+    M(T, Clone, sha512_clone, HASH_SIG_CLONE)                                          \
+    M(T, MarshalBinary, sha512_marshal_binary, ENCODING_SIG_MARSHAL_BINARY)            \
+    M(T, Reset, sha512_reset, HASH_SIG_RESET)                                          \
+    M(T, Size, sha512_size, HASH_SIG_SIZE)                                             \
+    M(T, Sum, sha512_sum_append, HASH_SIG_SUM)                                         \
+    M(T, UnmarshalBinary, sha512_unmarshal_binary, ENCODING_SIG_UNMARSHAL_BINARY)      \
+    M(T, Write, sha512_write, IO_SIG_WRITE)
+
+BURROW_METHODS_DEFINE(Sha512Digest, SHA512_METHODS);
+
+static const Type sha512_digest_type = {
+    {(const Byte *)"Digest", 6},
+    {(const Byte *)"crypto/internal/fips140/sha512", 30},
+    KIND_STRUCT,
+    (uint32_t)sizeof(Sha512Digest),
+    (uint16_t)_Alignof(Sha512Digest),
+    0,
+    (uint16_t)(sizeof burrow__methods_Sha512Digest /
+               sizeof burrow__methods_Sha512Digest[0]),
+    NULL,
+    burrow__methods_Sha512Digest,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
 };
+
+static const HashClonerVT sha512_vt = {
+    {{&sha512_digest_type, sha512_write},
+     sha512_sum_append,
+     sha512_reset,
+     sha512_size,
+     sha512_block_size},
+    sha512_clone,
+};
+
+static HashCloner sha512_clone(void *self, Alloc *a, Error *err) {
+    Sha512Digest *r = BURROW_NEW(a, Sha512Digest);
+    if (r == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return (HashCloner){NULL, NULL};
+    }
+    *r = *(Sha512Digest *)self;
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    HashCloner h = {&sha512_vt, r};
+    return h;
+}
 
 static Hash sha512_make(Alloc *a, Int size) {
     Sha512Digest *d = BURROW_NEW(a, Sha512Digest);
@@ -533,7 +651,7 @@ static Hash sha512_make(Alloc *a, Int size) {
         return (Hash){NULL, NULL};
     d->size = size;
     sha512_reset(d);
-    Hash h = {&sha512_vt, d};
+    Hash h = {&sha512_vt.hash, d};
     return h;
 }
 

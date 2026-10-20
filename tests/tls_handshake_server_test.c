@@ -1350,6 +1350,30 @@ static void expect_error(TestingT *t, Error err, const char *sub) {
                            error_text(err));
 }
 
+static void TestCloneHash(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Hash h1 = crypto_hash_new(CRYPTO_SHA256, a);
+    if (h1.vt == NULL) {
+        arena_free(&ar);
+        testing_t_fatal_v(t, "out of memory");
+    }
+    static Byte test[] = "test";
+    hash_write(h1, slice_from(test, 4, 4, TYPE_BYTE), NULL);
+    Slice s1 = hash_sum(a, h1, slice_nil(TYPE_BYTE));
+    Hash h2 = burrow__tls_clone_hash(a, h1, CRYPTO_SHA256);
+    /* Not in Go: a nil h2 would panic there. */
+    if (h2.vt == NULL) {
+        arena_free(&ar);
+        testing_t_fatal_v(t, "cloneHash returned nil");
+    }
+    Slice s2 = hash_sum(a, h2, slice_nil(TYPE_BYTE));
+    if (!bytes_equal(s1, s2))
+        testing_t_error_v(t, "cloned hash generated a different sum");
+    arena_free(&ar);
+}
+
 /* Not in Go: the goroutine of TestKeyTooSmallForRSAPSS. */
 typedef struct KeyTooSmallServer {
     TestingT *t;
@@ -2397,6 +2421,7 @@ static void TestHandshakeChangeRootCAsResumption(TestingT *t) {
     X(TestSNIGivenOnFailure)                                                           \
     X(TestGetConfigForClient)                                                          \
     X(TestCloseServerConnectionOnIdleClient)                                           \
+    X(TestCloneHash)                                                                   \
     X(TestKeyTooSmallForRSAPSS)                                                        \
     X(TestMultipleCertificates)                                                        \
     X(TestAESCipherReordering)                                                         \

@@ -24,6 +24,7 @@
 #include "burrow/crypto/hmac.h"
 #include "burrow/crypto/rsa.h"
 #include "burrow/crypto/x509.h"
+#include "burrow/encoding.h"
 #include "burrow/encoding/binary.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
@@ -406,24 +407,36 @@ Error burrow__tls_server_handshake_state_tls13_process_client_hello(
     return BURROW_NO_ERROR;
 }
 
-/* cloneHash.
- *
- * Not in Go: the hashes here can't be cloned or marshalled, so this makes a
- * new one for hs.suite and writes to it again what went into hs.transcript.
- * It is only called before the ClientHello goes in, when that is nothing or,
- * after a HelloRetryRequest, the message_hash and the HelloRetryRequest. A
- * zero Hash when it fails. */
-static Hash ts13_clone_hash(TlsServerHandshakeStateTLS13 *hs) {
-    Hash out = burrow__tls_suite13_hash_new(hs->suite)(hs->a);
-    if (out.vt == NULL || hs->hello_retry_request_msg == NULL)
-        return out;
-    ts13_write_message_hash(out, hs->ch_hash);
-    Error err = burrow__tls_transcript_msg(hs->hello_retry_request_msg,
-                                           hash_as_io_writer(out), hs->a);
-    if (BURROW_FAILED(err)) {
-        Hash none = {NULL, NULL};
-        return none;
+/* cloneHash uses [hash.Cloner] to clone in. If [hash.Cloner] is not
+ * implemented or not supported, then it falls back to the
+ * [encoding.BinaryMarshaler] and [encoding.BinaryUnmarshaler] interfaces
+ * implemented by standard library hashes to clone the state of in to a new
+ * instance of h. It returns nil if the operation fails. */
+Hash burrow__tls_clone_hash(Alloc *a, Hash in, CryptoHash h) {
+    Hash none = {NULL, NULL};
+    if (hash_is_cloner(in)) {
+        Error err = BURROW_NO_ERROR;
+        HashCloner out = hash_clone(a, in, &err);
+        if (!BURROW_FAILED(err))
+            return hash_cloner_as_hash(out);
     }
+    Any marshaler = BURROW_ANY(TYPE_OF(Hash), &in);
+    if (!encoding_is_binary_marshaler(marshaler) ||
+        !encoding_is_binary_unmarshaler(marshaler))
+        return none;
+    Error err = BURROW_NO_ERROR;
+    Slice state = encoding_marshal_binary(a, marshaler, &err);
+    if (BURROW_FAILED(err))
+        return none;
+    Hash out = crypto_hash_new(h, a);
+    if (out.vt == NULL)
+        return none;
+    Any unmarshaler = BURROW_ANY(TYPE_OF(Hash), &out);
+    if (!encoding_is_binary_marshaler(unmarshaler) ||
+        !encoding_is_binary_unmarshaler(unmarshaler))
+        return none;
+    if (BURROW_FAILED(encoding_unmarshal_binary(a, unmarshaler, state)))
+        return none;
     return out;
 }
 
@@ -491,7 +504,7 @@ static Error ts13_check_psk_binder(TlsServerHandshakeStateTLS13 *hs,
     if (binder_key.p == NULL)
         return burrow_err_out_of_memory;
     /* Clone the transcript in case a HelloRetryRequest was recorded. */
-    Hash transcript = ts13_clone_hash(hs);
+    Hash transcript = burrow__tls_clone_hash(hs->a, hs->transcript, hs->suite->hash);
     if (transcript.vt == NULL) {
         (void)burrow__tls_conn_send_alert(c, TLS_ALERT_INTERNAL_ERROR);
         return ts13_err_clone_hash;
@@ -854,8 +867,6 @@ static const TlsKeyShare *ts13_do_hello_retry_request(TlsServerHandshakeStateTLS
     c->did_hrr = true;
     hs->client_hello = client_hello;
     hs->client_hello_msg = msg;
-    hs->ch_hash = ch_hash;
-    hs->hello_retry_request_msg = hrr_msg;
     return ks;
 }
 

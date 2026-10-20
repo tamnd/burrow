@@ -10,7 +10,11 @@
 #include "burrow/crypto/sha256.h"
 
 #include "burrow/core.h"
+#include "burrow/declare.h"
+#include "burrow/encoding.h"
+#include "burrow/error.h"
 #include "burrow/hash.h"
+#include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
@@ -432,10 +436,111 @@ static Int sha256_size(void *self) {
     return ((Sha256Digest *)self)->is224 ? SHA256_SIZE224 : SHA256_SIZE;
 }
 
-static const HashVT sha256_vt = {
-    {NULL, sha256_write}, sha256_sum_append, sha256_reset,
-    sha256_size,          sha256_block_size,
+#define SHA256_MAGIC224 "sha\x02"
+#define SHA256_MAGIC256 "sha\x03"
+enum { sha256_marshaled_size = 4 + 8 * 4 + SHA256_BLOCK_SIZE + 8 };
+
+BURROW_SENTINEL_ERROR(sha256_err_identifier,
+                      "crypto/sha256: invalid hash state identifier");
+BURROW_SENTINEL_ERROR(sha256_err_size, "crypto/sha256: invalid hash state size");
+
+static Slice sha256_append_binary(Sha256Digest *d, Alloc *a, Slice b, Error *err) {
+    Byte st[sha256_marshaled_size];
+    memcpy(st, d->is224 ? SHA256_MAGIC224 : SHA256_MAGIC256, 4);
+    for (Int i = 0; i < 8; i++)
+        sha256_put_be32(st + 4 + 4 * i, d->h[i]);
+    memcpy(st + 36, d->x, (size_t)d->nx);
+    memset(st + 36 + d->nx, 0, (size_t)(SHA256_BLOCK_SIZE - d->nx));
+    sha256_put_be64(st + 36 + SHA256_BLOCK_SIZE, d->len);
+    if (b.elem == NULL)
+        b = slice_nil(TYPE_BYTE);
+    Int len = b.len;
+    Slice r = slice_append(a, b, st, sha256_marshaled_size);
+    BURROW_OUT(err, r.len == len + sha256_marshaled_size ? BURROW_NO_ERROR
+                                                         : burrow_err_out_of_memory);
+    return r;
+}
+
+static Slice sha256_marshal_binary(Sha256Digest *d, Alloc *a, Error *err) {
+    Slice b = slice_make(a, TYPE_BYTE, 0, sha256_marshaled_size);
+    if (b.p == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return slice_nil(TYPE_BYTE);
+    }
+    return sha256_append_binary(d, a, b, err);
+}
+
+static Error sha256_unmarshal_binary(Sha256Digest *d, Alloc *a, Slice b) {
+    (void)a;
+    const Byte *p = b.p;
+    if (b.len < 4 || memcmp(p, d->is224 ? SHA256_MAGIC224 : SHA256_MAGIC256, 4) != 0)
+        return sha256_err_identifier;
+    if (b.len != sha256_marshaled_size)
+        return sha256_err_size;
+    for (Int i = 0; i < 8; i++)
+        d->h[i] = sha256_be32(p + 4 + 4 * i);
+    memcpy(d->x, p + 36, SHA256_BLOCK_SIZE);
+    const Byte *n = p + 36 + SHA256_BLOCK_SIZE;
+    d->len = (uint64_t)sha256_be32(n) << 32 | sha256_be32(n + 4);
+    d->nx = (Int)(d->len % SHA256_BLOCK_SIZE);
+    return BURROW_NO_ERROR;
+}
+
+static HashCloner sha256_clone(void *self, Alloc *a, Error *err);
+
+/* The method set of Go's *sha256.Digest, so that a Hash from here answers
+ * h.(hash.Cloner) and h.(encoding.BinaryMarshaler) as Go's does. */
+#define SHA256_METHODS(M, T)                                                           \
+    M(T, AppendBinary, sha256_append_binary, ENCODING_SIG_APPEND_BINARY)               \
+    M(T, BlockSize, sha256_block_size, HASH_SIG_BLOCK_SIZE)                            \
+    M(T, Clone, sha256_clone, HASH_SIG_CLONE)                                          \
+    M(T, MarshalBinary, sha256_marshal_binary, ENCODING_SIG_MARSHAL_BINARY)            \
+    M(T, Reset, sha256_reset, HASH_SIG_RESET)                                          \
+    M(T, Size, sha256_size, HASH_SIG_SIZE)                                             \
+    M(T, Sum, sha256_sum_append, HASH_SIG_SUM)                                         \
+    M(T, UnmarshalBinary, sha256_unmarshal_binary, ENCODING_SIG_UNMARSHAL_BINARY)      \
+    M(T, Write, sha256_write, IO_SIG_WRITE)
+
+BURROW_METHODS_DEFINE(Sha256Digest, SHA256_METHODS);
+
+static const Type sha256_digest_type = {
+    {(const Byte *)"Digest", 6},
+    {(const Byte *)"crypto/internal/fips140/sha256", 30},
+    KIND_STRUCT,
+    (uint32_t)sizeof(Sha256Digest),
+    (uint16_t)_Alignof(Sha256Digest),
+    0,
+    (uint16_t)(sizeof burrow__methods_Sha256Digest /
+               sizeof burrow__methods_Sha256Digest[0]),
+    NULL,
+    burrow__methods_Sha256Digest,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
 };
+
+static const HashClonerVT sha256_vt = {
+    {{&sha256_digest_type, sha256_write},
+     sha256_sum_append,
+     sha256_reset,
+     sha256_size,
+     sha256_block_size},
+    sha256_clone,
+};
+
+static HashCloner sha256_clone(void *self, Alloc *a, Error *err) {
+    Sha256Digest *r = BURROW_NEW(a, Sha256Digest);
+    if (r == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return (HashCloner){NULL, NULL};
+    }
+    *r = *(Sha256Digest *)self;
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    HashCloner h = {&sha256_vt, r};
+    return h;
+}
 
 static Hash sha256_make(Alloc *a, bool is224) {
     Sha256Digest *d = BURROW_NEW(a, Sha256Digest);
@@ -443,7 +548,7 @@ static Hash sha256_make(Alloc *a, bool is224) {
         return (Hash){NULL, NULL};
     d->is224 = is224;
     sha256_reset(d);
-    Hash h = {&sha256_vt, d};
+    Hash h = {&sha256_vt.hash, d};
     return h;
 }
 

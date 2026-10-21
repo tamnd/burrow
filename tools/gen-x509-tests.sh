@@ -958,7 +958,7 @@ PY
 
 # The certificates root_test.go reads: test-file.crt in the package directory,
 # testdata/test-dir.crt, and gtsRoot and googleLeaf from verify_test.go, for
-# tests/x509_root_test.c.
+# tests/x509_root_test.c, and the root and key platform_test.go reads.
 python3 - "$goroot/src/crypto/x509" "$root/tests/x509_root_test_gen.h" <<'PY'
 import re
 import sys
@@ -994,6 +994,8 @@ for cname, value in [
     ("test_dir_crt", read("testdata/test-dir.crt")),
     ("gts_root", re.findall(r"\nconst gtsRoot = `(.*?)`", verify_test, re.S)),
     ("google_leaf", re.findall(r"\nconst googleLeaf = `(.*?)`", verify_test, re.S)),
+    ("platform_root_cert", read("platform_root_cert.pem")),
+    ("platform_root_key", read("platform_root_key.pem")),
 ]:
     if isinstance(value, list):
         assert len(value) == 1, cname

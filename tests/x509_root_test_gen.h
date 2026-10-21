@@ -142,4 +142,26 @@ static const char google_leaf[] =
     "i8eNLnKL9PXQ+5SwJFCzfEhcIZuhzg==\n"
     "-----END CERTIFICATE-----";
 
+static const char platform_root_cert[] =
+    "-----BEGIN CERTIFICATE-----\n"
+    "MIIB/DCCAaOgAwIBAgICIzEwCgYIKoZIzj0EAwIwLDEqMCgGA1UEAxMhR28gcGxh\n"
+    "dGZvcm0gdmVyaWZpZXIgdGVzdGluZyByb290MB4XDTIzMDUyNjE3NDQwMVoXDTI4\n"
+    "MDUyNDE4NDQwMVowLDEqMCgGA1UEAxMhR28gcGxhdGZvcm0gdmVyaWZpZXIgdGVz\n"
+    "dGluZyByb290MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE5dNQY4FY29i2g3xx\n"
+    "7FyH4XiZz0C0AM4uyPUsXCZNb7CsctHDLhLtzABWSfFz76j+oVhq+qKrwIHsLX+7\n"
+    "f6YTQqOBtDCBsTAOBgNVHQ8BAf8EBAMCAgQwEwYDVR0lBAwwCgYIKwYBBQUHAwEw\n"
+    "DwYDVR0TAQH/BAUwAwEB/zAdBgNVHQ4EFgQUEJInRbtQR6xTUSwvtdAe9A4XHwQw\n"
+    "WgYDVR0eAQH/BFAwTqAaMBiCFnRlc3RpbmcuZ29sYW5nLmludmFsaWShMDAKhwgA\n"
+    "AAAAAAAAADAihyAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAADAKBggq\n"
+    "hkjOPQQDAgNHADBEAiBgzgLyQm4rK1AuIcElH3MdRqlteq3nzZCxKOI4xHXYjQIg\n"
+    "BCSzaCb1+/AK+mhRubrdebFYlUdveTH98wAfKQHaw64=\n"
+    "-----END CERTIFICATE-----\n";
+
+static const char platform_root_key[] =
+    "-----BEGIN EC PRIVATE KEY-----\n"
+    "MHcCAQEEIHhv8LVzb9gqJzAY0P442+FW0oqbfBrLnfqxyyAujOFSoAoGCCqGSM49\n"
+    "AwEHoUQDQgAE5dNQY4FY29i2g3xx7FyH4XiZz0C0AM4uyPUsXCZNb7CsctHDLhLt\n"
+    "zABWSfFz76j+oVhq+qKrwIHsLX+7f6YTQg==\n"
+    "-----END EC PRIVATE KEY-----\n";
+
 #endif

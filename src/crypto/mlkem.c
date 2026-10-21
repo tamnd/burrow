@@ -700,6 +700,7 @@ CRYPTO_FIPS_TEXT static void mlkem_kem_encaps(const MlkemView *v, Byte key[32], 
  * instead, chosen in constant time. */
 CRYPTO_FIPS_TEXT static void mlkem_kem_decaps(const MlkemView *v, Byte key[32],
                                               const Byte *c) {
+    burrow__fips140_record_approved();
     Int csize = mlkem_ciphertext_size(v);
     Byte m[32];
     mlkem_pke_decrypt(v, m, c);
@@ -865,6 +866,9 @@ CRYPTO_FIPS_TEXT static Slice mlkem_encapsulate(const MlkemView *v, Alloc *a,
     mlkem_fips_self_test();
     Byte m[MLKEM_MESSAGE_SIZE];
     burrow__crypto_rand_system(slice_from(m, sizeof m, sizeof m, TYPE_BYTE));
+    /* Note that the modulus check (step 2 of the encapsulation key check from
+     * FIPS 203, Section 7.2) is performed by polyByteDecode in parseEK. */
+    burrow__fips140_record_approved();
     Slice k = mlkem_encapsulate_with(v, a, m, ciphertext);
     memset(m, 0, sizeof m);
     return k;
@@ -971,6 +975,7 @@ CRYPTO_FIPS_TEXT static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a)
         mlkem_kem_key_gen(&v, seed, seed + 32);                                        \
         memset(seed, 0, sizeof seed);                                                  \
         burrow__fips140_pct("ML-KEM PCT", mlkem_pct, &v);                              \
+        burrow__fips140_record_approved();                                             \
         return dk;                                                                     \
     }                                                                                  \
                                                                                        \
@@ -986,6 +991,7 @@ CRYPTO_FIPS_TEXT static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a)
         MlkemView v = mlkem_view_dk##N(dk);                                            \
         const Byte *p = (const Byte *)seed.p;                                          \
         mlkem_kem_key_gen(&v, p, p + 32);                                              \
+        burrow__fips140_record_approved();                                             \
         return dk;                                                                     \
     }                                                                                  \
                                                                                        \

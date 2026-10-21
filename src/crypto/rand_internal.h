@@ -17,10 +17,14 @@
  * crypto_rand_reader starts out as. */
 bool burrow__crypto_rand_is_default_reader(IoReader r);
 
-/* The system generator, never crypto_rand_reader, which is where Go's
- * crypto/internal/fips140/drbg.Read gets its bytes outside FIPS mode. It fills
- * p or the process ends. */
+/* Go's crypto/internal/fips140/drbg.Read, never crypto_rand_reader: the
+ * system generator, or in FIPS 140-3 mode the DRBG. It fills p or the process
+ * ends. */
 void burrow__crypto_rand_system(Slice p);
+
+/* crypto/internal/sysrand.Read, the operating system's generator, which the
+ * DRBG reads from. It fills p or the process ends. */
+void burrow__sysrand_read(Slice p);
 
 /* crypto/internal/rand.SetTestingReader, which testing/cryptotest uses to have
  * every read burrow__crypto_rand_system makes be one read from r instead, and

@@ -10,6 +10,7 @@
 #include "burrow/crypto/aes.h"
 
 #include "burrow/core.h"
+#include "burrow/io.h"
 
 #include "aes_internal.h"
 
@@ -55,5 +56,19 @@ void burrow__drbg_counter_reseed(DrbgCounter *c, const Byte entropy[DRBG_SEED_SI
  * additional_input may be NULL, Go's nil. True when a reseed is required. */
 bool burrow__drbg_counter_generate(DrbgCounter *c, Slice out,
                                    const Byte *additional_input);
+
+/* Read fills b with cryptographically secure random bytes. In FIPS mode, it
+ * uses an SP 800-90A Rev. 1 Deterministic Random Bit Generator (DRBG).
+ * Otherwise, it uses the operating system's random number generator. */
+void burrow__drbg_read(Slice b);
+
+/* SetTestingReader sets a global, deterministic cryptographic randomness
+ * source for testing purposes. Its Read method must never return an error, it
+ * must never return short, and it must be safe for concurrent use.
+ *
+ * This is only intended to be used by the testing/cryptotest package.
+ *
+ * Not in Go: a zero r unsets it. */
+void burrow__drbg_set_testing_reader(IoReader r);
 
 #endif /* BURROW_SRC_CRYPTO_DRBG_INTERNAL_H */

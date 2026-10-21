@@ -198,6 +198,13 @@ int64_t pal_errno_message(int64_t native, char *buf, int64_t cap, PalErrno *err)
  * which matches Go. */
 int64_t pal_clock_monotonic(void);
 
+/* A high-resolution timestamp for measuring time differences on the order of
+ * tens to hundreds of nanoseconds, which is what the FIPS 140-3 entropy source
+ * times its samples with. Its unit and epoch are unspecified. On Windows this is
+ * QueryPerformanceCounter unscaled, as Go's HighPrecisionNow is, and elsewhere
+ * it is pal_clock_monotonic. */
+int64_t pal_clock_high_precision(void);
+
 /* Nanoseconds since 1970-01-01 UTC, leap seconds smeared or ignored the way the
  * platform does it. This is the one that jumps. */
 int64_t pal_clock_realtime(void);

@@ -61,6 +61,7 @@ category	resolver	What net's resolver works from: the copy of resolv.conf it las
 category	zone-cache	The interface names and indexes IPv6 zones are read through. Go keeps the same cache as a package level variable behind a lock, and it is process wide because the interfaces are.
 category	sql-drivers	database/sql's registered drivers. Go keeps them in a package level map behind a RWMutex, and they are process wide because a driver registered anywhere is one every Open can find.
 category	fips-self-test	The sync.Onces behind the FIPS 140-3 self-tests that run the first time an algorithm is used. Go keeps the same ones as package level variables, and they are process wide because the test only has to pass once for the module.
+category	drbg	The FIPS 140-3 DRBG's shared instance, the pool of the others and the scratch memory its entropy source touches. Go keeps the same ones as package level variables in crypto/internal/fips140/drbg, and they are process wide because the module is.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/go/types_lookup.c	gt_empty_method_set	tables	Go's emptyMethodSet, which every type with no methods gets. Zero and never written.
@@ -457,6 +458,11 @@ global	src/crypto/rsa.c	rsa_self_test	fips-self-test	A SyncOnce, which is its ow
 global	src/crypto/rand.c	crypto_rand_debug_flags	godebug	The cryptocustomrand setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/crypto/rand.c	crand_testing_reader	package-vars	drbg's testingReader. Not synchronised, as in Go: testing/cryptotest sets it in a test that cannot be parallel, before the test starts the threads that read it.
 global	src/crypto/rand.c	crypto_rand_reader	package-vars	crypto/rand.Reader. Not synchronised, as in Go: a program assigns it before other threads read from it.
+global	src/crypto/drbg.c	drbg_memory	drbg	Only touched with atomics, by the entropy source, which does not care what is in it, as with Go's memory.
+global	src/crypto/drbg.c	drbg_instance	drbg	Taken with an atomic swap and put back with a compare and swap, so one reader at a time holds the Counter it points to, as in Go.
+global	src/crypto/drbg.c	drbg_pool	drbg	A SyncPool, which is its own synchronisation, set up under drbg_pool_once before anything uses it.
+global	src/crypto/drbg.c	drbg_pool_once	drbg	A SyncOnce, which is its own synchronisation.
+global	src/crypto/drbg.c	drbg_testing_reader	package-vars	drbg's testingReader. Not synchronised, as in Go: testing/cryptotest sets it through crypto/rand in a test that cannot be parallel, before the test starts the threads that read it.
 global	src/crypto/aes.c	aes_portable_only	impl-select	Set only by tests, through burrow__aes_set_portable, with relaxed atomics. A block reads it once, when it is made.
 global	src/crypto/crypto.c	crypto_hashes	crypto-registry	What crypto_register_hash was given for each hash, as a function address in an atomic word. Release stores and acquire loads only, so a hash being registered and one being made can race safely.
 global	src/crypto/nistec_p224.c	p224_b_value	tables	The curve's b in the field's own form, made once by p224_b_init.

@@ -242,7 +242,7 @@ TEST_GEN := $(wildcard tests/gen/*.c)
 DEPFLAGS := -MMD -MP
 DEPS     := $(OBJS:.o=.d) $(TEST_BINS:=.d)
 
-.PHONY: all lib test check collisions clean install fmt tidy amalgamation gofmt-gate sqlite from-go ctgrind
+.PHONY: all lib test check collisions clean install fmt tidy amalgamation gofmt-gate sqlite from-go ctgrind ct-asm
 
 all: lib
 
@@ -451,6 +451,19 @@ $(CTGRIND_BIN): tools/ctgrind.c $(LIB)
 ctgrind: $(CTGRIND_BIN)
 	valgrind --quiet --error-exitcode=1 --track-origins=yes \
 		--suppressions=tools/ctgrind.supp ./$(CTGRIND_BIN)
+
+# ct-asm: the conditional branches in the assembly the compiler writes for
+# src/crypto/subtle.c, against the counts in tools/ct-asm.txt, so that a
+# compiler upgrade that puts a branch back where ct_hide took it out fails here.
+# See tools/check-ct-asm.sh.
+CT_ASM := $(BUILD)/tools/subtle.s
+
+$(CT_ASM): src/crypto/subtle.c
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(THREADS) -g0 -S $< -o $@
+
+ct-asm: $(CT_ASM)
+	@tools/check-ct-asm.sh '$(CC)' $(CT_ASM)
 
 # The SQLite driver in examples/sqlite, the one program here that links a
 # library burrow does not have. pkg-config finds SQLite where it can, and

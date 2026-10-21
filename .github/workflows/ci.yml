@@ -520,6 +520,25 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y valgrind
       - run: make -j4 ctgrind
 
+  # The conditional branches in the assembly the compiler writes for
+  # src/crypto/subtle.c, against the counts in tools/ct-asm.txt, so that a new
+  # compiler that puts a branch on a secret back fails the build. Each count was
+  # read in the assembly first. tools/check-ct-asm.sh says how it counts.
+  ct-asm:
+    name: ct-asm (${{ matrix.os }}, ${{ matrix.cc }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v7
+      - run: command -v ${{ matrix.cc }} || { sudo apt-get update && sudo apt-get install -y ${{ matrix.cc }}; }
+      - run: ${{ matrix.cc }} --version
+      - run: make ct-asm CC=${{ matrix.cc }}
+
   # The programs under docs/examples, which the C blocks in the docs are
   # copies of, built against the amalgamation and run under the sanitisers. An
   # API change that breaks an example in a guide fails here, in the same pull

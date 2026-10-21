@@ -1,0 +1,34 @@
+# The conditional branches tools/check-ct-asm.sh expects in each function of
+# src/crypto/subtle.c, by architecture and compiler major version. A function
+# that is not here must have none. Every branch counted here was read in the
+# assembly. Each is on a length, on where the slices are in memory, on the DIT
+# flag or on the stack protector's canary, and none is on a secret.
+#
+# architecture compiler function branches
+
+# gcc 13 adds two branches to subtle_with_data_independent_timing, on the
+# stack protector's canary.
+x86_64 gcc-13 dit_restore 1
+x86_64 gcc-13 subtle_constant_time_compare 3
+x86_64 gcc-13 subtle_constant_time_copy 3
+x86_64 gcc-13 subtle_xor_bytes 12
+x86_64 gcc-13 subtle_with_data_independent_timing 3
+
+# clang 18 vectorises the loops and branches more to pick the vector width.
+x86_64 clang-18 dit_restore 1
+x86_64 clang-18 subtle_constant_time_compare 9
+x86_64 clang-18 subtle_constant_time_copy 14
+x86_64 clang-18 subtle_xor_bytes 26
+x86_64 clang-18 subtle_with_data_independent_timing 1
+
+aarch64 gcc-13 dit_restore 1
+aarch64 gcc-13 subtle_constant_time_compare 3
+aarch64 gcc-13 subtle_constant_time_copy 3
+aarch64 gcc-13 subtle_xor_bytes 12
+aarch64 gcc-13 subtle_with_data_independent_timing 3
+
+aarch64 clang-18 dit_restore 1
+aarch64 clang-18 subtle_constant_time_compare 10
+aarch64 clang-18 subtle_constant_time_copy 3
+aarch64 clang-18 subtle_xor_bytes 22
+aarch64 clang-18 subtle_with_data_independent_timing 1

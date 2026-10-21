@@ -5,9 +5,9 @@
  * Go's table driven tests are loops here rather than subtests, with the name
  * of the case in each message. generatePEMCertWithRepeatSAN signs with a new
  * ECDSA P-256 key where Go makes a 4096 bit RSA one; the tests only look at
- * the names in it. TestSystemVerify only runs on Windows in Go, and
- * TestIssue51759 only on macOS, both to test the platform verifier, which is
- * not here yet, so they are left out.
+ * the names in it. TestSystemVerify only runs on Windows, as in Go.
+ * TestIssue51759 only runs on macOS in Go, to test the platform verifier there,
+ * which is not here yet, so it is left out.
  *
  * Copyright 2011 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -30,6 +30,7 @@
 #include "burrow/mem/arena.h"
 #include "burrow/net.h"
 #include "burrow/panic.h"
+#include "burrow/platform.h"
 #include "burrow/sort.h"
 #include "burrow/strings.h"
 #include "burrow/testing.h"
@@ -261,24 +262,27 @@ static void check_expected_error(TestingT *t, const X509VerifyCase *test, Error 
     }
 }
 
-/* testVerify, with useSystemRoots false. */
-static void test_verify(TestingT *t, Alloc *a, const X509VerifyCase *test) {
+/* testVerify */
+static void test_verify(TestingT *t, Alloc *a, const X509VerifyCase *test,
+                        bool use_system_roots) {
     const char *name = test->name;
     X509CertPool *intermediates = x509_new_cert_pool(a);
-    X509CertPool *roots = x509_new_cert_pool(a);
     X509VerifyOptions opts = {0};
     opts.intermediates = intermediates;
-    opts.roots = roots;
     opts.dns_name = str_from_cstr(test->dns_name);
     opts.current_time = time_from_unix(test->current_time, 0);
     opts.key_usages = ekus(a, test->key_usages, test->n_key_usages);
 
-    for (Int j = 0; j < LEN(test->roots) && verify_cert_set(&test->roots[j]); j++)
-        if (!x509_cert_pool_append_certs_from_pem(
-                roots, cbytes(verify_cert_pem(a, &test->roots[j])))) {
-            testing_t_errorf_v(t, "%s: failed to parse root #%d", name, j);
-            return;
-        }
+    if (!use_system_roots) {
+        X509CertPool *roots = x509_new_cert_pool(a);
+        opts.roots = roots;
+        for (Int j = 0; j < LEN(test->roots) && verify_cert_set(&test->roots[j]); j++)
+            if (!x509_cert_pool_append_certs_from_pem(
+                    roots, cbytes(verify_cert_pem(a, &test->roots[j])))) {
+                testing_t_errorf_v(t, "%s: failed to parse root #%d", name, j);
+                return;
+            }
+    }
     for (Int j = 0;
          j < LEN(test->intermediates) && verify_cert_set(&test->intermediates[j]); j++)
         if (!x509_cert_pool_append_certs_from_pem(
@@ -301,8 +305,16 @@ static void test_verify(TestingT *t, Alloc *a, const X509VerifyCase *test) {
         testing_t_errorf_v(t, "%s: unexpected error: %v", name, err);
         return;
     }
-    if (test->expect != X509_EXPECT_NOTHING)
-        check_expected_error(t, test, err);
+    if (test->expect != X509_EXPECT_NOTHING) {
+        if (use_system_roots && test->system_lax) {
+            if (!BURROW_FAILED(err)) {
+                testing_t_errorf_v(t, "%s: expected error", name);
+                return;
+            }
+        } else {
+            check_expected_error(t, test, err);
+        }
+    }
 
     /* Every expected chain should match one (or more) returned chain. */
     Int n_expected = 0;
@@ -336,7 +348,23 @@ static void test_verify(TestingT *t, Alloc *a, const X509VerifyCase *test) {
 static void TestGoVerify(TestingT *t) {
     for (Int i = 0; i < LEN(verify_tests); i++) {
         ARENA(a);
-        test_verify(t, a, &verify_tests[i]);
+        test_verify(t, a, &verify_tests[i], false);
+        arena_free(&ar);
+    }
+}
+
+static void TestSystemVerify(TestingT *t) {
+    if (strcmp(burrow_os_name(), "windows") != 0) {
+        testing_t_skipf_v(t, "skipping verify test using system APIs on %q",
+                          burrow_os_name());
+        return;
+    }
+
+    for (Int i = 0; i < LEN(verify_tests); i++) {
+        if (verify_tests[i].system_skip)
+            continue;
+        ARENA(a);
+        test_verify(t, a, &verify_tests[i], true);
         arena_free(&ar);
     }
 }
@@ -1689,6 +1717,7 @@ static void TestSystemCertPool(TestingT *t) {
 
 #define TESTS(X)                                                                       \
     X(TestGoVerify)                                                                    \
+    X(TestSystemVerify)                                                                \
     X(TestUnknownAuthorityError)                                                       \
     X(TestValidHostname)                                                               \
     X(TestPathologicalChains)                                                          \

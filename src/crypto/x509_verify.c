@@ -23,12 +23,14 @@
 #include "burrow/net.h"
 #include "burrow/net/netip.h"
 #include "burrow/os.h"
+#include "burrow/pal.h"
 #include "burrow/panic.h"
 #include "burrow/path/filepath.h"
 #include "burrow/platform.h"
 #include "burrow/slice.h"
 #include "burrow/strings.h"
 #include "burrow/sync.h"
+#include "burrow/syscall.h"
 #include "burrow/time.h"
 
 #include "x509_internal.h"
@@ -1762,6 +1764,275 @@ static Slice x509_verify(Alloc *s, const X509Certificate *c, X509VerifyOptions *
     return x509_copy_chains(a, candidates, err);
 }
 
+#if defined(BURROW_OS_WINDOWS)
+
+/* systemVerify, from Go's root_windows.go. CryptoAPI builds the chains in
+ * src/pal/certverify_windows.c, and this is what Go does with them. */
+
+/* CERT_TRUST_IS_NOT_TIME_VALID and CERT_TRUST_IS_NOT_VALID_FOR_USAGE, and the
+ * CERT_E_ HRESULTs from the SSL policy, under names of their own so that
+ * wincrypt.h stays in the PAL. */
+#define X509_WIN_TRUST_IS_NOT_TIME_VALID 0x00000001u
+#define X509_WIN_TRUST_IS_NOT_VALID_FOR_USAGE 0x00000010u
+#define X509_WIN_E_EXPIRED 0x800B0101u
+#define X509_WIN_E_CN_NO_MATCH 0x800B010Fu
+#define X509_WIN_E_UNTRUSTEDROOT 0x800B0109u
+
+typedef struct X509WinVerify {
+    const X509Certificate *c;
+    const X509VerifyOptions *opts;
+    Alloc *a;
+    Slice chains;
+    bool seen_top;
+    Error top_err;
+} X509WinVerify;
+
+/* The syscall.Errno Go's syscall package gives for a failed call. */
+static Error x509_win_errno(PalErrno e) {
+    SyscallErrno n = syscall_errno_from_pal(e);
+    if (n == 0)
+        n = (SyscallErrno)pal_errno_native(e);
+    if (n == 0)
+        return errors_new(error_allocator(), str_from_cstr(pal_errno_string(e)));
+    return syscall_errno_as_error(n, error_allocator());
+}
+
+static Error x509_win_unknown(const X509Certificate *c) {
+    X509UnknownAuthorityError e = {c};
+    return x509_unknown_authority_error_as_error(e, error_allocator());
+}
+
+/* checkChainTrustStatus checks the trust status of the certificate chain,
+ * translating any errors it finds into Go errors in the process. */
+static Error x509_win_check_trust_status(const X509Certificate *c, uint32_t status) {
+    if (status != 0) {
+        switch (status) {
+        case X509_WIN_TRUST_IS_NOT_TIME_VALID:
+            return x509_invalid(c, X509_EXPIRED, BURROW_STR_EMPTY);
+        case X509_WIN_TRUST_IS_NOT_VALID_FOR_USAGE:
+            return x509_invalid(c, X509_INCOMPATIBLE_USAGE, BURROW_STR_EMPTY);
+        /* TODO(filippo): surface more error statuses. */
+        default:
+            return x509_win_unknown(c);
+        }
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* checkChainSSLServerPolicy checks that the certificate chain in chainCtx is
+ * valid for use as a certificate chain for a SSL/TLS server.
+ *
+ * Not in Go: the PAL has already called CertVerifyCertificateChainPolicy, and
+ * this reads what it found. */
+static Error x509_win_check_ssl_server_policy(const X509Certificate *c,
+                                              const PalCertChain *chain,
+                                              const X509VerifyOptions *opts) {
+    if (!chain->policy_ok)
+        return x509_win_errno(chain->policy_err);
+
+    /* TODO(mkrautz): use the lChainIndex and lElementIndex fields
+     * of the CertChainPolicyStatus to provide proper context, instead
+     * using c. */
+    if (chain->policy_status != 0) {
+        switch (chain->policy_status) {
+        case X509_WIN_E_EXPIRED:
+            return x509_invalid(c, X509_EXPIRED, BURROW_STR_EMPTY);
+        case X509_WIN_E_CN_NO_MATCH: {
+            X509HostnameError e = {c, opts->dns_name};
+            return x509_hostname_error_as_error(e, error_allocator());
+        }
+        case X509_WIN_E_UNTRUSTEDROOT:
+            return x509_win_unknown(c);
+        default:
+            return x509_win_unknown(c);
+        }
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* extractSimpleChain extracts the final certificate chain from a
+ * CertSimpleChain. */
+static Error x509_win_extract_simple_chain(Alloc *a, const PalCertChain *chain,
+                                           Slice *out) {
+    if (chain->n < 0)
+        return errors_new(error_allocator(), BURROW_S("x509: invalid simple chain"));
+    Slice certs = slice_make(a, TYPE_X509_CERTIFICATE_PTR, 0, chain->n);
+    for (int64_t i = 0; i < chain->n; i++) {
+        /* Copy the buf, since ParseCertificate does not create its own copy. */
+        Slice encoded = slice_from((void *)(uintptr_t)chain->certs[i], chain->lens[i],
+                                   chain->lens[i], TYPE_BYTE);
+        Slice buf = bytes_clone(a, encoded);
+        Error err = BURROW_NO_ERROR;
+        X509Certificate *parsed = x509_parse_certificate(a, buf, &err);
+        if (BURROW_FAILED(err))
+            return err;
+        certs = slice_append(a, certs, &parsed, 1);
+    }
+    *out = certs;
+    return BURROW_NO_ERROR;
+}
+
+/* verifyChain */
+static Error x509_win_verify_chain(X509WinVerify *v, const PalCertChain *chain,
+                                   Slice *out) {
+    Error err = x509_win_check_trust_status(v->c, chain->trust_error);
+    if (BURROW_FAILED(err))
+        return err;
+
+    if (v->opts->dns_name.len > 0) {
+        err = x509_win_check_ssl_server_policy(v->c, chain, v->opts);
+        if (BURROW_FAILED(err))
+            return err;
+    }
+
+    Slice certs = slice_nil(TYPE_X509_CERTIFICATE_PTR);
+    err = x509_win_extract_simple_chain(v->a, chain, &certs);
+    if (BURROW_FAILED(err))
+        return err;
+    if (certs.len == 0)
+        return errors_new(error_allocator(),
+                          BURROW_S("x509: internal error: system verifier returned an "
+                                   "empty chain"));
+
+    /* Mitigate CVE-2020-0601, where the Windows system verifier might be
+     * tricked into using custom curve parameters for a trusted root, by
+     * double-checking all ECDSA signatures. If the system was tricked into
+     * using spoofed parameters, the signature will be invalid for the correct
+     * ones we parsed. (We don't support custom curves ourselves.) */
+    X509Certificate *const *cs = certs.p;
+    for (Int i = 0; i + 1 < certs.len; i++) {
+        const X509Certificate *parent = cs[i + 1];
+        if (parent->public_key_algorithm != X509_ECDSA)
+            continue;
+        err = x509_certificate_check_signature(parent, cs[i]->signature_algorithm,
+                                               cs[i]->raw_tbs_certificate,
+                                               cs[i]->signature);
+        if (BURROW_FAILED(err))
+            return err;
+    }
+    *out = certs;
+    return BURROW_NO_ERROR;
+}
+
+/* Not in Go: one chain context from the PAL, the highest quality one first,
+ * which is the loop at the end of Go's systemVerify. */
+static void x509_win_chain(void *env, const PalCertChain *chain) {
+    X509WinVerify *v = env;
+    Slice certs = slice_nil(TYPE_X509_CERTIFICATE_PTR);
+    Error err = x509_win_verify_chain(v, chain, &certs);
+    if (!v->seen_top) {
+        v->seen_top = true;
+        v->top_err = err;
+    }
+    if (!BURROW_FAILED(err))
+        v->chains = slice_append(v->a, v->chains, &certs, 1);
+}
+
+/* systemVerify is like Verify, except that it uses CryptoAPI calls to build
+ * certificate chains and verify them.
+ *
+ * Not in Go: a KeyUsages with nothing but values that are not ExtKeyUsage
+ * constants indexes an empty slice in Go and panics. Here it asks CryptoAPI
+ * for no usage in particular. */
+static Slice x509_system_verify(const X509Certificate *c, const X509VerifyOptions *opts,
+                                Alloc *a, Error *err) {
+    Slice none = slice_nil(TYPE_X509_CERTIFICATE_CHAIN);
+    Arena scratch;
+    arena_init(&scratch, heap_allocator(), 0);
+    Alloc *s = arena_allocator(&scratch);
+
+    PalCertVerifyOpts po;
+    memset(&po, 0, sizeof po);
+    po.leaf = c->raw.p;
+    po.leaf_len = c->raw.len;
+    Int ni = burrow__x509_cert_pool_len(opts->intermediates);
+    if (ni > 0) {
+        const uint8_t **ders = BURROW_NEW_N(s, const uint8_t *, (size_t)ni);
+        int64_t *lens = BURROW_NEW_N(s, int64_t, (size_t)ni);
+        if (ders == NULL || lens == NULL) {
+            arena_free(&scratch);
+            *err = burrow_err_out_of_memory;
+            return none;
+        }
+        for (Int i = 0; i < ni; i++) {
+            const X509Certificate *im =
+                burrow__x509_cert_pool_cert(opts->intermediates, i, NULL);
+            ders[i] = im->raw.p;
+            lens[i] = im->raw.len;
+        }
+        po.intermediates = ders;
+        po.intermediate_lens = lens;
+        po.n_intermediates = ni;
+    }
+
+    Slice key_usages = opts->key_usages;
+    X509ExtKeyUsage server_auth = X509_EXT_KEY_USAGE_SERVER_AUTH;
+    if (key_usages.len == 0)
+        key_usages = slice_from(&server_auth, 1, 1, TYPE_INT);
+    const char **oids = BURROW_NEW_N(s, const char *, (size_t)key_usages.len);
+    if (oids == NULL) {
+        arena_free(&scratch);
+        *err = burrow_err_out_of_memory;
+        return none;
+    }
+    const X509ExtKeyUsage *ekus = key_usages.p;
+    for (Int i = 0; i < key_usages.len; i++) {
+        X509ExtKeyUsage eku = ekus[i];
+        if (eku == X509_EXT_KEY_USAGE_ANY) {
+            po.any_usage = true;
+            break;
+        }
+        if (eku < X509_EXT_KEY_USAGE_ANY ||
+            eku > X509_EXT_KEY_USAGE_MICROSOFT_KERNEL_CODE_SIGNING)
+            continue;
+        Str oid = x509_oid_string(x509_ext_key_usage_oid(eku, s), s);
+        char *z = BURROW_NEW_N(s, char, (size_t)oid.len + 1);
+        if (z == NULL) {
+            arena_free(&scratch);
+            *err = burrow_err_out_of_memory;
+            return none;
+        }
+        memcpy(z, oid.p, (size_t)oid.len);
+        z[oid.len] = 0;
+        oids[po.n_usages++] = z;
+    }
+    po.usages = oids;
+
+    if (!time_is_zero(opts->current_time)) {
+        po.has_time = true;
+        po.unix_nano = time_unix_nano(opts->current_time);
+    }
+    if (opts->dns_name.len > 0) {
+        Str name = strings_trim_suffix(opts->dns_name, BURROW_S("."));
+        po.ssl_policy = true;
+        po.server_name = (const char *)name.p;
+        po.server_name_len = name.len;
+    }
+
+    X509WinVerify v;
+    memset(&v, 0, sizeof v);
+    v.c = c;
+    v.opts = opts;
+    v.a = a;
+    v.chains = slice_nil(TYPE_X509_CERTIFICATE_CHAIN);
+    v.top_err = BURROW_NO_ERROR;
+    PalErrno pe = PAL_OK;
+    bool ok = pal_cert_verify(&po, x509_win_chain, &v, &pe);
+    arena_free(&scratch);
+    if (!ok) {
+        *err = x509_win_errno(pe);
+        return none;
+    }
+    if (v.chains.len == 0) {
+        /* Return the error from the highest quality context. */
+        *err = v.top_err;
+        return none;
+    }
+    return v.chains;
+}
+
+#endif /* BURROW_OS_WINDOWS */
+
 Slice x509_certificate_verify(const X509Certificate *c, Alloc *a,
                               X509VerifyOptions opts, Error *err) {
     Slice none = slice_nil(TYPE_X509_CERTIFICATE_CHAIN);
@@ -1777,9 +2048,31 @@ Slice x509_certificate_verify(const X509Certificate *c, Alloc *a,
         }
     }
 
-    /* On Windows, macOS and iOS Go hands a verify with no roots to the
-     * platform. Until that is here the system pool stands in, and on those
-     * it is empty unless SSL_CERT_FILE or SSL_CERT_DIR says otherwise. */
+#if defined(BURROW_OS_WINDOWS)
+    /* Use platform verifiers, where available, if Roots is from
+     * SystemCertPool. */
+    {
+        /* Don't use the system verifier if the system pool was replaced with
+         * a non-system pool, i.e. if SetFallbackRoots was called with
+         * x509usefallbackroots=1. */
+        const X509CertPool *system_pool = burrow__x509_system_roots_pool();
+        if (opts.roots == NULL && (system_pool == NULL || system_pool->system_pool))
+            return x509_system_verify(c, &opts, a, err);
+        if (opts.roots != NULL && opts.roots->system_pool) {
+            Slice platform_chains = x509_system_verify(c, &opts, a, err);
+            /* If the platform verifier succeeded, or there are no additional
+             * roots, return the platform verifier result. Otherwise, continue
+             * with the Go verifier. */
+            if (!BURROW_FAILED(*err) || opts.roots->len == 0)
+                return platform_chains;
+            *err = BURROW_NO_ERROR;
+        }
+    }
+#endif
+
+    /* Not in Go: on macOS and iOS Go hands a verify with no roots to the
+     * platform. Until that is here the system pool stands in, and there it is
+     * empty unless SSL_CERT_FILE or SSL_CERT_DIR says otherwise. */
     if (opts.roots == NULL) {
         opts.roots = burrow__x509_system_roots_pool();
         if (opts.roots == NULL) {

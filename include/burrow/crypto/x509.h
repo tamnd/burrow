@@ -874,10 +874,15 @@ BURROW_SLICE_TYPE_DECL(X509CertificateChain, X509CertificatePtr);
  * slice of X509CertificateChain from a. The certificates are borrowed from c and the
  * pools.
  *
- * On Windows, macOS and iOS, with no roots given, Go asks the platform to
- * verify. That is not here yet, and the system pool there is empty, so this
- * gives an UnknownAuthorityError unless SSL_CERT_FILE or SSL_CERT_DIR names
- * some roots. */
+ * On Windows, with no roots given or with the system pool as the roots, Go asks
+ * CryptoAPI to verify, and so does this. The certificates in those chains are
+ * parsed from what CryptoAPI gives back, from a. When CryptoAPI finds no chain
+ * and the roots have certificates added to the system pool, the chains come
+ * from those as usual.
+ *
+ * Go asks the platform on macOS and iOS too. That is not here yet, and the
+ * system pool there is empty, so this gives an UnknownAuthorityError unless
+ * SSL_CERT_FILE or SSL_CERT_DIR names some roots. */
 BURROW_OWNS(ret) Slice x509_certificate_verify(const X509Certificate *c, Alloc *a,
                                                X509VerifyOptions opts, Error *err);
 

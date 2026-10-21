@@ -337,16 +337,16 @@ typedef Int TlsRenegotiationSupport;
 
 /* QUICEncryptionLevel represents a QUIC encryption level used to transmit
  * handshake messages. */
-typedef Int TlsQuicEncryptionLevel;
+typedef Int TlsQUICEncryptionLevel;
 
-#define TLS_QUIC_ENCRYPTION_LEVEL_INITIAL ((TlsQuicEncryptionLevel)0)
-#define TLS_QUIC_ENCRYPTION_LEVEL_EARLY ((TlsQuicEncryptionLevel)1)
-#define TLS_QUIC_ENCRYPTION_LEVEL_HANDSHAKE ((TlsQuicEncryptionLevel)2)
-#define TLS_QUIC_ENCRYPTION_LEVEL_APPLICATION ((TlsQuicEncryptionLevel)3)
+#define TLS_QUIC_ENCRYPTION_LEVEL_INITIAL ((TlsQUICEncryptionLevel)0)
+#define TLS_QUIC_ENCRYPTION_LEVEL_EARLY ((TlsQUICEncryptionLevel)1)
+#define TLS_QUIC_ENCRYPTION_LEVEL_HANDSHAKE ((TlsQUICEncryptionLevel)2)
+#define TLS_QUIC_ENCRYPTION_LEVEL_APPLICATION ((TlsQUICEncryptionLevel)3)
 
 /* QUICEncryptionLevel.String: "Initial", "Early", "Handshake" or
  * "Application", or "QUICEncryptionLevel(7)" from a for any other value. */
-BURROW_OWNS(ret) Str tls_quic_encryption_level_string(TlsQuicEncryptionLevel l,
+BURROW_OWNS(ret) Str tls_quic_encryption_level_string(TlsQUICEncryptionLevel l,
                                                       Alloc *a);
 
 /* ------------------------------------------------------------------ alerts */
@@ -1346,6 +1346,10 @@ extern const Type *const TYPE_TLS_CERTIFICATE_VERIFICATION_ERROR;
 BURROW_OWNS(ret) Str tls_certificate_verification_error_error(
     const TlsCertificateVerificationError *e, Alloc *a);
 
+/* CertificateVerificationError.Unwrap: e->err. */
+BURROW_BORROWS(ret, e) Error
+tls_certificate_verification_error_unwrap(const TlsCertificateVerificationError *e);
+
 /* An Error for e, which errors_as with TYPE_TLS_CERTIFICATE_VERIFICATION_ERROR
  * gives back and errors_unwrap takes to e->err. e->err is kept with
  * error_retain in a, and the certificates are not copied. Out of memory gives
@@ -1603,10 +1607,10 @@ void tls_conn_free(TlsConn *c);
  * Methods of QUICConn are not safe for concurrent use.
  *
  * Not in Go: tls_quic_conn_free gives it back. */
-typedef struct TlsQuicConn TlsQuicConn;
+typedef struct TlsQUICConn TlsQUICConn;
 
 /* A QUICConfig configures a [QUICConn]. */
-typedef struct TlsQuicConfig {
+typedef struct TlsQUICConfig {
     TlsConfig *tls_config;
 
     /* EnableSessionEvents may be set to true to enable the [QUICStoreSession]
@@ -1619,13 +1623,13 @@ typedef struct TlsQuicConfig {
     /* ClientHelloInfoConn is the net.Conn to use for the ClientHelloInfo.Conn
      * field. */
     NetConn client_hello_info_conn;
-} TlsQuicConfig;
+} TlsQUICConfig;
 
 /* A QUICEventKind is a type of operation on a QUIC connection. */
-typedef Int TlsQuicEventKind;
+typedef Int TlsQUICEventKind;
 
 /* QUICNoEvent indicates that there are no events available. */
-#define TLS_QUIC_NO_EVENT ((TlsQuicEventKind)0)
+#define TLS_QUIC_NO_EVENT ((TlsQUICEventKind)0)
 
 /* QUICSetReadSecret and QUICSetWriteSecret provide the read and write secrets
  * for a given encryption level. QUICEvent.Level, QUICEvent.Data, and
@@ -1633,16 +1637,16 @@ typedef Int TlsQuicEventKind;
  *
  * Secrets for the Initial encryption level are derived from the initial
  * destination connection ID, and are not provided by the QUICConn. */
-#define TLS_QUIC_SET_READ_SECRET ((TlsQuicEventKind)1)
-#define TLS_QUIC_SET_WRITE_SECRET ((TlsQuicEventKind)2)
+#define TLS_QUIC_SET_READ_SECRET ((TlsQUICEventKind)1)
+#define TLS_QUIC_SET_WRITE_SECRET ((TlsQUICEventKind)2)
 
 /* QUICWriteData provides data to send to the peer in CRYPTO frames.
  * QUICEvent.Data is set. */
-#define TLS_QUIC_WRITE_DATA ((TlsQuicEventKind)3)
+#define TLS_QUIC_WRITE_DATA ((TlsQUICEventKind)3)
 
 /* QUICTransportParameters provides the peer's QUIC transport parameters.
  * QUICEvent.Data is set. */
-#define TLS_QUIC_TRANSPORT_PARAMETERS ((TlsQuicEventKind)4)
+#define TLS_QUIC_TRANSPORT_PARAMETERS ((TlsQUICEventKind)4)
 
 /* QUICTransportParametersRequired indicates that the caller must provide QUIC
  * transport parameters to send to the peer. The caller should set the
@@ -1651,15 +1655,15 @@ typedef Int TlsQuicEventKind;
  *
  * If transport parameters are set before calling QUICConn.Start, the
  * connection will never generate a QUICTransportParametersRequired event. */
-#define TLS_QUIC_TRANSPORT_PARAMETERS_REQUIRED ((TlsQuicEventKind)5)
+#define TLS_QUIC_TRANSPORT_PARAMETERS_REQUIRED ((TlsQUICEventKind)5)
 
 /* QUICRejectedEarlyData indicates that the server rejected 0-RTT data even if
  * we offered it. It's returned before QUICEncryptionLevelApplication keys are
  * returned. This event only occurs on client connections. */
-#define TLS_QUIC_REJECTED_EARLY_DATA ((TlsQuicEventKind)6)
+#define TLS_QUIC_REJECTED_EARLY_DATA ((TlsQUICEventKind)6)
 
 /* QUICHandshakeDone indicates that the TLS handshake has completed. */
-#define TLS_QUIC_HANDSHAKE_DONE ((TlsQuicEventKind)7)
+#define TLS_QUIC_HANDSHAKE_DONE ((TlsQUICEventKind)7)
 
 /* QUICResumeSession indicates that a client is attempting to resume a
  * previous session. [QUICEvent.SessionState] is set.
@@ -1671,28 +1675,28 @@ typedef Int TlsQuicEventKind;
  * The application may set [QUICEvent.SessionState.EarlyData] to false before
  * the next call to [QUICConn.NextEvent] to decline 0-RTT even if the session
  * supports it. */
-#define TLS_QUIC_RESUME_SESSION ((TlsQuicEventKind)8)
+#define TLS_QUIC_RESUME_SESSION ((TlsQUICEventKind)8)
 
 /* QUICStoreSession indicates that the server has provided state permitting the
  * client to resume the session. [QUICEvent.SessionState] is set. The
  * application should use [QUICConn.StoreSession] session to store the
  * [SessionState]. The application may modify the [SessionState] before
  * storing it. This event only occurs on client connections. */
-#define TLS_QUIC_STORE_SESSION ((TlsQuicEventKind)9)
+#define TLS_QUIC_STORE_SESSION ((TlsQUICEventKind)9)
 
 /* QUICErrorEvent indicates that a fatal error has occurred. The handshake
  * cannot proceed and the connection must be closed. QUICEvent.Err is set. */
-#define TLS_QUIC_ERROR_EVENT ((TlsQuicEventKind)10)
+#define TLS_QUIC_ERROR_EVENT ((TlsQUICEventKind)10)
 
 /* A QUICEvent is an event occurring on a QUIC connection.
  *
  * The type of event is specified by the Kind field. The contents of the other
  * fields are kind-specific. */
-typedef struct TlsQuicEvent {
-    TlsQuicEventKind kind;
+typedef struct TlsQUICEvent {
+    TlsQUICEventKind kind;
 
     /* Set for QUICSetReadSecret, QUICSetWriteSecret, and QUICWriteData. */
-    TlsQuicEncryptionLevel level;
+    TlsQUICEncryptionLevel level;
 
     /* Set for QUICTransportParameters, QUICSetReadSecret, QUICSetWriteSecret,
      * and QUICWriteData. The contents are owned by crypto/tls, and are valid
@@ -1713,14 +1717,14 @@ typedef struct TlsQuicEvent {
      *
      * Not in Go: the error belongs to the QUICConn. */
     Error err;
-} TlsQuicEvent;
+} TlsQUICEvent;
 
-typedef struct TlsQuicSessionTicketOptions {
+typedef struct TlsQUICSessionTicketOptions {
     /* EarlyData specifies whether the ticket may be used for 0-RTT. */
     bool early_data;
     /* Not in Go: a slice of Bytes. */
     Slice extra;
-} TlsQuicSessionTicketOptions;
+} TlsQUICSessionTicketOptions;
 
 /* QUICClient returns a new TLS client side connection using QUICTransport as
  * the underlying transport. The config cannot be nil.
@@ -1729,13 +1733,13 @@ typedef struct TlsQuicSessionTicketOptions {
  * goroutines can use at once, as the heap can, since the handshake runs on a
  * goroutine of its own. config->tls_config has to outlive it, and so does
  * config->client_hello_info_conn. NULL when a is out of memory. */
-BURROW_OWNS(ret) TlsQuicConn *tls_quic_client(Alloc *a, const TlsQuicConfig *config);
+BURROW_OWNS(ret) TlsQUICConn *tls_quic_client(Alloc *a, const TlsQUICConfig *config);
 
 /* QUICServer returns a new TLS server side connection using QUICTransport as
  * the underlying transport. The config cannot be nil.
  *
  * Not in Go: as tls_quic_client. */
-BURROW_OWNS(ret) TlsQuicConn *tls_quic_server(Alloc *a, const TlsQuicConfig *config);
+BURROW_OWNS(ret) TlsQUICConn *tls_quic_server(Alloc *a, const TlsQUICConfig *config);
 
 /* Start starts the client or server handshake protocol. It may produce
  * connection events, which may be read with [QUICConn.NextEvent].
@@ -1744,28 +1748,28 @@ BURROW_OWNS(ret) TlsQuicConn *tls_quic_server(Alloc *a, const TlsQuicConfig *con
  *
  * Not in Go: ctx has to outlive the handshake, which is over once
  * tls_quic_conn_close returns. */
-BURROW_BORROWS(ret, q) Error tls_quic_conn_start(TlsQuicConn *q, Context ctx);
+BURROW_BORROWS(ret, q) Error tls_quic_conn_start(TlsQUICConn *q, Context ctx);
 
 /* NextEvent returns the next event occurring on the connection. It returns an
  * event with a Kind of [QUICNoEvent] when no events are available. */
-TlsQuicEvent tls_quic_conn_next_event(TlsQuicConn *q);
+TlsQUICEvent tls_quic_conn_next_event(TlsQUICConn *q);
 
 /* Close closes the connection and stops any in-progress handshake. */
-BURROW_BORROWS(ret, q) Error tls_quic_conn_close(TlsQuicConn *q);
+BURROW_BORROWS(ret, q) Error tls_quic_conn_close(TlsQUICConn *q);
 
 /* HandleData handles handshake bytes received from the peer. It may produce
  * connection events, which may be read with [QUICConn.NextEvent].
  *
  * Not in Go: data is copied, and not kept after this returns. */
-BURROW_BORROWS(ret, q) Error tls_quic_conn_handle_data(TlsQuicConn *q,
-                                                       TlsQuicEncryptionLevel level,
+BURROW_BORROWS(ret, q) Error tls_quic_conn_handle_data(TlsQUICConn *q,
+                                                       TlsQUICEncryptionLevel level,
                                                        Slice data);
 
 /* SendSessionTicket sends a session ticket to the client. It produces
  * connection events, which may be read with [QUICConn.NextEvent]. Currently,
  * it can only be called once. */
 BURROW_BORROWS(ret, q) Error
-tls_quic_conn_send_session_ticket(TlsQuicConn *q, TlsQuicSessionTicketOptions opts);
+tls_quic_conn_send_session_ticket(TlsQUICConn *q, TlsQUICSessionTicketOptions opts);
 
 /* StoreSession stores a session previously received in a QUICStoreSession
  * event in the ClientSessionCache. The application may process additional
@@ -1774,13 +1778,13 @@ tls_quic_conn_send_session_ticket(TlsQuicConn *q, TlsQuicSessionTicketOptions op
  * Not in Go: a session from a QUICStoreSession event stays with q, and the
  * cache gets a reference to it. Any other session is handed over, to go in
  * the cache or to be freed. */
-BURROW_BORROWS(ret, q) Error tls_quic_conn_store_session(TlsQuicConn *q,
+BURROW_BORROWS(ret, q) Error tls_quic_conn_store_session(TlsQUICConn *q,
                                                          TlsSessionState *session);
 
 /* ConnectionState returns basic TLS details about the connection.
  *
  * Not in Go: what the state points at belongs to q. */
-TlsConnectionState tls_quic_conn_connection_state(TlsQuicConn *q);
+TlsConnectionState tls_quic_conn_connection_state(TlsQUICConn *q);
 
 /* SetTransportParameters sets the transport parameters to send to the peer.
  *
@@ -1789,11 +1793,11 @@ TlsConnectionState tls_quic_conn_connection_state(TlsQuicConn *q);
  * [QUICTransportParametersRequired].
  *
  * Not in Go: params is copied. */
-void tls_quic_conn_set_transport_parameters(TlsQuicConn *q, Slice params);
+void tls_quic_conn_set_transport_parameters(TlsQUICConn *q, Slice params);
 
 /* Not in Go: closes q, waits for its handshake to be over, and gives it back
  * to the allocator it came from with everything it kept. NULL does nothing. */
-void tls_quic_conn_free(TlsQuicConn *q);
+void tls_quic_conn_free(TlsQUICConn *q);
 
 #ifdef __cplusplus
 }

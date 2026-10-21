@@ -1194,6 +1194,11 @@ Str tls_certificate_verification_error_error(const TlsCertificateVerificationErr
     return fmt_sprintf_v(a, "tls: failed to verify certificate: %v", e->err);
 }
 
+Error tls_certificate_verification_error_unwrap(
+    const TlsCertificateVerificationError *e) {
+    return e->err;
+}
+
 Error tls_certificate_verification_error_as_error(
     const TlsCertificateVerificationError *e, Alloc *a) {
     TcfgVerificationBox *b = BURROW_NEW(a, TcfgVerificationBox);

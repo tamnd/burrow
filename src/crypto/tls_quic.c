@@ -38,7 +38,7 @@
 #include <string.h>
 
 /* QUICConn. */
-struct TlsQuicConn {
+struct TlsQUICConn {
     TlsConn *conn;
 
     bool session_ticket_sent;
@@ -70,8 +70,8 @@ BURROW_SENTINEL_ERROR(
 /* What []byte{} points at: empty and not nil. */
 static const Byte tqc_empty[1] = {0};
 
-static TlsQuicConn *tqc_new(Alloc *a, const TlsQuicConfig *config, bool is_client) {
-    TlsQuicConn *q = BURROW_NEW(a, TlsQuicConn);
+static TlsQUICConn *tqc_new(Alloc *a, const TlsQUICConfig *config, bool is_client) {
+    TlsQUICConn *q = BURROW_NEW(a, TlsQUICConn);
     if (q == NULL)
         return NULL;
     NetConn none;
@@ -85,7 +85,7 @@ static TlsQuicConn *tqc_new(Alloc *a, const TlsQuicConfig *config, bool is_clien
         chan_free(qs->signalc);
         chan_free(qs->blockedc);
         tls_conn_free(q->conn);
-        mem_free(a, q, sizeof *q, _Alignof(TlsQuicConn));
+        mem_free(a, q, sizeof *q, _Alignof(TlsQUICConn));
         return NULL;
     }
     q->a = a;
@@ -101,20 +101,20 @@ static TlsQuicConn *tqc_new(Alloc *a, const TlsQuicConfig *config, bool is_clien
     return q;
 }
 
-TlsQuicConn *tls_quic_client(Alloc *a, const TlsQuicConfig *config) {
+TlsQUICConn *tls_quic_client(Alloc *a, const TlsQUICConfig *config) {
     return tqc_new(a, config, TLS_ROLE_CLIENT);
 }
 
-TlsQuicConn *tls_quic_server(Alloc *a, const TlsQuicConfig *config) {
+TlsQUICConn *tls_quic_server(Alloc *a, const TlsQUICConfig *config) {
     return tqc_new(a, config, TLS_ROLE_SERVER);
 }
 
 static void tqc_handshake(void *env) {
-    TlsQuicConn *q = (TlsQuicConn *)env;
+    TlsQUICConn *q = (TlsQUICConn *)env;
     (void)tls_conn_handshake_context(q->conn, q->start_ctx);
 }
 
-Error tls_quic_conn_start(TlsQuicConn *q, Context ctx) {
+Error tls_quic_conn_start(TlsQUICConn *q, Context ctx) {
     TlsQuicState *qs = &q->state;
     if (qs->started)
         return burrow__tls_quic_error(tqc_err_start_twice);
@@ -144,9 +144,9 @@ static void tqc_reset_events(TlsQuicState *qs) {
     arena_reset(&qs->event_data);
 }
 
-TlsQuicEvent tls_quic_conn_next_event(TlsQuicConn *q) {
+TlsQUICEvent tls_quic_conn_next_event(TlsQUICConn *q) {
     TlsQuicState *qs = &q->state;
-    TlsQuicEvent none;
+    TlsQUICEvent none;
     memset(&none, 0, sizeof none);
     none.kind = TLS_QUIC_NO_EVENT;
     none.data = slice_nil(TYPE_BYTE);
@@ -174,14 +174,14 @@ TlsQuicEvent tls_quic_conn_next_event(TlsQuicConn *q) {
         tqc_reset_events(qs);
         return none;
     }
-    TlsQuicEvent e = qs->events[qs->next_event];
+    TlsQUICEvent e = qs->events[qs->next_event];
     memset(&qs->events[qs->next_event], 0,
            sizeof qs->events[0]); /* zero out references to data */
     qs->next_event++;
     return e;
 }
 
-Error tls_quic_conn_close(TlsQuicConn *q) {
+Error tls_quic_conn_close(TlsQUICConn *q) {
     TlsQuicState *qs = &q->state;
     if (BURROW_CONTEXT_IS_NIL(qs->ctx))
         return BURROW_NO_ERROR; /* never started */
@@ -192,7 +192,7 @@ Error tls_quic_conn_close(TlsQuicConn *q) {
     return q->conn->handshake_err;
 }
 
-Error tls_quic_conn_handle_data(TlsQuicConn *q, TlsQuicEncryptionLevel level,
+Error tls_quic_conn_handle_data(TlsQUICConn *q, TlsQUICEncryptionLevel level,
                                 Slice data) {
     TlsConn *c = q->conn;
     TlsQuicState *qs = &q->state;
@@ -240,8 +240,8 @@ Error tls_quic_conn_handle_data(TlsQuicConn *q, TlsQuicEncryptionLevel level,
     return BURROW_NO_ERROR;
 }
 
-Error tls_quic_conn_send_session_ticket(TlsQuicConn *q,
-                                        TlsQuicSessionTicketOptions opts) {
+Error tls_quic_conn_send_session_ticket(TlsQUICConn *q,
+                                        TlsQUICSessionTicketOptions opts) {
     TlsConn *c = q->conn;
     if (c->config->session_tickets_disabled)
         return BURROW_NO_ERROR;
@@ -266,7 +266,7 @@ static TlsClientSessionState *tqc_stored(const TlsQuicState *qs,
     return NULL;
 }
 
-Error tls_quic_conn_store_session(TlsQuicConn *q, TlsSessionState *session) {
+Error tls_quic_conn_store_session(TlsQUICConn *q, TlsSessionState *session) {
     TlsConn *c = q->conn;
     TlsQuicState *qs = &q->state;
     TlsClientSessionState *kept = tqc_stored(qs, session);
@@ -304,15 +304,15 @@ Error tls_quic_conn_store_session(TlsQuicConn *q, TlsSessionState *session) {
     return BURROW_NO_ERROR;
 }
 
-TlsConn *burrow__tls_quic_conn_conn(TlsQuicConn *q) {
+TlsConn *burrow__tls_quic_conn_conn(TlsQUICConn *q) {
     return q->conn;
 }
 
-TlsConnectionState tls_quic_conn_connection_state(TlsQuicConn *q) {
+TlsConnectionState tls_quic_conn_connection_state(TlsQUICConn *q) {
     return tls_conn_connection_state(q->conn);
 }
 
-void tls_quic_conn_set_transport_parameters(TlsQuicConn *q, Slice params) {
+void tls_quic_conn_set_transport_parameters(TlsQUICConn *q, Slice params) {
     TlsQuicState *qs = &q->state;
     if (params.len == 0) {
         params = slice_from((Byte *)(uintptr_t)tqc_empty, 0, 0, TYPE_BYTE);
@@ -330,7 +330,7 @@ void tls_quic_conn_set_transport_parameters(TlsQuicConn *q, Slice params) {
     }
 }
 
-void tls_quic_conn_free(TlsQuicConn *q) {
+void tls_quic_conn_free(TlsQUICConn *q) {
     if (q == NULL)
         return;
     TlsQuicState *qs = &q->state;
@@ -348,7 +348,7 @@ void tls_quic_conn_free(TlsQuicConn *q) {
     arena_free(&qs->event_data);
     arena_free(&qs->params);
     tls_conn_free(q->conn);
-    mem_free(q->a, q, sizeof *q, _Alignof(TlsQuicConn));
+    mem_free(q->a, q, sizeof *q, _Alignof(TlsQUICConn));
 }
 
 Error burrow__tls_quic_error(Error err) {
@@ -371,7 +371,7 @@ Error burrow__tls_quic_error(Error err) {
 
 /* Not in Go: append(events, e), with data, if it is not nil, copied into
  * event_data for the event. */
-static Error tqc_push(TlsQuicState *qs, TlsQuicEvent e, Slice data) {
+static Error tqc_push(TlsQuicState *qs, TlsQUICEvent e, Slice data) {
     Alloc *ea = arena_allocator(&qs->event_data);
     e.data = slice_nil(TYPE_BYTE);
     if (data.len > 0) {
@@ -381,7 +381,7 @@ static Error tqc_push(TlsQuicState *qs, TlsQuicEvent e, Slice data) {
     }
     if (qs->n_events == qs->cap_events) {
         Int cap = qs->cap_events * 2;
-        TlsQuicEvent *events = BURROW_NEW_N(ea, TlsQuicEvent, (size_t)cap);
+        TlsQUICEvent *events = BURROW_NEW_N(ea, TlsQUICEvent, (size_t)cap);
         if (events == NULL)
             return burrow_err_out_of_memory;
         memcpy(events, qs->events, (size_t)qs->n_events * sizeof events[0]);
@@ -392,8 +392,8 @@ static Error tqc_push(TlsQuicState *qs, TlsQuicEvent e, Slice data) {
     return BURROW_NO_ERROR;
 }
 
-static TlsQuicEvent tqc_event(TlsQuicEventKind kind) {
-    TlsQuicEvent e;
+static TlsQUICEvent tqc_event(TlsQUICEventKind kind) {
+    TlsQUICEvent e;
     memset(&e, 0, sizeof e);
     e.kind = kind;
     e.data = slice_nil(TYPE_BYTE);
@@ -434,7 +434,7 @@ Error burrow__tls_conn_quic_read_handshake_bytes(TlsConn *c, Int n) {
     return BURROW_NO_ERROR;
 }
 
-Error burrow__tls_conn_quic_set_read_secret(TlsConn *c, TlsQuicEncryptionLevel level,
+Error burrow__tls_conn_quic_set_read_secret(TlsConn *c, TlsQUICEncryptionLevel level,
                                             uint16_t suite, Slice secret) {
     /* Ensure that there are no buffered handshake messages before changing
      * the read keys, since that can cause messages to be parsed that were
@@ -443,28 +443,28 @@ Error burrow__tls_conn_quic_set_read_secret(TlsConn *c, TlsQuicEncryptionLevel l
         (void)burrow__tls_conn_send_alert(c, TLS_ALERT_UNEXPECTED_MESSAGE);
         return tqc_err_hand_not_empty;
     }
-    TlsQuicEvent e = tqc_event(TLS_QUIC_SET_READ_SECRET);
+    TlsQUICEvent e = tqc_event(TLS_QUIC_SET_READ_SECRET);
     e.level = level;
     e.suite = suite;
     return tqc_push(c->quic, e, secret);
 }
 
-Error burrow__tls_conn_quic_set_write_secret(TlsConn *c, TlsQuicEncryptionLevel level,
+Error burrow__tls_conn_quic_set_write_secret(TlsConn *c, TlsQUICEncryptionLevel level,
                                              uint16_t suite, Slice secret) {
-    TlsQuicEvent e = tqc_event(TLS_QUIC_SET_WRITE_SECRET);
+    TlsQUICEvent e = tqc_event(TLS_QUIC_SET_WRITE_SECRET);
     e.level = level;
     e.suite = suite;
     return tqc_push(c->quic, e, secret);
 }
 
-Error burrow__tls_conn_quic_write_crypto_data(TlsConn *c, TlsQuicEncryptionLevel level,
+Error burrow__tls_conn_quic_write_crypto_data(TlsConn *c, TlsQUICEncryptionLevel level,
                                               Slice data) {
     TlsQuicState *qs = c->quic;
-    TlsQuicEvent *last = NULL;
+    TlsQUICEvent *last = NULL;
     if (qs->n_events > 0)
         last = &qs->events[qs->n_events - 1];
     if (last == NULL || last->kind != TLS_QUIC_WRITE_DATA || last->level != level) {
-        TlsQuicEvent e = tqc_event(TLS_QUIC_WRITE_DATA);
+        TlsQUICEvent e = tqc_event(TLS_QUIC_WRITE_DATA);
         e.level = level;
         return tqc_push(qs, e, data);
     }
@@ -480,7 +480,7 @@ Error burrow__tls_conn_quic_write_crypto_data(TlsConn *c, TlsQuicEncryptionLevel
 
 Error burrow__tls_conn_quic_resume_session(TlsConn *c, TlsSessionState *session) {
     TlsQuicState *qs = c->quic;
-    TlsQuicEvent e = tqc_event(TLS_QUIC_RESUME_SESSION);
+    TlsQUICEvent e = tqc_event(TLS_QUIC_RESUME_SESSION);
     e.session_state = session;
     Error err = tqc_push(qs, e, slice_nil(TYPE_BYTE));
     if (BURROW_FAILED(err))
@@ -515,7 +515,7 @@ Error burrow__tls_conn_quic_store_session(TlsConn *c, TlsClientSessionState *cs)
         qs->cap_stored = cap;
     }
     qs->stored[qs->n_stored++] = cs;
-    TlsQuicEvent e = tqc_event(TLS_QUIC_STORE_SESSION);
+    TlsQUICEvent e = tqc_event(TLS_QUIC_STORE_SESSION);
     e.session_state = cs->session;
     (void)tqc_push(qs, e, slice_nil(TYPE_BYTE));
     return BURROW_NO_ERROR;

@@ -834,7 +834,7 @@ CRYPTO_FIPS_TEXT static Int sha3_left_encode(uint64_t x, Byte out[9]) {
 /* bytepad(data, rate), absorbed: the encoded rate, the data, and zeros to the
  * end of the block. */
 CRYPTO_FIPS_TEXT static void sha3_bytepad_write(Sha3SHAKE *s, Slice data, Int rate) {
-    Byte enc[9];
+    Byte enc[9] = {0};
     Int n = sha3_left_encode((uint64_t)rate, enc);
     sha3_absorb(&s->d, enc, n);
     sha3_absorb(&s->d, (const Byte *)data.p, data.len);
@@ -866,7 +866,7 @@ CRYPTO_FIPS_TEXT static Sha3SHAKE *sha3_new_cshake(Alloc *a, Slice n, Slice s, I
     if (c == NULL || (n.len == 0 && s.len == 0))
         return c;
     c->d.dsbyte = SHA3_DS_CSHAKE;
-    Byte enc[9];
+    Byte enc[9] = {0};
     Slice b = slice_make(a, TYPE_BYTE, 0, 9 + n.len + 9 + s.len);
     if (b.p == NULL) {
         mem_free(a, c, sizeof *c, _Alignof(Sha3SHAKE));

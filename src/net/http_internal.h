@@ -543,4 +543,9 @@ void burrow__http_server_handler_serve(HttpServer *srv, HttpResponseWriter w,
 bool burrow__http_server_do_keep_alives(HttpServer *srv);
 Int burrow__http_server_max_header_value_count(HttpServer *srv);
 
+/* net/http/internal/testcert's LocalhostCert and LocalhostKey, in
+ * http_testcert.c. */
+extern const Str burrow__http_testcert_localhost_cert;
+extern const Str burrow__http_testcert_localhost_key;
+
 #endif /* BURROW_SRC_NET_HTTP_INTERNAL_H */

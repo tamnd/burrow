@@ -341,6 +341,32 @@ static void hog2_loop(void *env) {
     }
 }
 
+/* Not in Go: an arena that is freed when the test ends, however it ends, which
+ * the garbage collector does for Go. A skip or a fatal ends the test where it
+ * is, so freeing it at the end of the test function would not be enough. */
+static void free_test_arena(void *env) {
+    Arena *ar = env;
+    arena_free(ar);
+    mem_free(heap_allocator(), ar, sizeof *ar, _Alignof(Arena));
+}
+
+static Alloc *test_arena(TestingT *t) {
+    Arena *ar = mem_alloc(heap_allocator(), sizeof *ar, _Alignof(Arena));
+    if (ar == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    arena_init(ar, NULL, 0);
+    testing_t_cleanup(t, BURROW_FN(Func, free_test_arena, ar));
+    return arena_allocator(ar);
+}
+
+/* Not in Go: the rate that TestDeltaProfile's deferred function puts back. */
+static Int saved_rate;
+
+static void restore_rate(void *env) {
+    (void)env;
+    (void)runtime_set_mutex_profile_fraction(saved_rate);
+}
+
 static void TestDeltaProfile(TestingT *t) {
 #if !defined(HAVE_TCP)
     /* Not in Go: the test server needs TCP, which here needs the readiness poll
@@ -351,7 +377,8 @@ static void TestDeltaProfile(TestingT *t) {
     testing_t_cleanup(t, BURROW_FN(Func, srv_close, NULL));
     /* Not in Go: with no stack walk every sample has an empty stack, which
      * Go's test finds out below and skips for. */
-    Int rate = runtime_set_mutex_profile_fraction(1);
+    saved_rate = runtime_set_mutex_profile_fraction(1);
+    testing_t_cleanup(t, BURROW_FN(Func, restore_rate, NULL));
 
     /* mutexHog1 will appear in non-delta mutex profile if the mutex profile
      * works. */
@@ -359,21 +386,15 @@ static void TestDeltaProfile(TestingT *t) {
 
     /* If mutexHog1 does not appear in the mutex profile, skip this test. Mutex
      * profile is likely not working, so is the delta profile. */
-    Arena ar;
-    arena_init(&ar, NULL, 0);
-    Alloc *a = arena_allocator(&ar);
+    Alloc *a = test_arena(t);
     Error err = BURROW_NO_ERROR;
     PfProfile *p = query(a, S("/debug/pprof/mutex"), &err);
-    if (BURROW_FAILED(err)) {
+    if (BURROW_FAILED(err))
         testing_t_skipf_v(t, "mutex profile is unsupported: %v", err);
-        goto out;
-    }
 
-    if (!seen(p, "mutex_hog1", 1)) {
+    if (!seen(p, "mutex_hog1", 1))
         testing_t_skipf_v(t, "mutex profile is not working: %v",
                           burrow__pf_profile_string(p, a));
-        goto out;
-    }
 
     /* causes mutexHog2 call stacks to appear in the mutex profile. */
     hog_done = chan_make(heap_allocator(), TYPE_BOOL, 0);
@@ -414,9 +435,6 @@ cleanup:; /* cleanup the above goroutine. */
     (void)chan_recv(hog_done, &v); /* wait for the goroutine to exit. */
     chan_free(hog_done);
     hog_done = NULL;
-out:
-    (void)runtime_set_mutex_profile_fraction(rate);
-    arena_free(&ar);
 }
 
 /* What Go's testdata/delta_mutex.go does: collects a 1s delta mutex profile
@@ -453,16 +471,13 @@ static void delta_mutex_main(void) {
  *
  * Regression test for https://go.dev/issue/64566. */
 static void TestDeltaProfileEmptyBase(TestingT *t) {
-    Arena ar;
-    arena_init(&ar, NULL, 0);
-    Alloc *a = arena_allocator(&ar);
+    Alloc *a = test_arena(t);
     if (os_getenv(a, S("BURROW_PPROF_DELTA_MUTEX")).len > 0)
         delta_mutex_main();
 
     if (testing_short()) {
         /* Delta profile collection has a 1s minimum. */
         testing_t_skip_v(t, "skipping in -short mode");
-        goto out;
     }
 
     SKIP_WITHOUT_EXEC(t);
@@ -503,7 +518,7 @@ static void TestDeltaProfileEmptyBase(TestingT *t) {
     if (p->sample_type.len != 2) {
         testing_t_errorf_v(t, "len(p.SampleType) got %d want 2", p->sample_type.len);
         /* Not in Go: Go goes on to index it and panics if it is short. */
-        goto out;
+        return;
     }
     if (!str_eq(st[0]->type, S("contentions")))
         testing_t_errorf_v(t, "p.SampleType[0].Type got %q want \"contentions\"",
@@ -527,8 +542,6 @@ static void TestDeltaProfileEmptyBase(TestingT *t) {
     if (!str_eq(p->period_type->unit, S("count")))
         testing_t_errorf_v(t, "p.PeriodType.Unit got %q want \"count\"",
                            p->period_type->unit);
-out:
-    arena_free(&ar);
 }
 
 #define TESTS(X)                                                                       \

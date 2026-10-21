@@ -445,6 +445,7 @@ global	src/crypto/ecdsa.c	ecdsa_self_test_deterministic	fips-self-test	A SyncOnc
 global	src/crypto/ed25519.c	ed_self_test	fips-self-test	A SyncOnce, which is its own synchronisation.
 global	src/crypto/mldsa.c	mldsa_self_test	fips-self-test	A SyncOnce, which is its own synchronisation.
 global	src/crypto/mlkem.c	mlkem_self_test	fips-self-test	A SyncOnce, which is its own synchronisation.
+global	src/crypto/rsa.c	rsa_self_test	fips-self-test	A SyncOnce, which is its own synchronisation.
 global	src/crypto/rand.c	crypto_rand_debug_flags	godebug	The cryptocustomrand setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/crypto/rand.c	crand_testing_reader	package-vars	drbg's testingReader. Not synchronised, as in Go: testing/cryptotest sets it in a test that cannot be parallel, before the test starts the threads that read it.
 global	src/crypto/rand.c	crypto_rand_reader	package-vars	crypto/rand.Reader. Not synchronised, as in Go: a program assigns it before other threads read from it.

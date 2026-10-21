@@ -4224,6 +4224,8 @@ static void handshake_mlkem(void *envp, TestingT *t) {
 }
 
 static void TestHandshakeMLKEM(TestingT *t) {
+    /* Not in Go: there is no BoringCrypto, so the skip for its FIPS mode is left
+     * out. */
     Int n = (Int)(sizeof mlkem_tests / sizeof mlkem_tests[0]);
     for (Int i = 0; i < n; i++)
         testing_t_run(t, str_from_cstr(mlkem_tests[i].name),

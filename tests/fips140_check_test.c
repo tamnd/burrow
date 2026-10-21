@@ -33,16 +33,13 @@ static void TestIntegrityCheck(TestingT *t) {
         return;
     }
 
+    if (fipstest_setting() == FIPS140_ON)
+        testing_t_fatalf_v(t, "GODEBUG=fips140=on but verification did not run");
+
     Arena ar;
     arena_init(&ar, NULL, 0);
-    Alloc *a = arena_allocator(&ar);
-    if (fipstest_setting(a) == FIPS140_ON) {
-        arena_free(&ar);
-        testing_t_fatalf_v(t, "GODEBUG=fips140=on but verification did not run");
-    }
-
     Slice out = {0};
-    fipstest_rerun(t, a, "on", &out);
+    fipstest_rerun(t, arena_allocator(&ar), "on", &out);
     /* Not in Go: check that the program that ran again got as far as the
      * check. */
     if (out.len > 0 && !fipstest_contains(out, "verified"))

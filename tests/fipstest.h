@@ -137,8 +137,14 @@ static inline void module_status(TestingT *t) {
 }
 
 /* The fips140 setting in GODEBUG, as burrow__fips140_setting reads it. */
-static inline Fips140Setting fipstest_setting(Alloc *a) {
-    return burrow__fips140_setting(str_to_cstr(a, os_getenv(a, BURROW_S("GODEBUG"))));
+static inline Fips140Setting fipstest_setting(void) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Fips140Setting s =
+        burrow__fips140_setting(str_to_cstr(a, os_getenv(a, BURROW_S("GODEBUG"))));
+    arena_free(&ar);
+    return s;
 }
 
 /* A program like this one with the module's checksum in it. That is this one

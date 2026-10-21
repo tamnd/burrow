@@ -10,11 +10,11 @@
 
 #include "burrow/platform.h"
 
-#if !defined(BURROW_OS_WINDOWS)
-
 #include "burrow/pal.h"
 
 #include "internal.h"
+
+#if !defined(BURROW_OS_WINDOWS)
 
 bool pal_cert_verify(const PalCertVerifyOpts *opts, PalCertChainFn fn, void *env,
                      PalErrno *err) {
@@ -28,10 +28,6 @@ bool pal_cert_verify(const PalCertVerifyOpts *opts, PalCertChainFn fn, void *env
 #endif /* !BURROW_OS_WINDOWS */
 
 #if !defined(BURROW_OS_DARWIN) && !defined(BURROW_OS_IOS)
-
-#include "burrow/pal.h"
-
-#include "internal.h"
 
 bool pal_trust_evaluate(const PalTrustOpts *opts, PalTrustFn fn, PalTrustCertFn cert_fn,
                         void *env, PalErrno *err) {

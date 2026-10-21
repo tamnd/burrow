@@ -213,6 +213,7 @@
 #include "burrow/synctest.h"
 #include "burrow/syscall.h"
 #include "burrow/testing.h"
+#include "burrow/testing/cryptotest.h"
 #include "burrow/testing/fstest.h"
 #include "burrow/testing/iotest.h"
 #include "burrow/testing/slogtest.h"

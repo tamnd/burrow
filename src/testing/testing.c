@@ -518,6 +518,7 @@ struct TestingT {
     bool done;
     bool finished;
     bool is_parallel;
+    bool deny_parallel;
 
     int64_t start;
     int64_t duration;
@@ -2067,9 +2068,15 @@ bool testing_t_run(TestingT *t, Str name, TestingTFunc f) {
     return !testing_t_failed(c);
 }
 
+static const Str testing_parallel_conflict = BURROW_S_INIT(
+    "testing: test using t.Setenv, t.Chdir, or cryptotest.SetGlobalRandom can not "
+    "use t.Parallel");
+
 void testing_t_parallel(TestingT *t) {
     if (t->is_parallel)
         panic_str(BURROW_S("testing: t.Parallel called multiple times"));
+    if (t->deny_parallel)
+        panic_str(testing_parallel_conflict);
     if (t->parent == NULL || t->parent->barrier == NULL)
         return;
     t->is_parallel = true;
@@ -2100,6 +2107,19 @@ void testing_t_parallel(TestingT *t) {
         chatty_updatef(t->chatty, t->name, "=== CONT  %s\n", t->name);
     set_running(t, true);
     t->start = burrow_nanotime();
+}
+
+void burrow__testing_t_check_parallel(TestingT *t) {
+    /* Non-parallel subtests that have parallel ancestors may still run in
+     * parallel with other tests: they are only non-parallel with respect to the
+     * other subtests of the same parent. Since calls like SetEnv or Chdir
+     * affects the whole process, we need to deny those if the current test or
+     * any parent is parallel. */
+    for (TestingT *c = t; c != NULL; c = c->parent) {
+        if (c->is_parallel)
+            panic_str(testing_parallel_conflict);
+    }
+    t->deny_parallel = true;
 }
 
 /* ----------------------------------------------------------- fuzz targets

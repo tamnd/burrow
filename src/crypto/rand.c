@@ -102,9 +102,21 @@ BURROW_NORETURN static void crand_fatal(const char *why, Int why_len) {
     runtime_throw(str_from_bytes(msg, (Int)(hl + wl)));
 }
 
+/* drbg's testingReader, which testing/cryptotest sets. */
+static IoReader crand_testing_reader;
+
+void burrow__crypto_rand_set_testing_reader(IoReader r) {
+    crand_testing_reader = r;
+}
+
 /* The system generator, which never comes back short: it fills p or the
- * process ends. */
+ * process ends. While a test has set the testing reader, it is one read from
+ * that instead. */
 void burrow__crypto_rand_system(Slice p) {
+    if (crand_testing_reader.vt != NULL) {
+        (void)crand_testing_reader.vt->read(crand_testing_reader.data, p, NULL);
+        return;
+    }
     PalErrno e = PAL_OK;
     if (!pal_random_bytes(p.p, p.len, &e)) {
         const char *why = pal_errno_string(e);
@@ -170,11 +182,10 @@ static void crand_maybe_read_byte(IoReader r) {
     (void)r.vt->read(r.data, slice_from(buf, 1, 1, TYPE_BYTE), NULL);
 }
 
-/* Go also passes over its testing reader here, which testing/cryptotest sets
- * and burrow does not have. */
 IoReader burrow__crypto_rand_custom_reader(IoReader r) {
     if ((crand_debug_load() & CRAND_DEBUG_CUSTOM) != 0) {
-        if (!burrow__crypto_rand_is_default_reader(r))
+        if (!burrow__crypto_rand_is_default_reader(r) &&
+            (r.vt != crand_testing_reader.vt || r.data != crand_testing_reader.data))
             crand_maybe_read_byte(r);
         return r;
     }

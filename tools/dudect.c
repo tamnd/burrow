@@ -4,8 +4,10 @@
  * This is the method of "Dude, is my code constant time?" by Reparaz, Balasch
  * and Verbauwhede (https://eprint.iacr.org/2016/1123). Each check runs one
  * operation many times, with inputs from two classes picked at random for
- * each run: class 0 is one fixed input and class 1 is a fresh random one. It
- * reads the cycle counter around every call, and then runs Welch's t-test on
+ * each run: class 0 is one fixed input and class 1 is a fresh random one.
+ * Where it can, the fixed input is all zeros, or the smallest valid value,
+ * because code that does less work for a zero byte or a zero window shows up
+ * most clearly against an input that is all zero. It reads the cycle counter around every call, and then runs Welch's t-test on
  * the two classes' times, once on all of them and once with the slowest runs
  * cut off at each of a series of percentiles, as the paper does. A |t| above
  * 10 fails the check, which is the paper's line for code that is clearly not
@@ -230,16 +232,16 @@ static void run_compare(Byte *in) {
     sink = (uint64_t)subtle_constant_time_compare(bytes(in, 32), bytes(secret32, 32));
 }
 
-static void setup_fixed(Byte *fixed, size_t n) {
-    random_bytes(fixed, n);
+static void setup_zero(Byte *fixed, size_t n) {
+    memset(fixed, 0, n);
 }
 
 static void setup_32(Byte *fixed) {
-    setup_fixed(fixed, 32);
+    setup_zero(fixed, 32);
 }
 
 static void setup_16(Byte *fixed) {
-    setup_fixed(fixed, 16);
+    setup_zero(fixed, 16);
 }
 
 /* The portable AES code, encrypting a fixed or a random block under a key
@@ -304,7 +306,9 @@ static void setup_p256(Byte *fixed) {
                                                 crypto_rand_reader, &err);
     must("crypto/ecdh P-256", err);
     p256_peer = ecdh_private_key_public_key(k);
+    /* Zero is not a valid P-256 key, so the fixed one is 1. */
     setup_32(fixed);
+    fixed[31] = 1;
 }
 
 static void run_p256(Byte *in) {
@@ -363,7 +367,7 @@ static void setup_exp(Byte *fixed) {
     bigmod_nat_init(&exp_x, heap_allocator());
     bigmod_nat_set_bytes(&exp_x, bytes(xb, 256), exp_m, &err);
     must("crypto/internal/fips140/bigmod", err);
-    setup_fixed(fixed, 256);
+    setup_zero(fixed, 256);
 }
 
 static void run_exp(Byte *in) {

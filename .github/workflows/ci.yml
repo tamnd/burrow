@@ -507,6 +507,19 @@ jobs:
           UBSAN_OPTIONS: print_stacktrace=1:halt_on_error=1
           ASAN_OPTIONS: detect_leaks=1:strict_string_checks=1:detect_stack_use_after_return=1
 
+  # The crypto code that has to run in constant time, under valgrind's memcheck
+  # with its secrets marked undefined, so that a branch or an index on a secret
+  # fails the build. tools/ctgrind.c says what it covers, and tools/ctgrind.supp
+  # lists the branches Go takes on purpose.
+  ctgrind:
+    name: ctgrind
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - run: sudo apt-get update && sudo apt-get install -y valgrind
+      - run: make -j4 ctgrind
+
   # The programs under docs/examples, which the C blocks in the docs are
   # copies of, built against the amalgamation and run under the sanitisers. An
   # API change that breaks an example in a guide fails here, in the same pull

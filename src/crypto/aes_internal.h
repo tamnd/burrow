@@ -39,6 +39,11 @@ typedef struct AesBlock {
     uint64_t sk[120];
 } AesBlock;
 
+/* Sets b up for key, which is len bytes, 16, 24 or 32. What aes_new_cipher
+ * does after its checks, for the code inside the module that keeps its blocks
+ * in its own structs. */
+void burrow__aes_block_init(AesBlock *b, const Byte *key, Int len);
+
 /* The AesBlock behind b, or NULL when b is not AES. */
 AesBlock *burrow__aes_block_of(CipherBlock b);
 

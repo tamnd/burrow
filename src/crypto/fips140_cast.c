@@ -168,6 +168,7 @@ CRYPTO_FIPS_TEXT void burrow__fips140_force_on(bool debug) {
     burrow__fips140_cast("PBKDF2", burrow__pbkdf2_cast, NULL);
     burrow__fips140_cast("AES-CBC", burrow__aes_cast, NULL);
     burrow__fips140_cast("CounterKDF", burrow__ctrkdf_cast, NULL);
+    burrow__fips140_cast("CTR_DRBG", burrow__drbg_cast, NULL);
     burrow__fips140_cast("TLSv1.2-SHA2-256", burrow__tls12_cast, NULL);
     burrow__fips140_cast("TLSv1.3-SHA2-256", burrow__tls13_cast, NULL);
 }

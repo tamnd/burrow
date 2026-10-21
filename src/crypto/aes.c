@@ -827,26 +827,12 @@ CRYPTO_FIPS_TEXT AesBlock *burrow__aes_block_of(CipherBlock b) {
     return b.vt == &aes_block_vt ? (AesBlock *)b.data : NULL;
 }
 
-CRYPTO_FIPS_TEXT CipherBlock aes_new_cipher(Alloc *a, Slice key, Error *err) {
-    int nk;
-    switch (key.len) {
-    case 16:
-    case 24:
-    case 32:
-        nk = (int)(key.len / 4);
-        break;
-    default:
-        BURROW_OUT(err, aes_key_size_error_as_error(key.len, error_allocator()));
-        return (CipherBlock){NULL, NULL};
-    }
-    AesBlock *b = BURROW_NEW(a, AesBlock);
-    if (b == NULL) {
-        BURROW_OUT(err, burrow_err_out_of_memory);
-        return (CipherBlock){NULL, NULL};
-    }
+CRYPTO_FIPS_TEXT void burrow__aes_block_init(AesBlock *b, const Byte *key, Int len) {
+    int nk = (int)(len / 4);
+    memset(b, 0, sizeof *b);
     b->rounds = nk + 6;
     b->impl = aes_pick_impl();
-    aes_expand_key(b, (const Byte *)key.p, nk);
+    aes_expand_key(b, key, nk);
 #if defined(CRYPTO_X86_AES)
     if (b->impl == AES_IMPL_X86)
         aes_x86_dec_keys(b);
@@ -857,6 +843,24 @@ CRYPTO_FIPS_TEXT CipherBlock aes_new_cipher(Alloc *a, Slice key, Error *err) {
 #endif
     if (b->impl == AES_IMPL_CT)
         aes_ct_schedule(b);
+}
+
+CRYPTO_FIPS_TEXT CipherBlock aes_new_cipher(Alloc *a, Slice key, Error *err) {
+    switch (key.len) {
+    case 16:
+    case 24:
+    case 32:
+        break;
+    default:
+        BURROW_OUT(err, aes_key_size_error_as_error(key.len, error_allocator()));
+        return (CipherBlock){NULL, NULL};
+    }
+    AesBlock *b = BURROW_NEW(a, AesBlock);
+    if (b == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return (CipherBlock){NULL, NULL};
+    }
+    burrow__aes_block_init(b, (const Byte *)key.p, key.len);
     BURROW_OUT(err, BURROW_NO_ERROR);
     return (CipherBlock){&aes_block_vt, b};
 }

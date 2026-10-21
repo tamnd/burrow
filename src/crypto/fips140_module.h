@@ -141,6 +141,7 @@ Error burrow__hmac_cast(void *arg);
 Error burrow__hkdf_cast(void *arg);
 Error burrow__pbkdf2_cast(void *arg);
 Error burrow__aes_cast(void *arg);
+Error burrow__drbg_cast(void *arg);
 Error burrow__ctrkdf_cast(void *arg);
 Error burrow__tls12_cast(void *arg);
 Error burrow__tls13_cast(void *arg);

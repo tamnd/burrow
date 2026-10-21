@@ -2,7 +2,8 @@
  * Go source: go1.27.1.
  *
  * Most of the file runs the client against recorded server flights or a real
- * server, which are not here yet. These are the tests that need neither.
+ * server, which are not here yet. These are the tests that need neither, and
+ * the ECH ones, which run against this package's own server.
  *
  * Copyright 2010 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -13,10 +14,16 @@
 
 #include "../src/crypto/tls_internal.h"
 #include "burrow/burrow.h"
+#include "burrow/crypto/ecdsa.h"
+#include "burrow/crypto/elliptic.h"
 #include "burrow/crypto/tls.h"
+#include "burrow/crypto/x509.h"
+#include "burrow/encoding/hex.h"
 #include "burrow/encoding/pem.h"
+#include "burrow/math/big.h"
 #include "burrow/mem/heap.h"
 #include "burrow/strings.h"
+#include "tls_handshake_test.h"
 #include "tls_test_gen.h"
 
 #include <string.h>
@@ -520,11 +527,235 @@ static void TestHandshakeRSATooBig(TestingT *t) {
     arena_free(&ar);
 }
 
+static const char ech_test_config_list[] =
+    "0041fe0d003d0100200020204bed0a11fc0dde595a9b78d966b0011128eb83f65d3c91c1cc5ac786c"
+    "d246f000400010001ff0e6578616d706c652e676f6c616e670000";
+
+static Slice ech_config_list(TestingT *t, Alloc *a) {
+    Error err = BURROW_NO_ERROR;
+    Slice b = hex_decode_string(a, str_from_cstr(ech_test_config_list), &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    return b;
+}
+
+BURROW_SENTINEL_ERROR(ech_callback_err, "callback err");
+
+static Error ech_verify_connection_ok(void *env, const TlsConnectionState *cs) {
+    (void)env;
+    (void)cs;
+    return BURROW_NO_ERROR;
+}
+
+static Error ech_verify_connection_err(void *env, const TlsConnectionState *cs) {
+    (void)env;
+    (void)cs;
+    return ech_callback_err;
+}
+
+static Error ech_verify_peer_certificate_err(void *env, Slice raw_certs,
+                                             Slice verified_chains) {
+    (void)env;
+    (void)raw_certs;
+    (void)verified_chains;
+    return ech_callback_err;
+}
+
+typedef struct ECHRejectionCallbacksCase {
+    const char *name;
+    const char *expected_err;
+
+    TlsVerifyConnectionFunc verify_connection;
+    TlsVerifyPeerCertificateFunc verify_peer_certificate;
+    TlsVerifyConnectionFunc encrypted_client_hello_rejection_verify;
+} ECHRejectionCallbacksCase;
+
+typedef struct ECHRejectionCallbacks {
+    const ECHRejectionCallbacksCase *tc;
+    TlsConfig *client_config, *server_config;
+} ECHRejectionCallbacks;
+
+/* Not in Go: a Server handshake run on its own goroutine, which closes its end
+ * of the pipe after. */
+typedef struct ServerJob {
+    TlsConn *s;
+    NetConn conn;
+    Error err;
+} ServerJob;
+
+static void server_handshake_job(void *env) {
+    ServerJob *j = (ServerJob *)env;
+    j->err = tls_conn_handshake(j->s);
+    (void)j->conn.vt->closer.close(j->conn.data);
+}
+
+static void ech_rejection_callbacks(void *env, TestingT *t) {
+    const ECHRejectionCallbacks *e = env;
+    const ECHRejectionCallbacksCase *tc = e->tc;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    NetConn c, s;
+    local_pipe(a, &c, &s);
+    ServerJob job = {tls_server(heap_allocator(), s, e->server_config), s,
+                     BURROW_NO_ERROR};
+    if (job.s == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    SyncWaitGroup wg = {0};
+    sync_wait_group_go(&wg, BURROW_FN(Func, server_handshake_job, &job));
+
+    TlsConfig c_config = *e->client_config;
+    c_config.verify_connection = tc->verify_connection;
+    c_config.verify_peer_certificate = tc->verify_peer_certificate;
+    c_config.encrypted_client_hello_rejection_verify =
+        tc->encrypted_client_hello_rejection_verify;
+
+    TlsConn *cli = tls_client(heap_allocator(), c, &c_config);
+    if (cli == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    Error client_err = tls_conn_handshake(cli);
+    (void)c.vt->closer.close(c.data);
+    sync_wait_group_wait(&wg);
+
+    Str expected_err = str_from_cstr(tc->expected_err);
+    if (expected_err.len == 0 && BURROW_FAILED(client_err))
+        testing_t_errorf_v(t, "unexpected err: %s", error_text(client_err));
+    else if (BURROW_FAILED(client_err) && !str_eq(expected_err, error_text(client_err)))
+        testing_t_errorf_v(t, "unexpected err: got %q, want %q", error_text(client_err),
+                           expected_err);
+    tls_conn_free(cli);
+    tls_conn_free(job.s);
+    local_pipe_free(c);
+    arena_free(&ar);
+}
+
+static void TestTLS13ECHRejectionCallbacks(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    EcdsaPrivateKey *k = ecdsa_generate_key(a, elliptic_p256(), (IoReader){0}, &err);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        testing_t_fatal_v(t, err);
+    }
+    Str dns_names[1] = {BURROW_S("example.golang")};
+    X509Certificate tmpl;
+    memset(&tmpl, 0, sizeof tmpl);
+    tmpl.serial_number = big_new_int(a, 1);
+    tmpl.subject.common_name = BURROW_S("test");
+    tmpl.dns_names = slice_from(dns_names, 1, 1, TYPE_STRING);
+    tmpl.not_before = time_add(test_time(NULL), -TIME_HOUR);
+    tmpl.not_after = time_add(test_time(NULL), TIME_HOUR);
+    Slice cert_der = x509_create_certificate(a, (IoReader){0}, &tmpl, &tmpl,
+                                             ecdsa_private_key_public(k),
+                                             ecdsa_private_key_signer(k), &err);
+    X509Certificate *cert = NULL;
+    if (!BURROW_FAILED(err))
+        cert = x509_parse_certificate(a, cert_der, &err);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        testing_t_fatal_v(t, err);
+    }
+
+    TlsConfig client_config = test_config_client(a);
+    TlsConfig server_config = test_config_server(a);
+    TlsCertificate certificate;
+    memset(&certificate, 0, sizeof certificate);
+    certificate.certificate = slice_from(&cert_der, 1, 1, TYPE_BYTES);
+    certificate.private_key = BURROW_ANY(TYPE_ECDSA_PRIVATE_KEY, k);
+    server_config.certificates = slice_from(&certificate, 1, 1, TYPE_TLS_CERTIFICATE);
+    server_config.min_version = TLS_VERSION_TLS13;
+    client_config.root_cas = x509_new_cert_pool(a);
+    if (client_config.root_cas == NULL) {
+        arena_free(&ar);
+        testing_t_fatal_v(t, "out of memory");
+    }
+    x509_cert_pool_add_cert(client_config.root_cas, cert);
+    client_config.min_version = TLS_VERSION_TLS13;
+    client_config.encrypted_client_hello_config_list = ech_config_list(t, a);
+    client_config.server_name = BURROW_S("example.golang");
+
+    static const ECHRejectionCallbacksCase cases[] = {
+        {
+            .name = "no callbacks",
+            .expected_err = "tls: server rejected ECH",
+        },
+        {
+            .name = "EncryptedClientHelloRejectionVerify, no err",
+            .encrypted_client_hello_rejection_verify = {ech_verify_connection_ok, NULL},
+            .expected_err = "tls: server rejected ECH",
+        },
+        {
+            .name = "EncryptedClientHelloRejectionVerify, err",
+            .encrypted_client_hello_rejection_verify = {ech_verify_connection_err,
+                                                        NULL},
+            /* testHandshake returns the server side error, so we just need to
+             * check alertBadCertificate was sent */
+            .expected_err = "callback err",
+        },
+        {
+            .name = "VerifyConnection, err",
+            .verify_connection = {ech_verify_connection_err, NULL},
+            .expected_err = "tls: server rejected ECH",
+        },
+        {
+            .name = "VerifyPeerCertificate, err",
+            .verify_peer_certificate = {ech_verify_peer_certificate_err, NULL},
+            .expected_err = "tls: server rejected ECH",
+        },
+    };
+    for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
+        ECHRejectionCallbacks env = {&cases[i], &client_config, &server_config};
+        testing_t_run(t, str_from_cstr(cases[i].name),
+                      BURROW_FN(TestingTFunc, ech_rejection_callbacks, &env));
+    }
+
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    arena_free(&ar);
+}
+
+static void TestECHTLS12Server(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig client_config = test_config_client(a);
+    TlsConfig server_config = test_config_server(a);
+
+    server_config.max_version = TLS_VERSION_TLS12;
+    client_config.min_version = 0;
+
+    client_config.encrypted_client_hello_config_list = ech_config_list(t, a);
+
+    Str expected_err = BURROW_S(
+        "server: tls: client offered only unsupported versions: [304]\nclient: "
+        "remote error: tls: protocol version not supported");
+    Handshake h;
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_OK(h.err) || !str_eq(error_text(h.err), expected_err)) {
+        testing_t_errorf_v(t, "unexpected handshake error: got %q, want %q",
+                           BURROW_OK(h.err) ? BURROW_S("<nil>") : error_text(h.err),
+                           expected_err);
+        handshake_free(&h);
+        tls_config_release(&server_config);
+        tls_config_release(&client_config);
+        arena_free(&ar);
+        testing_t_fail_now(t);
+    }
+    handshake_free(&h);
+    tls_config_release(&server_config);
+    tls_config_release(&client_config);
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestLRUClientSessionCache)                                                       \
     X(TestHostnameInSNI)                                                               \
     X(TestServerSelectingUnconfiguredCipherSuite)                                      \
     X(TestClientTLS13ServerHelloErrors)                                                \
-    X(TestHandshakeRSATooBig)
+    X(TestHandshakeRSATooBig)                                                          \
+    X(TestTLS13ECHRejectionCallbacks)                                                  \
+    X(TestECHTLS12Server)
 
 TESTING_MAIN(TESTS)

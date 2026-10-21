@@ -18,6 +18,7 @@
 #include "burrow/crypto/cipher.h"
 #include "burrow/crypto/ecdh.h"
 #include "burrow/crypto/ed25519.h"
+#include "burrow/crypto/hpke.h"
 #include "burrow/error.h"
 #include "burrow/hash.h"
 #include "burrow/io.h"
@@ -1627,6 +1628,145 @@ TlsConnectionState burrow__tls_conn_connection_state_locked(TlsConn *c);
  * certificates parsed again from their bytes included, so it can outlive c. */
 TlsSessionState *burrow__tls_conn_session_state(TlsConn *c, Alloc *a, Error *err);
 
+/* ------------------------------------------------------------------ ech.go */
+
+typedef struct TlsECHCipher {
+    uint16_t kdf_id;
+    uint16_t aead_id;
+} TlsECHCipher;
+
+typedef struct TlsECHExtension {
+    uint16_t type;
+    Slice data;
+} TlsECHExtension;
+
+typedef struct TlsECHConfig {
+    Slice raw;
+
+    uint16_t version;
+    uint16_t length;
+
+    uint8_t config_id;
+    uint16_t kem_id;
+    Slice public_key;
+    Slice symmetric_cipher_suite; /* []echCipher */
+
+    uint8_t max_name_length;
+    Slice public_name;
+    Slice extensions; /* []echExtension */
+} TlsECHConfig;
+
+/* The element types of a []echCipher, a []echExtension and a []echConfig. */
+extern const Type burrow__tls_ech_cipher_type;
+extern const Type burrow__tls_ech_extension_type;
+extern const Type burrow__tls_ech_config_type;
+
+/* parseECHConfig. Not in Go: what is parsed points into enc, and the lists are
+ * made in a. */
+Error burrow__tls_parse_ech_config(Alloc *a, Slice enc, bool *skip, TlsECHConfig *out);
+
+/* parseECHConfigList parses a RFC 9849 ECHConfigList, returning a slice of
+ * parsed ECHConfigs, in the same order they were parsed, or an error if the
+ * list is malformed.
+ *
+ * Not in Go: the list is made in a and points into data. */
+Slice burrow__tls_parse_ech_config_list(Alloc *a, Slice data, Error *err);
+
+/* pickECHConfig. list is a []echConfig. Not in Go: the public key is made in
+ * a, and the caller frees it with hpke_public_key_free. */
+BURROW_BORROWS(ret, list) const TlsECHConfig *
+burrow__tls_pick_ech_config(Alloc *a, Slice list, HpkePublicKey **pub,
+                            const HpkeKDF **kdf, const HpkeAEAD **aead);
+
+/* encodeInnerClientHello. */
+Slice burrow__tls_encode_inner_client_hello(const TlsClientHelloMsg *inner, Alloc *a,
+                                            Int max_name_length, Error *err);
+
+/* decodeInnerClientHello. Not in Go: the message is made in a, and its
+ * original is the reconstructed hello. */
+TlsHandshakeMsg *burrow__tls_decode_inner_client_hello(const TlsClientHelloMsg *outer,
+                                                       Alloc *a, Slice encoded,
+                                                       Error *err);
+
+/* decryptECHPayload. */
+Slice burrow__tls_decrypt_ech_payload(HpkeRecipient *context, Alloc *a, Slice hello,
+                                      Slice payload, Error *err);
+
+/* validDNSName is a rather rudimentary check for the validity of a DNS name.
+ * This is used to check if the public_name in a ECHConfig is valid when we are
+ * picking a config. This can be somewhat lax because even if we pick a
+ * valid-looking name, the DNS layer will later reject it anyway. */
+bool burrow__tls_valid_dns_name(Str name);
+
+/* echExtType, and errInvalidECHExt. */
+#define TLS_OUTER_ECH_EXT 0
+extern const Error burrow__tls_err_invalid_ech_ext;
+
+/* parseECHExt. Not in Go: encap and payload are copies made in a. */
+Error burrow__tls_parse_ech_ext(Alloc *a, Slice ext, uint8_t *ech_type,
+                                TlsECHCipher *cs, uint8_t *config_id, Slice *encap,
+                                Slice *payload);
+
+/* buildRetryConfigList. keys is a []EncryptedClientHelloKey. Not in Go: the
+ * list is made in a. */
+Slice burrow__tls_build_retry_config_list(Alloc *a, Slice keys, Error *err);
+
+/* echClientContext. */
+typedef struct TlsECHClientContext {
+    const TlsECHConfig *config;
+    HpkeSender *hpke_context;
+    Slice encapsulated_key;
+    TlsClientHelloMsg *inner_hello;
+    Hash inner_transcript;
+    uint16_t kdf_id;
+    uint16_t aead_id;
+    bool ech_rejected;
+    Slice retry_configs;
+
+    /* Not in Go: the message inner_hello is in. */
+    TlsHandshakeMsg *inner_hello_msg;
+} TlsECHClientContext;
+
+/* echServerContext. */
+typedef struct TlsECHServerContext {
+    HpkeRecipient *hpke_context;
+    uint8_t config_id;
+    TlsECHCipher ciphersuite;
+    Hash transcript;
+    /* inner indicates that the initial client_hello we received contained an
+     * encrypted_client_hello extension that indicated it was an "inner" hello.
+     * We don't do any additional processing of the hello in this case, so all
+     * fields above are unset. */
+    bool inner;
+} TlsECHServerContext;
+
+/* computeAndUpdateOuterECHExtension. Not in Go: the extension is made in a. */
+Error burrow__tls_compute_and_update_outer_ech_extension(TlsClientHelloMsg *outer,
+                                                         const TlsClientHelloMsg *inner,
+                                                         TlsECHClientContext *ech,
+                                                         bool use_key, Alloc *a);
+
+/* processECHClientHello. echKeys is a []EncryptedClientHelloKey.
+ *
+ * Not in Go: the hello comes back in *out, which is outer_msg itself unless
+ * the inner hello was decrypted, and the inner hello and the context are made
+ * in a. */
+Error burrow__tls_conn_process_ech_client_hello(TlsConn *c, Alloc *a,
+                                                TlsHandshakeMsg *outer_msg,
+                                                Slice ech_keys, TlsHandshakeMsg **out,
+                                                TlsECHServerContext **ech);
+
+/* Not in Go. The eight bytes of an ECH accept confirmation, which Go computes
+ * in four places as
+ *
+ *     prk, err := hkdf.Extract(h, random, nil)
+ *     tls13.ExpandLabel(h, prk, label, transcript.Sum(nil), 8)
+ *
+ * The caller sends the internal_error alert when this fails. */
+Slice burrow__tls_ech_accept_confirmation(Alloc *a, const TlsSuiteTLS13 *suite,
+                                          Slice random, Str label, Hash transcript,
+                                          Error *err);
+
 /* --------------------------------------------------------- client handshake */
 
 /* defaultConfig, the Config a Conn made with none uses. */
@@ -1709,10 +1849,11 @@ typedef struct TlsClientHandshakeStateTLS13 {
     Tls13MasterSecret master_secret;
     Slice traffic_secret; /* client_application_traffic_secret_0 */
 
+    TlsECHClientContext *ech_context;
+
     /* Not in Go: the messages server_hello and hello are in, the cache entry
      * session came from, which holds it, and the scratch allocator everything
-     * that only lasts the handshake is made in. Go's echContext comes with
-     * ech.go. */
+     * that only lasts the handshake is made in. */
     TlsHandshakeMsg *server_hello_msg;
     TlsHandshakeMsg *hello_msg;
     TlsClientSessionState *cs;
@@ -1763,9 +1904,10 @@ Error burrow__tls_server_handshake_state_handshake(TlsServerHandshakeState *hs);
 /* readClientHello reads a ClientHello message and selects the protocol
  * version.
  *
- * Not in Go: the message is made in a. */
+ * Not in Go: the message and the ECH context are made in a. */
 Error burrow__tls_conn_read_client_hello(TlsConn *c, Context ctx, Alloc *a,
-                                         TlsHandshakeMsg **out);
+                                         TlsHandshakeMsg **out,
+                                         TlsECHServerContext **ech);
 
 /* processClientHello. */
 Error burrow__tls_server_handshake_state_process_client_hello(
@@ -1799,10 +1941,10 @@ typedef struct TlsServerHandshakeStateTLS13 {
     Slice traffic_secret; /* client_application_traffic_secret_0 */
     Hash transcript;
     Slice client_finished;
+    TlsECHServerContext *ech_context;
 
     /* Not in Go: the messages client_hello and hello are in, and the scratch
-     * allocator everything that only lasts the handshake is made in. Go's
-     * echContext comes with ech.go. */
+     * allocator everything that only lasts the handshake is made in. */
     TlsHandshakeMsg *client_hello_msg;
     TlsHandshakeMsg *hello_msg;
     Alloc *a;

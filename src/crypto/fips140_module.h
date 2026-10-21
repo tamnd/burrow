@@ -60,13 +60,9 @@
 /* No sections: an APE program is rewritten after linking, and wasm has none of
  * the kind this needs. */
 #elif defined(_MSC_VER) && !defined(__clang__)
-/* The linker sorts sections whose names differ only after the dollar sign and
- * then joins them, so .bfipt$a, .bfipt$m and .bfipt$z become one .bfipt with
- * the start marker first and the end marker last. registry.c does the same for
- * the types. */
-#define CRYPTO_FIPS_TEXT __declspec(code_seg(".bfipt$m"))
+#define CRYPTO_FIPS_TEXT __declspec(code_seg(".bfipt"))
 #define CRYPTO_FIPS_RODATA                                                             \
-    __pragma(section(".bfipr$m", read)) __declspec(allocate(".bfipr$m"))
+    __pragma(section(".bfipr", read)) __declspec(allocate(".bfipr"))
 #define CRYPTO_FIPS_SECTIONS 1
 #elif defined(__APPLE__) && defined(__GNUC__)
 #define CRYPTO_FIPS_TEXT                                                               \
@@ -74,8 +70,8 @@
 #define CRYPTO_FIPS_RODATA __attribute__((section("__TEXT,__bfips_rodata")))
 #define CRYPTO_FIPS_SECTIONS 1
 #elif defined(_WIN32) && defined(__GNUC__)
-#define CRYPTO_FIPS_TEXT __attribute__((section(".bfipt$m")))
-#define CRYPTO_FIPS_RODATA __attribute__((section(".bfipr$m")))
+#define CRYPTO_FIPS_TEXT __attribute__((section(".bfipt")))
+#define CRYPTO_FIPS_RODATA __attribute__((section(".bfipr")))
 #define CRYPTO_FIPS_SECTIONS 1
 #elif defined(__ELF__) && defined(__GNUC__)
 #define CRYPTO_FIPS_TEXT __attribute__((section("burrow_fips_text")))

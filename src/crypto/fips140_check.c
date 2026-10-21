@@ -4,9 +4,10 @@
  *
  * Go's linker writes the checksum and the bounds of the four sections it
  * hashes into go:fipsinfo. Here the bounds come from the linker's symbols for
- * the two sections in fips140_module.h, and the checksum from burrow-gen fips,
- * which finds burrow's info object by its section and writes the checksum
- * into the file after linking.
+ * the two sections in fips140_module.h, or on Windows from the section table
+ * in the program's headers, and the checksum from burrow-gen fips, which finds
+ * burrow's info object by its section and writes the checksum into the file
+ * after linking.
  *
  * Copyright 2024 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -45,41 +46,20 @@ typedef struct FipsInfo {
     {{0xff, ' ', 'b', 'u', 'r', 'r', 'o', 'w', ' ', 'f', 'i', 'p', 's', ' ', 0xff, 0}, \
      {0}}
 
-/* The sections either side of the module's code and data, and the one the info
- * object is in. The ELF and Mach-O linkers give the bounds of a section by
- * name. PE has nothing like that, so the bounds are bytes of our own in
- * sections that sort before and after the ones the module goes in, as
- * registry.c does for the types, and the end is one past the last of them,
- * which is where the joined section ends. */
-#if defined(CRYPTO_FIPS_SECTIONS) && defined(_MSC_VER) && !defined(__clang__)
+/* The bounds of the module's code and data, and the section the info object
+ * is in. The ELF and Mach-O linkers give the bounds of a section by name. PE
+ * has nothing like that, so they come from the section table, which the loader
+ * maps at __ImageBase with the rest of the headers. That is the whole of each
+ * section, as burrow-gen fips sums it, padding and all. */
+#if defined(CRYPTO_FIPS_SECTIONS) && defined(_WIN32)
 
-#pragma section(".bfipt$a", read, execute)
-#pragma section(".bfipt$z", read, execute)
-#pragma section(".bfipr$a", read)
-#pragma section(".bfipr$m", read)
-#pragma section(".bfipr$z", read)
+extern const Byte __ImageBase[];
+#if defined(_MSC_VER) && !defined(__clang__)
 #pragma section(".bfipi", read)
-__declspec(allocate(".bfipt$a")) const Byte burrow__fips_text_first = 0;
-__declspec(allocate(".bfipt$z")) const Byte burrow__fips_text_last = 0;
-__declspec(allocate(".bfipr$a")) const Byte burrow__fips_rodata_first = 0;
-__declspec(allocate(".bfipr$z")) const Byte burrow__fips_rodata_last = 0;
 #define FIPS_INFO_STORAGE __declspec(allocate(".bfipi"))
-#define FIPS_TEXT_START (&burrow__fips_text_first)
-#define FIPS_TEXT_END (&burrow__fips_text_last + 1)
-#define FIPS_RODATA_START (&burrow__fips_rodata_first)
-#define FIPS_RODATA_END (&burrow__fips_rodata_last + 1)
-
-#elif defined(CRYPTO_FIPS_SECTIONS) && defined(_WIN32)
-
-__attribute__((used, section(".bfipt$a"))) static const Byte fips_text_first = 0;
-__attribute__((used, section(".bfipt$z"))) static const Byte fips_text_last = 0;
-__attribute__((used, section(".bfipr$a"))) static const Byte fips_rodata_first = 0;
-__attribute__((used, section(".bfipr$z"))) static const Byte fips_rodata_last = 0;
+#else
 #define FIPS_INFO_STORAGE __attribute__((used, section(".bfipi"))) static
-#define FIPS_TEXT_START (&fips_text_first)
-#define FIPS_TEXT_END (&fips_text_last + 1)
-#define FIPS_RODATA_START (&fips_rodata_first)
-#define FIPS_RODATA_END (&fips_rodata_last + 1)
+#endif
 
 #elif defined(CRYPTO_FIPS_SECTIONS) && defined(__APPLE__)
 
@@ -158,12 +138,52 @@ CRYPTO_FIPS_RODATA const int32_t burrow__fips140_checktest_rodata = 2;
 
 #if defined(CRYPTO_FIPS_SECTIONS)
 
+#if defined(_WIN32)
+
+CRYPTO_FIPS_TEXT static uint32_t fips_le(const Byte *p, int n) {
+    uint32_t v = 0;
+    for (int i = n - 1; i >= 0; i--)
+        v = (v << 8) | p[i];
+    return v;
+}
+
+/* The start and end of the section called name in the section table: past the
+ * signature at the offset at 0x3c, the 20 bytes of the file header, with the
+ * number of sections at 2 and the size of the optional header at 16, and that
+ * header, come 40 bytes for each section, with the name first, the size at 8
+ * and the address at 12. */
+CRYPTO_FIPS_TEXT static void fips_pe_section(const char name[8], const Byte **start,
+                                             const Byte **end) {
+    const Byte *base = FIPS_BOUND(__ImageBase);
+    const Byte *fh = base + fips_le(base + 0x3c, 4) + 4;
+    uint32_t n = fips_le(fh + 2, 2);
+    const Byte *s = fh + 20 + fips_le(fh + 16, 2);
+    *start = NULL;
+    *end = NULL;
+    for (uint32_t i = 0; i < n; i++, s += 40) {
+        if (memcmp(s, name, 8) == 0) {
+            *start = base + fips_le(s + 12, 4);
+            *end = *start + fips_le(s + 8, 4);
+            return;
+        }
+    }
+}
+
+CRYPTO_FIPS_TEXT void burrow__fips140_sections(const Byte *bounds[4]) {
+    fips_pe_section(".bfipt\0\0", &bounds[0], &bounds[1]);
+    fips_pe_section(".bfipr\0\0", &bounds[2], &bounds[3]);
+}
+
+#else
+
 CRYPTO_FIPS_TEXT void burrow__fips140_sections(const Byte *bounds[4]) {
     bounds[0] = FIPS_BOUND(FIPS_TEXT_START);
     bounds[1] = FIPS_BOUND(FIPS_TEXT_END);
     bounds[2] = FIPS_BOUND(FIPS_RODATA_START);
     bounds[3] = FIPS_BOUND(FIPS_RODATA_END);
 }
+
+#endif
 
 /* Writes the length of the n bytes at p, as eight big endian bytes, and then
  * the bytes. */

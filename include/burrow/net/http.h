@@ -1489,8 +1489,8 @@ BURROW_BORROWS(ret) Error http_response_controller_flush(HttpResponseController 
  * bufio_reader_free, buf->writer with bufio_writer_free, and the connection the
  * way its listener's connections are, such as net_tcp_conn_free on
  * net_conn_as_tcp_conn, or tls_conn_free on tls_conn_from_net_conn for one
- * http_server_serve_tls accepted. The request is the server's still, and is gone once
- * the handler returns. */
+ * http_server_serve_tls accepted. The request is the server's still, and is
+ * gone once the handler returns. */
 BURROW_OWNS(ret) NetConn http_response_controller_hijack(HttpResponseController *c,
                                                          BufioReadWriter *buf,
                                                          Error *err);

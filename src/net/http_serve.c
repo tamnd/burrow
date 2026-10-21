@@ -2014,9 +2014,10 @@ static bool sv_serve_tls(sv_Conn *c, TlsConn *tc) {
     if (str_eq(proto, BURROW_S("h2")) && burrow__http2_server_configured(s)) {
         /* net/http/internal/http2 path.
          *
-         * Mark freshly created HTTP/2 as active and prevent any server state hooks
-         * from being run on these connections. This prevents closeIdleConns from
-         * closing such connections. See issue https://golang.org/issue/39776. */
+         * Mark freshly created HTTP/2 as active and prevent any server state
+         * hooks from being run on these connections. This prevents
+         * closeIdleConns from closing such connections. See issue
+         * https://golang.org/issue/39776. */
         sv_set_state(c, HTTP_STATE_ACTIVE, false);
         sv_serve_http2_conn(c, c->ctx, false);
         return true;
@@ -2376,8 +2377,9 @@ static void sv_configure_http2(HttpServer *s) {
         s->own_tls_next_proto = m;
         s->tls_next_proto = m;
     }
-    /* Historically, the presence of a TLSNextProto["h2"] key has been the signal to
-     * enable/disable HTTP/2 support. Set a value in the map, but we'll never use it. */
+    /* Historically, the presence of a TLSNextProto["h2"] key has been the
+     * signal to enable/disable HTTP/2 support. Set a value in the map, but
+     * we'll never use it. */
     Str key = BURROW_S("h2");
     HttpTLSNextProtoFunc fn =
         BURROW_FN(HttpTLSNextProtoFunc, sv_h2_next_proto_placeholder, NULL);
@@ -2614,11 +2616,12 @@ Error http_server_listen_and_serve(HttpServer *s) {
  * a tls.Config.NextProtos list, according to the set of protocols in protos.
  * Not in Go: the list is made in a, and is nil when a is out of memory. */
 static Slice sv_adjust_next_protos(Alloc *a, Slice next_protos, HttpProtocols protos) {
-    /* Make a copy of NextProtos since it might be shared with some other tls.Config.
-     * (tls.Config.Clone doesn't do a deep copy.)
+    /* Make a copy of NextProtos since it might be shared with some other
+     * tls.Config. (tls.Config.Clone doesn't do a deep copy.)
      *
-     * We could avoid an allocation in the common case by checking to see if the slice
-     * is already in order, but this is just one small allocation per connection. */
+     * We could avoid an allocation in the common case by checking to see if
+     * the slice is already in order, but this is just one small allocation
+     * per connection. */
     Int cap = next_protos.len + 2;
     Str *out = (Str *)mem_alloc(a, (size_t)cap * sizeof(Str), _Alignof(Str));
     if (out == NULL)

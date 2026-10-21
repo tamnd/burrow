@@ -1,10 +1,18 @@
-/* Derived from Go's src/crypto/ecdh/ecdh_test.go.
+/* Derived from Go's src/crypto/ecdh/ecdh_test.go and
+ * ecdh_wycheproof_test.go.
  * Go source: go1.27.1.
  *
  * TestLinker builds a Go program and looks at its symbols, and has no C
  * counterpart: which curves end up in a binary is the linker's business here.
  * TestKeyExchanger and the cryptocustomrand=1 half of TestGenerateKey are
  * burrow's own.
+ *
+ * The Wycheproof vectors are in ecdh_test_gen.h, which tools/gen-ecdh-tests.sh
+ * writes from the Wycheproof module version Go's tests pin, after putting each
+ * one through Go. The generator also works out what ShouldPass says with each
+ * test's flagsShouldPass, and stops on a flag the map doesn't have, as
+ * ShouldPass does. Go runs each vector as a parallel subtest; here the
+ * subtests run one after another.
  *
  * Copyright 2022 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -17,12 +25,17 @@
 #include "burrow/bytes.h"
 #include "burrow/crypto.h"
 #include "burrow/crypto/ecdh.h"
+#include "burrow/crypto/ecdsa.h"
 #include "burrow/crypto/rand.h"
+#include "burrow/crypto/x509.h"
 #include "burrow/encoding/hex.h"
 #include "burrow/mem/heap.h"
+#include "burrow/slices.h"
 #include "burrow/strings.h"
 
 #include "../src/crypto/rand_internal.h"
+
+#include "ecdh_test_gen.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -711,6 +724,128 @@ static void TestHeapKeys(TestingT *t) {
     ecdh_public_key_free(NULL);
 }
 
+/* ------------------------------------------------------------ Wycheproof */
+
+/* How a test turns the public key of a vector into a crypto/ecdh key. */
+typedef EcdhPublicKey *(*ParsePub)(const EcdhCurve *curve, Alloc *a, Slice p,
+                                   Error *err);
+
+static EcdhPublicKey *new_public_key(const EcdhCurve *curve, Alloc *a, Slice p,
+                                     Error *err) {
+    return ecdh_curve_new_public_key(curve, a, p, err);
+}
+
+static EcdhPublicKey *parse_spki_pub(const EcdhCurve *curve, Alloc *a, Slice p,
+                                     Error *err) {
+    (void)curve;
+    Any pub_key_any = x509_parse_pkix_public_key(a, p, err);
+    if (BURROW_FAILED(*err))
+        return NULL;
+    if (pub_key_any.t != TYPE_ECDSA_PUBLIC_KEY) {
+        *err = fmt_errorf_v("unexpected key type %T", pub_key_any);
+        return NULL;
+    }
+    return ecdsa_public_key_ecdh(pub_key_any.data, a, err);
+}
+
+typedef struct EcdhWycheproofEnv {
+    const GenWycheproof *tv;
+    ParsePub parse_pub;
+} EcdhWycheproofEnv;
+
+static Slice unhex_parts(Alloc *a, const char *const parts[3]) {
+    Slice s[3];
+    Int n = 0;
+    for (; n < 3 && parts[n] != NULL; n++)
+        s[n] = unhex(a, parts[n]);
+    return slices_concat(a, s, n);
+}
+
+/* runECDHWycheproofTest runs test logic common to the three ECDH test schemas
+ * we process in this file. */
+static void run_ecdh_wycheproof_test(void *env, TestingT *t) {
+    const EcdhWycheproofEnv *e = env;
+    const GenWycheproof *tv = e->tv;
+    const EcdhCurve *curve = curves[tv->curve].curve();
+    static const Int key_sizes[] = {32, 48, 66, 32};
+    Int expected_key_size = key_sizes[tv->curve];
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+
+    bool should_pass = tv->should_pass;
+
+    Error err = BURROW_NO_ERROR;
+    EcdhPublicKey *pub = e->parse_pub(curve, a, unhex_parts(a, tv->public_key), &err);
+    if (BURROW_FAILED(err)) {
+        if (should_pass)
+            testing_t_errorf_v(t, "parsePub: %v", err);
+        arena_free(&ar);
+        return;
+    }
+
+    Slice priv_bytes = unhex(a, tv->private_key);
+    EcdhPrivateKey *priv = ecdh_curve_new_private_key(curve, a, priv_bytes, &err);
+    if (BURROW_FAILED(err)) {
+        if (should_pass && priv_bytes.len == expected_key_size)
+            testing_t_errorf_v(t, "NewPrivateKey: %v", err);
+        arena_free(&ar);
+        return;
+    }
+
+    Slice x = ecdh_private_key_ecdh(priv, a, pub, &err);
+    if (BURROW_FAILED(err)) {
+        if (should_pass) {
+            testing_t_errorf_v(t, "ECDH: %v", err);
+            arena_free(&ar);
+            testing_t_fail_now(t);
+        }
+        arena_free(&ar);
+        return;
+    }
+
+    Slice shared = unhex(a, tv->shared);
+    if (should_pass) {
+        if (!bytes_equal(shared, x))
+            testing_t_errorf_v(t, "ECDH = %x, want %x", x, shared);
+    } else if (tv->invalid) {
+        /* For invalid inputs, a correct ECDH result is a test failure. */
+        if (bytes_equal(shared, x))
+            testing_t_errorf_v(t, "ECDH = %x, want anything else", x);
+    }
+    arena_free(&ar);
+}
+
+static void run_wycheproof_table(TestingT *t, const GenWycheproof *tvs, size_t n,
+                                 ParsePub parse_pub) {
+    for (size_t i = 0; i < n; i++) {
+        const GenWycheproof *tv = &tvs[i];
+        char name[256];
+        if (tv->comment[0] != '\0')
+            snprintf(name, sizeof name, "%s #%d %s", tv->file, tv->tc_id, tv->comment);
+        else
+            snprintf(name, sizeof name, "%s #%d", tv->file, tv->tc_id);
+        EcdhWycheproofEnv e = {tv, parse_pub};
+        testing_t_run(t, str_from_cstr(name),
+                      BURROW_FN(TestingTFunc, run_ecdh_wycheproof_test, &e));
+    }
+}
+
+static void TestSecpECDHWycheproof(TestingT *t) {
+    run_wycheproof_table(t, gen_ecpoint, sizeof gen_ecpoint / sizeof gen_ecpoint[0],
+                         new_public_key);
+}
+
+static void TestSecpECDHSPKIWycheproof(TestingT *t) {
+    run_wycheproof_table(t, gen_spki, sizeof gen_spki / sizeof gen_spki[0],
+                         parse_spki_pub);
+}
+
+static void TestX25519ECDHWycheproof(TestingT *t) {
+    run_wycheproof_table(t, gen_x25519, sizeof gen_x25519 / sizeof gen_x25519[0],
+                         new_public_key);
+}
+
 #define TESTS(X)                                                                       \
     X(TestECDH)                                                                        \
     X(TestGenerateKey)                                                                 \
@@ -721,6 +856,9 @@ static void TestHeapKeys(TestingT *t) {
     X(TestNewPublicKey)                                                                \
     X(TestMismatchedCurves)                                                            \
     X(TestKeyExchanger)                                                                \
-    X(TestHeapKeys)
+    X(TestHeapKeys)                                                                    \
+    X(TestSecpECDHWycheproof)                                                          \
+    X(TestSecpECDHSPKIWycheproof)                                                      \
+    X(TestX25519ECDHWycheproof)
 
 TESTING_MAIN(TESTS)

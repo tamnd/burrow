@@ -103,8 +103,8 @@ static inline Slice load_testdata(Alloc *a, const TlsTestdataFile *files, size_t
             continue;
         StringsBuilder b = STRINGS_BUILDER(a);
         for (const char *const *l = files[i].lines; *l != NULL; l++) {
-            strings_builder_write_string(&b, str_from_cstr(*l));
-            strings_builder_write_byte(&b, '\n');
+            (void)strings_builder_write_string(&b, str_from_cstr(*l), NULL);
+            (void)strings_builder_write_byte(&b, '\n');
         }
         StringsReader sr;
         strings_reader_reset(&sr, strings_builder_string(&b));
@@ -238,6 +238,42 @@ static const NetConnVT replaying_conn_vt = {
 
 static inline NetConn replaying_conn_as_net_conn(ReplayingConn *r) {
     return (NetConn){&replaying_conn_vt, r};
+}
+
+/* Not in Go: the func(ConnectionState) error that validates a connection in a
+ * clientTest or serverTest. */
+BURROW_FUNC(ConnectionStateCheck, Error, const TlsConnectionState *cs);
+
+static inline Error check_cipher_suite_fn(void *env, const TlsConnectionState *state) {
+    uint16_t want = *(const uint16_t *)env;
+    if (state->cipher_suite != want)
+        return fmt_errorf_v("got cipher suite %x, want %x", state->cipher_suite, want);
+    return BURROW_NO_ERROR;
+}
+
+/* checkCipherSuite of handshake_server_test.go. Not in Go: want is kept in a. */
+static inline ConnectionStateCheck check_cipher_suite(Alloc *a, uint16_t want) {
+    uint16_t *w = mem_alloc(a, sizeof *w, _Alignof(uint16_t));
+    if (w == NULL)
+        panic_str(BURROW_S("out of memory"));
+    *w = want;
+    return BURROW_FN(ConnectionStateCheck, check_cipher_suite_fn, w);
+}
+
+static inline Error check_curve_id_fn(void *env, const TlsConnectionState *state) {
+    TlsCurveID want = *(const TlsCurveID *)env;
+    if (state->curve_id != want)
+        return fmt_errorf_v("got curve %d, want %d", state->curve_id, want);
+    return BURROW_NO_ERROR;
+}
+
+/* checkCurveID of handshake_server_test.go. Not in Go: want is kept in a. */
+static inline ConnectionStateCheck check_curve_id(Alloc *a, TlsCurveID want) {
+    TlsCurveID *w = mem_alloc(a, sizeof *w, _Alignof(TlsCurveID));
+    if (w == NULL)
+        panic_str(BURROW_S("out of memory"));
+    *w = want;
+    return BURROW_FN(ConnectionStateCheck, check_curve_id_fn, w);
 }
 
 /* Not in Go: what a test runs, the run method of a clientTest or serverTest

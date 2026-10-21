@@ -1,0 +1,85 @@
+# Suppressions for make ctgrind, which is tools/ctgrind.c under memcheck.
+#
+# Each entry is a branch that Go's code takes on a secret too, at the same
+# place. None of them can tell an attacker more than that a value was invalid,
+# or something that is public anyway. A new report that is not one of these is
+# a constant time bug until shown otherwise, and the fix is in the code, not a
+# new entry here. The trailing * on a name is for the copies that gcc makes of
+# a static function, like ecdh_nist_new_private.isra.0.
+
+# Scalar.signedRadix16 panics on a scalar with the top bit set, which a reduced
+# scalar never has.
+{
+   edwards25519 signedRadix16 high bit panic
+   Memcheck:Cond
+   fun:burrow__sc_signed_radix16*
+}
+
+# checkInitialized panics on a Point whose x and y are both zero, which no
+# point on the curve is.
+{
+   edwards25519 checkInitialized
+   Memcheck:Cond
+   fun:ge_check_initialized*
+}
+
+# p256Table.Select and p256AffineTable.Select panic on an index past the end
+# of the table, which a Booth digit never is. The selection itself is masked.
+{
+   nistec p256Table.Select bounds panic
+   Memcheck:Cond
+   fun:p256_table_select*
+}
+{
+   nistec p256AffineTable.Select bounds panic
+   Memcheck:Cond
+   fun:p256_affine_table_select*
+}
+
+# ecdh.NewPrivateKey returns an error for a key that is zero or not below the
+# order. isZero and isLess are constant time, and the branch on what they say
+# only tells whether the key was valid.
+{
+   ecdh NewPrivateKey scalar check
+   Memcheck:Cond
+   fun:ecdh_nist_valid_scalar*
+}
+{
+   ecdh NewPrivateKey error
+   Memcheck:Cond
+   fun:ecdh_nist_new_private*
+}
+
+# The X25519 shared secret is checked for all zeros, which only a low order
+# remote point gives, and that is an error.
+{
+   ecdh X25519 low order point
+   Memcheck:Cond
+   fun:ecdh_private_key_ecdh*
+}
+
+# Point.Bytes and Point.BytesX check for the point at infinity, which a valid
+# key times a valid point is not.
+{
+   nistec P-256 Bytes infinity
+   Memcheck:Cond
+   fun:p256_point_bytes*
+}
+{
+   nistec P-384 Bytes infinity
+   Memcheck:Cond
+   fun:p384_point_bytes*
+}
+{
+   nistec P-521 Bytes infinity
+   Memcheck:Cond
+   fun:p521_point_bytes*
+}
+
+# sampleNTT is rejection sampling from rho, which comes from the seed but is
+# published in the encapsulation key, so how many tries it takes is public.
+{
+   mlkem sampleNTT rejection sampling
+   Memcheck:Cond
+   fun:mlkem_sample_ntt*
+}

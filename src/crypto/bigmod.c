@@ -40,9 +40,19 @@ static BigmodChoice not_(BigmodChoice c) {
     return 1 ^ c;
 }
 
-/* ctMask: all ones if on is 1, and all zeros if it is 0. */
+/* ctMask: all ones if on is 1, and all zeros if it is 0.
+ *
+ * Not in Go: the empty asm statement, the same barrier as ct_hide in
+ * subtle.c. Without it clang knows the mask is all ones or all zeros and turns
+ * the masked copy in assign into a load from one address or the other, so
+ * that the table lookup in Exp reads memory at an address chosen by the
+ * exponent. make ctgrind found that. */
 static Uint ct_mask(BigmodChoice on) {
-    return 0 - (Uint)on;
+    Uint mask = 0 - (Uint)on;
+#if defined(__GNUC__) || defined(__clang__)
+    __asm__("" : "+r"(mask));
+#endif
+    return mask;
 }
 
 /* ctEq: 1 if x == y, and 0 otherwise, in time that does not depend on them. */

@@ -462,9 +462,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - run: sudo apt-get update && sudo apt-get install -y libgc-dev
-      - run: make BOEHM=1 test
+      - run: make -j4 BOEHM=1 test
       - run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBURROW_ENABLE_BOEHM=ON
-      - run: cmake --build build
+      - run: cmake --build build -j4
       - run: ctest --test-dir build --output-on-failure
 
   # The SQLite driver under examples/sqlite, the one program in the repository

@@ -242,7 +242,7 @@ TEST_GEN := $(wildcard tests/gen/*.c)
 DEPFLAGS := -MMD -MP
 DEPS     := $(OBJS:.o=.d) $(TEST_BINS:=.d)
 
-.PHONY: all lib test check collisions clean install fmt tidy amalgamation gofmt-gate sqlite from-go ctgrind ct-asm
+.PHONY: all lib test check collisions clean install fmt tidy amalgamation gofmt-gate sqlite from-go ctgrind dudect ct-asm
 
 all: lib
 
@@ -451,6 +451,19 @@ $(CTGRIND_BIN): tools/ctgrind.c $(LIB)
 ctgrind: $(CTGRIND_BIN)
 	valgrind --quiet --error-exitcode=1 --track-origins=yes \
 		--suppressions=tools/ctgrind.supp ./$(CTGRIND_BIN)
+
+# dudect: the constant time crypto code timed, with a t-test on whether the
+# time depends on the secret. See tools/dudect.c. make dudect DUDECT_SCALE=10
+# runs ten times as many.
+DUDECT_BIN := $(BUILD)/tools/dudect
+DUDECT_SCALE ?= 1
+
+$(DUDECT_BIN): tools/dudect.c $(LIB)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(THREADS) $< $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
+
+dudect: $(DUDECT_BIN)
+	./$(DUDECT_BIN) $(DUDECT_SCALE)
 
 # ct-asm: the conditional branches in the assembly the compiler writes for
 # src/crypto/subtle.c, against the counts in tools/ct-asm.txt, so that a

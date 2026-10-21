@@ -539,6 +539,22 @@ jobs:
       - run: ${{ matrix.cc }} --version
       - run: make ct-asm CC=${{ matrix.cc }}
 
+  # The constant-time code timed by tools/dudect.c, with Welch's t-test on the
+  # times for a fixed input and for random ones. The first check is a leaky
+  # comparison that has to fail, so a runner too noisy to see a leak fails the
+  # job instead of passing it.
+  dudect:
+    name: dudect (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, ubuntu-24.04-arm]
+    steps:
+      - uses: actions/checkout@v7
+      - run: make -j4 dudect
+
   # The programs under docs/examples, which the C blocks in the docs are
   # copies of, built against the amalgamation and run under the sanitisers. An
   # API change that breaks an example in a guide fails here, in the same pull

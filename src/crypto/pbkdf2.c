@@ -118,7 +118,7 @@ CRYPTO_FIPS_TEXT Error burrow__pbkdf2_cast(void *arg) {
         arena_free(&ar);
         return err;
     }
-    bool ok = mk.len == (Int)sizeof pbkdf2_cast_want &&
+    bool ok = mk.p != NULL && mk.len == (Int)sizeof pbkdf2_cast_want &&
               memcmp(mk.p, pbkdf2_cast_want, sizeof pbkdf2_cast_want) == 0;
     arena_free(&ar);
     return ok ? BURROW_NO_ERROR

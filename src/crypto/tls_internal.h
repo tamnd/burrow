@@ -1879,6 +1879,18 @@ BURROW_BORROWS(ret) TlsConfig *burrow__tls_default_config(void);
 /* clientHandshake, the handshakeFn of a Conn that Client makes. */
 Error burrow__tls_client_handshake(TlsConn *c, Context ctx);
 
+/* Not in Go: what makeClientHello returns besides the hello. */
+typedef struct TlsMadeClientHello {
+    TlsHandshakeMsg msg;
+    TlsKeySharePrivateKeys key_share_keys;
+    TlsECHClientContext *ech;
+} TlsMadeClientHello;
+
+/* makeClientHello. Not in Go: the hello and the ECH context are made in a, and
+ * out->key_share_keys has to be freed with
+ * burrow__tls_key_share_private_keys_free, also when it fails. */
+Error burrow__tls_conn_make_client_hello(TlsConn *c, Alloc *a, TlsMadeClientHello *out);
+
 /* checkALPN ensure that the server's choice of ALPN protocol is compatible
  * with the protocols that we advertised in the ClientHello. client_protos is a
  * []string. */

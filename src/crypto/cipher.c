@@ -28,6 +28,7 @@
 
 #include "aes_internal.h"
 #include "fips140_module.h"
+#include "fips140only_internal.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -66,6 +67,9 @@ CRYPTO_FIPS_TEXT static CipherCbc *cipher_cbc_make(Alloc *a, CipherBlock b, Slic
     Int bs = cipher_block_block_size(b);
     if (iv.len != bs)
         panic_str(bad_iv);
+    if (burrow__aes_block_of(b) == NULL && burrow__fips140only_enforced())
+        panic_str(BURROW_S("crypto/cipher: use of CBC with non-AES ciphers is not "
+                           "allowed in FIPS 140-only mode"));
     CipherCbc *x = (CipherCbc *)mem_alloc(a, sizeof(CipherCbc) + 2 * (size_t)bs,
                                           _Alignof(CipherCbc));
     if (x == NULL)
@@ -409,6 +413,9 @@ CRYPTO_FIPS_TEXT CipherStream cipher_new_ctr(Alloc *a, CipherBlock b, Slice iv) 
         c->ivlo = cipher_be64((const Byte *)iv.p + 8);
         return (CipherStream){&cipher_aes_ctr_vt, c};
     }
+    if (burrow__fips140only_enforced())
+        panic_str(BURROW_S("crypto/cipher: use of CTR with non-AES ciphers is not "
+                           "allowed in FIPS 140-only mode"));
     Int bs = cipher_block_block_size(b);
     if (iv.len != bs)
         panic_str(BURROW_S("cipher.NewCTR: IV length must equal block size"));
@@ -479,6 +486,10 @@ CRYPTO_FIPS_TEXT static void cipher_ofb_xor(void *self, Slice dst, Slice src) {
 static const CipherStreamVT cipher_ofb_vt = {NULL, cipher_ofb_xor};
 
 CRYPTO_FIPS_TEXT CipherStream cipher_new_ofb(Alloc *a, CipherBlock b, Slice iv) {
+    if (burrow__fips140only_enforced())
+        panic_str(
+            BURROW_S("crypto/cipher: use of OFB is not allowed in FIPS 140-only mode"));
+
     Int bs = cipher_block_block_size(b);
     if (iv.len != bs)
         panic_str(BURROW_S("cipher.NewOFB: IV length must equal block size"));
@@ -566,11 +577,17 @@ CRYPTO_FIPS_TEXT static CipherStream cipher_new_cfb(Alloc *a, CipherBlock b, Sli
 
 CRYPTO_FIPS_TEXT CipherStream cipher_new_cfb_encrypter(Alloc *a, CipherBlock b,
                                                        Slice iv) {
+    if (burrow__fips140only_enforced())
+        panic_str(
+            BURROW_S("crypto/cipher: use of CFB is not allowed in FIPS 140-only mode"));
     return cipher_new_cfb(a, b, iv, false);
 }
 
 CRYPTO_FIPS_TEXT CipherStream cipher_new_cfb_decrypter(Alloc *a, CipherBlock b,
                                                        Slice iv) {
+    if (burrow__fips140only_enforced())
+        panic_str(
+            BURROW_S("crypto/cipher: use of CFB is not allowed in FIPS 140-only mode"));
     return cipher_new_cfb(a, b, iv, true);
 }
 

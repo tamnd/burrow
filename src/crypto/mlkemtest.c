@@ -19,6 +19,7 @@
 #include "burrow/mem.h"
 #include "burrow/slice.h"
 
+#include "fips140only_internal.h"
 #include "mlkem_internal.h"
 
 static Slice mlkemtest_done(Slice key, Slice *ciphertext, Error *err) {
@@ -30,6 +31,10 @@ static Slice mlkemtest_done(Slice key, Slice *ciphertext, Error *err) {
     BURROW_OUT(err, BURROW_NO_ERROR);
     return key;
 }
+
+BURROW_FIPS140ONLY_ERROR(mlkemtest_err_fips140only,
+                         "crypto/mlkem/mlkemtest: use of derandomized encapsulation is "
+                         "not allowed in FIPS 140-only mode");
 
 static bool mlkemtest_check(Slice random, const char *msg, Slice *ciphertext,
                             Error *err) {
@@ -45,6 +50,11 @@ Slice mlkemtest_encapsulate768(const MlkemEncapsulationKey768 *ek, Alloc *a,
     if (!mlkemtest_check(random, "mlkemtest: Encapsulate768: random must be 32 bytes",
                          ciphertext, err))
         return slice_nil(TYPE_BYTE);
+    if (burrow__fips140only_enforced()) {
+        BURROW_OUT(err, mlkemtest_err_fips140only);
+        *ciphertext = slice_nil(TYPE_BYTE);
+        return slice_nil(TYPE_BYTE);
+    }
     Slice key = burrow__mlkem_encapsulate_internal768(ek, a, (const Byte *)random.p,
                                                       ciphertext);
     return mlkemtest_done(key, ciphertext, err);
@@ -55,6 +65,11 @@ Slice mlkemtest_encapsulate1024(const MlkemEncapsulationKey1024 *ek, Alloc *a,
     if (!mlkemtest_check(random, "mlkemtest: Encapsulate1024: random must be 32 bytes",
                          ciphertext, err))
         return slice_nil(TYPE_BYTE);
+    if (burrow__fips140only_enforced()) {
+        BURROW_OUT(err, mlkemtest_err_fips140only);
+        *ciphertext = slice_nil(TYPE_BYTE);
+        return slice_nil(TYPE_BYTE);
+    }
     Slice key = burrow__mlkem_encapsulate_internal1024(ek, a, (const Byte *)random.p,
                                                        ciphertext);
     return mlkemtest_done(key, ciphertext, err);

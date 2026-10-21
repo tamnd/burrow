@@ -14,8 +14,10 @@
 #include "burrow/crypto/aes.h"
 #include "burrow/crypto/cipher.h"
 #include "burrow/crypto/ecdh.h"
+#include "burrow/crypto/fips140.h"
 #include "burrow/crypto/hkdf.h"
 #include "burrow/crypto/mlkem.h"
+#include "burrow/crypto/rand.h"
 #include "burrow/crypto/sha256.h"
 #include "burrow/crypto/sha3.h"
 #include "burrow/crypto/sha512.h"
@@ -29,6 +31,7 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "aes_internal.h"
 #include "chacha20poly1305.h"
 #include "hpke_internal.h"
 #include "rand_internal.h"
@@ -319,7 +322,7 @@ static CipherAEAD hpke_aead_cipher(Alloc *a, const HpkeAEAD *aead, Slice key,
         CipherBlock b = aes_new_cipher(a, key, err);
         if (BURROW_FAILED(*err))
             return none;
-        c = cipher_new_gcm(a, b, err);
+        c = burrow__gcm_new(a, b, err);
     } else {
         c = chacha20poly1305_new(a, key, err);
     }
@@ -708,6 +711,60 @@ static CryptoEncapsulator hpke_new_ek(Alloc *a, const HpkeKEM *kem, Slice data,
     return mlkem_encapsulation_key1024_as_encapsulator(*ek1024);
 }
 
+/* fips140.WithoutEnforcement around the curve half of a hybrid of ML-KEM, which
+ * is Approved, for NewPublicKey, NewPrivateKey and GenerateKey. Go also runs
+ * the ECDH itself that way, but ECDH is never refused in fips140=only, so here
+ * it is called as it is. */
+typedef struct HpkeCurveCall {
+    enum { HPKE_CURVE_NEW_PUBLIC, HPKE_CURVE_NEW_PRIVATE, HPKE_CURVE_GENERATE } op;
+    const EcdhCurve *curve;
+    Alloc *a;
+    Slice data;
+    IoReader rand;
+    Error *err;
+    EcdhPublicKey *pub;
+    EcdhPrivateKey *priv;
+} HpkeCurveCall;
+
+static void hpke_curve_call_run(void *env) {
+    HpkeCurveCall *c = env;
+    switch (c->op) {
+    case HPKE_CURVE_NEW_PUBLIC:
+        c->pub = ecdh_curve_new_public_key(c->curve, c->a, c->data, c->err);
+        break;
+    case HPKE_CURVE_NEW_PRIVATE:
+        c->priv = ecdh_curve_new_private_key(c->curve, c->a, c->data, c->err);
+        break;
+    case HPKE_CURVE_GENERATE:
+        c->priv = ecdh_curve_generate_key(c->curve, c->a, c->rand, c->err);
+        break;
+    default:
+        break;
+    }
+}
+
+static EcdhPublicKey *hpke_hybrid_new_public_key(const EcdhCurve *curve, Alloc *a,
+                                                 Slice data, Error *err) {
+    HpkeCurveCall c = {HPKE_CURVE_NEW_PUBLIC, curve, a, data, {0}, err, NULL, NULL};
+    fips140_without_enforcement(BURROW_FN(Func, hpke_curve_call_run, &c));
+    return c.pub;
+}
+
+static EcdhPrivateKey *hpke_hybrid_new_private_key(const EcdhCurve *curve, Alloc *a,
+                                                   Slice data, Error *err) {
+    HpkeCurveCall c = {HPKE_CURVE_NEW_PRIVATE, curve, a, data, {0}, err, NULL, NULL};
+    fips140_without_enforcement(BURROW_FN(Func, hpke_curve_call_run, &c));
+    return c.priv;
+}
+
+static EcdhPrivateKey *hpke_hybrid_generate_key(const EcdhCurve *curve, Alloc *a,
+                                                IoReader rand, Error *err) {
+    HpkeCurveCall c = {
+        HPKE_CURVE_GENERATE, curve, a, slice_nil(TYPE_BYTE), rand, err, NULL, NULL};
+    fips140_without_enforcement(BURROW_FN(Func, hpke_curve_call_run, &c));
+    return c.priv;
+}
+
 static HpkePublicKey *hpke_kem_public_key(const HpkeKEM *kem, Alloc *a, Slice data,
                                           Error *err) {
     switch (kem->kind) {
@@ -752,7 +809,7 @@ static HpkePublicKey *hpke_kem_public_key(const HpkeKEM *kem, Alloc *a, Slice da
             hpke_new_ek(a, kem, slice_sub(data, 0, ek_size), &ek768, &ek1024, err);
         if (BURROW_FAILED(*err))
             return NULL;
-        EcdhPublicKey *t = ecdh_curve_new_public_key(
+        EcdhPublicKey *t = hpke_hybrid_new_public_key(
             kem->curve(), a, slice_sub(data, ek_size, data.len), err);
         HpkePublicKey *pk = NULL;
         if (BURROW_OK(*err))
@@ -1018,8 +1075,8 @@ static HpkePrivateKey *hpke_hybrid_private_key_from_seed(Alloc *a, const HpkeKEM
     for (;;) {
         burrow__sha3_read(&s, seed_t, kem->curve_seed_size);
         Error e = BURROW_NO_ERROR;
-        t = ecdh_curve_new_private_key(kem->curve(), a,
-                                       hpke_bytes(seed_t, kem->curve_seed_size), &e);
+        t = hpke_hybrid_new_private_key(kem->curve(), a,
+                                        hpke_bytes(seed_t, kem->curve_seed_size), &e);
         if (BURROW_OK(e))
             break;
         if (errors_is(e, burrow_err_out_of_memory)) {
@@ -1083,9 +1140,8 @@ HpkePrivateKey *hpke_kem_generate_key(const HpkeKEM *kem, Alloc *a, Error *err) 
     HpkePrivateKey *k = NULL;
     switch (kem->kind) {
     case HPKE_KEM_DH: {
-        IoReader rand = {0};
         k = hpke_dh_private_key_owning(
-            a, ecdh_curve_generate_key(kem->curve(), a, rand, &e), &e);
+            a, ecdh_curve_generate_key(kem->curve(), a, crypto_rand_reader, &e), &e);
         break;
     }
     case HPKE_KEM_MLKEM: {
@@ -1236,13 +1292,17 @@ static Slice hpke_hybrid_shared_secret(Alloc *s, const HpkeKEM *kem, Slice ss_pq
 /* The ephemeral curve key of an encapsulation, r's when it has one. *made is
  * the key when it was made here, for the caller to free. */
 static const EcdhPrivateKey *hpke_ephemeral(Alloc *s, const EcdhPublicKey *pub,
-                                            const HpkeEncapRandomness *r,
+                                            const HpkeEncapRandomness *r, bool hybrid,
                                             EcdhPrivateKey **made, Error *err) {
     *made = NULL;
     if (r != NULL && r->ephemeral != NULL)
         return r->ephemeral;
-    IoReader rand = {0};
-    *made = ecdh_curve_generate_key(ecdh_public_key_curve(pub), s, rand, err);
+    if (hybrid)
+        *made = hpke_hybrid_generate_key(ecdh_public_key_curve(pub), s,
+                                         crypto_rand_reader, err);
+    else
+        *made = ecdh_curve_generate_key(ecdh_public_key_curve(pub), s,
+                                        crypto_rand_reader, err);
     return *made;
 }
 
@@ -1266,7 +1326,7 @@ static Slice hpke_encap(Alloc *s, const HpkePublicKey *pk, const HpkeEncapRandom
     switch (kem->kind) {
     case HPKE_KEM_DH: {
         EcdhPrivateKey *made;
-        const EcdhPrivateKey *eph = hpke_ephemeral(s, pk->t, r, &made, err);
+        const EcdhPrivateKey *eph = hpke_ephemeral(s, pk->t, r, false, &made, err);
         if (BURROW_FAILED(*err))
             return slice_nil(TYPE_BYTE);
         Slice dh = ecdh_private_key_ecdh(eph, s, pk->t, err);
@@ -1289,7 +1349,7 @@ static Slice hpke_encap(Alloc *s, const HpkePublicKey *pk, const HpkeEncapRandom
         return hpke_pq_encapsulate(s, pk->pq, r, enc);
     case HPKE_KEM_HYBRID: {
         EcdhPrivateKey *made;
-        const EcdhPrivateKey *eph = hpke_ephemeral(s, pk->t, r, &made, err);
+        const EcdhPrivateKey *eph = hpke_ephemeral(s, pk->t, r, true, &made, err);
         if (BURROW_FAILED(*err))
             return slice_nil(TYPE_BYTE);
         Slice ss_t = ecdh_private_key_ecdh(eph, s, pk->t, err);
@@ -1352,7 +1412,7 @@ static Slice hpke_decap(Alloc *s, const HpkePrivateKey *k, Slice enc, Error *err
         if (BURROW_FAILED(*err))
             return slice_nil(TYPE_BYTE);
         EcdhPublicKey *pub =
-            ecdh_curve_new_public_key(ecdh_key_exchanger_curve(k->t), s, ct_t, err);
+            hpke_hybrid_new_public_key(ecdh_key_exchanger_curve(k->t), s, ct_t, err);
         if (BURROW_FAILED(*err)) {
             hpke_wipe(ss_pq);
             return slice_nil(TYPE_BYTE);

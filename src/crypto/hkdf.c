@@ -21,19 +21,20 @@
 #include "burrow/type.h"
 
 #include "fips140_module.h"
+#include "fips140only_internal.h"
 
 #include <stdint.h>
 #include <string.h>
 
-CRYPTO_FIPS_TEXT Slice hkdf_extract(Alloc *a, HashNewFunc h, Slice secret, Slice salt,
-                                    Error *err) {
+CRYPTO_FIPS_TEXT Slice burrow__hkdf_extract(Alloc *a, HashNewFunc h, Slice secret,
+                                            Slice salt, Error *err) {
     BURROW_OUT(err, BURROW_NO_ERROR);
     if (secret.len < 112 / 8)
         burrow__fips140_record_non_approved();
     /* A missing salt is a block of zeros as long as the sum, and HMAC pads
      * an empty key with zeros to the block size anyway, so an empty salt
      * gives the same answer without making the zeros. */
-    Hash ext = hmac_new(a, h, salt);
+    Hash ext = burrow__hmac_new(a, h, salt);
     if (ext.vt == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);
         return slice_nil(TYPE_BYTE);
@@ -43,11 +44,10 @@ CRYPTO_FIPS_TEXT Slice hkdf_extract(Alloc *a, HashNewFunc h, Slice secret, Slice
     return hash_sum(a, ext, slice_nil(TYPE_BYTE));
 }
 
-CRYPTO_FIPS_TEXT static Slice hkdf_expand_unchecked(Alloc *a, HashNewFunc h, Slice prk,
-                                                    Str info, Int key_length,
-                                                    Error *err) {
+CRYPTO_FIPS_TEXT Slice burrow__hkdf_expand(Alloc *a, HashNewFunc h, Slice prk, Str info,
+                                           Int key_length, Error *err) {
     Slice out = slice_make(a, TYPE_BYTE, 0, key_length);
-    Hash exp = hmac_new(a, h, prk);
+    Hash exp = burrow__hmac_new(a, h, prk);
     if (exp.vt == NULL || (out.p == NULL && key_length > 0)) {
         BURROW_OUT(err, burrow_err_out_of_memory);
         return slice_nil(TYPE_BYTE);
@@ -75,6 +75,36 @@ CRYPTO_FIPS_TEXT static Slice hkdf_expand_unchecked(Alloc *a, HashNewFunc h, Sli
     return out;
 }
 
+BURROW_FIPS140ONLY_ERROR(
+    hkdf_err_short_key_fips140only,
+    "crypto/hkdf: use of keys shorter than 112 bits is not allowed "
+    "in FIPS 140-only mode");
+BURROW_FIPS140ONLY_ERROR(hkdf_err_hash_fips140only,
+                         "crypto/hkdf: use of hash functions other than SHA-2 or SHA-3 "
+                         "is not allowed in FIPS 140-only mode");
+
+CRYPTO_FIPS_TEXT static bool hkdf_check_fips140_only(HashNewFunc h, Slice key,
+                                                     Error *err) {
+    if (!burrow__fips140only_enforced())
+        return true;
+    if (key.len < 112 / 8) {
+        BURROW_OUT(err, hkdf_err_short_key_fips140only);
+        return false;
+    }
+    if (!burrow__fips140only_approved_hash_func(h)) {
+        BURROW_OUT(err, hkdf_err_hash_fips140only);
+        return false;
+    }
+    return true;
+}
+
+CRYPTO_FIPS_TEXT Slice hkdf_extract(Alloc *a, HashNewFunc h, Slice secret, Slice salt,
+                                    Error *err) {
+    if (!hkdf_check_fips140_only(h, secret, err))
+        return slice_nil(TYPE_BYTE);
+    return burrow__hkdf_extract(a, h, secret, salt, err);
+}
+
 /* Go checks the length against the hash's size in the exported functions,
  * before the FIPS module that does the work ever sees it. */
 CRYPTO_FIPS_TEXT static bool hkdf_too_long(Alloc *a, HashNewFunc h, Int key_length,
@@ -94,21 +124,32 @@ CRYPTO_FIPS_TEXT static bool hkdf_too_long(Alloc *a, HashNewFunc h, Int key_leng
 
 CRYPTO_FIPS_TEXT Slice hkdf_expand(Alloc *a, HashNewFunc h, Slice pseudorandom_key,
                                    Str info, Int key_length, Error *err) {
+    if (!hkdf_check_fips140_only(h, pseudorandom_key, err))
+        return slice_nil(TYPE_BYTE);
     if (hkdf_too_long(a, h, key_length, err))
         return slice_nil(TYPE_BYTE);
-    return hkdf_expand_unchecked(a, h, pseudorandom_key, info, key_length, err);
+    return burrow__hkdf_expand(a, h, pseudorandom_key, info, key_length, err);
 }
 
-CRYPTO_FIPS_TEXT Slice hkdf_key(Alloc *a, HashNewFunc h, Slice secret, Slice salt,
-                                Str info, Int key_length, Error *err) {
-    if (hkdf_too_long(a, h, key_length, err))
-        return slice_nil(TYPE_BYTE);
-    Slice prk = hkdf_extract(a, h, secret, salt, err);
+/* The module's hkdf.Key. */
+CRYPTO_FIPS_TEXT static Slice hkdf_module_key(Alloc *a, HashNewFunc h, Slice secret,
+                                              Slice salt, Str info, Int key_length,
+                                              Error *err) {
+    Slice prk = burrow__hkdf_extract(a, h, secret, salt, err);
     if (prk.p == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);
         return slice_nil(TYPE_BYTE);
     }
-    return hkdf_expand_unchecked(a, h, prk, info, key_length, err);
+    return burrow__hkdf_expand(a, h, prk, info, key_length, err);
+}
+
+CRYPTO_FIPS_TEXT Slice hkdf_key(Alloc *a, HashNewFunc h, Slice secret, Slice salt,
+                                Str info, Int key_length, Error *err) {
+    if (!hkdf_check_fips140_only(h, secret, err))
+        return slice_nil(TYPE_BYTE);
+    if (hkdf_too_long(a, h, key_length, err))
+        return slice_nil(TYPE_BYTE);
+    return hkdf_module_key(a, h, secret, salt, info, key_length, err);
 }
 
 /* ------------------------------------------------------------------- CAST */
@@ -134,8 +175,8 @@ CRYPTO_FIPS_TEXT Error burrow__hkdf_cast(void *arg) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Error err = BURROW_NO_ERROR;
-    Slice got = hkdf_key(arena_allocator(&ar), sha256_new, input, input, info,
-                         (Int)sizeof hkdf_cast_want, &err);
+    Slice got = hkdf_module_key(arena_allocator(&ar), sha256_new, input, input, info,
+                                (Int)sizeof hkdf_cast_want, &err);
     if (BURROW_FAILED(err)) {
         arena_free(&ar);
         return err;

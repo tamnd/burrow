@@ -47,7 +47,7 @@ CRYPTO_FIPS_TEXT static bool tls_p_hash(Alloc *scratch, HashNewFunc hash, Byte *
                                         Int n, Slice secret, Slice seed) {
     Byte abuf[TLS_PRF_MAX_SUM], bbuf[TLS_PRF_MAX_SUM];
     Error err = BURROW_NO_ERROR;
-    Hash h = hmac_new(scratch, hash, secret);
+    Hash h = burrow__hmac_new(scratch, hash, secret);
     if (h.vt == NULL)
         return false;
     hash_write(h, seed, &err);

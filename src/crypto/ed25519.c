@@ -27,6 +27,7 @@
 
 #include "edwards25519.h"
 #include "fips140_module.h"
+#include "fips140only_internal.h"
 #include "rand_internal.h"
 #include "sha512_internal.h"
 
@@ -493,6 +494,11 @@ CRYPTO_FIPS_TEXT Slice ed25519_private_key_sign(Ed25519PrivateKey priv, Alloc *a
                                  "Ed25519ph)"));
         return slice_nil(TYPE_BYTE);
     }
+    if (dom == ED_DOM_CTX && burrow__fips140only_enforced()) {
+        BURROW_OUT(err, ed_error("crypto/ed25519: use of Ed25519ctx is not allowed in "
+                                 "FIPS 140-only mode"));
+        return slice_nil(TYPE_BYTE);
+    }
 
     ed_fips_self_test();
     uint8_t signature[ED25519_SIGNATURE_SIZE];
@@ -554,6 +560,14 @@ CRYPTO_FIPS_TEXT Ed25519PublicKey ed25519_generate_key(Alloc *a, IoReader random
     *priv = slice_nil(TYPE_BYTE);
     if (random.vt == NULL)
         random = burrow__crypto_rand_nil_reader();
+
+    if (burrow__fips140only_enforced() &&
+        !burrow__fips140only_approved_random_reader(random)) {
+        BURROW_OUT(err,
+                   ed_error("crypto/ed25519: only crypto/rand.Reader is allowed in "
+                            "FIPS 140-only mode"));
+        return slice_nil(TYPE_BYTE);
+    }
 
     uint8_t seed[ED25519_SEED_SIZE];
     Slice seed_slice =
@@ -641,6 +655,9 @@ CRYPTO_FIPS_TEXT Error ed25519_verify_with_options(Ed25519PublicKey pub, Slice m
             return ed_error_n("ed25519: bad Ed25519ph context length: ",
                               opts->context.len);
     } else if (opts->hash == 0 && opts->context.len != 0) {
+        if (burrow__fips140only_enforced())
+            return ed_error("crypto/ed25519: use of Ed25519ctx is not allowed in FIPS "
+                            "140-only mode");
         ed_fips_self_test();
         /* FIPS 186-5 specifies Ed25519 and Ed25519ph (with context), but not
          * Ed25519ctx. */

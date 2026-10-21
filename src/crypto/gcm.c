@@ -29,6 +29,7 @@
 
 #include "aes_internal.h"
 #include "fips140_module.h"
+#include "fips140only_internal.h"
 #include "internal.h"
 #include "rand_internal.h"
 
@@ -714,6 +715,9 @@ CRYPTO_FIPS_TEXT static CipherAEAD gcm_new(Alloc *a, CipherBlock b, Int nonce_si
         return gcm_fail(err, "cipher: incorrect tag size given to GCM");
     if (nonce_size <= 0)
         return gcm_fail(err, "cipher: the nonce can't have zero length");
+    if (burrow__aes_block_of(b) == NULL && burrow__fips140only_enforced())
+        return gcm_fail(err, "crypto/cipher: use of GCM with non-AES ciphers is not "
+                             "allowed in FIPS 140-only mode");
     if (cipher_block_block_size(b) != GCM_BLOCK_SIZE)
         return gcm_fail(err, "cipher: NewGCM requires 128-bit block cipher");
     CipherGcm *g = BURROW_NEW(a, CipherGcm);
@@ -733,17 +737,31 @@ CRYPTO_FIPS_TEXT static CipherAEAD gcm_new(Alloc *a, CipherBlock b, Int nonce_si
     return (CipherAEAD){vt, g};
 }
 
+CRYPTO_FIPS_TEXT CipherAEAD burrow__gcm_new(Alloc *a, CipherBlock b, Error *err) {
+    return gcm_new(a, b, GCM_STANDARD_NONCE_SIZE, GCM_TAG_SIZE, &gcm_vt, err);
+}
+
+#define GCM_ERR_FIPS140ONLY                                                            \
+    "crypto/cipher: use of GCM with arbitrary IVs is not allowed in FIPS 140-only "    \
+    "mode, use NewGCMWithRandomNonce"
+
 CRYPTO_FIPS_TEXT CipherAEAD cipher_new_gcm(Alloc *a, CipherBlock b, Error *err) {
+    if (burrow__fips140only_enforced())
+        return gcm_fail(err, GCM_ERR_FIPS140ONLY);
     return gcm_new(a, b, GCM_STANDARD_NONCE_SIZE, GCM_TAG_SIZE, &gcm_vt, err);
 }
 
 CRYPTO_FIPS_TEXT CipherAEAD cipher_new_gcm_with_nonce_size(Alloc *a, CipherBlock b,
                                                            Int size, Error *err) {
+    if (burrow__fips140only_enforced())
+        return gcm_fail(err, GCM_ERR_FIPS140ONLY);
     return gcm_new(a, b, size, GCM_TAG_SIZE, &gcm_vt, err);
 }
 
 CRYPTO_FIPS_TEXT CipherAEAD cipher_new_gcm_with_tag_size(Alloc *a, CipherBlock b,
                                                          Int tag_size, Error *err) {
+    if (burrow__fips140only_enforced())
+        return gcm_fail(err, GCM_ERR_FIPS140ONLY);
     return gcm_new(a, b, GCM_STANDARD_NONCE_SIZE, tag_size, &gcm_vt, err);
 }
 

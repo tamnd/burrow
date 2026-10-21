@@ -14,8 +14,9 @@
  * burrow is not FIPS 140-3 validated. Its module follows Go's, but it has not
  * been through validation, and saying that it was would be false. The mode is
  * there for what it does: the self-tests, the integrity check and the service
- * indicator. fips140=only also makes fips140_enforced true, but the packages
- * outside the module do not check it yet.
+ * indicator. fips140=only also makes fips140_enforced true, and then the
+ * packages outside the module refuse what is not approved, with an error or a
+ * panic, as they do in Go.
  *
  * The integrity check needs the module's checksum in the program, which Go's
  * linker writes and burrow-gen fips writes here, after linking:

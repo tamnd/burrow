@@ -212,8 +212,8 @@ CRYPTO_FIPS_TEXT bool burrow__fips140_module_sum(Byte sum[32]) {
     Byte nbuf[8];
     Arena ar;
     arena_init(&ar, NULL, 0);
-    Hash h = hmac_new(arena_allocator(&ar), sha256_new,
-                      slice_from(key, sizeof key, sizeof key, TYPE_BYTE));
+    Hash h = burrow__hmac_new(arena_allocator(&ar), sha256_new,
+                              slice_from(key, sizeof key, sizeof key, TYPE_BYTE));
     if (h.vt == NULL) {
         arena_free(&ar);
         return false;

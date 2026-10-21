@@ -23,6 +23,7 @@
 #include "burrow/type.h"
 
 #include "drbg_internal.h"
+#include "fips140only_internal.h"
 #include "rand_internal.h"
 
 #include <stdint.h>
@@ -207,7 +208,15 @@ static void crand_drop(Alloc *a, BigInt *n, Slice bytes) {
         mem_free(h, bytes.p, (size_t)bytes.cap, 1);
 }
 
+BURROW_FIPS140ONLY_ERROR(
+    crand_err_prime_fips140only,
+    "crypto/rand: use of Prime is not allowed in FIPS 140-only mode");
+
 BigInt *crypto_rand_prime(Alloc *a, IoReader rand, Int bits, Error *err) {
+    if (burrow__fips140only_enforced()) {
+        BURROW_OUT(err, crand_err_prime_fips140only);
+        return NULL;
+    }
     if (bits < 2) {
         BURROW_OUT(
             err,

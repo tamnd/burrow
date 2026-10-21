@@ -31,6 +31,7 @@
 
 #include "bigmod.h"
 #include "fips140_module.h"
+#include "fips140only_internal.h"
 #include "rand_internal.h"
 #include "rsa_internal.h"
 
@@ -2064,6 +2065,74 @@ CRYPTO_FIPS_TEXT static bool rsa_fail(Error *err, Error e) {
     return false;
 }
 
+/* ------------------------------------------------------- FIPS 140-only */
+
+#define RSA_ERR_HASH_FIPS140ONLY                                                       \
+    "crypto/rsa: use of hash functions other than SHA-2 or SHA-3 is not allowed in "   \
+    "FIPS 140-only mode"
+#define RSA_ERR_RAND_FIPS140ONLY                                                       \
+    "crypto/rsa: only crypto/rand.Reader is allowed in FIPS 140-only mode"
+#define RSA_ERR_SALT_FIPS140ONLY                                                       \
+    "crypto/rsa: use of PSS salt longer than the hash is not allowed in FIPS "         \
+    "140-only mode"
+#define RSA_ERR_PKCS1V15_FIPS140ONLY                                                   \
+    "crypto/rsa: use of PKCS#1 v1.5 encryption is not allowed in FIPS 140-only mode"
+
+CRYPTO_FIPS_TEXT static Error
+rsa_check_fips140_only_public_key(const RsaPublicKey *pub) {
+    if (!burrow__fips140only_enforced())
+        return BURROW_NO_ERROR;
+    if (pub->n == NULL)
+        return rsa_error("crypto/rsa: public key missing N");
+    if (big_int_bit_len(pub->n) < 2048)
+        return rsa_error(
+            "crypto/rsa: use of keys smaller than 2048 bits is not allowed "
+            "in FIPS 140-only mode");
+    if (big_int_bit_len(pub->n) % 2 == 1)
+        return rsa_error("crypto/rsa: use of keys with odd size is not allowed in FIPS "
+                         "140-only mode");
+    /* 2¹⁶, in UTF-8. */
+    if (pub->e <= 1 << 16)
+        return rsa_error(
+            "crypto/rsa: use of public exponent <= 2\xc2\xb9\xe2\x81\xb6 is "
+            "not allowed in FIPS 140-only mode");
+    if ((pub->e & 1) == 0)
+        return rsa_error(
+            "crypto/rsa: use of even public exponent is not allowed in FIPS "
+            "140-only mode");
+    return BURROW_NO_ERROR;
+}
+
+CRYPTO_FIPS_TEXT static Error
+rsa_check_fips140_only_private_key(const RsaPrivateKey *priv) {
+    if (!burrow__fips140only_enforced())
+        return BURROW_NO_ERROR;
+    Error err = rsa_check_fips140_only_public_key(&priv->public_key);
+    if (BURROW_FAILED(err))
+        return err;
+    if (priv->primes_len != 2)
+        return rsa_error("crypto/rsa: use of multi-prime keys is not allowed in FIPS "
+                         "140-only mode");
+    if (priv->primes[0] == NULL || priv->primes[1] == NULL ||
+        big_int_bit_len(priv->primes[0]) != big_int_bit_len(priv->primes[1]))
+        return rsa_error(
+            "crypto/rsa: use of primes of different sizes is not allowed in "
+            "FIPS 140-only mode");
+    return BURROW_NO_ERROR;
+}
+
+/* Not in Go: hash.Available() && fips140only.ApprovedHash(hash.New()). */
+CRYPTO_FIPS_TEXT static bool rsa_fips140_only_approved_crypto_hash(CryptoHash hash) {
+    if (!crypto_hash_available(hash))
+        return false;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    bool ok =
+        burrow__fips140only_approved_hash(crypto_hash_new(hash, arena_allocator(&ar)));
+    arena_free(&ar);
+    return ok;
+}
+
 /* ------------------------------------------------------- precomputation */
 
 CRYPTO_FIPS_TEXT static void rsa_precomputed_free(RsaPrecomputedValues *pv, Alloc *a) {
@@ -2393,6 +2462,23 @@ CRYPTO_FIPS_TEXT RsaPrivateKey *rsa_generate_key(Alloc *a, IoReader random, Int 
         return NULL;
 
     random = rsa_reader(random);
+
+    if (burrow__fips140only_enforced() && bits < 2048) {
+        rsa_set_error(err, "crypto/rsa: use of keys smaller than 2048 bits is not "
+                           "allowed in FIPS 140-only mode");
+        return NULL;
+    }
+    if (burrow__fips140only_enforced() && bits % 2 == 1) {
+        rsa_set_error(err, "crypto/rsa: use of keys with odd size is not allowed in "
+                           "FIPS 140-only mode");
+        return NULL;
+    }
+    if (burrow__fips140only_enforced() &&
+        !burrow__fips140only_approved_random_reader(random)) {
+        rsa_set_error(err, RSA_ERR_RAND_FIPS140ONLY);
+        return NULL;
+    }
+
     Error e = BURROW_NO_ERROR;
     RsaFipsKey *k = rsa_fips_generate_key(a, random, bits, &e);
     if (bits < 256 && k == NULL) {
@@ -2438,6 +2524,12 @@ CRYPTO_FIPS_TEXT RsaPrivateKey *rsa_generate_multi_prime_key(Alloc *a, IoReader 
                                                              Error *err) {
     if (nprimes == 2)
         return rsa_generate_key(a, random, bits, err);
+    if (burrow__fips140only_enforced()) {
+        rsa_set_error(err,
+                      "crypto/rsa: multi-prime RSA is not allowed in FIPS 140-only "
+                      "mode");
+        return NULL;
+    }
 
     random = rsa_reader(random);
 
@@ -2597,11 +2689,28 @@ CRYPTO_FIPS_TEXT Slice rsa_sign_pss(Alloc *a, IoReader rand, const RsaPrivateKey
     rsa_scratch_init(&s);
     Slice out = slice_nil(TYPE_BYTE);
     Hash h = crypto_hash_new(hash, s.a);
+
+    if (rsa_fail(err, rsa_check_fips140_only_private_key(priv)))
+        goto done;
+    if (burrow__fips140only_enforced() && !burrow__fips140only_approved_hash(h)) {
+        rsa_set_error(err, RSA_ERR_HASH_FIPS140ONLY);
+        goto done;
+    }
+    if (burrow__fips140only_enforced() &&
+        !burrow__fips140only_approved_random_reader(rand)) {
+        rsa_set_error(err, RSA_ERR_RAND_FIPS140ONLY);
+        goto done;
+    }
+
     const RsaFipsKey *k = rsa_fips_private_key(priv, s.a, err);
     if (k == NULL)
         goto done;
 
     Int salt_length = rsa_pss_salt_length(opts);
+    if (burrow__fips140only_enforced() && salt_length > hash_size(h)) {
+        rsa_set_error(err, RSA_ERR_SALT_FIPS140ONLY);
+        goto done;
+    }
     switch (salt_length) {
     case RSA_PSS_SALT_LENGTH_AUTO:
         if (!rsa_pss_max_salt_length(k->n, h, &salt_length)) {
@@ -2645,11 +2754,24 @@ CRYPTO_FIPS_TEXT Error rsa_verify_pss(const RsaPublicKey *pub, CryptoHash hash,
     RsaScratch s;
     rsa_scratch_init(&s);
     Hash h = crypto_hash_new(hash, s.a);
+
+    err = rsa_check_fips140_only_public_key(pub);
+    if (BURROW_FAILED(err))
+        goto done;
+    if (burrow__fips140only_enforced() && !burrow__fips140only_approved_hash(h)) {
+        err = rsa_error(RSA_ERR_HASH_FIPS140ONLY);
+        goto done;
+    }
+
     BigmodModulus *N = rsa_fips_public_key(pub, s.a, &err);
     if (N == NULL)
         goto done;
 
     Int salt_length = rsa_pss_salt_length(opts);
+    if (burrow__fips140only_enforced() && salt_length > hash_size(h)) {
+        err = rsa_error(RSA_ERR_SALT_FIPS140ONLY);
+        goto done;
+    }
     switch (salt_length) {
     case RSA_PSS_SALT_LENGTH_AUTO:
         err = rsa_fips_verify_pss(N, pub->e, h, digest, sig,
@@ -2678,6 +2800,18 @@ rsa_encrypt_oaep_hashes(Alloc *a, Hash hash, Hash mgf_hash, IoReader random,
     Slice out = slice_nil(TYPE_BYTE);
     if (rsa_fail(err, rsa_check_public_key_size(pub)))
         goto reset;
+
+    if (rsa_fail(err, rsa_check_fips140_only_public_key(pub)))
+        goto reset;
+    if (burrow__fips140only_enforced() && !burrow__fips140only_approved_hash(hash)) {
+        rsa_set_error(err, RSA_ERR_HASH_FIPS140ONLY);
+        goto reset;
+    }
+    if (burrow__fips140only_enforced() &&
+        !burrow__fips140only_approved_random_reader(random)) {
+        rsa_set_error(err, RSA_ERR_RAND_FIPS140ONLY);
+        goto reset;
+    }
 
     RsaScratch s;
     rsa_scratch_init(&s);
@@ -2730,6 +2864,16 @@ rsa_decrypt_oaep_hashes(Alloc *a, Hash hash, Hash mgf_hash, const RsaPrivateKey 
     if (rsa_fail(err, rsa_check_public_key_size(&priv->public_key)))
         return slice_nil(TYPE_BYTE);
 
+    if (rsa_fail(err, rsa_check_fips140_only_private_key(priv)))
+        return slice_nil(TYPE_BYTE);
+    if (burrow__fips140only_enforced()) {
+        if (!burrow__fips140only_approved_hash(hash) ||
+            !burrow__fips140only_approved_hash(mgf_hash)) {
+            rsa_set_error(err, RSA_ERR_HASH_FIPS140ONLY);
+            return slice_nil(TYPE_BYTE);
+        }
+    }
+
     RsaScratch s;
     rsa_scratch_init(&s);
     Slice out = slice_nil(TYPE_BYTE);
@@ -2771,6 +2915,15 @@ CRYPTO_FIPS_TEXT Slice rsa_sign_pkcs1_v15(Alloc *a, IoReader random,
     if (rsa_fail(err, rsa_check_public_key_size(&priv->public_key)))
         goto done;
 
+    if (rsa_fail(err, rsa_check_fips140_only_private_key(priv)))
+        goto done;
+    if (burrow__fips140only_enforced()) {
+        if (!rsa_fips140_only_approved_crypto_hash(hash)) {
+            rsa_set_error(err, RSA_ERR_HASH_FIPS140ONLY);
+            goto done;
+        }
+    }
+
     const RsaFipsKey *k = rsa_fips_private_key(priv, s.a, err);
     if (k != NULL) {
         rsa_fips_self_test();
@@ -2804,6 +2957,16 @@ CRYPTO_FIPS_TEXT Error rsa_verify_pkcs1_v15(const RsaPublicKey *pub, CryptoHash 
     if (BURROW_FAILED(err))
         goto done;
 
+    err = rsa_check_fips140_only_public_key(pub);
+    if (BURROW_FAILED(err))
+        goto done;
+    if (burrow__fips140only_enforced()) {
+        if (!rsa_fips140_only_approved_crypto_hash(hash)) {
+            err = rsa_error(RSA_ERR_HASH_FIPS140ONLY);
+            goto done;
+        }
+    }
+
     BigmodModulus *N = rsa_fips_public_key(pub, s.a, &err);
     if (N != NULL) {
         rsa_fips_self_test();
@@ -2821,6 +2984,11 @@ done:
 CRYPTO_FIPS_TEXT Slice rsa_encrypt_pkcs1_v15(Alloc *a, IoReader random,
                                              const RsaPublicKey *pub, Slice msg,
                                              Error *err) {
+    if (burrow__fips140only_enforced()) {
+        rsa_set_error(err, RSA_ERR_PKCS1V15_FIPS140ONLY);
+        return slice_nil(TYPE_BYTE);
+    }
+
     if (rsa_fail(err, rsa_check_public_key_size(pub)))
         return slice_nil(TYPE_BYTE);
     Int k = rsa_public_key_size(pub);
@@ -2872,6 +3040,11 @@ CRYPTO_FIPS_TEXT static bool rsa_decrypt_pkcs1_v15_em(const RsaPrivateKey *priv,
                                                       Slice ciphertext, Alloc *tmp,
                                                       Int *valid, Slice *em, Int *index,
                                                       Error *err) {
+    if (burrow__fips140only_enforced()) {
+        rsa_set_error(err, RSA_ERR_PKCS1V15_FIPS140ONLY);
+        return false;
+    }
+
     Int k = rsa_public_key_size(&priv->public_key);
     if (k < 11) {
         BURROW_OUT(err, rsa_err_decryption);

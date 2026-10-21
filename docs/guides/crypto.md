@@ -174,7 +174,7 @@ With the mode on, a program that has no checksum panics with `fips140: no verifi
 
 Go reads the setting when the program starts. burrow has nothing that runs then, so it reads it the first time the program uses the module or calls one of these functions, and changing `GODEBUG` after that changes nothing, as in Go.
 
-`fips140_version` gives `"latest"`, which is what Go gives for a program that was not built against a frozen module. `fips140_enforced` is true under `fips140=only`, but the packages outside the module do not check it yet. `fips140_without_enforcement` runs a function with strict enforcement off, for it and for the goroutines it starts:
+`fips140_version` gives `"latest"`, which is what Go gives for a program that was not built against a frozen module. `fips140_enforced` is true under `fips140=only`, and then the packages outside the module refuse what is not approved, as Go's do: MD5, SHA-1, DES, RC4, ChaCha20-Poly1305, DSA, X25519, RSA keys under 2048 bits and GCM with a nonce the caller picks, among others. A function that has an error gives one, and one that does not panics. `fips140_without_enforcement` runs a function with strict enforcement off, for it and for the goroutines it starts:
 
 <!-- example: ../examples/crypto/fips140.c#without -->
 ```c

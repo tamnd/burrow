@@ -19,6 +19,7 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "fips140only_internal.h"
 #include "internal.h"
 #include "sha1_internal.h"
 
@@ -423,7 +424,15 @@ static void sha1_reset(void *self) {
 
 static void sha1_update(Sha1Digest *d, const Byte *p, Int n);
 
+BURROW_FIPS140ONLY_ERROR(
+    sha1_err_fips140only,
+    "crypto/sha1: use of SHA-1 is not allowed in FIPS 140-only mode");
+
 static void sha1_check_sum(Sha1Digest *d, Byte out[SHA1_SIZE]) {
+    if (burrow__fips140only_enforced())
+        panic_str(BURROW_S("crypto/sha1: use of SHA-1 is not allowed in FIPS 140-only "
+                           "mode"));
+
     /* Padding: add 1 bit and 0 bits until 56 bytes mod 64, then the length in
      * bits as a big endian 64 bit number. */
     uint64_t len = d->len;
@@ -465,6 +474,10 @@ static void sha1_update(Sha1Digest *d, const Byte *p, Int n) {
 }
 
 static Int sha1_write(void *self, Slice p, Error *err) {
+    if (burrow__fips140only_enforced()) {
+        BURROW_OUT(err, sha1_err_fips140only);
+        return 0;
+    }
     sha1_update(self, (const Byte *)p.p, p.len);
     BURROW_OUT(err, BURROW_NO_ERROR);
     return p.len;
@@ -611,6 +624,10 @@ Hash sha1_new(Alloc *a) {
  * is filled. It always runs two blocks and keeps the answer of the one it
  * needed. */
 static void sha1_const_sum(Sha1Digest *d, Byte out[SHA1_SIZE]) {
+    if (burrow__fips140only_enforced())
+        panic_str(BURROW_S("crypto/sha1: use of SHA-1 is not allowed in FIPS 140-only "
+                           "mode"));
+
     Byte length[8];
     sha1_put_be64(length, d->len << 3);
 
@@ -691,6 +708,9 @@ Hash burrow__sha1_new_constant_time(Alloc *a) {
 }
 
 Sha1SumRet sha1_sum(Slice data) {
+    if (burrow__fips140only_enforced())
+        panic_str(BURROW_S("crypto/sha1: use of SHA-1 is not allowed in FIPS 140-only "
+                           "mode"));
     Sha1Digest d;
     Sha1SumRet r;
     sha1_reset(&d);

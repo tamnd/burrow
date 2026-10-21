@@ -213,6 +213,24 @@ jobs:
       - uses: docker/setup-qemu-action@v3
         with:
           platforms: s390x
+      - uses: actions/cache/restore@v6
+        id: image
+        with:
+          path: ~/image.tar
+          key: image-gcc-15-s390x
+      - name: pull the image
+        if: steps.image.outputs.cache-hit != 'true'
+        run: |
+          docker pull --platform linux/s390x public.ecr.aws/docker/library/gcc:15
+          docker save -o ~/image.tar public.ecr.aws/docker/library/gcc:15
+      - if: steps.image.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/image.tar
+          key: image-gcc-15-s390x
+      - name: load the image
+        if: steps.image.outputs.cache-hit == 'true'
+        run: docker load -i ~/image.tar
       # The tests run in short mode here. A few of them write and read back
       # archives of 4 GiB and more, which take a minute or two each on real
       # hardware and would not finish under emulation.
@@ -244,14 +262,38 @@ jobs:
   #
   # Both container jobs pull Docker's official images from the copy on Amazon's
   # public registry. Docker Hub limits anonymous pulls per address, the hosted
-  # runners share addresses, and in October 2026 that limit started failing these
-  # two jobs within seconds of starting.
+  # runners share addresses, and in October 2026 that limit started failing
+  # these two jobs within seconds of starting. Amazon's registry limits the data
+  # each address pulls, and later that month it failed them too, with
+  # "toomanyrequests: Data limit exceeded". So each job keeps its image in the
+  # Actions cache and only pulls when the cache doesn't have it. The image is
+  # saved as soon as it is pulled, rather than at the end of the job, so a run
+  # whose tests fail still fills the cache. The key names the tag, so moving the
+  # tag means changing the key, and the new image is pulled once.
   musl:
     name: linux-musl-gcc (alpine)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/cache/restore@v6
+        id: image
+        with:
+          path: ~/image.tar
+          key: image-alpine-3.20
+      - name: pull the image
+        if: steps.image.outputs.cache-hit != 'true'
+        run: |
+          docker pull public.ecr.aws/docker/library/alpine:3.20
+          docker save -o ~/image.tar public.ecr.aws/docker/library/alpine:3.20
+      - if: steps.image.outputs.cache-hit != 'true'
+        uses: actions/cache/save@v6
+        with:
+          path: ~/image.tar
+          key: image-alpine-3.20
+      - name: load the image
+        if: steps.image.outputs.cache-hit == 'true'
+        run: docker load -i ~/image.tar
       - name: build and test
         run: |
           docker run --rm -v "$PWD":/src -w /src public.ecr.aws/docker/library/alpine:3.20 \

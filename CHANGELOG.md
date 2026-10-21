@@ -4,6 +4,34 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API, and none of it has been through a security review yet.
 
+## v0.3.2 (2026-10-21)
+
+crypto/tls, which is the main part of P3 (#5), and the first tools that check the constant-time code.
+
+### Added
+
+- `crypto/tls`: versions, cipher suites, the PRF, the key schedule and alerts (#526), handshake messages (#528), `auth.go` (#529), `X509KeyPair` and `LoadX509KeyPair` (#530), `Config` with its ticket keys and the LRU session cache (#531), the record layer (#533), `Conn` and its record I/O (#534), session state and tickets (#536), the key agreements (#537) and TLS 1.3 key exchanges (#538), the client handshake for TLS 1.2 (#539) and 1.3 (#540), the server handshake for TLS 1.2 (#541) and 1.3 (#542), `Listen`, `Dial` and `Dialer` (#544), Encrypted Client Hello (#548) and the QUIC hooks (#549).
+- Go's tests for crypto/tls: more server handshake tests (#543), more of `tls_test.go` (#545), Go's recorded handshakes, replayed (#552), the rest of the client handshake tests (#553), `handshake_test.go` (#554) and the rest of `conn_test.go` (#560).
+- `Clone` and binary marshaling on the hashes (#546, #550), and `SetGlobalRandom` in `testing/cryptotest` (#551).
+- CMAC, with Go's tests and its Wycheproof vectors (#565), and the Wycheproof tests of hmac, hkdf and pbkdf2 (#562), of GCM, CBC and ChaCha20-Poly1305 (#563), and of crypto/ecdh (#564).
+- `make ctgrind`, which runs the constant-time code under valgrind with its secrets marked undefined (#556). It covers `crypto/subtle`, the SHA-2 hashes and HMAC, Ed25519, ECDH and ML-KEM, then AES, GCM, ChaCha20-Poly1305 and ECDSA signing (#568), and RSA signing and decryption (#570).
+- `make ct-asm`, which counts the conditional branches in each function of `subtle.c` and fails when a count changes, in CI on x86-64 and arm64 with gcc and clang (#566).
+- CONTRIBUTING.md has the constant-time rules for crypto code (#555, #561).
+
+### Changed
+
+- The QUIC types are spelled the way Go spells them, and `CertificateVerificationError` has `Unwrap` (#558).
+- On MSVC, `ct_hide` and bigmod's `ct_mask` read their value back through a `volatile`, which stands in for the empty `asm` statement GCC and Clang get (#567).
+
+### Fixed
+
+- A cache timing leak that clang put into bigmod's `Exp`, where it loaded from an address that depended on the exponent. ctgrind found it (#556).
+- The amalgamation, MSVC and macOS jobs on main (#547), and the amalgamation, cosmopolitan and clang-tidy jobs (#569).
+
+### Docs
+
+- The crypto/tls docs describe the package as it is now, with a handshake example (#557), and the fips140ems docs say what it does in burrow, which is nothing (#559).
+
 ## v0.3.1 (2026-10-20)
 
 The v0.3.0 Release workflow failed, so this is the first release of the P5 work with binaries.

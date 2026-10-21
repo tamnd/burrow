@@ -61,6 +61,11 @@
 # Point.Bytes and Point.BytesX check for the point at infinity, which a valid
 # key times a valid point is not.
 {
+   nistec P-224 Bytes infinity
+   Memcheck:Cond
+   fun:p224_point_bytes*
+}
+{
    nistec P-256 Bytes infinity
    Memcheck:Cond
    fun:p256_point_bytes*
@@ -82,4 +87,83 @@
    mlkem sampleNTT rejection sampling
    Memcheck:Cond
    fun:mlkem_sample_ntt*
+}
+
+# The generic Poly1305 panics with "poly1305: unexpected overflow" if a sum or
+# a product carries out of its 128 bits. The clamped r and the partly reduced h
+# keep that from ever happening, so the branch always goes the same way.
+{
+   poly1305 overflow panic
+   Memcheck:Cond
+   fun:poly1305_no_overflow*
+}
+
+# Open in GCM and in ChaCha20-Poly1305 compares the tag in constant time and
+# then fails if it is wrong, which the caller learns from the error anyway.
+# With clang the branch is in gcm_open, on what gcm_open_into returns.
+{
+   gcm Open tag check
+   Memcheck:Cond
+   fun:gcm_open*
+}
+{
+   chacha20poly1305 Open tag check
+   Memcheck:Cond
+   fun:chacha20poly1305_open_with*
+}
+
+# ECDSA's randomPoint is rejection sampling: a candidate for the nonce that is
+# zero or not below the order goes round again, which for these curves almost
+# never happens. Nat.SetBytes is where the candidate is compared with the order.
+{
+   ecdsa randomPoint rejection sampling
+   Memcheck:Cond
+   fun:ecdsa_random_point*
+}
+{
+   ecdsa randomPoint SetBytes range check
+   Memcheck:Cond
+   fun:bigmod_nat_set_bytes
+   fun:ecdsa_random_point*
+}
+
+# sign reads the key with Nat.SetBytes, which fails for a key that is not below
+# the order. burrow also reads the nonce from randomPoint back the same way,
+# and it always is below the order. Then sign fails if r or s is zero, and its
+# SetOverflowingBytes checks the length of r. r and s are the signature, so
+# they are public, but they come from the key and the nonce, and only become
+# public to valgrind once the harness says so.
+{
+   ecdsa sign SetBytes range check
+   Memcheck:Cond
+   fun:bigmod_nat_set_bytes
+   fun:burrow__ecdsa_sign_with_drbg*
+}
+{
+   ecdsa sign r or s is zero
+   Memcheck:Cond
+   fun:burrow__ecdsa_sign_with_drbg*
+}
+{
+   ecdsa sign SetOverflowingBytes on r
+   Memcheck:Cond
+   fun:bigmod_nat_set_overflowing_bytes
+   fun:burrow__ecdsa_sign_with_drbg*
+}
+{
+   ecdsa sign bitLen of r
+   Memcheck:Cond
+   fun:bit_len
+   fun:bigmod_nat_set_overflowing_bytes
+   fun:burrow__ecdsa_sign_with_drbg*
+}
+
+# Nat.Bytes stops at a zero limb when the bytes run out before the limbs, and
+# panics if the limb is not zero. A value reduced modulo the order never has
+# bits there, so the branch always goes the same way. With 64 bit limbs, only
+# P-224 and P-521 have orders that are not a whole number of limbs.
+{
+   ecdsa Nat.Bytes spare limb
+   Memcheck:Cond
+   fun:ecdsa_nat_bytes*
 }

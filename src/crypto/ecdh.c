@@ -18,6 +18,7 @@
 #include "burrow/mem/heap.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
+#include "burrow/sync.h"
 #include "burrow/type.h"
 
 #include "edwards25519.h"
@@ -331,6 +332,100 @@ ecdh_nist_new_private(const EcdhCurve *c, Alloc *a, Slice key, Error *err) {
     return ecdh_new_private(c, a, key.p, key.len, pub, n, err);
 }
 
+/* fips140/ecdh's ecdh, the shared secret of the private scalar d and the
+ * encoded point q into out, without the checks on the keys around it. */
+CRYPTO_FIPS_TEXT static bool ecdh_nist_shared(const NistecCurve *nc, Slice d, Slice q,
+                                              uint8_t *out, Error *err) {
+    /* SetBytes checks that (x, y) are reduced modulo p, and that they are on
+     * the curve, performing Steps 2-3 of Section 5.6.2.3.4. */
+    NistecPoint p;
+    Error e = BURROW_NO_ERROR;
+    if (nc->set_bytes(nc->point_new(&p), q, &e) == NULL ||
+        nc->scalar_mult(&p, &p, d, &e) == NULL || nc->bytes_x(&p, out, &e) == NULL) {
+        BURROW_OUT(err, e);
+        return false;
+    }
+    return true;
+}
+
+/* -------------------------------------------------------------- self-test */
+
+/* From Go's src/crypto/internal/fips140/ecdh/cast.go. Per IG D.F, Scenario 2,
+ * path (1). */
+
+CRYPTO_FIPS_RODATA static const uint8_t ecdh_cast_private_key[32] = {
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
+    0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+    0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+};
+
+CRYPTO_FIPS_RODATA static const uint8_t ecdh_cast_public_key[65] = {
+    0x04, 0x51, 0x5c, 0x3d, 0x6e, 0xb9, 0xe3, 0x96, 0xb9, 0x04, 0xd3, 0xfe, 0xca,
+    0x7f, 0x54, 0xfd, 0xcd, 0x0c, 0xc1, 0xe9, 0x97, 0xbf, 0x37, 0x5d, 0xca, 0x51,
+    0x5a, 0xd0, 0xa6, 0xc3, 0xb4, 0x03, 0x5f, 0x45, 0x36, 0xbe, 0x3a, 0x50, 0xf3,
+    0x18, 0xfb, 0xf9, 0xa5, 0x47, 0x59, 0x02, 0xa2, 0x21, 0x50, 0x2b, 0xef, 0x0d,
+    0x57, 0xe0, 0x8c, 0x53, 0xb2, 0xcc, 0x0a, 0x56, 0xf1, 0x7d, 0x9f, 0x93, 0x54,
+};
+
+CRYPTO_FIPS_RODATA static const uint8_t ecdh_cast_want[32] = {
+    0xb4, 0xf1, 0xfc, 0xce, 0x40, 0x73, 0x5f, 0x83, 0x6a, 0xf8, 0xd6,
+    0x31, 0x2d, 0x24, 0x8d, 0x1a, 0x83, 0x48, 0x40, 0x56, 0x69, 0xa1,
+    0x95, 0xfa, 0xc5, 0x35, 0x04, 0x06, 0xba, 0x76, 0xbc, 0xce,
+};
+
+CRYPTO_FIPS_TEXT static Error ecdh_cast(void *arg) {
+    (void)arg;
+    Int dn = (Int)sizeof ecdh_cast_private_key, qn = (Int)sizeof ecdh_cast_public_key;
+    Slice d = slice_from((void *)(uintptr_t)ecdh_cast_private_key, dn, dn, TYPE_BYTE);
+    Slice q = slice_from((void *)(uintptr_t)ecdh_cast_public_key, qn, qn, TYPE_BYTE);
+    uint8_t got[32];
+    Error err = BURROW_NO_ERROR;
+    if (!ecdh_nist_shared(&burrow__nistec_p256, d, q, got, &err))
+        return err;
+    if (memcmp(got, ecdh_cast_want, sizeof got) != 0)
+        return errors_new(error_allocator(), BURROW_S("unexpected result"));
+    return BURROW_NO_ERROR;
+}
+
+CRYPTO_FIPS_TEXT static void ecdh_self_test_once(void *env) {
+    (void)env;
+    burrow__fips140_cast("KAS-ECC-SSC P-256", ecdh_cast, NULL);
+}
+
+static SyncOnce ecdh_self_test;
+
+/* fipsSelfTest, Go's sync.OnceFunc. */
+CRYPTO_FIPS_TEXT static void ecdh_fips_self_test(void) {
+    sync_once_do(&ecdh_self_test, BURROW_FN(Func, ecdh_self_test_once, NULL));
+}
+
+/* The "ECDH PCT" of fips140/ecdh's GenerateKey. A "Pairwise Consistency Test"
+ * makes no sense if we just generated the public key from an ephemeral private
+ * key. Moreover, there is no way to check it aside from redoing the exact same
+ * computation again. SP 800-56A Rev. 3, Section 5.6.2.1.4 acknowledges that,
+ * and doesn't require it. However, ISO 19790:2012, Section 7.10.3.3 has a
+ * blanket requirement for a PCT for all generated keys (AS10.35) and FIPS 140-3
+ * IG 10.3.A, Additional Comment 1 goes out of its way to say that "the PCT
+ * shall be performed consistent [...], even if the underlying standard does not
+ * require a PCT". So we do it. And make ECDH nearly 50% slower (only) in FIPS
+ * mode. */
+CRYPTO_FIPS_TEXT static Error ecdh_pct(void *arg) {
+    const EcdhPrivateKey *k = arg;
+    const NistecCurve *nc = k->curve->nist;
+    NistecPoint p1;
+    Error e = BURROW_NO_ERROR;
+    if (nc->scalar_base_mult(&p1, k->private_key, &e) == NULL)
+        return e;
+    uint8_t q[NISTEC_MAX_POINT_BYTES];
+    Int n = nc->bytes(&p1, q);
+    const Slice *pub = &k->public_key.public_key;
+    if (n != pub->len || memcmp(q, pub->p, (size_t)n) != 0)
+        return errors_new(
+            error_allocator(),
+            BURROW_S("crypto/ecdh: public key does not match private key"));
+    return BURROW_NO_ERROR;
+}
+
 /* drbg.ReadWithReader: the system generator for the default reader, which is
  * what drbg.Read is outside FIPS mode, and io.ReadFull for anything else. */
 CRYPTO_FIPS_TEXT static int ecdh_read(IoReader r, uint8_t *p, Int n, Error *err) {
@@ -383,6 +478,8 @@ CRYPTO_FIPS_TEXT EcdhPrivateKey *ecdh_curve_generate_key(const EcdhCurve *c, All
         if (ecdh_nist_valid_scalar(c, ks)) {
             EcdhPrivateKey *k = ecdh_nist_new_private(c, a, ks, err);
             memset(key, 0, sizeof key);
+            if (k != NULL)
+                burrow__fips140_pct("ECDH PCT", ecdh_pct, k);
             return k;
         }
     }
@@ -440,18 +537,13 @@ CRYPTO_FIPS_TEXT Slice ecdh_private_key_ecdh(const EcdhPrivateKey *k, Alloc *a,
         }
     } else {
         const NistecCurve *nc = k->curve->nist;
+        ecdh_fips_self_test();
         if (k->public_key.public_key.len == 1) {
             ecdh_set_error(err, "crypto/ecdh: public key is the identity element");
             return slice_nil(TYPE_BYTE);
         }
-        NistecPoint p;
-        Error e = BURROW_NO_ERROR;
-        if (nc->set_bytes(nc->point_new(&p), remote->public_key, &e) == NULL ||
-            nc->scalar_mult(&p, &p, k->private_key, &e) == NULL ||
-            nc->bytes_x(&p, out, &e) == NULL) {
-            BURROW_OUT(err, e);
+        if (!ecdh_nist_shared(nc, k->private_key, remote->public_key, out, err))
             return slice_nil(TYPE_BYTE);
-        }
         n = nc->element_bytes;
     }
     Slice s = slice_make(a, TYPE_BYTE, n, n);

@@ -22,6 +22,7 @@
 #include "burrow/panic.h"
 #include "burrow/runtime.h"
 #include "burrow/slice.h"
+#include "burrow/sync.h"
 #include "burrow/type.h"
 
 #include "edwards25519.h"
@@ -297,6 +298,85 @@ CRYPTO_FIPS_TEXT static Error ed_verify_with_dom(const Edwards25519Point *A,
     return BURROW_NO_ERROR;
 }
 
+/* ------------------------------------------------------------- self-tests */
+
+/* From Go's src/crypto/internal/fips140/ed25519/cast.go. */
+
+CRYPTO_FIPS_RODATA static const uint8_t ed_cast_seed[32] = {
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
+    0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+    0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+};
+
+CRYPTO_FIPS_RODATA static const uint8_t ed_cast_want[64] = {
+    0xbd, 0xe7, 0xa5, 0xf3, 0x40, 0x73, 0xb9, 0x5a, 0x2e, 0x6d, 0x63, 0x20, 0x0a,
+    0xd5, 0x92, 0x9b, 0xa2, 0x3d, 0x00, 0x44, 0xb4, 0xc5, 0xfd, 0x62, 0x1d, 0x5e,
+    0x33, 0x2f, 0xe4, 0x61, 0x42, 0x31, 0x5b, 0x10, 0x53, 0x13, 0x4d, 0xcb, 0xd1,
+    0x1b, 0x2a, 0xf6, 0xcd, 0x0e, 0xdb, 0x9a, 0xd3, 0x1e, 0x35, 0xdb, 0x0b, 0xcf,
+    0x58, 0x90, 0x4f, 0xd7, 0x69, 0x38, 0xed, 0x30, 0x51, 0x0f, 0xaa, 0x03,
+};
+
+/* NewPublicKey, for the 32 bytes of a key the module made. */
+CRYPTO_FIPS_TEXT static Error ed_public_point(Edwards25519Point *A,
+                                              const uint8_t *pub) {
+    Slice b = slice_from((void *)(uintptr_t)pub, 32, 32, TYPE_BYTE);
+    if (burrow__ge_set_bytes(A, b, NULL) == NULL)
+        return ed_error("ed25519: bad public key");
+    return BURROW_NO_ERROR;
+}
+
+CRYPTO_FIPS_TEXT static Error ed_cast(void *arg) {
+    (void)arg;
+    static const char msg[] = "CAST";
+    EdPrivate k;
+    ed_private_from_seed(&k, ed_cast_seed);
+    Edwards25519Point A;
+    Error err = ed_public_point(&A, k.pub);
+    if (BURROW_FAILED(err))
+        return err;
+    uint8_t sig[ED25519_SIGNATURE_SIZE];
+    Slice m = slice_from((void *)(uintptr_t)msg, 4, 4, TYPE_BYTE);
+    ed_sign_with_dom(sig, &k, m, ED_DOM_PURE, BURROW_STR_EMPTY);
+    if (memcmp(sig, ed_cast_want, sizeof sig) != 0)
+        return errors_new(error_allocator(), BURROW_S("unexpected result"));
+    return ed_verify_with_dom(
+        &A, k.pub, m,
+        slice_from(sig, ED25519_SIGNATURE_SIZE, ED25519_SIGNATURE_SIZE, TYPE_BYTE),
+        ED_DOM_PURE, BURROW_STR_EMPTY);
+}
+
+CRYPTO_FIPS_TEXT static void ed_self_test_once(void *env) {
+    (void)env;
+    burrow__fips140_cast("Ed25519 sign and verify", ed_cast, NULL);
+}
+
+static SyncOnce ed_self_test;
+
+/* fipsSelfTest, Go's sync.OnceFunc, which every signature and verification of
+ * the module runs first. */
+CRYPTO_FIPS_TEXT static void ed_fips_self_test(void) {
+    sync_once_do(&ed_self_test, BURROW_FN(Func, ed_self_test_once, NULL));
+}
+
+/* pairwiseTest: Sign and Verify, the self-test and all, of "PCT". */
+CRYPTO_FIPS_TEXT static Error ed_pct(void *arg) {
+    static const char msg[] = "PCT";
+    const EdPrivate *k = arg;
+    Slice m = slice_from((void *)(uintptr_t)msg, 3, 3, TYPE_BYTE);
+    uint8_t sig[ED25519_SIGNATURE_SIZE];
+    ed_fips_self_test();
+    ed_sign_with_dom(sig, k, m, ED_DOM_PURE, BURROW_STR_EMPTY);
+    Edwards25519Point A;
+    Error err = ed_public_point(&A, k->pub);
+    if (BURROW_FAILED(err))
+        return err;
+    ed_fips_self_test();
+    return ed_verify_with_dom(
+        &A, k->pub, m,
+        slice_from(sig, ED25519_SIGNATURE_SIZE, ED25519_SIGNATURE_SIZE, TYPE_BYTE),
+        ED_DOM_PURE, BURROW_STR_EMPTY);
+}
+
 /* ------------------------------------------------------------------- keys */
 
 /* A copy of n bytes at p from a, or a nil Slice with no memory. */
@@ -406,6 +486,7 @@ CRYPTO_FIPS_TEXT Slice ed25519_private_key_sign(Ed25519PrivateKey priv, Alloc *a
         return slice_nil(TYPE_BYTE);
     }
 
+    ed_fips_self_test();
     uint8_t signature[ED25519_SIGNATURE_SIZE];
     e = ed_sign_variant(signature, &k, message, dom, context);
     if (BURROW_FAILED(e)) {
@@ -469,7 +550,8 @@ CRYPTO_FIPS_TEXT Ed25519PublicKey ed25519_generate_key(Alloc *a, IoReader random
     uint8_t seed[ED25519_SEED_SIZE];
     Slice seed_slice =
         slice_from(seed, ED25519_SEED_SIZE, ED25519_SEED_SIZE, TYPE_BYTE);
-    if (burrow__crypto_rand_is_default_reader(random)) {
+    bool approved = burrow__crypto_rand_is_default_reader(random);
+    if (approved) {
         burrow__crypto_rand_system(seed_slice);
     } else {
         Error e = BURROW_NO_ERROR;
@@ -480,7 +562,21 @@ CRYPTO_FIPS_TEXT Ed25519PublicKey ed25519_generate_key(Alloc *a, IoReader random
         }
     }
 
-    Ed25519PrivateKey k = ed25519_new_key_from_seed(a, seed_slice);
+    /* Go's fips140/ed25519.GenerateKey, which the default reader goes through,
+     * runs the PCT, and NewKeyFromSeed, which other readers go through, does
+     * not. */
+    EdPrivate pk;
+    ed_private_from_seed(&pk, seed);
+    if (approved)
+        burrow__fips140_pct("Ed25519 sign and verify PCT", ed_pct, &pk);
+    Ed25519PrivateKey k =
+        slice_make(a, TYPE_BYTE, ED25519_PRIVATE_KEY_SIZE, ED25519_PRIVATE_KEY_SIZE);
+    if (k.p != NULL) {
+        memcpy(k.p, pk.seed, ED25519_SEED_SIZE);
+        memcpy((Byte *)k.p + ED25519_SEED_SIZE, pk.pub, ED25519_PUBLIC_KEY_SIZE);
+    }
+    memset(&pk, 0, sizeof pk);
+    memset(seed, 0, sizeof seed);
     if (k.p == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);
         return slice_nil(TYPE_BYTE);
@@ -502,6 +598,7 @@ CRYPTO_FIPS_TEXT Slice ed25519_sign(Alloc *a, Ed25519PrivateKey priv, Slice mess
     if (BURROW_FAILED(e))
         ed_panic_n("ed25519: bad private key: ed25519: bad private key length: ",
                    priv.len);
+    ed_fips_self_test();
     uint8_t signature[ED25519_SIGNATURE_SIZE];
     ed_sign_with_dom(signature, &k, message, ED_DOM_PURE, BURROW_STR_EMPTY);
     return ed_copy(a, signature, ED25519_SIGNATURE_SIZE);
@@ -525,6 +622,7 @@ CRYPTO_FIPS_TEXT Error ed25519_verify_with_options(Ed25519PublicKey pub, Slice m
 
     EdDom dom;
     if (opts->hash == CRYPTO_SHA512) {
+        ed_fips_self_test();
         dom = ED_DOM_PH;
         if (message.len != SHA512_SIZE)
             return ed_error_n("ed25519: bad Ed25519ph message hash length: ",
@@ -533,11 +631,13 @@ CRYPTO_FIPS_TEXT Error ed25519_verify_with_options(Ed25519PublicKey pub, Slice m
             return ed_error_n("ed25519: bad Ed25519ph context length: ",
                               opts->context.len);
     } else if (opts->hash == 0 && opts->context.len != 0) {
+        ed_fips_self_test();
         dom = ED_DOM_CTX;
         if (opts->context.len > 255)
             return ed_error_n("ed25519: bad Ed25519ctx context length: ",
                               opts->context.len);
     } else if (opts->hash == 0) {
+        ed_fips_self_test();
         dom = ED_DOM_PURE;
     } else {
         return ed_error(

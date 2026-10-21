@@ -1,4 +1,5 @@
-/* Derived from Go's src/crypto/internal/fips140/aes/gcm/cmac.go.
+/* Derived from Go's src/crypto/internal/fips140/aes/gcm/cmac.go, ctrkdf.go and
+ * cast.go.
  * Go source: go1.27.1.
  *
  * CMAC, from NIST SP 800-38B. Go keeps it inside the FIPS module, for its
@@ -13,7 +14,10 @@
 #include "burrow/crypto/cipher.h"
 
 #include "burrow/core.h"
+#include "burrow/crypto/aes.h"
 #include "burrow/crypto/subtle.h"
+#include "burrow/error.h"
+#include "burrow/mem/arena.h"
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
@@ -81,4 +85,70 @@ CRYPTO_FIPS_TEXT void burrow__cmac_mac(Cmac *c, Byte out[AES_BLOCK_SIZE], Slice 
         burrow__aes_encrypt_blocks(&c->b, x, x, 1);
     }
     memcpy(out, x, AES_BLOCK_SIZE);
+}
+
+/* ------------------------------------------------------------- CounterKDF */
+
+/* From Go's src/crypto/internal/fips140/aes/gcm/ctrkdf.go. */
+
+CRYPTO_FIPS_TEXT void burrow__counter_kdf_init(CounterKdf *kdf, const AesBlock *b) {
+    burrow__cmac_init(&kdf->mac, b);
+}
+
+CRYPTO_FIPS_TEXT void burrow__counter_kdf_derive_key(CounterKdf *kdf, Byte out[32],
+                                                     Byte label,
+                                                     const Byte context[12]) {
+    Byte input[AES_BLOCK_SIZE] = {0};
+    input[2] = label;
+    memcpy(input + 4, context, 12);
+
+    input[1] = 0x01; /* i = 1 */
+    burrow__cmac_mac(&kdf->mac, out, cmac_bytes(input, AES_BLOCK_SIZE));
+
+    input[1] = 0x02; /* i = 2 */
+    burrow__cmac_mac(&kdf->mac, out + AES_BLOCK_SIZE,
+                     cmac_bytes(input, AES_BLOCK_SIZE));
+}
+
+/* ------------------------------------------------------------------- CAST */
+
+/* From Go's src/crypto/internal/fips140/aes/gcm/cast.go. Counter KDF covers
+ * CMAC per IG 10.3.B, and CMAC covers GCM per IG 10.3.A Resolution 1.d(i). AES
+ * decryption is covered by the CBC CAST in package crypto/internal/fips140/aes.
+ */
+
+CRYPTO_FIPS_RODATA static const Byte cmac_cast_key[16] = {
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+};
+
+CRYPTO_FIPS_RODATA static const Byte cmac_cast_context[12] = {
+    0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b, 0x2c,
+};
+
+CRYPTO_FIPS_RODATA static const Byte cmac_cast_want[32] = {
+    0xe6, 0x86, 0x96, 0x97, 0x08, 0xfc, 0x90, 0x30, 0x36, 0x1c, 0x65,
+    0x94, 0xb2, 0x62, 0xa5, 0xf7, 0xcb, 0x9d, 0x93, 0x94, 0xda, 0xf1,
+    0x94, 0x09, 0x6a, 0x27, 0x5e, 0x85, 0x22, 0x5e, 0x7a, 0xee,
+};
+
+CRYPTO_FIPS_TEXT Error burrow__ctrkdf_cast(void *arg) {
+    (void)arg;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Error err = BURROW_NO_ERROR;
+    Slice key = slice_from((void *)(uintptr_t)cmac_cast_key, 16, 16, TYPE_BYTE);
+    CipherBlock b = aes_new_cipher(arena_allocator(&ar), key, &err);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        return err;
+    }
+    CounterKdf kdf;
+    burrow__counter_kdf_init(&kdf, burrow__aes_block_of(b));
+    arena_free(&ar);
+    Byte got[32];
+    burrow__counter_kdf_derive_key(&kdf, got, 0xFF, cmac_cast_context);
+    if (memcmp(got, cmac_cast_want, sizeof got) != 0)
+        return errors_new(error_allocator(), BURROW_S("unexpected result"));
+    return BURROW_NO_ERROR;
 }

@@ -39,6 +39,11 @@ typedef struct AesBlock {
     uint64_t sk[120];
 } AesBlock;
 
+/* Sets b up for key, which is len bytes, 16, 24 or 32. What aes_new_cipher
+ * does after its checks, for the code inside the module that keeps its blocks
+ * in its own structs. */
+void burrow__aes_block_init(AesBlock *b, const Byte *key, Int len);
+
 /* The AesBlock behind b, or NULL when b is not AES. */
 AesBlock *burrow__aes_block_of(CipherBlock b);
 
@@ -77,6 +82,20 @@ void burrow__cmac_init(Cmac *c, const AesBlock *b);
 
 /* CMAC.MAC: the tag of m into out. */
 void burrow__cmac_mac(Cmac *c, Byte out[AES_BLOCK_SIZE], Slice m);
+
+/* CounterKDF, from the same package, in cmac.c: a KDF in counter mode over
+ * CMAC-AES, from NIST SP 800-108 Revision 1 Update 1, Section 4.1, with a
+ * 256-bit output, an 8-bit label and a 96-bit context. */
+typedef struct CounterKdf {
+    Cmac mac;
+} CounterKdf;
+
+/* NewCounterKDF: kdf over a copy of b. */
+void burrow__counter_kdf_init(CounterKdf *kdf, const AesBlock *b);
+
+/* CounterKDF.DeriveKey: the key for label and context into out. */
+void burrow__counter_kdf_derive_key(CounterKdf *kdf, Byte out[32], Byte label,
+                                    const Byte context[12]);
 
 /* GCM's errOpen, "cipher: message authentication failed", which Go does not
  * export either. */

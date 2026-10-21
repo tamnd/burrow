@@ -60,6 +60,7 @@ category	crypto-registry	crypto's table of registered hash functions. Go keeps i
 category	resolver	What net's resolver works from: the copy of resolv.conf it last read, the hook tests use to stand in for the host name, and the default Resolver. Go keeps the same ones as package level variables, and they are process wide because every lookup in the process reads the same files.
 category	zone-cache	The interface names and indexes IPv6 zones are read through. Go keeps the same cache as a package level variable behind a lock, and it is process wide because the interfaces are.
 category	sql-drivers	database/sql's registered drivers. Go keeps them in a package level map behind a RWMutex, and they are process wide because a driver registered anywhere is one every Open can find.
+category	fips-self-test	The sync.Onces behind the FIPS 140-3 self-tests that run the first time an algorithm is used. Go keeps the same ones as package level variables, and they are process wide because the test only has to pass once for the module.
 
 global	src/core/slice.c	zerobase	marker	Never written. Every zero sized allocation returns this address, and a copy into it is a copy of zero bytes.
 global	src/go/types_lookup.c	gt_empty_method_set	tables	Go's emptyMethodSet, which every type with no methods gets. Zero and never written.
@@ -436,6 +437,15 @@ global	src/syscall/zsyscall.c	burrow__syscall_procs	tables	Go's procCreateFileW 
 global	src/syscall/exec_unix.c	syscall_fork_lock	package-vars	Go's syscall.ForkLock, a sync.RWMutex at package level in Go too. It is the lock, so it is its own synchronisation: forks take it for writing and whoever opens a descriptor that is not close on exec yet takes it for reading.
 global	src/syscall/exec_windows.c	syscall_fork_lock	package-vars	Go's syscall.ForkLock, which nothing uses on Windows, in Go or here. It is a lock, so it is its own synchronisation.
 global	src/crypto/fips140.c	fips140_off	godebug	Whether the fips140 setting has been read and said off, which is all there is to remember since every other value panics. Relaxed atomic loads and stores only, and two racing first loads store the same value.
+global	src/crypto/fips140_cast.c	fips_mode	godebug	Go's fips140.Enabled and its debug flag, set once by burrow__fips140_force_on with a release store before anything else uses the module, and read with acquire loads.
+global	src/crypto/fips140_cast.c	fips_fail_cast	godebug	The failfipscast setting, written by burrow__fips140_force_on before its release store of fips_mode and only read after an acquire load of fips_mode that saw it on.
+global	src/crypto/ecdh.c	ecdh_self_test	fips-self-test	A SyncOnce, which is its own synchronisation.
+global	src/crypto/ecdsa.c	ecdsa_self_test	fips-self-test	A SyncOnce, which is its own synchronisation.
+global	src/crypto/ecdsa.c	ecdsa_self_test_deterministic	fips-self-test	A SyncOnce, which is its own synchronisation.
+global	src/crypto/ed25519.c	ed_self_test	fips-self-test	A SyncOnce, which is its own synchronisation.
+global	src/crypto/mldsa.c	mldsa_self_test	fips-self-test	A SyncOnce, which is its own synchronisation.
+global	src/crypto/mlkem.c	mlkem_self_test	fips-self-test	A SyncOnce, which is its own synchronisation.
+global	src/crypto/rsa.c	rsa_self_test	fips-self-test	A SyncOnce, which is its own synchronisation.
 global	src/crypto/rand.c	crypto_rand_debug_flags	godebug	The cryptocustomrand setting, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/crypto/rand.c	crand_testing_reader	package-vars	drbg's testingReader. Not synchronised, as in Go: testing/cryptotest sets it in a test that cannot be parallel, before the test starts the threads that read it.
 global	src/crypto/rand.c	crypto_rand_reader	package-vars	crypto/rand.Reader. Not synchronised, as in Go: a program assigns it before other threads read from it.

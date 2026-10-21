@@ -21,10 +21,11 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
-MODULE="aes bigmod cipher cmac ecdh ecdsa ed25519 edwards25519
-edwards25519_field edwards25519_scalar edwards25519_table fips140_check gcm
-hkdf hmac mldsa mlkem nistec nistec_p224 nistec_p256 nistec_p384 nistec_p521
-pbkdf2 rsa sha256 sha3 sha512 subtle tls_key_schedule tls_prf"
+MODULE="aes bigmod cipher cmac drbg ecdh ecdsa ed25519 edwards25519
+edwards25519_field edwards25519_scalar edwards25519_table fips140_cast
+fips140_check gcm hkdf hmac mldsa mlkem nistec nistec_p224 nistec_p256
+nistec_p384 nistec_p521 pbkdf2 rsa sha256 sha3 sha512 subtle tls_key_schedule
+tls_prf"
 
 set --
 for m in $MODULE; do

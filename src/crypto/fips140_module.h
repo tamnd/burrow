@@ -52,6 +52,7 @@
 #include "burrow/crypto/subtle.h"
 
 #include "burrow/core.h"
+#include "burrow/error.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -106,6 +107,44 @@ bool burrow__fips140_module_sum(Byte sum[32]);
 /* The bounds of the two sections, the code and the read-only data, all NULL
  * when there are none. For tests/fips140_check_test.c. */
 void burrow__fips140_sections(const Byte *bounds[4]);
+
+/* Whether FIPS 140-3 mode is on, Go's fips140.Enabled. Nothing turns it on yet
+ * but burrow__fips140_force_on, which is for tests. */
+bool burrow__fips140_enabled(void);
+
+/* A self-test, Go's func() error, with arg, what was passed along with it. */
+typedef Error (*FipsSelfTest)(void *arg);
+
+/* Runs the named Cryptographic Algorithm Self-Test when FIPS 140-3 mode is on,
+ * and ends the program, with runtime_throw, when it fails. Go's fips140.CAST.
+ * The name must not contain commas, colons, hashes or equal signs. */
+void burrow__fips140_cast(const char *name, FipsSelfTest f, void *arg);
+
+/* The same for a Pairwise Consistency Test, which every key pair the module
+ * generates goes through. Go's fips140.PCT. */
+void burrow__fips140_pct(const char *name, FipsSelfTest f, void *arg);
+
+/* Not in Go: turns FIPS 140-3 mode on, as GODEBUG=fips140=on does in Go, or
+ * fips140=debug with debug true. Like Go's init functions it then checks that
+ * the mode is supported, runs the integrity check, and runs the self-tests Go
+ * runs at init, panicking or ending the program when one fails. Once only, and
+ * before anything else uses the module: it is for tests, which run a copy of
+ * themselves for it. */
+void burrow__fips140_force_on(bool debug);
+
+/* The self-tests Go runs from the init functions of its packages, each in the
+ * file of its package, as in Go, for burrow__fips140_force_on. */
+Error burrow__sha256_cast(void *arg);
+Error burrow__sha512_cast(void *arg);
+Error burrow__sha3_cast(void *arg);
+Error burrow__hmac_cast(void *arg);
+Error burrow__hkdf_cast(void *arg);
+Error burrow__pbkdf2_cast(void *arg);
+Error burrow__aes_cast(void *arg);
+Error burrow__drbg_cast(void *arg);
+Error burrow__ctrkdf_cast(void *arg);
+Error burrow__tls12_cast(void *arg);
+Error burrow__tls13_cast(void *arg);
 
 /* Not in Go: one function and one constant of the module that nothing uses,
  * for tests/fips140_check_test.c to look for in the sections, which is what

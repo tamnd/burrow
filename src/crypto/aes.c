@@ -34,6 +34,7 @@
 #include "burrow/crypto/cipher.h"
 #include "burrow/error.h"
 #include "burrow/mem.h"
+#include "burrow/mem/arena.h"
 #include "burrow/pal.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
@@ -826,26 +827,12 @@ CRYPTO_FIPS_TEXT AesBlock *burrow__aes_block_of(CipherBlock b) {
     return b.vt == &aes_block_vt ? (AesBlock *)b.data : NULL;
 }
 
-CRYPTO_FIPS_TEXT CipherBlock aes_new_cipher(Alloc *a, Slice key, Error *err) {
-    int nk;
-    switch (key.len) {
-    case 16:
-    case 24:
-    case 32:
-        nk = (int)(key.len / 4);
-        break;
-    default:
-        BURROW_OUT(err, aes_key_size_error_as_error(key.len, error_allocator()));
-        return (CipherBlock){NULL, NULL};
-    }
-    AesBlock *b = BURROW_NEW(a, AesBlock);
-    if (b == NULL) {
-        BURROW_OUT(err, burrow_err_out_of_memory);
-        return (CipherBlock){NULL, NULL};
-    }
+CRYPTO_FIPS_TEXT void burrow__aes_block_init(AesBlock *b, const Byte *key, Int len) {
+    int nk = (int)(len / 4);
+    memset(b, 0, sizeof *b);
     b->rounds = nk + 6;
     b->impl = aes_pick_impl();
-    aes_expand_key(b, (const Byte *)key.p, nk);
+    aes_expand_key(b, key, nk);
 #if defined(CRYPTO_X86_AES)
     if (b->impl == AES_IMPL_X86)
         aes_x86_dec_keys(b);
@@ -856,6 +843,82 @@ CRYPTO_FIPS_TEXT CipherBlock aes_new_cipher(Alloc *a, Slice key, Error *err) {
 #endif
     if (b->impl == AES_IMPL_CT)
         aes_ct_schedule(b);
+}
+
+CRYPTO_FIPS_TEXT CipherBlock aes_new_cipher(Alloc *a, Slice key, Error *err) {
+    switch (key.len) {
+    case 16:
+    case 24:
+    case 32:
+        break;
+    default:
+        BURROW_OUT(err, aes_key_size_error_as_error(key.len, error_allocator()));
+        return (CipherBlock){NULL, NULL};
+    }
+    AesBlock *b = BURROW_NEW(a, AesBlock);
+    if (b == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return (CipherBlock){NULL, NULL};
+    }
+    burrow__aes_block_init(b, (const Byte *)key.p, key.len);
     BURROW_OUT(err, BURROW_NO_ERROR);
     return (CipherBlock){&aes_block_vt, b};
+}
+
+/* ------------------------------------------------------------------- CAST */
+
+/* From Go's src/crypto/internal/fips140/aes/cast.go. */
+
+CRYPTO_FIPS_RODATA static const Byte aes_cast_key[16] = {
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+};
+
+CRYPTO_FIPS_RODATA static const Byte aes_cast_iv[16] = {
+    0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+    0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+};
+
+CRYPTO_FIPS_RODATA static const Byte aes_cast_plaintext[16] = {
+    0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28,
+    0x29, 0x2a, 0x2b, 0x2c, 0x2d, 0x2e, 0x2f, 0x30,
+};
+
+CRYPTO_FIPS_RODATA static const Byte aes_cast_ciphertext[16] = {
+    0xdf, 0x76, 0x26, 0x4b, 0xd3, 0xb2, 0xc4, 0x8d,
+    0x40, 0xa2, 0x6e, 0x7a, 0xc4, 0xff, 0xbd, 0x35,
+};
+
+CRYPTO_FIPS_TEXT static Slice aes_cast_bytes(const Byte *p) {
+    return slice_from((void *)(uintptr_t)p, 16, 16, TYPE_BYTE);
+}
+
+CRYPTO_FIPS_TEXT Error burrow__aes_cast(void *arg) {
+    (void)arg;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    CipherBlock b = aes_new_cipher(a, aes_cast_bytes(aes_cast_key), &err);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        return err;
+    }
+    Byte buf[16] = {0};
+    Slice bufs = slice_from(buf, 16, 16, TYPE_BYTE);
+    CipherBlockMode enc = cipher_new_cbc_encrypter(a, b, aes_cast_bytes(aes_cast_iv));
+    CipherBlockMode dec = cipher_new_cbc_decrypter(a, b, aes_cast_bytes(aes_cast_iv));
+    if (enc.vt == NULL || dec.vt == NULL) {
+        arena_free(&ar);
+        return burrow_err_out_of_memory;
+    }
+    cipher_block_mode_crypt_blocks(enc, bufs, aes_cast_bytes(aes_cast_plaintext));
+    bool ok = memcmp(buf, aes_cast_ciphertext, 16) == 0;
+    if (ok) {
+        cipher_block_mode_crypt_blocks(dec, bufs, aes_cast_bytes(aes_cast_ciphertext));
+        ok = memcmp(buf, aes_cast_plaintext, 16) == 0;
+    }
+    arena_free(&ar);
+    return ok ? BURROW_NO_ERROR
+              : errors_new(error_allocator(), BURROW_S("unexpected result"));
 }

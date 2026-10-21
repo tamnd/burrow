@@ -20,105 +20,30 @@
  * in the LICENSE file. */
 
 #include "check.h"
+#include "fipstest.h"
 
 #include "burrow/burrow.h"
 #include "burrow/crypto/aes.h"
 #include "burrow/crypto/ed25519.h"
 #include "burrow/crypto/mlkem.h"
 #include "burrow/crypto/sha256.h"
-#include "burrow/os/exec.h"
-#include "burrow/path/filepath.h"
 #include "burrow/unicode.h"
-
-#include "../src/crypto/fips140_module.h"
 
 #include <stdint.h>
 #include <string.h>
-
-/* cryptotest.MustSupportFIPS140. */
-#define MUST_SUPPORT_FIPS140(t)                                                        \
-    do {                                                                               \
-        const char *fips_why = burrow__fips140_supported();                            \
-        if (fips_why != NULL)                                                          \
-            testing_t_skipf_v((t), "test requires FIPS 140 mode: %s", fips_why);       \
-    } while (0)
-
-/* Not in Go: the magic at the start of the info that burrow-gen fips fills in.
- * The 0xff comes from a volatile so the compiler cannot put the whole magic in
- * this program as a constant, which would be a second copy for find_info. Go
- * leaves the 0xff out of its constant for the same reason. */
-static void fips_magic(Byte m[16]) {
-    volatile Byte ff = 0xff;
-    m[0] = ff;
-    memcpy(m + 1, " burrow fips ", 13);
-    m[14] = ff;
-    m[15] = 0;
-}
-
-/* Not in Go: where the info is in bin, the bytes of this program, or -1 after
- * failing the test when it is not there exactly once. */
-static Int find_info(TestingT *t, Slice bin) {
-    Byte m[16];
-    fips_magic(m);
-    Slice ms = slice_from(m, 16, 16, TYPE_BYTE);
-    Int i = bytes_index(bin, ms);
-    if (i < 0) {
-        testing_t_errorf_v(t, "no FIPS info in the program");
-        return -1;
-    }
-    if (bytes_index(slice_sub(bin, i + 1, bin.len), ms) >= 0) {
-        testing_t_errorf_v(t, "the FIPS info is in the program more than once");
-        return -1;
-    }
-    return i;
-}
 
 /* Writes a copy of this program with sum in place of its checksum, runs
  * TestIntegrityCheck in it with BURROW_FIPS140_CHECK=1, and returns what it
  * printed. False when that could not be done, after failing the test. */
 static bool run_with_sum(TestingT *t, Alloc *a, const Byte sum[32], Slice *out,
                          Error *runerr) {
-    Error err = BURROW_NO_ERROR;
-    Str exe = os_executable(a, &err);
-    if (BURROW_FAILED(err)) {
-        testing_t_errorf_v(t, "Executable: %s", error_text(err));
+    Str dir;
+    Str bin_path = fipstest_copy(t, a, sum, &dir);
+    if (bin_path.len == 0) {
+        if (dir.len > 0)
+            os_remove_all(dir);
         return false;
     }
-    Slice bin = os_read_file(a, exe, &err);
-    if (BURROW_FAILED(err)) {
-        testing_t_errorf_v(t, "ReadFile: %s", error_text(err));
-        return false;
-    }
-    Int i = find_info(t, bin);
-    if (i < 0)
-        return false;
-    memcpy((Byte *)bin.p + i + 16, sum, 32);
-
-    Str dir = os_mkdir_temp(a, BURROW_S(""), BURROW_S("fips140test"), &err);
-    if (BURROW_FAILED(err)) {
-        testing_t_errorf_v(t, "MkdirTemp: %s", error_text(err));
-        return false;
-    }
-    Str bin_path = filepath_join_v(a, 2, dir, BURROW_S("fips140test.exe"));
-    err = os_write_file(bin_path, bin, 0755);
-    if (BURROW_FAILED(err)) {
-        testing_t_errorf_v(t, "WriteFile: %s", error_text(err));
-        os_remove_all(dir);
-        return false;
-    }
-
-#if defined(BURROW_OS_DARWIN)
-    /* Regenerate the macOS ad-hoc code signature. */
-    ExecCmd *sign = exec_command_v(a, BURROW_S("codesign"), 4, BURROW_S("-s"),
-                                   BURROW_S("-"), BURROW_S("-f"), bin_path);
-    Slice sout = exec_cmd_combined_output(sign, a, &err);
-    if (BURROW_FAILED(err)) {
-        Str so = {(const Byte *)sout.p, sout.len};
-        testing_t_errorf_v(t, "codesign failed: %s\n%s", error_text(err), so);
-        os_remove_all(dir);
-        return false;
-    }
-#endif
 
     testing_t_logf_v(t, "running modified binary...");
     ExecCmd *cmd = exec_command_v(a, bin_path, 2, BURROW_S("-test.v"),
@@ -130,11 +55,6 @@ static bool run_with_sum(TestingT *t, Alloc *a, const Byte sum[32], Slice *out,
     testing_t_logf_v(t, "running with BURROW_FIPS140_CHECK=1:\n%s", printed);
     os_remove_all(dir);
     return true;
-}
-
-static bool out_contains(Slice out, const char *s) {
-    Int n = (Int)strlen(s);
-    return bytes_contains(out, slice_from((void *)(uintptr_t)s, n, n, TYPE_BYTE));
 }
 
 static void TestIntegrityCheck(TestingT *t) {
@@ -170,7 +90,7 @@ static void TestIntegrityCheck(TestingT *t) {
         if (BURROW_FAILED(err))
             testing_t_errorf_v(t, "binary with the checksum written in failed: %s",
                                error_text(err));
-        if (!out_contains(out, "verified"))
+        if (!fipstest_contains(out, "verified"))
             testing_t_errorf_v(t, "binary with the checksum written in did not verify");
     }
     arena_free(&ar);
@@ -191,9 +111,9 @@ static void TestIntegrityCheckFailure(TestingT *t) {
     if (run_with_sum(t, a, sum, &out, &err)) {
         if (!BURROW_FAILED(err))
             testing_t_errorf_v(t, "modified binary did not fail as expected");
-        if (!out_contains(out, "fips140: verification mismatch"))
+        if (!fipstest_contains(out, "fips140: verification mismatch"))
             testing_t_errorf_v(t, "modified binary did not fail with expected message");
-        if (out_contains(out, "verified"))
+        if (fipstest_contains(out, "verified"))
             testing_t_errorf_v(t, "modified binary did not exit");
     }
     arena_free(&ar);

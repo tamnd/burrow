@@ -24,6 +24,7 @@
 #include "burrow/mem/heap.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
+#include "burrow/sync.h"
 #include "burrow/type.h"
 
 #include "fips140_module.h"
@@ -1147,6 +1148,9 @@ mldsa_sign_internal(const MldsaPrivateKey *priv, const Byte mu[64],
     return true;
 }
 
+/* fipsSelfTest, which comes after the self-test it runs, further on. */
+static void mldsa_fips_self_test(void);
+
 /* signInternal as a new Slice from a. */
 CRYPTO_FIPS_TEXT static Slice
 mldsa_sign_to_slice(const MldsaPrivateKey *priv, Alloc *a, const Byte mu[64],
@@ -1164,6 +1168,7 @@ mldsa_sign_to_slice(const MldsaPrivateKey *priv, Alloc *a, const Byte mu[64],
 CRYPTO_FIPS_TEXT static Slice mldsa_sign_message(const MldsaPrivateKey *priv, Alloc *a,
                                                  Slice msg, Str context,
                                                  const Byte *random, Error *err) {
+    mldsa_fips_self_test();
     Byte mu[64];
     if (!mldsa_compute_message_hash(mu, priv->pub.tr, msg, context)) {
         mldsa_set_error(err, "mldsa: context too long");
@@ -1184,6 +1189,7 @@ CRYPTO_FIPS_TEXT static Slice mldsa_sign_mu(const MldsaPrivateKey *priv, Alloc *
                                             Slice mu, const Byte *random,
                                             const MldsaRejectionHook *hook,
                                             Error *err) {
+    mldsa_fips_self_test();
     if (mu.len != 64) {
         mldsa_set_error(err, "mldsa: invalid message hash length");
         return slice_nil(TYPE_BYTE);
@@ -1319,6 +1325,7 @@ CRYPTO_FIPS_TEXT static Error mldsa_verify_internal(const MldsaPublicKey *pub,
 
 CRYPTO_FIPS_TEXT Error burrow__mldsa_verify_external_mu(const MldsaPublicKey *pk,
                                                         Slice mu, Slice sig) {
+    mldsa_fips_self_test();
     if (mu.len != 64)
         return mldsa_error("mldsa: invalid message hash length");
     return mldsa_verify_internal(pk, mu.p, sig);
@@ -1578,6 +1585,37 @@ CRYPTO_FIPS_TEXT Error burrow__mldsa_fips140_cast(const MldsaRejectionHook *hook
     return e;
 }
 
+CRYPTO_FIPS_TEXT static Error mldsa_cast(void *arg) {
+    (void)arg;
+    return burrow__mldsa_fips140_cast(NULL);
+}
+
+CRYPTO_FIPS_TEXT static void mldsa_self_test_once(void *env) {
+    (void)env;
+    burrow__fips140_cast("ML-DSA-44", mldsa_cast, NULL);
+}
+
+static SyncOnce mldsa_self_test;
+
+/* fipsSelfTest, Go's sync.OnceFunc, for all three parameter sets. */
+CRYPTO_FIPS_TEXT static void mldsa_fips_self_test(void) {
+    sync_once_do(&mldsa_self_test, BURROW_FN(Func, mldsa_self_test_once, NULL));
+}
+
+/* fipsPCT's test: SignExternalMuDeterministic and VerifyExternalMu, the
+ * self-tests and all, with a μ of 64 zero bytes. */
+CRYPTO_FIPS_TEXT static Error mldsa_pct(void *arg) {
+    static const Byte zero[64] = {0};
+    const MldsaPrivateKey *priv = arg;
+    Byte sig[MLDSA_MAX_SIG_SIZE];
+    mldsa_fips_self_test();
+    if (!mldsa_sign_internal(priv, zero, zero, NULL, sig))
+        return burrow_err_out_of_memory;
+    mldsa_fips_self_test();
+    Int n = priv->pub.p->signature_size;
+    return mldsa_verify_internal(&priv->pub, zero, slice_from(sig, n, n, TYPE_BYTE));
+}
+
 /* ------------------------------------------------------------- public API */
 
 CRYPTO_FIPS_TEXT CryptoHash mldsa_options_hash_func(const MldsaOptions *opts) {
@@ -1617,10 +1655,13 @@ mldsa_generate_key(Alloc *a, const MldsaParameters *params, Error *err) {
         mldsa_set_error(err, "mldsa: invalid parameters");
         return NULL;
     }
+    mldsa_fips_self_test();
     Byte seed[32];
     burrow__crypto_rand_system(slice_from(seed, 32, 32, TYPE_BYTE));
     MldsaPrivateKey *priv = mldsa_private_key_from_seed(params, a, seed, err);
     memset(seed, 0, sizeof seed);
+    if (priv != NULL)
+        burrow__fips140_pct("ML-DSA sign and verify PCT", mldsa_pct, priv);
     return priv;
 }
 
@@ -1630,6 +1671,7 @@ mldsa_new_private_key(Alloc *a, const MldsaParameters *params, Slice seed, Error
         mldsa_set_error(err, "mldsa: invalid parameters");
         return NULL;
     }
+    mldsa_fips_self_test();
     if (seed.len != MLDSA_PRIVATE_KEY_SIZE) {
         mldsa_set_error(err, "mldsa: invalid seed length");
         return NULL;
@@ -1797,6 +1839,7 @@ CRYPTO_FIPS_TEXT Error mldsa_verify(const MldsaPublicKey *pk, Slice message,
         return mldsa_error("mldsa: nil public key");
     if (pk->p == NULL)
         return mldsa_error("mldsa: zero public key");
+    mldsa_fips_self_test();
     Str context = opts != NULL ? opts->context : BURROW_STR_EMPTY;
     Byte mu[64];
     if (!mldsa_compute_message_hash(mu, pk->tr, message, context))

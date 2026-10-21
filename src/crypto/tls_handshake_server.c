@@ -379,13 +379,11 @@ Error burrow__tls_server_handshake_state_process_client_hello(
     if (hs->hello->random.p == NULL)
         return burrow_err_out_of_memory;
     Slice server_random = hs->hello->random;
-    /* Downgrade protection canaries. See RFC 8446, Section 4.1.3.
-     *
-     * Go also sets them when testingOnlyForceDowngradeCanary is, which comes
-     * with the tests that set it. */
+    /* Downgrade protection canaries. See RFC 8446, Section 4.1.3. */
     uint16_t max_vers = burrow__tls_config_max_supported_version(
         c->config, TLS_ROLE_SERVER, c->quic != NULL);
-    if (max_vers >= TLS_VERSION_TLS12 && c->vers < max_vers) {
+    if ((max_vers >= TLS_VERSION_TLS12 && c->vers < max_vers) ||
+        burrow__tls_testing_only_force_downgrade_canary) {
         Byte *canary = (Byte *)server_random.p + 24;
         if (c->vers == TLS_VERSION_TLS12)
             memcpy(canary, TLS_DOWNGRADE_CANARY_TLS12, 8);

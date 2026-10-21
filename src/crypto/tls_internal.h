@@ -128,6 +128,11 @@ extern const Byte burrow__tls_hello_retry_request_random[32];
 #define TLS_DOWNGRADE_CANARY_TLS12 "DOWNGRD\x01"
 #define TLS_DOWNGRADE_CANARY_TLS11 "DOWNGRD\x00"
 
+/* testingOnlyForceDowngradeCanary is set in tests to force the server side to
+ * include downgrade canaries even if it's using its highers supported version.
+ * Not in Go: only tests set it, while nothing else is running. */
+extern bool burrow__tls_testing_only_force_downgrade_canary;
+
 bool burrow__tls_is_tls13_only_key_exchange(TlsCurveID curve);
 bool burrow__tls_is_pq_key_exchange(TlsCurveID curve);
 
@@ -1186,6 +1191,13 @@ bool burrow__tls_supports_ecdhe(const TlsConfig *c, uint16_t version,
 /* requiresClientCert reports whether the ClientAuthType requires a client
  * certificate to be provided. */
 bool burrow__tls_requires_client_cert(TlsClientAuthType c);
+
+/* Not in Go: for the tests, which reach into an lruSessionCache for
+ * q.Front(). The state of the entry at the front, the one used last, and its
+ * key in *key. Both stay the cache's. NULL, with an empty key, when the cache is
+ * empty or did not come from tls_new_lru_client_session_cache. */
+TlsClientSessionState *burrow__tls_lru_session_cache_front(TlsClientSessionCache c,
+                                                           Str *key);
 
 /* ---------------------------------------------------------- key agreement */
 

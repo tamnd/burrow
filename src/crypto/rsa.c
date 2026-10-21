@@ -1924,6 +1924,32 @@ static const RsaFipsKey *rsa_fips_private_key(const RsaPrivateKey *priv, Alloc *
     return pv.fips;
 }
 
+static void rsa_mark_nat(const BigmodNat *x, void (*mark)(void *p, size_t n)) {
+    mark(x->limbs, (size_t)x->len * sizeof(Uint));
+}
+
+static void rsa_mark_modulus(BigmodModulus *m, void (*mark)(void *p, size_t n)) {
+    rsa_mark_nat(&m->nat, mark);
+    mark(&m->m0inv, sizeof m->m0inv);
+    rsa_mark_nat(&m->rr, mark);
+}
+
+bool burrow__rsa_mark_secrets(const RsaPrivateKey *priv,
+                              void (*mark)(void *p, size_t n)) {
+    const RsaFipsKey *k = priv->precomputed.fips;
+    if (k == NULL)
+        return false;
+    rsa_mark_nat(&k->d, mark);
+    if (k->crt) {
+        rsa_mark_modulus(k->p, mark);
+        rsa_mark_modulus(k->q, mark);
+        mark(k->dp.p, (size_t)k->dp.len);
+        mark(k->dq.p, (size_t)k->dq.len);
+        rsa_mark_nat(&k->qinv, mark);
+    }
+    return true;
+}
+
 /* fipsPublicKey: the modulus of pub, from tmp. */
 static BigmodModulus *rsa_fips_public_key(const RsaPublicKey *pub, Alloc *tmp,
                                           Error *err) {

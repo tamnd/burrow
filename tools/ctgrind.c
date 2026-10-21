@@ -25,6 +25,7 @@
 #include "burrow/crypto/hmac.h"
 #include "burrow/crypto/mlkem.h"
 #include "burrow/crypto/rand.h"
+#include "burrow/crypto/rsa.h"
 #include "burrow/crypto/sha256.h"
 #include "burrow/crypto/sha512.h"
 #include "burrow/crypto/subtle.h"
@@ -34,6 +35,7 @@
 #include "../src/crypto/bigmod.h"
 #include "../src/crypto/chacha20poly1305.h"
 #include "../src/crypto/ecdsa_internal.h"
+#include "../src/crypto/rsa_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -272,6 +274,71 @@ static void check_mlkem(void) {
     end("crypto/mlkem");
 }
 
+/* RSA signing with PKCS #1 v1.5 and PSS, and decryption with OAEP and with
+ * PKCS #1 v1.5 into a session key, with a 2048 bit key whose private
+ * exponent, primes and CRT values are secret. The big.Int values in the
+ * PrivateKey are not marked, because these go through the key that
+ * rsa_generate_key precomputes, as in Go. */
+static void check_rsa(void) {
+    Byte hash[32] = {1, 2, 3}, msg[] = "a message that is not secret";
+    Byte session[16] = {4, 5, 6}, key[16];
+    Error err = {0};
+    begin();
+    Alloc *a = arena_allocator(&arena);
+    RsaPrivateKey *priv = rsa_generate_key(a, crypto_rand_reader, 2048, &err);
+    check_failed("crypto/rsa", err);
+    const RsaPublicKey *pub = &priv->public_key;
+    Slice m = bytes(msg, (Int)sizeof msg - 1);
+    Slice oaep = rsa_encrypt_oaep(a, sha256_new(a), crypto_rand_reader, pub, m,
+                                  slice_nil(TYPE_BYTE), &err);
+    check_failed("crypto/rsa", err);
+    Slice pkcs1 = rsa_encrypt_pkcs1_v15(a, crypto_rand_reader, pub,
+                                        bytes(session, (Int)sizeof session), &err);
+    check_failed("crypto/rsa", err);
+    if (!burrow__rsa_mark_secrets(priv, secret)) {
+        fprintf(stderr, "ctgrind: crypto/rsa: the key has no precomputed values\n");
+        exit(2);
+    }
+
+    Slice sig = rsa_sign_pkcs1_v15(a, crypto_rand_reader, priv, CRYPTO_SHA256,
+                                   bytes(hash, (Int)sizeof hash), &err);
+    public_(&err, sizeof err);
+    public_(&sig, sizeof sig);
+    check_failed("crypto/rsa", err);
+    public_(sig.p, (size_t)sig.len);
+
+    sig = rsa_sign_pss(a, crypto_rand_reader, priv, CRYPTO_SHA256,
+                       bytes(hash, (Int)sizeof hash), NULL, &err);
+    public_(&err, sizeof err);
+    public_(&sig, sizeof sig);
+    check_failed("crypto/rsa", err);
+    public_(sig.p, (size_t)sig.len);
+
+    /* The plaintext comes from an arena of its own. Its length depends on the
+     * key until the harness says it is public, and so would the bookkeeping
+     * of the arena it is in, which every later free looks at. The arena gets
+     * its first chunk before that, so that the size of the chunk it asks the
+     * heap for does not depend on the key either. */
+    Arena out;
+    arena_init(&out, NULL, 0);
+    (void)mem_alloc(arena_allocator(&out), 1, 1);
+    Slice pt = rsa_decrypt_oaep(arena_allocator(&out), sha256_new(a), (IoReader){0},
+                                priv, oaep, slice_nil(TYPE_BYTE), &err);
+    public_(&err, sizeof err);
+    public_(&pt, sizeof pt);
+    check_failed("crypto/rsa", err);
+    public_(pt.p, (size_t)pt.len);
+    arena_free(&out);
+
+    err = rsa_decrypt_pkcs1_v15_session_key((IoReader){0}, priv, pkcs1,
+                                            secret_bytes(key, (Int)sizeof key));
+    public_(&err, sizeof err);
+    check_failed("crypto/rsa", err);
+    public_(key, sizeof key);
+    rsa_private_key_free(priv, a);
+    end("crypto/rsa");
+}
+
 /* The exponentiation that RSA signing and decryption are made of, with a
  * secret base and exponent and a public 2048 bit modulus. */
 static void check_bigmod(void) {
@@ -316,6 +383,7 @@ int main(void) {
     check_ecdsa("crypto/ecdsa P-384", elliptic_p384(), burrow__ecdsa_fips_p384());
     check_ecdsa("crypto/ecdsa P-521", elliptic_p521(), burrow__ecdsa_fips_p521());
     check_mlkem();
+    check_rsa();
     check_bigmod();
     return 0;
 }

@@ -118,14 +118,21 @@ static void check_ed25519(void) {
     end("crypto/ed25519");
 }
 
-static void check_ecdh(const char *name, const EcdhCurve *c, Int size) {
+static void check_ecdh(const char *name, const EcdhCurve *c) {
     Byte key[66];
     Error err = {0};
     begin();
     Alloc *a = arena_allocator(&arena);
     EcdhPrivateKey *peer = ecdh_curve_generate_key(c, a, crypto_rand_reader, &err);
     check_failed(name, err);
-    EcdhPrivateKey *k = ecdh_curve_new_private_key(c, a, secret_bytes(key, size), &err);
+    /* A key from generate_key, because random bytes are not always below the
+     * order, and for P-521 they hardly ever are. */
+    EcdhPrivateKey *g = ecdh_curve_generate_key(c, a, crypto_rand_reader, &err);
+    check_failed(name, err);
+    Slice gb = ecdh_private_key_bytes(g, a);
+    memcpy(key, gb.p, (size_t)gb.len);
+    secret(key, (size_t)gb.len);
+    EcdhPrivateKey *k = ecdh_curve_new_private_key(c, a, bytes(key, gb.len), &err);
     public_(&err, sizeof err);
     public_(&k, sizeof k);
     check_failed(name, err);
@@ -135,6 +142,7 @@ static void check_ecdh(const char *name, const EcdhCurve *c, Int size) {
     check_failed(name, err);
     public_(shared.p, (size_t)shared.len);
     ecdh_private_key_free(k);
+    ecdh_private_key_free(g);
     ecdh_private_key_free(peer);
     end(name);
 }
@@ -198,10 +206,10 @@ int main(void) {
     check_subtle();
     check_hashes();
     check_ed25519();
-    check_ecdh("crypto/ecdh X25519", ecdh_x25519(), 32);
-    check_ecdh("crypto/ecdh P-256", ecdh_p256(), 32);
-    check_ecdh("crypto/ecdh P-384", ecdh_p384(), 48);
-    check_ecdh("crypto/ecdh P-521", ecdh_p521(), 66);
+    check_ecdh("crypto/ecdh X25519", ecdh_x25519());
+    check_ecdh("crypto/ecdh P-256", ecdh_p256());
+    check_ecdh("crypto/ecdh P-384", ecdh_p384());
+    check_ecdh("crypto/ecdh P-521", ecdh_p521());
     check_mlkem();
     check_bigmod();
     return 0;

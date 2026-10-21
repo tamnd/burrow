@@ -1,9 +1,13 @@
 /* Derived from Go's src/crypto/tls/handshake_client_test.go.
  * Go source: go1.27.1.
  *
- * Most of the file runs the client against recorded server flights or a real
- * server, which are not here yet. These are the tests that need neither, and
- * the ECH ones, which run against this package's own server.
+ * The tests that replay Go's recorded handshakes do it through
+ * tls_replay_test.h, with the recordings tools/gen-tls-replay-tests.sh put in
+ * tls_replay_client_gen.h. The ECH tests run against this package's own
+ * server. TestResumption, TestKeyLogTLS12, TestKeyLogTLS13,
+ * TestServerSelectingUnconfiguredApplicationProtocol and the tests from
+ * TestVerifyConnection to TestTLS13OnlyClientHelloCipherSuite come in later
+ * changes.
  *
  * Copyright 2010 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -24,9 +28,980 @@
 #include "burrow/mem/heap.h"
 #include "burrow/strings.h"
 #include "tls_handshake_test.h"
+#include "tls_replay_client_gen.h"
+#include "tls_replay_test.h"
 #include "tls_test_gen.h"
 
 #include <string.h>
+
+/* opensslSentinel, what the recordings have the server send once the client
+ * has renegotiated or updated its keys. */
+#define OPENSSL_SENTINEL "SENTINEL\n"
+
+/* Not in Go: the checkRenegotiationError func(renegotiationNum int, err error)
+ * error of a clientTest. */
+BURROW_FUNC(RenegotiationErrorCheck, Error, int renegotiation_num, Error err);
+
+/* clientTest. Not in Go: args, serverCert and extensions are left out, since
+ * only -update uses them, to start OpenSSL with. */
+typedef struct ClientTest {
+    /* name is a freeform string identifying the test and the file in which
+     * the expected results will be stored. */
+    Str name;
+    /* config, if not nil, contains a custom Config to use for this test. */
+    TlsConfig *config;
+    /* validate, if not nil, is a function that will be called with the
+     * ConnectionState of the resulting connection. It returns a non-nil
+     * error if the ConnectionState is unacceptable. */
+    ConnectionStateCheck validate;
+    /* numRenegotiations is the number of times that the connection will be
+     * renegotiated. */
+    int num_renegotiations;
+    /* renegotiationExpectedToFail, if not zero, is the number of the
+     * renegotiation attempt that is expected to fail. */
+    int renegotiation_expected_to_fail;
+    /* checkRenegotiationError, if not nil, is called with any error
+     * arising from renegotiation. It can map expected errors to nil to
+     * ignore them. */
+    RenegotiationErrorCheck check_renegotiation_error;
+    /* sendKeyUpdate will cause the server to send a KeyUpdate message. */
+    bool send_key_update;
+    /* Not in Go: where the test's allocations go. */
+    Alloc *a;
+} ClientTest;
+
+static Str client_test_data_path(const ClientTest *test) {
+    return fmt_sprintf_v(test->a, "testdata/Client-%s", test->name);
+}
+
+static Slice client_test_load_data(const ClientTest *test, Error *err) {
+    Str name = fmt_sprintf_v(test->a, "Client-%s", test->name);
+    return load_testdata(test->a, tls_client_testdata,
+                         sizeof tls_client_testdata / sizeof tls_client_testdata[0],
+                         name, err);
+}
+
+/* Not in Go: the part of clientTest.run between Client and the deferred
+ * Close, which returns where Go's does. */
+static void client_test_talk(const ClientTest *test, TestingT *t, TlsConn *client) {
+    Error err = BURROW_NO_ERROR;
+    Byte hello[] = "hello\n";
+    (void)tls_conn_write(client, slice_from(hello, 6, 6, TYPE_BYTE), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "Client.Write failed: %s", error_text(err));
+        return;
+    }
+
+    Str openssl_sentinel = BURROW_S(OPENSSL_SENTINEL);
+    for (int i = 1; i <= test->num_renegotiations; i++) {
+        /* Not in Go: Go reads in a goroutine, and waits for it straight away
+         * when it replays, there being no OpenSSL to talk to in between. So
+         * the read is made here. */
+        Byte buf[256];
+        Error rerr = BURROW_NO_ERROR;
+        Int n = tls_conn_read(client, slice_from(buf, 256, 256, TYPE_BYTE), &rerr);
+
+        if (test->check_renegotiation_error.f != NULL) {
+            Error new_err = test->check_renegotiation_error.f(
+                test->check_renegotiation_error.env, i, rerr);
+            if (BURROW_FAILED(rerr) && !BURROW_FAILED(new_err))
+                continue;
+            rerr = new_err;
+        }
+
+        if (BURROW_FAILED(rerr)) {
+            testing_t_errorf_v(t, "Client.Read failed after renegotiation #%d: %s", i,
+                               error_text(rerr));
+            continue;
+        }
+
+        Str got = str_from_bytes(buf, n);
+        if (!str_eq(openssl_sentinel, got))
+            testing_t_errorf_v(t, "Client.Read returned %q, but wanted %q", got,
+                               openssl_sentinel);
+
+        Int expected = (Int)i + 1;
+        if (client->handshakes != expected)
+            testing_t_errorf_v(t,
+                               "client should have recorded %d handshakes, but "
+                               "believes that %d have occurred",
+                               expected, client->handshakes);
+    }
+
+    if (test->send_key_update) {
+        /* Not in Go: the read is inline, for the same reason. */
+        Byte buf[256];
+        Error rerr = BURROW_NO_ERROR;
+        Int n = tls_conn_read(client, slice_from(buf, 256, 256, TYPE_BYTE), &rerr);
+        if (BURROW_FAILED(rerr)) {
+            testing_t_errorf_v(t, "Client.Read failed after KeyUpdate: %s",
+                               error_text(rerr));
+        } else {
+            Str got = str_from_bytes(buf, n);
+            if (!str_eq(openssl_sentinel, got))
+                testing_t_errorf_v(t, "Client.Read returned %q, but wanted %q", got,
+                                   openssl_sentinel);
+        }
+
+        Byte again[] = "hello again\n";
+        (void)tls_conn_write(client, slice_from(again, 12, 12, TYPE_BYTE), &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "Client.Write failed: %s", error_text(err));
+            return;
+        }
+    }
+
+    if (test->validate.f != NULL) {
+        TlsConnectionState cs = tls_conn_connection_state(client);
+        Error verr = test->validate.f(test->validate.env, &cs);
+        if (BURROW_FAILED(verr))
+            testing_t_errorf_v(t, "validate callback returned error: %s",
+                               error_text(verr));
+    }
+}
+
+/* clientTest.run with write false, which is all of it there is without
+ * -update. */
+static void client_test_run(void *env, TestingT *t) {
+    ClientTest *test = env;
+    Alloc *a = test->a;
+
+    Error err = BURROW_NO_ERROR;
+    Slice flows = client_test_load_data(test, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "failed to load data from %s: %v",
+                           client_test_data_path(test), error_text(err));
+    ReplayingConn replay;
+    memset(&replay, 0, sizeof replay);
+    replay.t = t;
+    replay.flows = flows;
+    replay.reading = false;
+
+    TlsConfig base;
+    TlsConfig *config = test->config;
+    if (config == NULL) {
+        base = test_config_client(a);
+        config = &base;
+    }
+    config = tls_config_clone(config, a);
+    if (config == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    TlsConn *client =
+        tls_client(heap_allocator(), replaying_conn_as_net_conn(&replay), config);
+    if (client == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    client_test_talk(test, t, client);
+    (void)tls_conn_close(client);
+    tls_conn_free(client);
+    tls_config_release(config);
+}
+
+static void run_client_test_for_version(TestingT *t, const ClientTest *tmpl,
+                                        Str version) {
+    ClientTest test = *tmpl;
+    if (tmpl->config != NULL) {
+        test.config = tls_config_clone(tmpl->config, test.a);
+        if (test.config == NULL)
+            testing_t_fatal_v(t, "out of memory");
+    }
+    test.name = fmt_sprintf_v(test.a, "%s-%s", version, test.name);
+
+    run_test_and_update_if_needed(t, version,
+                                  BURROW_FN(ReplayRunFunc, client_test_run, &test));
+    if (test.config != NULL)
+        tls_config_release(test.config);
+}
+
+static void run_client_test_tls10(TestingT *t, ClientTest *tmpl) {
+    if (tmpl->config == NULL) {
+        TlsConfig base = test_config_client(tmpl->a);
+        tmpl->config = tls_config_clone(&base, tmpl->a);
+        if (tmpl->config == NULL)
+            testing_t_fatal_v(t, "out of memory");
+    }
+    if (tmpl->config->min_version == 0)
+        tmpl->config->min_version = TLS_VERSION_TLS10;
+    run_client_test_for_version(t, tmpl, BURROW_S("TLSv10"));
+}
+
+static void run_client_test_tls11(TestingT *t, ClientTest *tmpl) {
+    if (tmpl->config == NULL) {
+        TlsConfig base = test_config_client(tmpl->a);
+        tmpl->config = tls_config_clone(&base, tmpl->a);
+        if (tmpl->config == NULL)
+            testing_t_fatal_v(t, "out of memory");
+    }
+    if (tmpl->config->min_version == 0)
+        tmpl->config->min_version = TLS_VERSION_TLS11;
+    run_client_test_for_version(t, tmpl, BURROW_S("TLSv11"));
+}
+
+static void run_client_test_tls12(TestingT *t, ClientTest *tmpl) {
+    run_client_test_for_version(t, tmpl, BURROW_S("TLSv12"));
+}
+
+static void run_client_test_tls13(TestingT *t, ClientTest *tmpl) {
+    run_client_test_for_version(t, tmpl, BURROW_S("TLSv13"));
+}
+
+/* Not in Go: testConfigClient.Clone(), made in a. */
+static TlsConfig *test_config_client_clone(TestingT *t, Alloc *a) {
+    TlsConfig base = test_config_client(a);
+    TlsConfig *config = tls_config_clone(&base, a);
+    if (config == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    return config;
+}
+
+/* Not in Go: the end of a test that ran a clientTest, which gives back what
+ * its config holds and frees ar. */
+static void client_test_free(ClientTest *test, Arena *ar) {
+    if (test->config != NULL)
+        tls_config_release(test->config);
+    arena_free(ar);
+}
+
+static void TestHandshakeClientRSARC4(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig *config = test_config_client_clone(t, a);
+    uint16_t suites[] = {TLS_TLS_RSA_WITH_RC4_128_SHA};
+    config->cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    ClientTest test = {
+        .name = BURROW_S("RSA-RC4"),
+        .config = config,
+        .validate = check_cipher_suite(a, TLS_TLS_RSA_WITH_RC4_128_SHA),
+        .a = a,
+    };
+    run_client_test_tls10(t, &test);
+    run_client_test_tls11(t, &test);
+    run_client_test_tls12(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientRSAAES128GCM(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig *config = test_config_client_clone(t, a);
+    uint16_t suites[] = {TLS_TLS_RSA_WITH_AES_128_GCM_SHA256};
+    config->cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    ClientTest test = {
+        .name = BURROW_S("AES128-GCM-SHA256"),
+        .config = config,
+        .validate = check_cipher_suite(a, TLS_TLS_RSA_WITH_AES_128_GCM_SHA256),
+        .a = a,
+    };
+    run_client_test_tls12(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientRSAAES256GCM(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig *config = test_config_client_clone(t, a);
+    uint16_t suites[] = {TLS_TLS_RSA_WITH_AES_256_GCM_SHA384};
+    config->cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    ClientTest test = {
+        .name = BURROW_S("AES256-GCM-SHA384"),
+        .config = config,
+        .validate = check_cipher_suite(a, TLS_TLS_RSA_WITH_AES_256_GCM_SHA384),
+        .a = a,
+    };
+    run_client_test_tls12(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientECDHERSAAES(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ClientTest test = {
+        .name = BURROW_S("ECDHE-RSA-AES"),
+        .validate = check_cipher_suite(a, TLS_TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA),
+        .a = a,
+    };
+    run_client_test_tls10(t, &test);
+    run_client_test_tls11(t, &test);
+    run_client_test_tls12(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientECDHEECDSAAES(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ClientTest test = {
+        .name = BURROW_S("ECDHE-ECDSA-AES"),
+        .validate = check_cipher_suite(a, TLS_TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA),
+        .a = a,
+    };
+    run_client_test_tls10(t, &test);
+    run_client_test_tls11(t, &test);
+    run_client_test_tls12(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientECDHEECDSAAESGCM(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ClientTest test = {
+        .name = BURROW_S("ECDHE-ECDSA-AES-GCM"),
+        .validate = check_cipher_suite(a, TLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256),
+        .a = a,
+    };
+    run_client_test_tls12(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientAES256GCMSHA384(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ClientTest test = {
+        .name = BURROW_S("ECDHE-ECDSA-AES256-GCM-SHA384"),
+        .validate = check_cipher_suite(a, TLS_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384),
+        .a = a,
+    };
+    run_client_test_tls12(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientAES128CBCSHA256(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig *config = test_config_client_clone(t, a);
+    uint16_t suites[] = {TLS_TLS_RSA_WITH_AES_128_CBC_SHA256};
+    config->cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    ClientTest test = {
+        .name = BURROW_S("AES128-SHA256"),
+        .config = config,
+        .validate = check_cipher_suite(a, TLS_TLS_RSA_WITH_AES_128_CBC_SHA256),
+        .a = a,
+    };
+    run_client_test_tls12(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientECDHERSAAES128CBCSHA256(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig *config = test_config_client_clone(t, a);
+    uint16_t suites[] = {TLS_TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256};
+    config->cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    ClientTest test = {
+        .name = BURROW_S("ECDHE-RSA-AES128-SHA256"),
+        .config = config,
+        .validate = check_cipher_suite(a, TLS_TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256),
+        .a = a,
+    };
+    run_client_test_tls12(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientECDHEECDSAAES128CBCSHA256(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig *config = test_config_client_clone(t, a);
+    uint16_t suites[] = {TLS_TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256};
+    config->cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    ClientTest test = {
+        .name = BURROW_S("ECDHE-ECDSA-AES128-SHA256"),
+        .config = config,
+        .validate = check_cipher_suite(a, TLS_TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256),
+        .a = a,
+    };
+    run_client_test_tls12(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientX25519(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ClientTest test = {
+        .name = BURROW_S("X25519-ECDHE"),
+        .validate = check_curve_id(a, TLS_X25519),
+        .a = a,
+    };
+    run_client_test_tls12(t, &test);
+    run_client_test_tls13(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientP256(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ClientTest test = {
+        .name = BURROW_S("P256-ECDHE"),
+        .validate = check_curve_id(a, TLS_CURVE_P256),
+        .a = a,
+    };
+    run_client_test_tls12(t, &test);
+    run_client_test_tls13(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static Error hello_retry_request_check(void *env, const TlsConnectionState *cs) {
+    (void)env;
+    if (!cs->hello_retry_request)
+        return errors_new(heap_allocator(), BURROW_S("expected HelloRetryRequest"));
+    return BURROW_NO_ERROR;
+}
+
+static void TestHandshakeClientHelloRetryRequest(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig *config = test_config_client_clone(t, a);
+    uint16_t curves[] = {TLS_X25519, TLS_CURVE_P256};
+    config->curve_preferences = slice_from(curves, 2, 2, TYPE_UINT16);
+
+    ClientTest test = {
+        .name = BURROW_S("HelloRetryRequest"),
+        .config = config,
+        .validate = BURROW_FN(ConnectionStateCheck, hello_retry_request_check, NULL),
+        .a = a,
+    };
+
+    run_client_test_tls13(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientECDHERSAChaCha20(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ClientTest test = {
+        .name = BURROW_S("ECDHE-RSA-CHACHA20-POLY1305"),
+        .validate =
+            check_cipher_suite(a, TLS_TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256),
+        .a = a,
+    };
+    run_client_test_tls12(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientECDHEECDSAChaCha20(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ClientTest test = {
+        .name = BURROW_S("ECDHE-ECDSA-CHACHA20-POLY1305"),
+        .validate =
+            check_cipher_suite(a, TLS_TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256),
+        .a = a,
+    };
+    run_client_test_tls12(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientAES128SHA256(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ClientTest test = {
+        .name = BURROW_S("AES128-SHA256"),
+        .validate = check_cipher_suite(a, TLS_TLS_AES_128_GCM_SHA256),
+        .a = a,
+    };
+    run_client_test_tls13(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientAES256SHA384(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ClientTest test = {
+        .name = BURROW_S("AES256-SHA384"),
+        .validate = check_cipher_suite(a, TLS_TLS_AES_256_GCM_SHA384),
+        .a = a,
+    };
+    run_client_test_tls13(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientCHACHA20SHA256(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ClientTest test = {
+        .name = BURROW_S("CHACHA20-SHA256"),
+        .validate = check_cipher_suite(a, TLS_TLS_CHACHA20_POLY1305_SHA256),
+        .a = a,
+    };
+    run_client_test_tls13(t, &test);
+    client_test_free(&test, &ar);
+}
+
+/* Not in Go: what checkPeerCertificateType's func closes over. */
+typedef struct PeerCertificateTypeCheck {
+    Alloc *a;
+    X509PublicKeyAlgorithm expected;
+} PeerCertificateTypeCheck;
+
+static Error check_peer_certificate_type_fn(void *env, const TlsConnectionState *cs) {
+    const PeerCertificateTypeCheck *c = env;
+    if (cs->peer_certificates.len == 0)
+        return errors_new(c->a, BURROW_S("no peer certificates"));
+    X509Certificate *const *certs = cs->peer_certificates.p;
+    if (certs[0]->public_key_algorithm != c->expected) {
+        Str got =
+            x509_public_key_algorithm_string(certs[0]->public_key_algorithm, c->a);
+        Str want = x509_public_key_algorithm_string(c->expected, c->a);
+        return fmt_errorf_v(
+            "peer certificate public key algorithm is %v, but expected %v", got, want);
+    }
+    return BURROW_NO_ERROR;
+}
+
+static ConnectionStateCheck
+check_peer_certificate_type(Alloc *a, X509PublicKeyAlgorithm expected) {
+    PeerCertificateTypeCheck *c =
+        mem_alloc(a, sizeof *c, _Alignof(PeerCertificateTypeCheck));
+    if (c == NULL)
+        panic_str(BURROW_S("out of memory"));
+    c->a = a;
+    c->expected = expected;
+    return BURROW_FN(ConnectionStateCheck, check_peer_certificate_type_fn, c);
+}
+
+static void TestHandshakeClientRSATLS13(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ClientTest test = {
+        .name = BURROW_S("RSA"),
+        .validate = check_peer_certificate_type(a, X509_RSA),
+        .a = a,
+    };
+    run_client_test_tls13(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientECDSATLS13(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ClientTest test = {
+        .name = BURROW_S("ECDSA"),
+        .validate = check_peer_certificate_type(a, X509_ECDSA),
+        .a = a,
+    };
+    run_client_test_tls13(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientEd25519(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ClientTest test = {
+        .name = BURROW_S("Ed25519"),
+        .validate = check_peer_certificate_type(a, X509_ED25519),
+        .a = a,
+    };
+    run_client_test_tls12(t, &test);
+    run_client_test_tls13(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientCertEd25519(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ClientTest test = {
+        .name = BURROW_S("ClientCert-Ed25519-Ed25519"),
+        .a = a,
+    };
+
+    run_client_test_tls12(t, &test);
+    run_client_test_tls13(t, &test);
+
+    ClientTest test2 = {
+        .name = BURROW_S("ClientCert-Ed25519-RSA-ECDHE"),
+        .a = a,
+    };
+
+    run_client_test_tls12(t, &test2);
+    run_client_test_tls13(t, &test2);
+
+    TlsConfig *config = test_config_client_clone(t, a);
+    uint16_t suites[] = {TLS_TLS_RSA_WITH_AES_128_CBC_SHA256};
+    config->cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    ClientTest test3 = {
+        .name = BURROW_S("ClientCert-Ed25519-RSA"),
+        .config = config,
+        .validate = check_cipher_suite(a, TLS_TLS_RSA_WITH_AES_128_CBC_SHA256),
+        .a = a,
+    };
+
+    run_client_test_tls12(t, &test3);
+    client_test_free(&test3, &ar);
+}
+
+/* Not in Go: []Certificate{c}, made in a. */
+static Slice one_certificate(Alloc *a, TlsCertificate c) {
+    Slice certs = slice_make(a, TYPE_TLS_CERTIFICATE, 1, 1);
+    if (certs.p == NULL)
+        panic_str(BURROW_S("out of memory"));
+    *(TlsCertificate *)certs.p = c;
+    return certs;
+}
+
+static void TestHandshakeClientCertRSA(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig *config = test_config_client_clone(t, a);
+    config->certificates =
+        one_certificate(a, parse_test_cert(a, test_client_rsa2048_cert_pem,
+                                           test_client_rsa2048_key_pem));
+
+    ClientTest test = {
+        .name = BURROW_S("ClientCert-RSA-RSA-ECDHE"),
+        .config = config,
+        .a = a,
+    };
+
+    run_client_test_tls10(t, &test);
+    run_client_test_tls12(t, &test);
+    run_client_test_tls13(t, &test);
+
+    ClientTest test2 = {
+        .name = BURROW_S("ClientCert-RSA-ECDSA"),
+        .config = config,
+        .a = a,
+    };
+
+    run_client_test_tls10(t, &test2);
+    run_client_test_tls12(t, &test2);
+    run_client_test_tls13(t, &test2);
+
+    uint16_t suites[] = {TLS_TLS_RSA_WITH_AES_128_CBC_SHA};
+    config->cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    ClientTest test3 = {
+        .name = BURROW_S("ClientCert-RSA-RSA"),
+        .config = config,
+        .validate = check_cipher_suite(a, TLS_TLS_RSA_WITH_AES_128_CBC_SHA),
+        .a = a,
+    };
+
+    run_client_test_tls10(t, &test3);
+    run_client_test_tls12(t, &test3);
+    client_test_free(&test3, &ar);
+}
+
+static void TestHandshakeClientCertECDSA(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig *config = test_config_client_clone(t, a);
+    config->certificates =
+        one_certificate(a, parse_test_cert(a, test_client_ecdsap256_cert_pem,
+                                           test_client_ecdsap256_key_pem));
+
+    ClientTest test = {
+        .name = BURROW_S("ClientCert-ECDSA-ECDSA"),
+        .config = config,
+        .a = a,
+    };
+
+    run_client_test_tls10(t, &test);
+    run_client_test_tls12(t, &test);
+    run_client_test_tls13(t, &test);
+
+    ClientTest test2 = {
+        .name = BURROW_S("ClientCert-ECDSA-RSA-ECDHE"),
+        .config = config,
+        .a = a,
+    };
+
+    run_client_test_tls10(t, &test2);
+    run_client_test_tls12(t, &test2);
+    run_client_test_tls13(t, &test2);
+
+    uint16_t suites[] = {TLS_TLS_RSA_WITH_AES_128_CBC_SHA};
+    config->cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    ClientTest test3 = {
+        .name = BURROW_S("ClientCert-ECDSA-RSA"),
+        .config = config,
+        .validate = check_cipher_suite(a, TLS_TLS_RSA_WITH_AES_128_CBC_SHA),
+        .a = a,
+    };
+
+    run_client_test_tls10(t, &test3);
+    run_client_test_tls12(t, &test3);
+    client_test_free(&test3, &ar);
+}
+
+static Error rsapss_signature_check(void *env, const TlsConnectionState *cs) {
+    Alloc *a = env;
+    if (cs->peer_certificates.len == 0)
+        panic_str(BURROW_S("runtime error: index out of range [0] with length 0"));
+    X509Certificate *const *certs = cs->peer_certificates.p;
+    if (certs[0]->signature_algorithm != X509_SHA512_WITH_RSAPSS) {
+        Str got = x509_signature_algorithm_string(certs[0]->signature_algorithm, a);
+        Str want = x509_signature_algorithm_string(X509_SHA512_WITH_RSAPSS, a);
+        return fmt_errorf_v(
+            "peer certificate signature algorithm is %v, but expected %v", got, want);
+    }
+    return BURROW_NO_ERROR;
+}
+
+/* TestHandshakeClientCertRSAPSS tests rsa_pss_rsae_sha256 signatures from both
+ * client and server certificates. It also serves from both sides a certificate
+ * signed itself with RSA-PSS, mostly to check that crypto/x509 chain validation
+ * works. */
+static void TestHandshakeClientCertRSAPSS(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig *config = test_config_client_clone(t, a);
+    config->certificates = one_certificate(
+        a, parse_test_cert(a, test_client_rsapss_cert_pem, test_client_rsapss_key_pem));
+    ClientTest test = {
+        .name = BURROW_S("ClientCert-RSA-RSAPSS"),
+        .config = config,
+        .validate = BURROW_FN(ConnectionStateCheck, rsapss_signature_check, a),
+        .a = a,
+    };
+    run_client_test_tls12(t, &test);
+    run_client_test_tls13(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientCertRSAPKCS1v15(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ClientTest test = {
+        .name = BURROW_S("ClientCert-RSA-RSAPKCS1v15"),
+        .a = a,
+    };
+    run_client_test_tls12(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestClientKeyUpdate(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ClientTest test = {
+        .name = BURROW_S("KeyUpdate"),
+        .send_key_update = true,
+        .a = a,
+    };
+    run_client_test_tls13(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestHandshakeClientALPNMatch(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig *config = test_config_client_clone(t, a);
+    Str protos[] = {BURROW_S_INIT("proto2"), BURROW_S_INIT("proto1")};
+    config->next_protos = slice_from(protos, 2, 2, TYPE_STRING);
+    ClientTest test = {
+        .name = BURROW_S("ALPN"),
+        .config = config,
+        /* The server's preferences should override the client. */
+        .validate = check_negotiated_protocol(a, BURROW_S("proto1")),
+        .a = a,
+    };
+    run_client_test_tls12(t, &test);
+    run_client_test_tls13(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static const char scts_base64[] =
+    "ABIBaQFnAHUApLkJkLQYWBSHuxOizGdwCjw1mAT5G9+443fNDsgN3BAAAAFHl5nuFgAABAMARjBEAiAc"
+    "S4JdlW5nW9sElUv2zvQyPoZ6ejKrGGB03gjaBZFMLwIgc1Qbbn+hsH0RvObzhS+XZhr3iuQQJY8S9G85"
+    "D9KeGPAAdgBo9pj4H2SCvjqM7rkoHUz8cVFdZ5PURNEKZ6y7T0/7xAAAAUeX4bVwAAAEAwBHMEUCIDIh"
+    "FDgG2HIuADBkGuLobU5a4dlCHoJLliWJ1SYT05z6AiEAjxIoZFFPRNWMGGIjskOTMwXzQ1Wh2e7NxXE1"
+    "kd1J0QsAdgDuS723dc5guuFCaR+r4Z5mow9+X7By2IMAxHuJeqj9ywAAAUhcZIqHAAAEAwBHMEUCICmJ"
+    "1rBT09LpkbzxtUC+Hi7nXLR0J+2PmwLp+sJMuqK+AiEAr0NkUnEVKVhAkccIFpYDqHOlZaBsuEhWWrYp"
+    "g2RtKp0=";
+
+static Error scts_check(void *env, const TlsConnectionState *state) {
+    const Slice *scts = env;
+    Slice expected_scts[3] = {
+        slice_sub(*scts, 8, 125),
+        slice_sub(*scts, 127, 245),
+        slice_sub(*scts, 247, scts->len),
+    };
+    Int n = state->signed_certificate_timestamps.len;
+    if (n != 3)
+        return fmt_errorf_v("Got %d scts, wanted %d", n, 3);
+    const Slice *got = state->signed_certificate_timestamps.p;
+    for (int i = 0; i < 3; i++) {
+        if (!bytes_equal(got[i], expected_scts[i]))
+            return fmt_errorf_v("SCT #%d contained %x, expected %x", i, got[i],
+                                expected_scts[i]);
+    }
+    return BURROW_NO_ERROR;
+}
+
+static void TestHandshakeClientSCTs(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    Slice scts = base64_encoding_decode_string(base64_std_encoding, a,
+                                               str_from_cstr(scts_base64), &err);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        testing_t_fatal_v(t, err);
+    }
+
+    ClientTest test = {
+        .name = BURROW_S("SCT"),
+        .validate = BURROW_FN(ConnectionStateCheck, scts_check, &scts),
+        .a = a,
+    };
+    run_client_test_tls12(t, &test);
+
+    /* TLS 1.3 moved SCTs to the Certificate extensions and -serverinfo only
+     * supports ServerHello extensions. */
+    client_test_free(&test, &ar);
+}
+
+static Error renegotiation_rejected_check(void *env, int renegotiation_num, Error err) {
+    (void)env;
+    (void)renegotiation_num;
+    if (!BURROW_FAILED(err))
+        return errors_new(heap_allocator(),
+                          BURROW_S("expected error from renegotiation but got nil"));
+    if (!strings_contains(error_text(err), BURROW_S("no renegotiation")))
+        return fmt_errorf_v("expected renegotiation to be rejected but got %q",
+                            error_text(err));
+    return BURROW_NO_ERROR;
+}
+
+static void TestRenegotiationRejected(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ClientTest test = {
+        .name = BURROW_S("RenegotiationRejected"),
+        .num_renegotiations = 1,
+        .renegotiation_expected_to_fail = 1,
+        .check_renegotiation_error =
+            BURROW_FN(RenegotiationErrorCheck, renegotiation_rejected_check, NULL),
+        .a = a,
+    };
+    run_client_test_tls12(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestRenegotiateOnce(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig *config = test_config_client_clone(t, a);
+    config->renegotiation = TLS_RENEGOTIATE_ONCE_AS_CLIENT;
+
+    ClientTest test = {
+        .name = BURROW_S("RenegotiateOnce"),
+        .config = config,
+        .num_renegotiations = 1,
+        .a = a,
+    };
+
+    run_client_test_tls12(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static void TestRenegotiateTwice(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig *config = test_config_client_clone(t, a);
+    config->renegotiation = TLS_RENEGOTIATE_FREELY_AS_CLIENT;
+
+    ClientTest test = {
+        .name = BURROW_S("RenegotiateTwice"),
+        .config = config,
+        .num_renegotiations = 2,
+        .a = a,
+    };
+
+    run_client_test_tls12(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static Error renegotiate_twice_rejected_check(void *env, int renegotiation_num,
+                                              Error err) {
+    (void)env;
+    if (renegotiation_num == 1)
+        return err;
+
+    if (!BURROW_FAILED(err))
+        return errors_new(heap_allocator(),
+                          BURROW_S("expected error from renegotiation but got nil"));
+    if (!strings_contains(error_text(err), BURROW_S("no renegotiation")))
+        return fmt_errorf_v("expected renegotiation to be rejected but got %q",
+                            error_text(err));
+    return BURROW_NO_ERROR;
+}
+
+static void TestRenegotiateTwiceRejected(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig *config = test_config_client_clone(t, a);
+    config->renegotiation = TLS_RENEGOTIATE_ONCE_AS_CLIENT;
+
+    ClientTest test = {
+        .name = BURROW_S("RenegotiateTwiceRejected"),
+        .config = config,
+        .num_renegotiations = 2,
+        .renegotiation_expected_to_fail = 2,
+        .check_renegotiation_error =
+            BURROW_FN(RenegotiationErrorCheck, renegotiate_twice_rejected_check, NULL),
+        .a = a,
+    };
+
+    run_client_test_tls12(t, &test);
+    client_test_free(&test, &ar);
+}
+
+static Error export_keying_material_check(void *env, const TlsConnectionState *state) {
+    Alloc *a = env;
+    Error err = BURROW_NO_ERROR;
+    Slice km = tls_connection_state_export_keying_material(
+        state, a, BURROW_S("test"), slice_nil(TYPE_BYTE), 42, &err);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("ExportKeyingMaterial failed: %v", error_text(err));
+    if (km.len != 42)
+        return fmt_errorf_v("Got %d bytes from ExportKeyingMaterial, wanted %d", km.len,
+                            42);
+    return BURROW_NO_ERROR;
+}
+
+static void TestHandshakeClientExportKeyingMaterial(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    ClientTest test = {
+        .name = BURROW_S("ExportKeyingMaterial"),
+        .validate = BURROW_FN(ConnectionStateCheck, export_keying_material_check, a),
+        .a = a,
+    };
+    run_client_test_tls10(t, &test);
+    run_client_test_tls12(t, &test);
+    run_client_test_tls13(t, &test);
+    client_test_free(&test, &ar);
+}
 
 static TlsClientSessionState *cache_get(TlsClientSessionCache cache, Str key,
                                         bool *ok) {
@@ -750,7 +1725,41 @@ static void TestECHTLS12Server(TestingT *t) {
 }
 
 #define TESTS(X)                                                                       \
+    X(TestHandshakeClientRSARC4)                                                       \
+    X(TestHandshakeClientRSAAES128GCM)                                                 \
+    X(TestHandshakeClientRSAAES256GCM)                                                 \
+    X(TestHandshakeClientECDHERSAAES)                                                  \
+    X(TestHandshakeClientECDHEECDSAAES)                                                \
+    X(TestHandshakeClientECDHEECDSAAESGCM)                                             \
+    X(TestHandshakeClientAES256GCMSHA384)                                              \
+    X(TestHandshakeClientAES128CBCSHA256)                                              \
+    X(TestHandshakeClientECDHERSAAES128CBCSHA256)                                      \
+    X(TestHandshakeClientECDHEECDSAAES128CBCSHA256)                                    \
+    X(TestHandshakeClientX25519)                                                       \
+    X(TestHandshakeClientP256)                                                         \
+    X(TestHandshakeClientHelloRetryRequest)                                            \
+    X(TestHandshakeClientECDHERSAChaCha20)                                             \
+    X(TestHandshakeClientECDHEECDSAChaCha20)                                           \
+    X(TestHandshakeClientAES128SHA256)                                                 \
+    X(TestHandshakeClientAES256SHA384)                                                 \
+    X(TestHandshakeClientCHACHA20SHA256)                                               \
+    X(TestHandshakeClientRSATLS13)                                                     \
+    X(TestHandshakeClientECDSATLS13)                                                   \
+    X(TestHandshakeClientEd25519)                                                      \
+    X(TestHandshakeClientCertEd25519)                                                  \
+    X(TestHandshakeClientCertRSA)                                                      \
+    X(TestHandshakeClientCertECDSA)                                                    \
+    X(TestHandshakeClientCertRSAPSS)                                                   \
+    X(TestHandshakeClientCertRSAPKCS1v15)                                              \
+    X(TestClientKeyUpdate)                                                             \
     X(TestLRUClientSessionCache)                                                       \
+    X(TestHandshakeClientALPNMatch)                                                    \
+    X(TestHandshakeClientSCTs)                                                         \
+    X(TestRenegotiationRejected)                                                       \
+    X(TestRenegotiateOnce)                                                             \
+    X(TestRenegotiateTwice)                                                            \
+    X(TestRenegotiateTwiceRejected)                                                    \
+    X(TestHandshakeClientExportKeyingMaterial)                                         \
     X(TestHostnameInSNI)                                                               \
     X(TestServerSelectingUnconfiguredCipherSuite)                                      \
     X(TestClientTLS13ServerHelloErrors)                                                \

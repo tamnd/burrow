@@ -8,6 +8,8 @@
 #ifndef BURROW_SRC_CRYPTO_ENTROPY_INTERNAL_H
 #define BURROW_SRC_CRYPTO_ENTROPY_INTERNAL_H
 
+#include "burrow/crypto/aes.h"
+
 #include "burrow/core.h"
 #include "burrow/error.h"
 #include "burrow/slice.h"

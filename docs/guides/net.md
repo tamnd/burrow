@@ -1671,6 +1671,30 @@ The client follows up to ten redirects, and `check_redirect` decides otherwise: 
 
 `timeout` covers the whole exchange, the redirects and the reading of the body included. When it runs out the error is a `UrlError` that is a timeout to `net_error_timeout`, and `errors_is` finds `context_deadline_exceeded` in it. A request's context can cancel it too. Every error from the client is a `UrlError` with the method and the URL, with any password in the URL shown as `***`. A status like 404 is not an error. The response it comes with has to be freed with `http_response_free`, and so does the one that comes back with an error from `check_redirect`.
 
+## Limits
+
+The server and the client put the same limits on what they read as Go does, and they are on without anything being set. A peer that sends a header without end, or a body of nothing but chunk extensions, runs into one of these rather than into the allocator.
+
+| Limit | Default | Changed with |
+|---|---|---|
+| A request's first line and header, over HTTP/1 and HTTP/2 | 1 MiB (`HTTP_DEFAULT_MAX_HEADER_BYTES`), and more gets a 431 | `max_header_bytes` in `HttpServer` |
+| Header values in a request | 500 (`HTTP_DEFAULT_MAX_HEADER_VALUE_COUNT`), and more gets a 400 | `max_header_value_count` in `HttpServer` |
+| A response's header, over HTTP/1 and HTTP/2 | 10 MiB | `max_response_header_bytes` in `HttpTransport` |
+| A form body read by `http_request_parse_form` | 10 MiB | `http_max_bytes_reader` on the body, which then sets the limit |
+| Memory for the files in a multipart form parsed by `http_request_form_value`, `http_request_post_form_value` and `http_request_form_file` | 32 MiB, and the rest goes to temporary files | `http_request_parse_multipart_form` with a size of your own, called first |
+| Parts and headers in a multipart form | 1000 parts and 10000 headers | `GODEBUG=multipartmaxparts=N` and `multipartmaxheaders=N` |
+| Cookies read from a request's `Cookie` headers or a response's `Set-Cookie` headers | 3000 | `GODEBUG=httpcookiemaxnum=N`, and 0 takes it away |
+| Parameters in a query | 10000 | `GODEBUG=urlmaxqueryparams=N`, and 0 takes it away |
+| A chunk size line | 4096 bytes, and longer is `http_err_line_too_long` | Nothing |
+| Chunk extensions and other overhead in a chunked body | Each chunk may bring 16 bytes and twice its data in overhead, and 16 KiB more than that ends the body with an error | Nothing |
+| A request body the handler left unread | The server reads up to 256 KiB of it to keep the connection, and closes the connection after more | Nothing |
+| HTTP/2 streams open at once | 250 | `max_concurrent_streams` in `HttpHTTP2Config` |
+| HTTP/2 frames | 1 MiB | `max_read_frame_size` in `HttpHTTP2Config` |
+| HTTP/2 request body windows | 1 MiB for the connection and 1 MiB for each stream | `max_receive_buffer_per_connection` and `max_receive_buffer_per_stream` |
+| HTTP/2 control frames waiting to be written | 10000, and more closes the connection | Nothing |
+
+There is no limit on the size of a request body itself, as in Go. A handler that wants one wraps the body with `http_max_bytes_reader`.
+
 ## Tracing requests
 
 `net/http/httptrace` shows what the client does on the way to a response. An `HttptraceClientTrace` is a set of hooks, any of which can be left out, for getting a connection, the DNS lookup and the dial, writing the request and reading the response. `httptrace_with_client_trace` puts it in a context, and a request sent with that context calls the hooks:

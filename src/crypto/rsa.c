@@ -158,7 +158,7 @@ CRYPTO_FIPS_TEXT static bool rsa_godebug(const char *env, const char *key, Str *
 
 CRYPTO_FIPS_TEXT static uint32_t rsa_debug_parse(const char *v) {
     uint32_t f = RSA_DEBUG_KNOWN;
-    Str s;
+    Str s = {0};
     if (v != NULL && rsa_godebug(v, "rsa1024min", &s) && s.len == 1 && s.p[0] == '0')
         f |= RSA_DEBUG_1024MIN_OFF;
     burrow__atomic_store_relaxed_u32(&rsa_debug_flags, f);

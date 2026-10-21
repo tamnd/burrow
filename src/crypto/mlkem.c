@@ -21,6 +21,7 @@
 #include "burrow/mem.h"
 #include "burrow/mem/heap.h"
 #include "burrow/slice.h"
+#include "burrow/sync.h"
 #include "burrow/type.h"
 
 #include "fips140_module.h"
@@ -758,6 +759,85 @@ CRYPTO_FIPS_TEXT static void *mlkem_new(Alloc *a, size_t size, size_t align,
     return p;
 }
 
+/* ------------------------------------------------------------- self-tests */
+
+/* From Go's src/crypto/internal/fips140/mlkem/cast.go. */
+
+CRYPTO_FIPS_RODATA static const Byte mlkem_cast_d[32] = {
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b,
+    0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+    0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+};
+
+CRYPTO_FIPS_RODATA static const Byte mlkem_cast_z[32] = {
+    0x21, 0x22, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2a, 0x2b,
+    0x2c, 0x2d, 0x2e, 0x2f, 0x30, 0x31, 0x32, 0x33, 0x34, 0x35, 0x36,
+    0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40,
+};
+
+CRYPTO_FIPS_RODATA static const Byte mlkem_cast_m[32] = {
+    0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b,
+    0x4c, 0x4d, 0x4e, 0x4f, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56,
+    0x57, 0x58, 0x59, 0x5a, 0x5b, 0x5c, 0x5d, 0x5e, 0x5f, 0x60,
+};
+
+CRYPTO_FIPS_RODATA static const Byte mlkem_cast_k[32] = {
+    0x55, 0x01, 0xfc, 0x52, 0x3b, 0x74, 0x5f, 0x41, 0x76, 0x2a, 0x18,
+    0x8d, 0xe4, 0x4a, 0x59, 0xb9, 0x20, 0xf4, 0x30, 0x14, 0x62, 0x04,
+    0xee, 0x4e, 0x79, 0x37, 0x32, 0x39, 0x6d, 0xf7, 0xaa, 0x48,
+};
+
+CRYPTO_FIPS_TEXT static Error mlkem_cast(void *arg) {
+    MlkemDecapsulationKey768 dk;
+    memset(&dk, 0, sizeof dk);
+    MlkemView v = mlkem_view_dk768(&dk);
+    mlkem_kem_key_gen(&v, mlkem_cast_d, mlkem_cast_z);
+    Byte c[MLKEM_CIPHERTEXT_SIZE768];
+    Byte ke[MLKEM_SHARED_KEY_SIZE], kd[MLKEM_SHARED_KEY_SIZE];
+    MlkemView ev = mlkem_view_ek768(&dk.ek);
+    mlkem_kem_encaps(&ev, ke, c, mlkem_cast_m);
+    mlkem_kem_decaps(&v, kd, c);
+    memset(&dk, 0, sizeof dk);
+    if (memcmp(ke, mlkem_cast_k, sizeof ke) != 0 ||
+        memcmp(kd, mlkem_cast_k, sizeof kd) != 0)
+        return errors_new(error_allocator(), BURROW_S("unexpected result"));
+    return BURROW_NO_ERROR;
+}
+
+CRYPTO_FIPS_TEXT static void mlkem_self_test_once(void *env) {
+    burrow__fips140_cast("ML-KEM-768", mlkem_cast, NULL);
+}
+
+static SyncOnce mlkem_self_test;
+
+/* fipsSelfTest, Go's sync.OnceFunc, for both sizes. */
+CRYPTO_FIPS_TEXT static void mlkem_fips_self_test(void) {
+    sync_once_do(&mlkem_self_test, BURROW_FN(Func, mlkem_self_test_once, NULL));
+}
+
+/* kemPCT: Encapsulate with the decapsulation key's own encapsulation key, and
+ * Decapsulate what that gives. arg is the view of the decapsulation key, which
+ * also serves as the view of its encapsulation key. */
+CRYPTO_FIPS_TEXT static Error mlkem_pct(void *arg) {
+    const MlkemView *v = arg;
+    Byte m[MLKEM_MESSAGE_SIZE];
+    Byte c[MLKEM_CIPHERTEXT_SIZE1024];
+    Byte k[MLKEM_SHARED_KEY_SIZE], k1[MLKEM_SHARED_KEY_SIZE];
+    mlkem_fips_self_test();
+    burrow__crypto_rand_system(slice_from(m, sizeof m, sizeof m, TYPE_BYTE));
+    mlkem_kem_encaps(v, k, c, m);
+    mlkem_fips_self_test();
+    mlkem_kem_decaps(v, k1, c);
+    Int eq = subtle_constant_time_compare(slice_from(k, 32, 32, TYPE_BYTE),
+                                          slice_from(k1, 32, 32, TYPE_BYTE));
+    memset(m, 0, sizeof m);
+    memset(k, 0, sizeof k);
+    memset(k1, 0, sizeof k1);
+    if (eq != 1)
+        return errors_new(error_allocator(), BURROW_S("mlkem: PCT failed"));
+    return BURROW_NO_ERROR;
+}
+
 /* Encapsulate with the message m, as two new Slices from a. */
 CRYPTO_FIPS_TEXT static Slice mlkem_encapsulate_with(const MlkemView *v, Alloc *a,
                                                      const Byte m[32],
@@ -780,6 +860,7 @@ CRYPTO_FIPS_TEXT static Slice mlkem_encapsulate_with(const MlkemView *v, Alloc *
 
 CRYPTO_FIPS_TEXT static Slice mlkem_encapsulate(const MlkemView *v, Alloc *a,
                                                 Slice *ciphertext) {
+    mlkem_fips_self_test();
     Byte m[MLKEM_MESSAGE_SIZE];
     burrow__crypto_rand_system(slice_from(m, sizeof m, sizeof m, TYPE_BYTE));
     Slice k = mlkem_encapsulate_with(v, a, m, ciphertext);
@@ -789,6 +870,7 @@ CRYPTO_FIPS_TEXT static Slice mlkem_encapsulate(const MlkemView *v, Alloc *a,
 
 CRYPTO_FIPS_TEXT static Slice mlkem_decapsulate(const MlkemView *v, Alloc *a,
                                                 Slice ciphertext, Error *err) {
+    mlkem_fips_self_test();
     if (ciphertext.len != mlkem_ciphertext_size(v)) {
         mlkem_set_error(err, "mlkem: invalid ciphertext length");
         return slice_nil(TYPE_BYTE);
@@ -866,6 +948,7 @@ CRYPTO_FIPS_TEXT static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a)
                                                                                        \
     CRYPTO_FIPS_TEXT MlkemDecapsulationKey##N *burrow__mlkem_generate_key_internal##N( \
         Alloc *a, const Byte d[32], const Byte z[32]) {                                \
+        mlkem_fips_self_test();                                                        \
         MlkemDecapsulationKey##N *dk = mlkem_new_dk##N(a, NULL);                       \
         if (dk == NULL)                                                                \
             return NULL;                                                               \
@@ -876,6 +959,7 @@ CRYPTO_FIPS_TEXT static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a)
                                                                                        \
     CRYPTO_FIPS_TEXT MlkemDecapsulationKey##N *mlkem_generate_key##N(Alloc *a,         \
                                                                      Error *err) {     \
+        mlkem_fips_self_test();                                                        \
         MlkemDecapsulationKey##N *dk = mlkem_new_dk##N(a, err);                        \
         if (dk == NULL)                                                                \
             return NULL;                                                               \
@@ -884,6 +968,7 @@ CRYPTO_FIPS_TEXT static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a)
         MlkemView v = mlkem_view_dk##N(dk);                                            \
         mlkem_kem_key_gen(&v, seed, seed + 32);                                        \
         memset(seed, 0, sizeof seed);                                                  \
+        burrow__fips140_pct("ML-KEM PCT", mlkem_pct, &v);                              \
         return dk;                                                                     \
     }                                                                                  \
                                                                                        \
@@ -1055,6 +1140,7 @@ MLKEM_FUNCS(1024)
 
 CRYPTO_FIPS_TEXT Slice burrow__mlkem_encapsulate_internal768(
     const MlkemEncapsulationKey768 *ek, Alloc *a, const Byte m[32], Slice *ciphertext) {
+    mlkem_fips_self_test();
     MlkemView v = mlkem_view_ek768(ek);
     return mlkem_encapsulate_with(&v, a, m, ciphertext);
 }
@@ -1062,6 +1148,7 @@ CRYPTO_FIPS_TEXT Slice burrow__mlkem_encapsulate_internal768(
 CRYPTO_FIPS_TEXT Slice
 burrow__mlkem_encapsulate_internal1024(const MlkemEncapsulationKey1024 *ek, Alloc *a,
                                        const Byte m[32], Slice *ciphertext) {
+    mlkem_fips_self_test();
     MlkemView v = mlkem_view_ek1024(ek);
     return mlkem_encapsulate_with(&v, a, m, ciphertext);
 }

@@ -543,6 +543,9 @@ void burrow__http_server_handler_serve(HttpServer *srv, HttpResponseWriter w,
 bool burrow__http_server_do_keep_alives(HttpServer *srv);
 Int burrow__http_server_max_header_value_count(HttpServer *srv);
 
+/* Server.tlsHandshakeTimeout, in http_serve.c. */
+Duration burrow__http_server_tls_handshake_timeout(const HttpServer *s);
+
 /* export_test.go's SetTestHookServerServe, which sets testHookServerServe. */
 BURROW_FUNC(burrow__HttpTestHookServerServe, void, HttpServer *s, NetListener l);
 void burrow__http_set_test_hook_server_serve(burrow__HttpTestHookServerServe fn);

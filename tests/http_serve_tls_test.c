@@ -1,7 +1,8 @@
-/* Derived from Go's src/net/http/serve_test.go.
+/* Derived from Go's src/net/http/serve_test.go and server_test.go.
  * Go source: go1.27.1.
  *
- * Server.ServeTLS, and how Serve and ListenAndServeTLS turn HTTP/2 on. Go's
+ * Server.ServeTLS, how Serve and ListenAndServeTLS turn HTTP/2 on, and the
+ * TLS handshake timeout. Go's
  * CondSkipHTTP2 is left out, since HTTP/2 can't be built out of burrow, and so
  * is afterTest, which looks for goroutines Go's transports leave behind.
  *
@@ -17,6 +18,7 @@
 #include "burrow/burrow.h"
 #include "burrow/chan.h"
 #include "burrow/crypto/tls.h"
+#include "burrow/iface.h"
 #include "burrow/map.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
@@ -24,6 +26,7 @@
 #include "burrow/net/http.h"
 #include "burrow/netpoll.h"
 #include "burrow/sync.h"
+#include "burrow/time.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -474,6 +477,34 @@ static void TestAutomaticHTTP2_ListenAndServe_GetConfigForClient(TestingT *t) {
     arena_free(&ar);
 }
 
+static void TestServerTLSHandshakeTimeout(TestingT *t) {
+    static const struct {
+        HttpServer s;
+        Duration want;
+    } tests[] = {
+        {.s = {0}, .want = 0},
+        {.s = {.read_timeout = -1}, .want = 0},
+        {.s = {.read_timeout = 5 * TIME_SECOND}, .want = 5 * TIME_SECOND},
+        {.s = {.read_timeout = 5 * TIME_SECOND, .write_timeout = -1},
+         .want = 5 * TIME_SECOND},
+        {.s = {.read_timeout = 5 * TIME_SECOND, .write_timeout = 4 * TIME_SECOND},
+         .want = 4 * TIME_SECOND},
+        {.s = {.read_timeout = 5 * TIME_SECOND,
+               .read_header_timeout = 2 * TIME_SECOND,
+               .write_timeout = 4 * TIME_SECOND},
+         .want = 2 * TIME_SECOND},
+    };
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
+        Duration got = burrow__http_server_tls_handshake_timeout(&tests[i].s);
+        Duration want = tests[i].want;
+        if (got != want) {
+            Any g = BURROW_ANY(TYPE_DURATION, &got);
+            Any w = BURROW_ANY(TYPE_DURATION, &want);
+            testing_t_errorf_v(t, "%d. got %v; want %v", (Int)i, g, w);
+        }
+    }
+}
+
 #define TESTS(X)                                                                       \
     X(TestServeTLS)                                                                    \
     X(TestAutomaticHTTP2_Serve_NoTLSConfig)                                            \
@@ -482,5 +513,6 @@ static void TestAutomaticHTTP2_ListenAndServe_GetConfigForClient(TestingT *t) {
     X(TestAutomaticHTTP2_Serve_WithTLSConfig)                                          \
     X(TestAutomaticHTTP2_ListenAndServe)                                               \
     X(TestAutomaticHTTP2_ListenAndServe_GetCertificate)                                \
-    X(TestAutomaticHTTP2_ListenAndServe_GetConfigForClient)
+    X(TestAutomaticHTTP2_ListenAndServe_GetConfigForClient)                            \
+    X(TestServerTLSHandshakeTimeout)
 TESTING_MAIN(TESTS)

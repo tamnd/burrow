@@ -477,7 +477,7 @@ static HttpProtocols sv_protocols(const HttpServer *s) {
  *
  * It returns the minimum of any positive ReadHeaderTimeout,
  * ReadTimeout, or WriteTimeout. */
-static Duration sv_tls_handshake_timeout(const HttpServer *s) {
+Duration burrow__http_server_tls_handshake_timeout(const HttpServer *s) {
     Duration ret = 0;
     const Duration vs[] = {s->read_header_timeout, s->read_timeout, s->write_timeout};
     for (size_t i = 0; i < sizeof vs / sizeof vs[0]; i++) {
@@ -1992,7 +1992,7 @@ static const HttpHandlerVT sv_init_alpn_request_vt = {NULL, sv_init_alpn_request
  * connection is done with, and false when it goes on to HTTP/1. */
 static bool sv_serve_tls(sv_Conn *c, TlsConn *tc) {
     HttpServer *s = c->server;
-    Duration tls_to = sv_tls_handshake_timeout(s);
+    Duration tls_to = burrow__http_server_tls_handshake_timeout(s);
     if (tls_to > 0) {
         Time dl = time_add(time_now(), tls_to);
         (void)sv_set_read_deadline(c->rwc, dl);

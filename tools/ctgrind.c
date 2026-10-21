@@ -112,7 +112,8 @@ static void check_ed25519(void) {
     Byte msg[] = "a message that is not secret";
     begin();
     Alloc *a = arena_allocator(&arena);
-    Ed25519PrivateKey priv = ed25519_new_key_from_seed(a, secret_bytes(seed, sizeof seed));
+    Ed25519PrivateKey priv =
+        ed25519_new_key_from_seed(a, secret_bytes(seed, sizeof seed));
     Slice sig = ed25519_sign(a, priv, bytes(msg, (Int)sizeof msg - 1));
     public_(sig.p, (size_t)sig.len);
     end("crypto/ed25519");

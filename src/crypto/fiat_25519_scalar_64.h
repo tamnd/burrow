@@ -4,8 +4,10 @@
  *
  * Everything between the two lines of dashes is fiat-c/src/curve25519_scalar_64.c
  * from https://github.com/mit-plv/fiat-crypto at commit c79cf6061a60, byte for
- * byte. It is generated from a formally verified model, so it is not edited
- * here, and .clang-format-ignore keeps the formatter off it. What is around it
+ * byte but for the CRYPTO_FIPS_TEXT in front of each function, which puts
+ * the ones the compiler does not inline in the code section of the FIPS 140-3
+ * module. It is generated from a formally verified model, so nothing else is
+ * changed, and .clang-format-ignore keeps the formatter off it. What is around it
  * keeps it to the machines it is for and quiets the one warning burrow's flags
  * give for it, the sign change in the cmovznz mask.
  *
@@ -38,6 +40,8 @@
 /* ed25519.h comes first so that the amalgamation files this header with
  * crypto/ed25519, the package it is part of. */
 #include "burrow/crypto/ed25519.h"
+
+#include "fips140_module.h"
 
 #if defined(__SIZEOF_INT128__)
 
@@ -98,7 +102,7 @@ typedef uint64_t fiat_25519_scalar_non_montgomery_domain_field_element[4];
 #endif
 
 #if !defined(FIAT_25519_SCALAR_NO_ASM) && (defined(__GNUC__) || defined(__clang__))
-static __inline__ uint64_t fiat_25519_scalar_value_barrier_u64(uint64_t a) {
+CRYPTO_FIPS_TEXT static __inline__ uint64_t fiat_25519_scalar_value_barrier_u64(uint64_t a) {
   __asm__("" : "+r"(a) : /* no inputs */);
   return a;
 }
@@ -122,7 +126,7 @@ static __inline__ uint64_t fiat_25519_scalar_value_barrier_u64(uint64_t a) {
  *   out1: [0x0 ~> 0xffffffffffffffff]
  *   out2: [0x0 ~> 0x1]
  */
-static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_addcarryx_u64(uint64_t* out1, fiat_25519_scalar_uint1* out2, fiat_25519_scalar_uint1 arg1, uint64_t arg2, uint64_t arg3) {
+CRYPTO_FIPS_TEXT static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_addcarryx_u64(uint64_t* out1, fiat_25519_scalar_uint1* out2, fiat_25519_scalar_uint1 arg1, uint64_t arg2, uint64_t arg3) {
   fiat_25519_scalar_uint128 x1;
   uint64_t x2;
   fiat_25519_scalar_uint1 x3;
@@ -148,7 +152,7 @@ static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_addcarryx_u64(uint64
  *   out1: [0x0 ~> 0xffffffffffffffff]
  *   out2: [0x0 ~> 0x1]
  */
-static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_subborrowx_u64(uint64_t* out1, fiat_25519_scalar_uint1* out2, fiat_25519_scalar_uint1 arg1, uint64_t arg2, uint64_t arg3) {
+CRYPTO_FIPS_TEXT static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_subborrowx_u64(uint64_t* out1, fiat_25519_scalar_uint1* out2, fiat_25519_scalar_uint1 arg1, uint64_t arg2, uint64_t arg3) {
   fiat_25519_scalar_int128 x1;
   fiat_25519_scalar_int1 x2;
   uint64_t x3;
@@ -173,7 +177,7 @@ static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_subborrowx_u64(uint6
  *   out1: [0x0 ~> 0xffffffffffffffff]
  *   out2: [0x0 ~> 0xffffffffffffffff]
  */
-static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_mulx_u64(uint64_t* out1, uint64_t* out2, uint64_t arg1, uint64_t arg2) {
+CRYPTO_FIPS_TEXT static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_mulx_u64(uint64_t* out1, uint64_t* out2, uint64_t arg1, uint64_t arg2) {
   fiat_25519_scalar_uint128 x1;
   uint64_t x2;
   uint64_t x3;
@@ -197,7 +201,7 @@ static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_mulx_u64(uint64_t* o
  * Output Bounds:
  *   out1: [0x0 ~> 0xffffffffffffffff]
  */
-static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_cmovznz_u64(uint64_t* out1, fiat_25519_scalar_uint1 arg1, uint64_t arg2, uint64_t arg3) {
+CRYPTO_FIPS_TEXT static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_cmovznz_u64(uint64_t* out1, fiat_25519_scalar_uint1 arg1, uint64_t arg2, uint64_t arg3) {
   fiat_25519_scalar_uint1 x1;
   uint64_t x2;
   uint64_t x3;
@@ -218,7 +222,7 @@ static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_cmovznz_u64(uint64_t
  *   0 ≤ eval out1 < m
  *
  */
-static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_mul(fiat_25519_scalar_montgomery_domain_field_element out1, const fiat_25519_scalar_montgomery_domain_field_element arg1, const fiat_25519_scalar_montgomery_domain_field_element arg2) {
+CRYPTO_FIPS_TEXT static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_mul(fiat_25519_scalar_montgomery_domain_field_element out1, const fiat_25519_scalar_montgomery_domain_field_element arg1, const fiat_25519_scalar_montgomery_domain_field_element arg2) {
   uint64_t x1;
   uint64_t x2;
   uint64_t x3;
@@ -537,7 +541,7 @@ static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_mul(fiat_25519_scala
  *   0 ≤ eval out1 < m
  *
  */
-static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_square(fiat_25519_scalar_montgomery_domain_field_element out1, const fiat_25519_scalar_montgomery_domain_field_element arg1) {
+CRYPTO_FIPS_TEXT static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_square(fiat_25519_scalar_montgomery_domain_field_element out1, const fiat_25519_scalar_montgomery_domain_field_element arg1) {
   uint64_t x1;
   uint64_t x2;
   uint64_t x3;
@@ -857,7 +861,7 @@ static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_square(fiat_25519_sc
  *   0 ≤ eval out1 < m
  *
  */
-static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_add(fiat_25519_scalar_montgomery_domain_field_element out1, const fiat_25519_scalar_montgomery_domain_field_element arg1, const fiat_25519_scalar_montgomery_domain_field_element arg2) {
+CRYPTO_FIPS_TEXT static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_add(fiat_25519_scalar_montgomery_domain_field_element out1, const fiat_25519_scalar_montgomery_domain_field_element arg1, const fiat_25519_scalar_montgomery_domain_field_element arg2) {
   uint64_t x1;
   fiat_25519_scalar_uint1 x2;
   uint64_t x3;
@@ -910,7 +914,7 @@ static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_add(fiat_25519_scala
  *   0 ≤ eval out1 < m
  *
  */
-static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_sub(fiat_25519_scalar_montgomery_domain_field_element out1, const fiat_25519_scalar_montgomery_domain_field_element arg1, const fiat_25519_scalar_montgomery_domain_field_element arg2) {
+CRYPTO_FIPS_TEXT static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_sub(fiat_25519_scalar_montgomery_domain_field_element out1, const fiat_25519_scalar_montgomery_domain_field_element arg1, const fiat_25519_scalar_montgomery_domain_field_element arg2) {
   uint64_t x1;
   fiat_25519_scalar_uint1 x2;
   uint64_t x3;
@@ -953,7 +957,7 @@ static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_sub(fiat_25519_scala
  *   0 ≤ eval out1 < m
  *
  */
-static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_opp(fiat_25519_scalar_montgomery_domain_field_element out1, const fiat_25519_scalar_montgomery_domain_field_element arg1) {
+CRYPTO_FIPS_TEXT static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_opp(fiat_25519_scalar_montgomery_domain_field_element out1, const fiat_25519_scalar_montgomery_domain_field_element arg1) {
   uint64_t x1;
   fiat_25519_scalar_uint1 x2;
   uint64_t x3;
@@ -996,7 +1000,7 @@ static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_opp(fiat_25519_scala
  *   0 ≤ eval out1 < m
  *
  */
-static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_from_montgomery(fiat_25519_scalar_non_montgomery_domain_field_element out1, const fiat_25519_scalar_montgomery_domain_field_element arg1) {
+CRYPTO_FIPS_TEXT static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_from_montgomery(fiat_25519_scalar_non_montgomery_domain_field_element out1, const fiat_25519_scalar_montgomery_domain_field_element arg1) {
   uint64_t x1;
   uint64_t x2;
   uint64_t x3;
@@ -1163,7 +1167,7 @@ static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_from_montgomery(fiat
  *   0 ≤ eval out1 < m
  *
  */
-static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_to_montgomery(fiat_25519_scalar_montgomery_domain_field_element out1, const fiat_25519_scalar_non_montgomery_domain_field_element arg1) {
+CRYPTO_FIPS_TEXT static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_to_montgomery(fiat_25519_scalar_montgomery_domain_field_element out1, const fiat_25519_scalar_non_montgomery_domain_field_element arg1) {
   uint64_t x1;
   uint64_t x2;
   uint64_t x3;
@@ -1444,7 +1448,7 @@ static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_to_montgomery(fiat_2
  * Output Bounds:
  *   out1: [0x0 ~> 0xffffffffffffffff]
  */
-static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_nonzero(uint64_t* out1, const uint64_t arg1[4]) {
+CRYPTO_FIPS_TEXT static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_nonzero(uint64_t* out1, const uint64_t arg1[4]) {
   uint64_t x1;
   x1 = ((arg1[0]) | ((arg1[1]) | ((arg1[2]) | (arg1[3]))));
   *out1 = x1;
@@ -1463,7 +1467,7 @@ static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_nonzero(uint64_t* ou
  * Output Bounds:
  *   out1: [[0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff]]
  */
-static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_selectznz(uint64_t out1[4], fiat_25519_scalar_uint1 arg1, const uint64_t arg2[4], const uint64_t arg3[4]) {
+CRYPTO_FIPS_TEXT static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_selectznz(uint64_t out1[4], fiat_25519_scalar_uint1 arg1, const uint64_t arg2[4], const uint64_t arg3[4]) {
   uint64_t x1;
   uint64_t x2;
   uint64_t x3;
@@ -1491,7 +1495,7 @@ static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_selectznz(uint64_t o
  * Output Bounds:
  *   out1: [[0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0xff], [0x0 ~> 0x1f]]
  */
-static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_to_bytes(uint8_t out1[32], const uint64_t arg1[4]) {
+CRYPTO_FIPS_TEXT static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_to_bytes(uint8_t out1[32], const uint64_t arg1[4]) {
   uint64_t x1;
   uint64_t x2;
   uint64_t x3;
@@ -1660,7 +1664,7 @@ static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_to_bytes(uint8_t out
  * Output Bounds:
  *   out1: [[0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0x1fffffffffffffff]]
  */
-static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_from_bytes(uint64_t out1[4], const uint8_t arg1[32]) {
+CRYPTO_FIPS_TEXT static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_from_bytes(uint64_t out1[4], const uint8_t arg1[32]) {
   uint64_t x1;
   uint64_t x2;
   uint64_t x3;
@@ -1795,7 +1799,7 @@ static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_from_bytes(uint64_t 
  *   0 ≤ eval out1 < m
  *
  */
-static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_set_one(fiat_25519_scalar_montgomery_domain_field_element out1) {
+CRYPTO_FIPS_TEXT static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_set_one(fiat_25519_scalar_montgomery_domain_field_element out1) {
   out1[0] = UINT64_C(0xd6ec31748d98951d);
   out1[1] = UINT64_C(0xc6ef5bf4737dcf70);
   out1[2] = UINT64_C(0xfffffffffffffffe);
@@ -1812,7 +1816,7 @@ static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_set_one(fiat_25519_s
  * Output Bounds:
  *   out1: [[0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff]]
  */
-static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_msat(uint64_t out1[5]) {
+CRYPTO_FIPS_TEXT static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_msat(uint64_t out1[5]) {
   out1[0] = UINT64_C(0x5812631a5cf5d3ed);
   out1[1] = UINT64_C(0x14def9dea2f79cd6);
   out1[2] = 0x0;
@@ -1850,7 +1854,7 @@ static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_msat(uint64_t out1[5
  *   out4: [[0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff]]
  *   out5: [[0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff]]
  */
-static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_divstep(uint64_t* out1, uint64_t out2[5], uint64_t out3[5], uint64_t out4[4], uint64_t out5[4], uint64_t arg1, const uint64_t arg2[5], const uint64_t arg3[5], const uint64_t arg4[4], const uint64_t arg5[4]) {
+CRYPTO_FIPS_TEXT static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_divstep(uint64_t* out1, uint64_t out2[5], uint64_t out3[5], uint64_t out4[4], uint64_t out5[4], uint64_t arg1, const uint64_t arg2[5], const uint64_t arg3[5], const uint64_t arg4[4], const uint64_t arg5[4]) {
   uint64_t x1;
   fiat_25519_scalar_uint1 x2;
   fiat_25519_scalar_uint1 x3;
@@ -2095,7 +2099,7 @@ static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_divstep(uint64_t* ou
  * Output Bounds:
  *   out1: [[0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff], [0x0 ~> 0xffffffffffffffff]]
  */
-static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_divstep_precomp(uint64_t out1[4]) {
+CRYPTO_FIPS_TEXT static FIAT_25519_SCALAR_FIAT_INLINE void fiat_25519_scalar_divstep_precomp(uint64_t out1[4]) {
   out1[0] = UINT64_C(0xd70af84436a7cb92);
   out1[1] = UINT64_C(0x5f71c978b0b8b159);
   out1[2] = UINT64_C(0xe76d816974947f1a);

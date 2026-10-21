@@ -30,7 +30,7 @@ set --
 for m in $MODULE; do
 	set -- "$@" "src/crypto/$m.c"
 done
-set -- "$@" src/crypto/nistec_p256_point.h
+set -- "$@" src/crypto/nistec_p256_point.h src/crypto/fiat_*.h
 
 # A definition starts at the left margin and ends in ") {", maybe some lines
 # further on. Directives and the lines that continue them are skipped, and so

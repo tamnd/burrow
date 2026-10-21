@@ -24,6 +24,8 @@ src/xnet/idna_tables.c
 src/xnet/idna_tables.h
 src/xnet/hpack_tables.c
 tests/xnet_idna_test_gen.h
+tests/tls_replay_client_gen.h
+tests/tls_replay_server_gen.h
 tests/embedtest/*_embed.c
 src/syscall/zerrors.c
 include/burrow/syscall/zerrors.h

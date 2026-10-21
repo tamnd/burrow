@@ -242,7 +242,7 @@ TEST_GEN := $(wildcard tests/gen/*.c)
 DEPFLAGS := -MMD -MP
 DEPS     := $(OBJS:.o=.d) $(TEST_BINS:=.d)
 
-.PHONY: all lib test check collisions clean install fmt tidy amalgamation gofmt-gate sqlite from-go
+.PHONY: all lib test check collisions clean install fmt tidy amalgamation gofmt-gate sqlite from-go ctgrind
 
 all: lib
 
@@ -438,6 +438,19 @@ $(FROM_GO_BIN): tools/from-go.c $(LIB)
 	$(CC) $(CFLAGS) $(THREADS) $< $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
 
 from-go: $(FROM_GO_BIN)
+
+# ctgrind: the constant time crypto code under valgrind's memcheck, with the
+# secrets marked undefined so that a branch or an index on one is an error.
+# Needs valgrind and its headers. See tools/ctgrind.c.
+CTGRIND_BIN := $(BUILD)/tools/ctgrind
+
+$(CTGRIND_BIN): tools/ctgrind.c $(LIB)
+	@mkdir -p $(dir $@)
+	$(CC) $(CFLAGS) $(THREADS) $< $(LIB) $(LDLIBS) $(LDFLAGS) -o $@
+
+ctgrind: $(CTGRIND_BIN)
+	valgrind --quiet --error-exitcode=1 --track-origins=yes \
+		--suppressions=tools/ctgrind.supp ./$(CTGRIND_BIN)
 
 # The SQLite driver in examples/sqlite, the one program here that links a
 # library burrow does not have. pkg-config finds SQLite where it can, and

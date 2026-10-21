@@ -339,11 +339,21 @@ static Error tls_alert_error_clone(const void *self, Alloc *a) {
     return tls_alert_error_as_error(((const TlsAlertBox *)self)->e, a);
 }
 
+static bool tls_alert_error_is(const void *self, Error target);
+
 static const ErrorVT tls_alert_error_vt = {
     .self_type = &tls_alert_error_desc,
     .message = tls_alert_error_text,
+    .is = tls_alert_error_is,
     .clone = tls_alert_error_clone,
 };
+
+/* Go compares AlertErrors by value, and two made for the same alert are
+ * different memory. */
+static bool tls_alert_error_is(const void *self, Error target) {
+    return target.vt == &tls_alert_error_vt &&
+           ((const TlsAlertBox *)target.data)->e == ((const TlsAlertBox *)self)->e;
+}
 
 Error tls_alert_error_as_error(TlsAlertError e, Alloc *a) {
     Int mlen = tls_alert_message(NULL, e);

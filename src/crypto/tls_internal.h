@@ -1689,6 +1689,9 @@ Error burrow__tls_conn_handle_post_handshake_message(TlsConn *c);
  * wraps it with alertInternalError. */
 Error burrow__tls_quic_error(Error err);
 
+/* Not in Go: q.conn, for the tests. */
+TlsConn *burrow__tls_quic_conn_conn(TlsQuicConn *q);
+
 /* The Conn half of quic.go. Each of these is only for a connection with
  * c->quic set, and runs on the handshake goroutine with handshake_mutex held,
  * as Go's do, apart from those a QUICConn method calls. Not in Go: the data

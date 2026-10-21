@@ -304,6 +304,10 @@ Error tls_quic_conn_store_session(TlsQuicConn *q, TlsSessionState *session) {
     return BURROW_NO_ERROR;
 }
 
+TlsConn *burrow__tls_quic_conn_conn(TlsQuicConn *q) {
+    return q->conn;
+}
+
 TlsConnectionState tls_quic_conn_connection_state(TlsQuicConn *q) {
     return tls_conn_connection_state(q->conn);
 }
@@ -356,7 +360,7 @@ Error burrow__tls_quic_error(Error err) {
     (void)burrow__tls_as_alert(err, &a);
     /* Not in Go: with no memory for the AlertError, err goes as it is. */
     Error ae = tls_alert_error_as_error(a, error_allocator());
-    if (BURROW_OK(ae))
+    if (errors_is(ae, burrow_err_out_of_memory))
         return err;
     /* Return an error wrapping the original error and an AlertError.
      * Truncate the text of the alert to 0 characters. */

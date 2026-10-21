@@ -1,6 +1,7 @@
 /* Derived from Go's src/crypto/cipher/benchmark_test.go, cbc_aes_test.go,
- * cbc_test.go, cfb_test.go, common_test.go, ctr_aes_test.go, ctr_test.go,
- * fuzz_test.go and ofb_test.go. gcm_test.go is tests/gcm_test.c.
+ * cbc_aes_wycheproof_test.go, cbc_test.go, cfb_test.go, common_test.go,
+ * ctr_aes_test.go, ctr_test.go, fuzz_test.go and ofb_test.go. gcm_test.go and
+ * gcm_wycheproof_test.go are tests/gcm_test.c.
  * Go source: go1.27.1.
  *
  * What is left out:
@@ -9,7 +10,11 @@
  *     ask reflection what methods a value has, or whether NewCTR and friends
  *     pick up an undocumented method on the block, and a C table has nothing
  *     to ask.
- *   - The Wycheproof CBC vectors, which wait for the Wycheproof files.
+ *
+ * TestCBCAESWycheproof's vectors are in cipher_test_gen.h, which
+ * tools/gen-cipher-tests.sh writes from the Wycheproof module version Go's
+ * tests pin, after putting each one through Go. Go runs each one as a
+ * parallel subtest; here the subtests run one after another.
  *
  * The Go tests seed math/rand with fixed numbers. The same seeds go into the
  * generator from testhash.h here, so the bytes differ from Go's, but none of
@@ -33,6 +38,10 @@
 #include "burrow/encoding/hex.h"
 #include "burrow/io.h"
 
+#include "cipher_test_gen.h"
+
+#include <stdint.h>
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -291,6 +300,80 @@ static void test_cbc_decrypter_aes(void *env, TestingT *t) {
 
 static void TestCBCDecrypterAES(TestingT *t) {
     testcipher_all_implementations(t, test_cbc_decrypter_aes, NULL);
+}
+
+static void cbc_aes_wycheproof(void *env, TestingT *t) {
+    const GenWycheproof *tv = env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+
+    Error err = BURROW_NO_ERROR;
+    CipherBlock block = aes_new_cipher(a, unhex(a, tv->key), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "NewCipher: %v", err);
+        arena_free(&ar);
+        testing_t_fail_now(t);
+    }
+    CipherBlockMode mode = cipher_new_cbc_decrypter(a, block, unhex(a, tv->iv));
+    Slice ct = unhex(a, tv->ct);
+    if (ct.len % AES_BLOCK_SIZE != 0) {
+        testing_t_errorf_v(t, "ciphertext is not a multiple of the block size");
+        arena_free(&ar);
+        testing_t_fail_now(t);
+    }
+    cipher_block_mode_crypt_blocks(mode, ct, ct); /* decrypt the block in place */
+
+    /* Test cases with bad/missing padding are expected to fail, but
+     * cipher.CBCDecrypter doesn't validate padding. Skip these. Fail loudly if
+     * there's an invalid test for any other reason, so we can evaluate what to
+     * do with it.
+     *
+     * Not in Go: the generator has already made that last check, against the
+     * flags and the result, and stops on any other invalid test, so there is
+     * nothing left to check here. */
+    if (tv->bad_padding) {
+        arena_free(&ar);
+        return;
+    }
+
+    /* Remove the PKCS#5 padding from the given ciphertext to validate it */
+    const Byte *p = ct.p;
+    Byte padding = p[ct.len - 1];
+    Int padding_num = (Int)padding;
+    for (Int i = padding_num; i > 0; i--) {
+        if (p[ct.len - i] != padding) { /* panic if the padding is unexpectedly bad */
+            testing_t_errorf_v(t, "bad padding at index=%d of %v", i, ct);
+            arena_free(&ar);
+            testing_t_fail_now(t);
+        }
+    }
+    ct = slice_sub(ct, 0, ct.len - padding_num);
+
+    Str got = hex_encode_to_string(a, ct);
+    Str want = str_from_cstr(tv->msg);
+    if (!str_eq(got, want))
+        testing_t_errorf_v(t, "decoded ciphertext not equal: %s, want %s", got, want);
+    arena_free(&ar);
+}
+
+static void cbc_aes_wycheproof_all(void *env, TestingT *t) {
+    (void)env;
+    for (size_t i = 0; i < sizeof gen_wycheproof / sizeof gen_wycheproof[0]; i++) {
+        const GenWycheproof *tv = &gen_wycheproof[i];
+        char name[256];
+        if (tv->comment[0] != '\0')
+            snprintf(name, sizeof name, "%s #%d %s", tv->file, tv->tc_id, tv->comment);
+        else
+            snprintf(name, sizeof name, "%s #%d", tv->file, tv->tc_id);
+        testing_t_run(
+            t, str_from_cstr(name),
+            BURROW_FN(TestingTFunc, cbc_aes_wycheproof, (void *)(uintptr_t)tv));
+    }
+}
+
+static void TestCBCAESWycheproof(TestingT *t) {
+    testcipher_all_implementations(t, cbc_aes_wycheproof_all, NULL);
 }
 
 static void cbc_block_mode(TestingT *t, CipherBlock block) {
@@ -1264,6 +1347,7 @@ static void BenchmarkAESCBCDecrypt1K(TestingB *b) {
 #define TESTS(X)                                                                       \
     X(TestCBCEncrypterAES)                                                             \
     X(TestCBCDecrypterAES)                                                             \
+    X(TestCBCAESWycheproof)                                                            \
     X(TestCBCBlockMode)                                                                \
     X(TestCBCSetIV)                                                                    \
     X(TestFuzz)                                                                        \

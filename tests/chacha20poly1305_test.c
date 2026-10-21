@@ -1,6 +1,7 @@
 /* Derived from golang.org/x/crypto's chacha20/chacha_test.go,
  * internal/poly1305/poly1305_test.go and
- * chacha20poly1305/chacha20poly1305_test.go, at the version Go vendors.
+ * chacha20poly1305/chacha20poly1305_test.go, at the version Go vendors, and
+ * from Go's src/crypto/internal/cryptotest/chacha20poly1305_wycheproof_test.go.
  * Go source: go1.27.1, golang.org/x/crypto v0.52.1-0.20260526024921-9beb694f9766.
  *
  * The vectors are in chacha20poly1305_test_gen.h, which
@@ -8,7 +9,10 @@
  * each, the portable one, so TestSumGeneric and TestSum test the same code, as
  * they do in Go on a machine without assembly. ExampleNewX is a test here, as
  * the package is private. The tests after it are burrow's, for the errors, the
- * panics and sealing in place.
+ * panics and sealing in place, apart from TestChaCha20Poly1305Wycheproof,
+ * which is Go's. Its vectors come from the Wycheproof module version Go's
+ * tests pin, and the generator puts each one through x/crypto first. Go runs
+ * each one as a parallel subtest; here the subtests run one after another.
  *
  * Copyright 2016 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -1042,6 +1046,107 @@ static void TestCipherStream(TestingT *t) {
 }
 
 typedef struct {
+    CipherAEAD aead;
+    Alloc *a;
+    Slice iv, msg, ct_with_tag, aad;
+} WycheproofCall;
+
+static void call_wycheproof_seal(void *env) {
+    const WycheproofCall *c = env;
+    (void)cipher_aead_seal(c->aead, c->a, slice_nil(TYPE_BYTE), c->iv, c->msg, c->aad);
+}
+
+static void call_wycheproof_open(void *env) {
+    const WycheproofCall *c = env;
+    Error err = BURROW_NO_ERROR;
+    (void)cipher_aead_open(c->aead, c->a, slice_nil(TYPE_BYTE), c->iv, c->ct_with_tag,
+                           c->aad, &err);
+}
+
+static void chacha20poly1305_wycheproof(void *env, TestingT *t) {
+    const GenWycheproof *tv = env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+
+    Error err = BURROW_NO_ERROR;
+    CipherAEAD aead = strcmp(tv->file, "xchacha20_poly1305_test.json") == 0
+                          ? chacha20poly1305_new_x(a, unhex(a, tv->key), &err)
+                          : chacha20poly1305_new(a, unhex(a, tv->key), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "failed to construct cipher: %s", err);
+        arena_free(&ar);
+        testing_t_fail_now(t);
+    }
+
+    Slice iv = unhex(a, tv->iv);
+    Slice tag = unhex(a, tv->tag);
+    Slice ct = unhex(a, tv->ct);
+    Slice msg = unhex(a, tv->msg);
+    Slice aad = unhex(a, tv->aad);
+    Slice parts[2] = {ct, tag};
+
+    /* The Go implementation panics on invalid nonce sizes rather than
+     * returning an error. Verify this behavior. */
+    if (iv.len != cipher_aead_nonce_size(aead)) {
+        WycheproofCall c = {aead, a, iv, msg, slices_concat(a, parts, 2), aad};
+        if (!panics(call_wycheproof_seal, &c))
+            testing_t_errorf_v(t, "%s: expected panic but didn't get one", "Seal");
+        if (!panics(call_wycheproof_open, &c))
+            testing_t_errorf_v(t, "%s: expected panic but didn't get one", "Open");
+        arena_free(&ar);
+        return;
+    }
+
+    Slice gen_ct = cipher_aead_seal(aead, a, slice_nil(TYPE_BYTE), iv, msg, aad);
+    Slice gen_msg =
+        cipher_aead_open(aead, a, slice_nil(TYPE_BYTE), iv, gen_ct, aad, &err);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "failed to decrypt generated ciphertext: %s", err);
+    if (!bytes_equal(gen_msg, msg))
+        testing_t_errorf_v(t, "unexpected roundtripped plaintext: got %x, want %x",
+                           gen_msg, msg);
+
+    Slice ct_with_tag = slices_concat(a, parts, 2);
+    err = BURROW_NO_ERROR;
+    Slice msg2 =
+        cipher_aead_open(aead, a, slice_nil(TYPE_BYTE), iv, ct_with_tag, aad, &err);
+    bool want_pass = tv->want_pass;
+    if (!want_pass && !BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "decryption succeeded when it should've failed");
+    } else if (want_pass) {
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "decryption failed: %s", err);
+            arena_free(&ar);
+            testing_t_fail_now(t);
+        }
+        if (!bytes_equal(gen_ct, ct_with_tag))
+            testing_t_errorf_v(
+                t, "generated ciphertext doesn't match expected: got %x, want %x",
+                gen_ct, ct_with_tag);
+        if (!bytes_equal(msg, msg2))
+            testing_t_errorf_v(
+                t, "decrypted ciphertext doesn't match expected: got %x, want %x", msg2,
+                msg);
+    }
+    arena_free(&ar);
+}
+
+static void TestChaCha20Poly1305Wycheproof(TestingT *t) {
+    for (size_t i = 0; i < LEN(gen_wycheproof); i++) {
+        const GenWycheproof *tv = &gen_wycheproof[i];
+        char name[256];
+        if (tv->comment[0] != '\0')
+            snprintf(name, sizeof name, "%s #%d %s", tv->file, tv->tc_id, tv->comment);
+        else
+            snprintf(name, sizeof name, "%s #%d", tv->file, tv->tc_id);
+        testing_t_run(t, str_from_cstr(name),
+                      BURROW_FN(TestingTFunc, chacha20poly1305_wycheproof,
+                                (void *)(uintptr_t)tv));
+    }
+}
+
+typedef struct {
     Int length, nonce_size;
     bool open;
 } AeadBench;
@@ -1121,6 +1226,7 @@ static void BenchmarkChacha20Poly1305(TestingB *b) {
     X(TestErrors)                                                                      \
     X(TestInPlace)                                                                     \
     X(TestCipherStream)                                                                \
+    X(TestChaCha20Poly1305Wycheproof)                                                  \
     X(BenchmarkChaCha20)                                                               \
     X(Benchmark64)                                                                     \
     X(Benchmark1K)                                                                     \

@@ -203,14 +203,8 @@ static bool tcl_contains_curve(Slice list, TlsCurveID want) {
     return false;
 }
 
-/* Not in Go: what makeClientHello returns besides the hello. */
-typedef struct TclHello {
-    TlsHandshakeMsg msg;
-    TlsKeySharePrivateKeys key_share_keys;
-    TlsECHClientContext *ech;
-} TclHello;
-
-static Error tcl_make_client_hello(TlsConn *c, Alloc *a, TclHello *out) {
+Error burrow__tls_conn_make_client_hello(TlsConn *c, Alloc *a,
+                                         TlsMadeClientHello *out) {
     TlsConfig *config = c->config;
     if (config->server_name.len == 0 && !config->insecure_skip_verify)
         return tcl_err_server_name;
@@ -669,8 +663,8 @@ static Error tcl_handshake(TclState *hs);
 /* Not in Go. The part of clientHandshake after loadSession, which runs with
  * the session, if there is one, so the caller can drop it from the cache
  * when this fails. */
-static Error tcl_client_handshake_with(TlsConn *c, Context ctx, Alloc *a, TclHello *h,
-                                       TclLoaded *l) {
+static Error tcl_client_handshake_with(TlsConn *c, Context ctx, Alloc *a,
+                                       TlsMadeClientHello *h, TclLoaded *l) {
     TlsClientHelloMsg *hello = &h->msg.client_hello;
     TlsECHClientContext *ech = h->ech;
     if (ech != NULL) {
@@ -821,9 +815,9 @@ Error burrow__tls_client_handshake(TlsConn *c, Context ctx) {
     arena_init(&ar, heap_allocator(), 0);
     Alloc *a = arena_allocator(&ar);
 
-    TclHello h;
+    TlsMadeClientHello h;
     memset(&h, 0, sizeof h);
-    Error err = tcl_make_client_hello(c, a, &h);
+    Error err = burrow__tls_conn_make_client_hello(c, a, &h);
     if (BURROW_FAILED(err)) {
         burrow__tls_key_share_private_keys_free(&h.key_share_keys);
         arena_free(&ar);

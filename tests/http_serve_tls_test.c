@@ -329,7 +329,6 @@ static void try_free(ListenAndServeTry *j) {
 }
 
 static void test_automatic_http2_listen_and_serve(TestingT *t, TlsConfig *tls_conf) {
-    need_tcp(t);
     /* Not parallel: uses global test hooks. */
     bool ok = false;
     ListenAndServeTry *s = NULL;
@@ -404,6 +403,7 @@ static void test_automatic_http2_listen_and_serve(TestingT *t, TlsConfig *tls_co
 }
 
 static void TestAutomaticHTTP2_ListenAndServe(TestingT *t) {
+    need_tcp(t); /* before anything is made, as a skip ends the test here */
     Arena ar;
     arena_init(&ar, NULL, 0);
     Error err = BURROW_NO_ERROR;
@@ -428,6 +428,7 @@ static TlsCertificate *get_certificate(void *env, TlsClientHelloInfo *client_hel
 }
 
 static void TestAutomaticHTTP2_ListenAndServe_GetCertificate(TestingT *t) {
+    need_tcp(t); /* before anything is made, as a skip ends the test here */
     Arena ar;
     arena_init(&ar, NULL, 0);
     Error err = BURROW_NO_ERROR;
@@ -452,6 +453,7 @@ static TlsConfig *get_config_for_client(void *env, TlsClientHelloInfo *client_he
 }
 
 static void TestAutomaticHTTP2_ListenAndServe_GetConfigForClient(TestingT *t) {
+    need_tcp(t); /* before anything is made, as a skip ends the test here */
     Arena ar;
     arena_init(&ar, NULL, 0);
     Error err = BURROW_NO_ERROR;

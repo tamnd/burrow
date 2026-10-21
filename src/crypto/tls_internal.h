@@ -1349,7 +1349,7 @@ typedef struct TlsHalfConn {
     TlsCipher next_cipher; /* next encryption state */
     Hash next_mac;         /* next MAC algorithm */
 
-    TlsQuicEncryptionLevel level; /* current QUIC encryption level */
+    TlsQUICEncryptionLevel level; /* current QUIC encryption level */
     Slice traffic_secret;         /* current TLS 1.3 traffic secret */
 
     Alloc *parent;
@@ -1394,7 +1394,7 @@ Error burrow__tls_half_conn_change_cipher_spec(TlsHalfConn *hc);
  * the connection goes no further. */
 Error burrow__tls_half_conn_set_traffic_secret(TlsHalfConn *hc,
                                                const TlsSuiteTLS13 *suite,
-                                               TlsQuicEncryptionLevel level,
+                                               TlsQUICEncryptionLevel level,
                                                Slice secret);
 
 /* incSeq increments the sequence number. */
@@ -1445,7 +1445,7 @@ typedef Error (*TlsHandshakeFn)(TlsConn *c, Context ctx);
 typedef struct TlsQuicState {
     /* Not in Go: events is events[:n_events] of Go's slice. It is event_arr,
      * or comes from event_data once there are more than fit there. */
-    TlsQuicEvent *events;
+    TlsQUICEvent *events;
     Int n_events;
     Int cap_events;
     Int next_event;
@@ -1455,7 +1455,7 @@ typedef struct TlsQuicState {
      * transport parameters, Initial data, Early read secret, Handshake write
      * and read secrets, Handshake data, Application write secret, Application
      * data. */
-    TlsQuicEvent event_arr[8];
+    TlsQUICEvent event_arr[8];
 
     bool started;
     Chan *signalc;  /* handshake data is available to be read */
@@ -1665,7 +1665,7 @@ Error burrow__tls_conn_read_handshake(TlsConn *c, IoWriter transcript, Alloc *a,
  * caller must ensure the call to setWriteTrafficSecret happens first so any
  * alerts are sent at the write level. */
 Error burrow__tls_conn_set_read_traffic_secret(TlsConn *c, const TlsSuiteTLS13 *suite,
-                                               TlsQuicEncryptionLevel level,
+                                               TlsQUICEncryptionLevel level,
                                                Slice secret, bool locked);
 
 /* setWriteTrafficSecret sets the write traffic secret for the given encryption
@@ -1674,7 +1674,7 @@ Error burrow__tls_conn_set_read_traffic_secret(TlsConn *c, const TlsSuiteTLS13 *
  * are sent at the write level. Not in Go: it can run out of memory, which
  * goes to c->out.err as well. */
 Error burrow__tls_conn_set_write_traffic_secret(TlsConn *c, const TlsSuiteTLS13 *suite,
-                                                TlsQuicEncryptionLevel level,
+                                                TlsQUICEncryptionLevel level,
                                                 Slice secret);
 
 /* clientSessionCacheKey returns a key used to cache sessionTickets that could
@@ -1702,18 +1702,18 @@ Error burrow__tls_conn_handle_post_handshake_message(TlsConn *c);
 Error burrow__tls_quic_error(Error err);
 
 /* Not in Go: q.conn, for the tests. */
-TlsConn *burrow__tls_quic_conn_conn(TlsQuicConn *q);
+TlsConn *burrow__tls_quic_conn_conn(TlsQUICConn *q);
 
 /* The Conn half of quic.go. Each of these is only for a connection with
  * c->quic set, and runs on the handshake goroutine with handshake_mutex held,
  * as Go's do, apart from those a QUICConn method calls. Not in Go: the data
  * and secrets are copied, and those that can run out of memory say so. */
 Error burrow__tls_conn_quic_read_handshake_bytes(TlsConn *c, Int n);
-Error burrow__tls_conn_quic_set_read_secret(TlsConn *c, TlsQuicEncryptionLevel level,
+Error burrow__tls_conn_quic_set_read_secret(TlsConn *c, TlsQUICEncryptionLevel level,
                                             uint16_t suite, Slice secret);
-Error burrow__tls_conn_quic_set_write_secret(TlsConn *c, TlsQuicEncryptionLevel level,
+Error burrow__tls_conn_quic_set_write_secret(TlsConn *c, TlsQUICEncryptionLevel level,
                                              uint16_t suite, Slice secret);
-Error burrow__tls_conn_quic_write_crypto_data(TlsConn *c, TlsQuicEncryptionLevel level,
+Error burrow__tls_conn_quic_write_crypto_data(TlsConn *c, TlsQUICEncryptionLevel level,
                                               Slice data);
 Error burrow__tls_conn_quic_resume_session(TlsConn *c, TlsSessionState *session);
 /* Not in Go: the event hands out cs's session, and q keeps the reference to

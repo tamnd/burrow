@@ -195,7 +195,7 @@ Str tls_client_auth_type_string(TlsClientAuthType i, Alloc *a) {
     }
 }
 
-Str tls_quic_encryption_level_string(TlsQuicEncryptionLevel l, Alloc *a) {
+Str tls_quic_encryption_level_string(TlsQUICEncryptionLevel l, Alloc *a) {
     switch (l) {
     case TLS_QUIC_ENCRYPTION_LEVEL_INITIAL:
         return BURROW_S("Initial");

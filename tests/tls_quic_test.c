@@ -61,8 +61,8 @@ static TlsConfig *test_config(TestingT *t, Alloc *a, bool server) {
 }
 
 /* Not in Go: &QUICConfig{TLSConfig: c}. */
-static TlsQuicConfig quic_config(TlsConfig *c) {
-    TlsQuicConfig q;
+static TlsQUICConfig quic_config(TlsConfig *c) {
+    TlsQUICConfig q;
     memset(&q, 0, sizeof q);
     q.tls_config = c;
     return q;
@@ -99,11 +99,11 @@ typedef struct SecretMap {
     bool ok[4];
 } SecretMap;
 
-static bool secret_ok(const SecretMap *m, TlsQuicEncryptionLevel level) {
+static bool secret_ok(const SecretMap *m, TlsQUICEncryptionLevel level) {
     return level >= 0 && level < 4 && m->ok[level];
 }
 
-static SuiteSecret secret_get(const SecretMap *m, TlsQuicEncryptionLevel level) {
+static SuiteSecret secret_get(const SecretMap *m, TlsQUICEncryptionLevel level) {
     SuiteSecret none = {0, {NULL, 0, 0, NULL}};
     return secret_ok(m, level) ? m->v[level] : none;
 }
@@ -118,10 +118,10 @@ typedef struct TestQUICConn TestQUICConn;
 
 struct TestQUICConn {
     TestingT *t;
-    TlsQuicConn *conn;
+    TlsQUICConn *conn;
     SecretMap read_secret;
     SecretMap write_secret;
-    TlsQuicSessionTicketOptions ticket_opts;
+    TlsQUICSessionTicketOptions ticket_opts;
     void (*on_resume_session)(TlsSessionState *);
     Slice got_params;
     Error got_error;
@@ -141,7 +141,7 @@ static void close_test_quic_conn(void *env) {
 
 /* Not in Go: what newTestQUICClient and newTestQUICServer share. The cleanup
  * closes the QUICConn as Go's does, and gives everything back too. */
-static TestQUICConn *new_test_quic_conn(TestingT *t, const TlsQuicConfig *config,
+static TestQUICConn *new_test_quic_conn(TestingT *t, const TlsQUICConfig *config,
                                         bool server) {
     TestQUICConn *q = BURROW_NEW(heap_allocator(), TestQUICConn);
     if (q == NULL)
@@ -160,11 +160,11 @@ static TestQUICConn *new_test_quic_conn(TestingT *t, const TlsQuicConfig *config
     return q;
 }
 
-static TestQUICConn *new_test_quic_client(TestingT *t, const TlsQuicConfig *config) {
+static TestQUICConn *new_test_quic_client(TestingT *t, const TlsQUICConfig *config) {
     return new_test_quic_conn(t, config, false);
 }
 
-static TestQUICConn *new_test_quic_server(TestingT *t, const TlsQuicConfig *config) {
+static TestQUICConn *new_test_quic_server(TestingT *t, const TlsQUICConfig *config) {
     return new_test_quic_conn(t, config, true);
 }
 
@@ -177,7 +177,7 @@ static Slice keep_bytes(TestQUICConn *q, Slice b) {
     return c;
 }
 
-static void set_read_secret(TestQUICConn *q, TlsQuicEncryptionLevel level,
+static void set_read_secret(TestQUICConn *q, TlsQUICEncryptionLevel level,
                             uint16_t suite, Slice secret) {
     Str l = tls_quic_encryption_level_string(level, arena_allocator(&q->ar));
     if (!secret_ok(&q->write_secret, level) && level != TLS_QUIC_ENCRYPTION_LEVEL_EARLY)
@@ -200,7 +200,7 @@ static void set_read_secret(TestQUICConn *q, TlsQuicEncryptionLevel level,
     }
 }
 
-static void set_write_secret(TestQUICConn *q, TlsQuicEncryptionLevel level,
+static void set_write_secret(TestQUICConn *q, TlsQUICEncryptionLevel level,
                              uint16_t suite, Slice secret) {
     Str l = tls_quic_encryption_level_string(level, arena_allocator(&q->ar));
     if (secret_ok(&q->write_secret, level))
@@ -223,7 +223,7 @@ BURROW_SENTINEL_ERROR(err_transport_parameters_required,
 /* What []byte{} points at. */
 static const Byte empty_bytes[1] = {0};
 
-BURROW_FUNC(OnEventFunc, bool, TlsQuicEvent e, TestQUICConn *src, TestQUICConn *dst);
+BURROW_FUNC(OnEventFunc, bool, TlsQUICEvent e, TestQUICConn *src, TestQUICConn *dst);
 
 static Error run_test_quic_connection(Context ctx, TestQUICConn *cli, TestQUICConn *srv,
                                       OnEventFunc on_event) {
@@ -239,7 +239,7 @@ static Error run_test_quic_connection(Context ctx, TestQUICConn *cli, TestQUICCo
     }
     Int idle_count = 0;
     for (;;) {
-        TlsQuicEvent e = tls_quic_conn_next_event(a->conn);
+        TlsQUICEvent e = tls_quic_conn_next_event(a->conn);
         if (!BURROW_FUNC_IS_NIL(on_event) && BURROW_CALLF(on_event, e, a, b))
             continue;
         if (BURROW_FAILED(a->got_error) && e.kind != TLS_QUIC_NO_EVENT)
@@ -317,8 +317,8 @@ static const OnEventFunc no_on_event = {NULL, NULL};
 
 /* Not in Go: a QUICConfig with MinVersion set to TLS 1.3, which nearly every
  * test starts with. */
-static TlsQuicConfig tls13_config(TestingT *t, Alloc *a, bool server) {
-    TlsQuicConfig c = quic_config(test_config(t, a, server));
+static TlsQUICConfig tls13_config(TestingT *t, Alloc *a, bool server) {
+    TlsQUICConfig c = quic_config(test_config(t, a, server));
     c.tls_config->min_version = TLS_VERSION_TLS13;
     return c;
 }
@@ -332,8 +332,8 @@ static Slice str_bytes(Str s) {
 
 static void TestQUICConnection(TestingT *t) {
     Alloc *a = test_arena(t);
-    TlsQuicConfig client_config = tls13_config(t, a, false);
-    TlsQuicConfig server_config = tls13_config(t, a, true);
+    TlsQUICConfig client_config = tls13_config(t, a, false);
+    TlsQUICConfig server_config = tls13_config(t, a, true);
 
     TestQUICConn *cli = new_test_quic_client(t, &client_config);
     tls_quic_conn_set_transport_parameters(cli->conn, slice_nil(TYPE_BYTE));
@@ -353,10 +353,10 @@ static void TestQUICConnection(TestingT *t) {
         testing_t_errorf_v(t, "server has no Handshake secret");
     if (!secret_ok(&srv->read_secret, TLS_QUIC_ENCRYPTION_LEVEL_APPLICATION))
         testing_t_errorf_v(t, "server has no Application secret");
-    static const TlsQuicEncryptionLevel levels[2] = {
+    static const TlsQUICEncryptionLevel levels[2] = {
         TLS_QUIC_ENCRYPTION_LEVEL_HANDSHAKE, TLS_QUIC_ENCRYPTION_LEVEL_APPLICATION};
     for (int i = 0; i < 2; i++) {
-        TlsQuicEncryptionLevel level = levels[i];
+        TlsQUICEncryptionLevel level = levels[i];
         Str l = tls_quic_encryption_level_string(level, a);
         if (!secret_ok(&cli->read_secret, level))
             testing_t_errorf_v(t, "client has no %v read secret", l);
@@ -394,10 +394,10 @@ static void quic_versions(void *env, TestingT *t) {
     server->min_version = tc->server_min;
     server->max_version = tc->server_max;
 
-    TlsQuicConfig client_config = quic_config(client);
+    TlsQUICConfig client_config = quic_config(client);
     TestQUICConn *cli = new_test_quic_client(t, &client_config);
     tls_quic_conn_set_transport_parameters(cli->conn, slice_nil(TYPE_BYTE));
-    TlsQuicConfig server_config = quic_config(server);
+    TlsQUICConfig server_config = quic_config(server);
     TestQUICConn *srv = new_test_quic_server(t, &server_config);
     tls_quic_conn_set_transport_parameters(srv->conn, slice_nil(TYPE_BYTE));
     Error err = run_test_quic_connection(context_background(), cli, srv, no_on_event);
@@ -421,10 +421,10 @@ static void TestQUICVersions(TestingT *t) {
 
 static void TestQUICSessionResumption(TestingT *t) {
     Alloc *a = test_arena(t);
-    TlsQuicConfig client_config = tls13_config(t, a, false);
+    TlsQUICConfig client_config = tls13_config(t, a, false);
     client_config.tls_config->client_session_cache = new_lru_cache(t, a, 1);
 
-    TlsQuicConfig server_config = tls13_config(t, a, true);
+    TlsQUICConfig server_config = tls13_config(t, a, true);
 
     TestQUICConn *cli = new_test_quic_client(t, &client_config);
     tls_quic_conn_set_transport_parameters(cli->conn, slice_nil(TYPE_BYTE));
@@ -458,7 +458,7 @@ static void TestQUICSessionResumption(TestingT *t) {
         testing_t_errorf_v(t, "third connection unexpectedly used session resumption");
 }
 
-static bool fragmentary_data(void *env, TlsQuicEvent e, TestQUICConn *src,
+static bool fragmentary_data(void *env, TlsQUICEvent e, TestQUICConn *src,
                              TestQUICConn *dst) {
     TestingT *t = (TestingT *)env;
     (void)src;
@@ -479,10 +479,10 @@ static bool fragmentary_data(void *env, TlsQuicEvent e, TestQUICConn *src,
 
 static void TestQUICFragmentaryData(TestingT *t) {
     Alloc *a = test_arena(t);
-    TlsQuicConfig client_config = tls13_config(t, a, false);
+    TlsQUICConfig client_config = tls13_config(t, a, false);
     client_config.tls_config->client_session_cache = new_lru_cache(t, a, 1);
 
-    TlsQuicConfig server_config = tls13_config(t, a, true);
+    TlsQUICConfig server_config = tls13_config(t, a, true);
 
     TestQUICConn *cli = new_test_quic_client(t, &client_config);
     tls_quic_conn_set_transport_parameters(cli->conn, slice_nil(TYPE_BYTE));
@@ -497,8 +497,8 @@ static void TestQUICFragmentaryData(TestingT *t) {
 /* Not in Go: the handshake every post-handshake test starts with. */
 static void connect_tls13(TestingT *t, TestQUICConn **cli, TestQUICConn **srv) {
     Alloc *a = test_arena(t);
-    TlsQuicConfig client_config = tls13_config(t, a, false);
-    TlsQuicConfig server_config = tls13_config(t, a, true);
+    TlsQUICConfig client_config = tls13_config(t, a, false);
+    TlsQUICConfig server_config = tls13_config(t, a, true);
     *cli = new_test_quic_client(t, &client_config);
     tls_quic_conn_set_transport_parameters((*cli)->conn, slice_nil(TYPE_BYTE));
     *srv = new_test_quic_server(t, &server_config);
@@ -582,11 +582,11 @@ static bool same_error(Error x, Error y) {
 
 static void TestQUICHandshakeError(TestingT *t) {
     Alloc *a = test_arena(t);
-    TlsQuicConfig client_config = tls13_config(t, a, false);
+    TlsQUICConfig client_config = tls13_config(t, a, false);
     client_config.tls_config->insecure_skip_verify = false;
     client_config.tls_config->server_name = BURROW_S("name");
 
-    TlsQuicConfig server_config = tls13_config(t, a, true);
+    TlsQUICConfig server_config = tls13_config(t, a, true);
 
     TestQUICConn *cli = new_test_quic_client(t, &client_config);
     tls_quic_conn_set_transport_parameters(cli->conn, slice_nil(TYPE_BYTE));
@@ -605,7 +605,7 @@ static void TestQUICHandshakeError(TestingT *t) {
                            "CertificateVerificationError",
                            err);
 
-    TlsQuicEvent ev = tls_quic_conn_next_event(cli->conn);
+    TlsQUICEvent ev = tls_quic_conn_next_event(cli->conn);
     if (ev.kind != TLS_QUIC_ERROR_EVENT)
         testing_t_errorf_v(t, "client.NextEvent: no QUICErrorEvent, want one");
     if (!same_error(ev.err, err))
@@ -633,9 +633,9 @@ static Slice h3(void) {
  * function. */
 static void TestQUICECHKeyError(TestingT *t) {
     Alloc *a = test_arena(t);
-    TlsQuicConfig client_config = tls13_config(t, a, false);
+    TlsQUICConfig client_config = tls13_config(t, a, false);
     client_config.tls_config->next_protos = h3();
-    TlsQuicConfig server_config = tls13_config(t, a, true);
+    TlsQUICConfig server_config = tls13_config(t, a, true);
     server_config.tls_config->next_protos = h3();
     server_config.tls_config->get_encrypted_client_hello_keys =
         BURROW_FN(TlsGetEncryptedClientHelloKeysFunc, get_ech_keys, NULL);
@@ -674,7 +674,7 @@ typedef struct ConnectionStateEnv {
     TestQUICConn *srv;
 } ConnectionStateEnv;
 
-static bool check_connection_state(void *env, TlsQuicEvent e, TestQUICConn *src,
+static bool check_connection_state(void *env, TlsQUICEvent e, TestQUICConn *src,
                                    TestQUICConn *dst) {
     const ConnectionStateEnv *x = (const ConnectionStateEnv *)env;
     (void)e;
@@ -703,9 +703,9 @@ static bool check_connection_state(void *env, TlsQuicEvent e, TestQUICConn *src,
  * it reports the application protocol as soon as it has been negotiated. */
 static void TestQUICConnectionState(TestingT *t) {
     Alloc *a = test_arena(t);
-    TlsQuicConfig client_config = tls13_config(t, a, false);
+    TlsQUICConfig client_config = tls13_config(t, a, false);
     client_config.tls_config->next_protos = h3();
-    TlsQuicConfig server_config = tls13_config(t, a, true);
+    TlsQUICConfig server_config = tls13_config(t, a, true);
     server_config.tls_config->next_protos = h3();
     TestQUICConn *cli = new_test_quic_client(t, &client_config);
     tls_quic_conn_set_transport_parameters(cli->conn, slice_nil(TYPE_BYTE));
@@ -750,8 +750,8 @@ static void TestQUICStartContextPropagation(TestingT *t) {
     Context ctx = context_with_value(a, context_background(), key, value);
     if (BURROW_CONTEXT_IS_NIL(ctx))
         testing_t_fatal_v(t, "out of memory");
-    TlsQuicConfig client_config = tls13_config(t, a, false);
-    TlsQuicConfig server_config = tls13_config(t, a, true);
+    TlsQUICConfig client_config = tls13_config(t, a, false);
+    TlsQUICConfig server_config = tls13_config(t, a, true);
     ContextPropagationEnv env = {t, 0};
     server_config.tls_config->get_config_for_client =
         BURROW_FN(TlsGetConfigForClientFunc, check_context_value, &env);
@@ -804,8 +804,8 @@ static void TestQUICClientHelloInfoConn(TestingT *t) {
         testing_t_fatal_v(t, "out of memory");
     NetConn client_hello_info_conn = ends[0];
     testing_t_cleanup(t, BURROW_FN(Func, close_pipe, ends));
-    TlsQuicConfig client_config = tls13_config(t, a, false);
-    TlsQuicConfig server_config = tls13_config(t, a, true);
+    TlsQUICConfig client_config = tls13_config(t, a, false);
+    TlsQUICConfig server_config = tls13_config(t, a, true);
     server_config.client_hello_info_conn = client_hello_info_conn;
     HelloInfoConnEnv env = {t, client_hello_info_conn, false};
     server_config.tls_config->get_config_for_client =
@@ -838,8 +838,8 @@ static void TestQUICContextCancelation(TestingT *t) {
     Context ctx = context_with_cancel(a, context_background(), &cancel);
     if (BURROW_CONTEXT_IS_NIL(ctx))
         testing_t_fatal_v(t, "out of memory");
-    TlsQuicConfig client_config = tls13_config(t, a, false);
-    TlsQuicConfig server_config = tls13_config(t, a, true);
+    TlsQUICConfig client_config = tls13_config(t, a, false);
+    TlsQUICConfig server_config = tls13_config(t, a, true);
     TestQUICConn *cli = new_test_quic_client(t, &client_config);
     tls_quic_conn_set_transport_parameters(cli->conn, slice_nil(TYPE_BYTE));
     TestQUICConn *srv = new_test_quic_server(t, &server_config);
@@ -859,10 +859,10 @@ static void TestQUICContextCancelation(TestingT *t) {
 
 static void TestQUICDelayedTransportParameters(TestingT *t) {
     Alloc *a = test_arena(t);
-    TlsQuicConfig client_config = tls13_config(t, a, false);
+    TlsQUICConfig client_config = tls13_config(t, a, false);
     client_config.tls_config->client_session_cache = new_lru_cache(t, a, 1);
 
-    TlsQuicConfig server_config = tls13_config(t, a, true);
+    TlsQUICConfig server_config = tls13_config(t, a, true);
 
     Str cli_params = BURROW_S("client params");
     Str srv_params = BURROW_S("server params");
@@ -898,8 +898,8 @@ static void TestQUICDelayedTransportParameters(TestingT *t) {
 
 static void TestQUICEmptyTransportParameters(TestingT *t) {
     Alloc *a = test_arena(t);
-    TlsQuicConfig client_config = tls13_config(t, a, false);
-    TlsQuicConfig server_config = tls13_config(t, a, true);
+    TlsQUICConfig client_config = tls13_config(t, a, false);
+    TlsQUICConfig server_config = tls13_config(t, a, true);
 
     TestQUICConn *cli = new_test_quic_client(t, &client_config);
     tls_quic_conn_set_transport_parameters(cli->conn, slice_nil(TYPE_BYTE));
@@ -923,7 +923,7 @@ static void TestQUICEmptyTransportParameters(TestingT *t) {
 
 static void TestQUICCanceledWaitingForData(TestingT *t) {
     Alloc *a = test_arena(t);
-    TlsQuicConfig client_config = tls13_config(t, a, false);
+    TlsQUICConfig client_config = tls13_config(t, a, false);
     TestQUICConn *cli = new_test_quic_client(t, &client_config);
     tls_quic_conn_set_transport_parameters(cli->conn, slice_nil(TYPE_BYTE));
     (void)tls_quic_conn_start(cli->conn, context_background());
@@ -936,7 +936,7 @@ static void TestQUICCanceledWaitingForData(TestingT *t) {
 
 static void TestQUICCanceledWaitingForTransportParams(TestingT *t) {
     Alloc *a = test_arena(t);
-    TlsQuicConfig client_config = tls13_config(t, a, false);
+    TlsQUICConfig client_config = tls13_config(t, a, false);
     TestQUICConn *cli = new_test_quic_client(t, &client_config);
     (void)tls_quic_conn_start(cli->conn, context_background());
     while (tls_quic_conn_next_event(cli->conn).kind !=
@@ -947,7 +947,7 @@ static void TestQUICCanceledWaitingForTransportParams(TestingT *t) {
         testing_t_errorf_v(t, "conn.Close() = %v, want alertCloseNotify", err);
 }
 
-static bool no_session_events(void *env, TlsQuicEvent e, TestQUICConn *src,
+static bool no_session_events(void *env, TlsQUICEvent e, TestQUICConn *src,
                               TestQUICConn *dst) {
     TestingT *t = (TestingT *)env;
     (void)src;
@@ -966,11 +966,11 @@ static bool no_session_events(void *env, TlsQuicEvent e, TestQUICConn *src,
 
 static void TestQUICEarlyData(TestingT *t) {
     Alloc *a = test_arena(t);
-    TlsQuicConfig client_config = tls13_config(t, a, false);
+    TlsQUICConfig client_config = tls13_config(t, a, false);
     client_config.tls_config->client_session_cache = new_lru_cache(t, a, 1);
     client_config.tls_config->next_protos = h3();
 
-    TlsQuicConfig server_config = tls13_config(t, a, true);
+    TlsQUICConfig server_config = tls13_config(t, a, true);
     server_config.tls_config->next_protos = h3();
 
     TestQUICConn *cli = new_test_quic_client(t, &client_config);
@@ -1013,12 +1013,12 @@ static void decline_early_data(TlsSessionState *state) {
 
 static void test_quic_early_data_declined(TestingT *t, bool server) {
     Alloc *a = test_arena(t);
-    TlsQuicConfig client_config = tls13_config(t, a, false);
+    TlsQUICConfig client_config = tls13_config(t, a, false);
     client_config.enable_session_events = true;
     client_config.tls_config->client_session_cache = new_lru_cache(t, a, 1);
     client_config.tls_config->next_protos = h3();
 
-    TlsQuicConfig server_config = tls13_config(t, a, true);
+    TlsQUICConfig server_config = tls13_config(t, a, true);
     server_config.enable_session_events = true;
     server_config.tls_config->next_protos = h3();
 

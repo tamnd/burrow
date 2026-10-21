@@ -417,3 +417,15 @@ database/sql: method (*Conn) QueryRowContext: returns the Row by value
 database/sql: method (*Conn) Raw: the callback gets the DriverConn, which is what Go's interface{} holds
 # burrow has no reflect.Type. A column's scan type is the type descriptor.
 database/sql: method (*ColumnType) ScanType: returns the type descriptor in place of a reflect.Type
+
+# include/burrow/crypto/tls.h: ConnectionState is a large struct, so the ticket
+# functions take it by pointer, as VerifyConnection and the other callbacks do.
+crypto/tls: method (*Config) EncryptTicket: takes the ConnectionState by pointer
+crypto/tls: method (*Config) DecryptTicket: takes the ConnectionState by pointer
+# Both copy into memory the Config owns, and say so when there is none to be
+# had, which is a failure that Go does not have.
+crypto/tls: method (*Config) SetSessionTicketKeys: returns burrow_err_out_of_memory when the keys cannot be copied
+crypto/tls: method (*Config) BuildNameToCertificate: returns burrow_err_out_of_memory when the map cannot be built
+# The text is built in an allocator, and the error is read through a pointer,
+# as with the other error types in the package.
+crypto/tls: method (RecordHeaderError) Error: the receiver is a pointer, and the text is built in an allocator

@@ -135,7 +135,7 @@ Error burrow__tls_half_conn_change_cipher_spec(TlsHalfConn *hc) {
 
 Error burrow__tls_half_conn_set_traffic_secret(TlsHalfConn *hc,
                                                const TlsSuiteTLS13 *suite,
-                                               TlsQuicEncryptionLevel level,
+                                               TlsQUICEncryptionLevel level,
                                                Slice secret) {
     Arena *ar = thc_new_arena(hc);
     if (ar == NULL) {
@@ -2186,7 +2186,7 @@ Error tls_conn_verify_hostname(TlsConn *c, Str host) {
 }
 
 Error burrow__tls_conn_set_read_traffic_secret(TlsConn *c, const TlsSuiteTLS13 *suite,
-                                               TlsQuicEncryptionLevel level,
+                                               TlsQUICEncryptionLevel level,
                                                Slice secret, bool locked) {
     /* Ensure that there are no buffered handshake messages before changing the
      * read keys, since that can cause messages to be parsed that were
@@ -2202,7 +2202,7 @@ Error burrow__tls_conn_set_read_traffic_secret(TlsConn *c, const TlsSuiteTLS13 *
 }
 
 Error burrow__tls_conn_set_write_traffic_secret(TlsConn *c, const TlsSuiteTLS13 *suite,
-                                                TlsQuicEncryptionLevel level,
+                                                TlsQUICEncryptionLevel level,
                                                 Slice secret) {
     return burrow__tls_half_conn_set_traffic_secret(&c->out, suite, level, secret);
 }

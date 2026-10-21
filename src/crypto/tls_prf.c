@@ -494,8 +494,8 @@ CRYPTO_FIPS_TEXT Error burrow__tls12_cast(void *arg) {
         slice_from((void *)(uintptr_t)tls12_cast_transcript, 16, 16, TYPE_BYTE);
     Arena ar;
     arena_init(&ar, NULL, 0);
-    Slice got =
-        burrow__tls12_master_secret(arena_allocator(&ar), sha256_new, input, transcript);
+    Slice got = burrow__tls12_master_secret(arena_allocator(&ar), sha256_new, input,
+                                            transcript);
     if (got.p == NULL) {
         arena_free(&ar);
         return burrow_err_out_of_memory;

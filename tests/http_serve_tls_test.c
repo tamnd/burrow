@@ -484,7 +484,7 @@ static void TestServerTLSHandshakeTimeout(TestingT *t) {
         HttpServer s;
         Duration want;
     } tests[] = {
-        {.s = {0}, .want = 0},
+        {.s = {.read_timeout = 0}, .want = 0},
         {.s = {.read_timeout = -1}, .want = 0},
         {.s = {.read_timeout = 5 * TIME_SECOND}, .want = 5 * TIME_SECOND},
         {.s = {.read_timeout = 5 * TIME_SECOND, .write_timeout = -1},

@@ -1,5 +1,5 @@
 /* Derived from Go's src/crypto/internal/entropy/v1.0.0/entropy.go and
- * sha384.go, and src/crypto/internal/fips140deps/time.
+ * sha384.go.
  * Go source: go1.27.1.
  *
  * Package entropy implements a CPU jitter-based SP 800-90B entropy source.

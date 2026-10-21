@@ -21,8 +21,10 @@
  * The constant tables only go in the section when they hold no pointers. A
  * pointer in a position independent program is fixed up when it is loaded, so
  * the bytes in memory are not the bytes in the file, and the HMAC could never
- * match. Go hashes its FIPS data sections too. burrow hashes the code and the
- * read-only data, which is what does not change while the program runs.
+ * match. Go hashes its FIPS data too, because its compiler keeps such pointers
+ * out of it and leaves them for the package's init function to fill in. burrow
+ * hashes the code and the read-only tables without pointers, which are the
+ * same in memory as in the file.
  *
  * What the compiler makes on its own, such as string literals and constant
  * pools, stays in the usual sections. So do the small constants declared inside

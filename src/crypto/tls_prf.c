@@ -434,3 +434,46 @@ CRYPTO_FIPS_TEXT TlsEkmFunc burrow__tls_ekm_func(Alloc *a, const TlsEkmMaster *m
         return f;
     return BURROW_FN(TlsEkmFunc, tls_ekm_call, c);
 }
+
+/* ------------------------------------------------------------------- CAST */
+
+/* From Go's src/crypto/internal/fips140/tls12/cast.go. Go calls
+ * tls12.MasterSecret, which is the PRF that
+ * burrow__tls_ext_master_from_pre_master_secret runs for TLS 1.2. */
+
+CRYPTO_FIPS_RODATA static const Byte tls12_cast_input[16] = {
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+};
+
+CRYPTO_FIPS_RODATA static const Byte tls12_cast_transcript[16] = {
+    0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+    0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+};
+
+CRYPTO_FIPS_RODATA static const Byte tls12_cast_want[48] = {
+    0x8c, 0x3e, 0xed, 0xa7, 0x1c, 0x1b, 0x4c, 0xc0, 0xa0, 0x44, 0x90, 0x75,
+    0xa8, 0x8e, 0xbc, 0x7c, 0x5e, 0x1c, 0x4b, 0x1e, 0x4f, 0xe3, 0xc1, 0x06,
+    0xeb, 0xdc, 0xc0, 0x5d, 0xc0, 0xc8, 0xec, 0xf3, 0xe2, 0xb9, 0xd1, 0x03,
+    0x5e, 0xb2, 0x60, 0x5d, 0x12, 0x68, 0x4f, 0x49, 0xdf, 0xa9, 0x9d, 0xcc,
+};
+
+CRYPTO_FIPS_TEXT Error burrow__tls12_cast(void *arg) {
+    Slice input = slice_from((void *)(uintptr_t)tls12_cast_input, 16, 16, TYPE_BYTE);
+    Slice transcript =
+        slice_from((void *)(uintptr_t)tls12_cast_transcript, 16, 16, TYPE_BYTE);
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Slice got = burrow__tls_prf12(arena_allocator(&ar), sha256_new, input,
+                                  BURROW_S("extended master secret"), transcript,
+                                  TLS_MASTER_SECRET_LENGTH);
+    if (got.p == NULL) {
+        arena_free(&ar);
+        return burrow_err_out_of_memory;
+    }
+    bool ok = got.len == (Int)sizeof tls12_cast_want &&
+              memcmp(got.p, tls12_cast_want, sizeof tls12_cast_want) == 0;
+    arena_free(&ar);
+    return ok ? BURROW_NO_ERROR
+              : errors_new(error_allocator(), BURROW_S("unexpected result"));
+}

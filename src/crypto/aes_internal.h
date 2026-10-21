@@ -78,6 +78,20 @@ void burrow__cmac_init(Cmac *c, const AesBlock *b);
 /* CMAC.MAC: the tag of m into out. */
 void burrow__cmac_mac(Cmac *c, Byte out[AES_BLOCK_SIZE], Slice m);
 
+/* CounterKDF, from the same package, in cmac.c: a KDF in counter mode over
+ * CMAC-AES, from NIST SP 800-108 Revision 1 Update 1, Section 4.1, with a
+ * 256-bit output, an 8-bit label and a 96-bit context. */
+typedef struct CounterKdf {
+    Cmac mac;
+} CounterKdf;
+
+/* NewCounterKDF: kdf over a copy of b. */
+void burrow__counter_kdf_init(CounterKdf *kdf, const AesBlock *b);
+
+/* CounterKDF.DeriveKey: the key for label and context into out. */
+void burrow__counter_kdf_derive_key(CounterKdf *kdf, Byte out[32], Byte label,
+                                    const Byte context[12]);
+
 /* GCM's errOpen, "cipher: message authentication failed", which Go does not
  * export either. */
 extern const Error burrow__gcm_err_open;

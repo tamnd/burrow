@@ -11,9 +11,11 @@
 
 #include "burrow/core.h"
 #include "burrow/crypto/hmac.h"
+#include "burrow/crypto/sha256.h"
 #include "burrow/error.h"
 #include "burrow/hash.h"
 #include "burrow/mem.h"
+#include "burrow/mem/arena.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
 #include "burrow/type.h"
@@ -21,6 +23,7 @@
 #include "fips140_module.h"
 
 #include <stdint.h>
+#include <string.h>
 
 CRYPTO_FIPS_TEXT Slice hkdf_extract(Alloc *a, HashNewFunc h, Slice secret, Slice salt,
                                     Error *err) {
@@ -102,4 +105,39 @@ CRYPTO_FIPS_TEXT Slice hkdf_key(Alloc *a, HashNewFunc h, Slice secret, Slice sal
         return slice_nil(TYPE_BYTE);
     }
     return hkdf_expand_unchecked(a, h, prk, info, key_length, err);
+}
+
+/* ------------------------------------------------------------------- CAST */
+
+/* From Go's src/crypto/internal/fips140/hkdf/cast.go. */
+
+CRYPTO_FIPS_RODATA static const Byte hkdf_cast_input[16] = {
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+};
+
+CRYPTO_FIPS_RODATA static const Byte hkdf_cast_want[32] = {
+    0xb6, 0x53, 0x00, 0x5b, 0x51, 0x6d, 0x2b, 0xc9, 0x4a, 0xe4, 0xf9,
+    0x51, 0x73, 0x1f, 0x71, 0x21, 0xa6, 0xc1, 0xde, 0x42, 0x4f, 0x2c,
+    0x99, 0x60, 0x64, 0xdb, 0x66, 0x3e, 0xec, 0xa6, 0x37, 0xff,
+};
+
+CRYPTO_FIPS_TEXT Error burrow__hkdf_cast(void *arg) {
+    Int n = (Int)sizeof hkdf_cast_input;
+    Slice input = slice_from((void *)(uintptr_t)hkdf_cast_input, n, n, TYPE_BYTE);
+    Str info = str_from_bytes(hkdf_cast_input, n);
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Error err = BURROW_NO_ERROR;
+    Slice got = hkdf_key(arena_allocator(&ar), sha256_new, input, input, info,
+                         (Int)sizeof hkdf_cast_want, &err);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        return err;
+    }
+    bool ok = got.len == (Int)sizeof hkdf_cast_want &&
+              memcmp(got.p, hkdf_cast_want, sizeof hkdf_cast_want) == 0;
+    arena_free(&ar);
+    return ok ? BURROW_NO_ERROR
+              : errors_new(error_allocator(), BURROW_S("unexpected result"));
 }

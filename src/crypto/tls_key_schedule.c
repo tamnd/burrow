@@ -14,6 +14,7 @@
 #include "burrow/crypto/hkdf.h"
 #include "burrow/crypto/hmac.h"
 #include "burrow/crypto/mlkem.h"
+#include "burrow/crypto/sha256.h"
 #include "burrow/error.h"
 #include "burrow/hash.h"
 #include "burrow/io.h"
@@ -713,4 +714,49 @@ CRYPTO_FIPS_TEXT Slice burrow__tls_key_exchange_client_shared_secret(
         ke, a, arena_allocator(&scratch), priv, ecdh_share_data, mlkem_share_data, err);
     arena_free(&scratch);
     return shared_key;
+}
+
+/* ------------------------------------------------------------------- CAST */
+
+/* From Go's src/crypto/internal/fips140/tls13/cast.go. */
+
+CRYPTO_FIPS_RODATA static const Byte tls13_cast_input[16] = {
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+};
+
+CRYPTO_FIPS_RODATA static const Byte tls13_cast_want[32] = {
+    0x78, 0x20, 0x71, 0x75, 0x52, 0xfd, 0x47, 0x67, 0xe1, 0x07, 0x5c,
+    0x83, 0x74, 0x2e, 0x49, 0x43, 0xf7, 0xe3, 0x08, 0x6a, 0x2a, 0xcb,
+    0x96, 0xc7, 0xa3, 0x1f, 0xe3, 0x23, 0x56, 0x6e, 0x14, 0x5b,
+};
+
+CRYPTO_FIPS_TEXT Error burrow__tls13_cast(void *arg) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Tls13EarlySecret es =
+        burrow__tls13_new_early_secret(a, sha256_new, slice_nil(TYPE_BYTE));
+    Tls13HandshakeSecret hs =
+        burrow__tls13_early_secret_handshake_secret(&es, a, slice_nil(TYPE_BYTE));
+    Tls13MasterSecret ms = burrow__tls13_handshake_secret_master_secret(&hs, a);
+    Hash transcript = sha256_new(a);
+    if (es.secret.p == NULL || hs.secret.p == NULL || ms.secret.p == NULL ||
+        transcript.vt == NULL) {
+        arena_free(&ar);
+        return burrow_err_out_of_memory;
+    }
+    Slice input = slice_from((void *)(uintptr_t)tls13_cast_input, 16, 16, TYPE_BYTE);
+    hash_write(transcript, input, NULL);
+    Slice got =
+        burrow__tls13_master_secret_resumption_master_secret(&ms, a, transcript);
+    if (got.p == NULL) {
+        arena_free(&ar);
+        return burrow_err_out_of_memory;
+    }
+    bool ok = got.len == (Int)sizeof tls13_cast_want &&
+              memcmp(got.p, tls13_cast_want, sizeof tls13_cast_want) == 0;
+    arena_free(&ar);
+    return ok ? BURROW_NO_ERROR
+              : errors_new(error_allocator(), BURROW_S("unexpected result"));
 }

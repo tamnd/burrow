@@ -10,9 +10,11 @@
 #include "burrow/crypto/hmac.h"
 
 #include "burrow/core.h"
+#include "burrow/crypto/sha256.h"
 #include "burrow/crypto/subtle.h"
 #include "burrow/hash.h"
 #include "burrow/mem.h"
+#include "burrow/mem/arena.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
 #include "burrow/type.h"
@@ -109,4 +111,40 @@ CRYPTO_FIPS_TEXT Hash hmac_new(Alloc *a, HashNewFunc h, Slice key) {
 
 CRYPTO_FIPS_TEXT bool hmac_equal(Slice mac1, Slice mac2) {
     return subtle_constant_time_compare(mac1, mac2) == 1;
+}
+
+/* ------------------------------------------------------------------- CAST */
+
+/* From Go's src/crypto/internal/fips140/hmac/cast.go. */
+
+CRYPTO_FIPS_RODATA static const Byte hmac_cast_input[16] = {
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+};
+
+CRYPTO_FIPS_RODATA static const Byte hmac_cast_want[32] = {
+    0xf0, 0x8d, 0x82, 0x8d, 0x4c, 0x9e, 0xad, 0x3d, 0xdc, 0x12, 0x9c,
+    0x4e, 0x70, 0xc4, 0x19, 0x2a, 0x4f, 0x12, 0x73, 0x23, 0x73, 0x77,
+    0x66, 0x05, 0x10, 0xee, 0x57, 0x6b, 0x3a, 0xc7, 0x14, 0x41,
+};
+
+CRYPTO_FIPS_TEXT Error burrow__hmac_cast(void *arg) {
+    Int n = (Int)sizeof hmac_cast_input;
+    Slice input = slice_from((void *)(uintptr_t)hmac_cast_input, n, n, TYPE_BYTE);
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Hash h = hmac_new(a, sha256_new, input);
+    if (h.vt == NULL) {
+        arena_free(&ar);
+        return burrow_err_out_of_memory;
+    }
+    hash_write(h, input, NULL);
+    hash_write(h, input, NULL);
+    Slice got = hash_sum(a, h, (Slice){0});
+    bool ok = got.len == (Int)sizeof hmac_cast_want &&
+              memcmp(got.p, hmac_cast_want, sizeof hmac_cast_want) == 0;
+    arena_free(&ar);
+    return ok ? BURROW_NO_ERROR
+              : errors_new(error_allocator(), BURROW_S("unexpected result"));
 }

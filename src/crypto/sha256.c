@@ -586,3 +586,30 @@ CRYPTO_FIPS_TEXT Sha256Sum224Ret sha256_sum224(Slice data) {
     memcpy(r.a, h, sizeof r.a);
     return r;
 }
+
+/* ------------------------------------------------------------------- CAST */
+
+/* From Go's src/crypto/internal/fips140/sha256/cast.go. */
+
+CRYPTO_FIPS_RODATA static const Byte sha256_cast_input[16] = {
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+};
+
+CRYPTO_FIPS_RODATA static const Byte sha256_cast_want[32] = {
+    0x5d, 0xfb, 0xab, 0xee, 0xdf, 0x31, 0x8b, 0xf3, 0x3c, 0x09, 0x27,
+    0xc4, 0x3d, 0x76, 0x30, 0xf5, 0x1b, 0x82, 0xf3, 0x51, 0x74, 0x03,
+    0x01, 0x35, 0x4f, 0xa3, 0xd7, 0xfc, 0x51, 0xf0, 0x13, 0x2e,
+};
+
+CRYPTO_FIPS_TEXT Error burrow__sha256_cast(void *arg) {
+    Sha256Digest d;
+    Byte got[SHA256_SIZE];
+    d.is224 = false;
+    sha256_reset(&d);
+    sha256_update(&d, sha256_cast_input, (Int)sizeof sha256_cast_input);
+    sha256_check_sum(&d, got);
+    if (memcmp(got, sha256_cast_want, sizeof got) != 0)
+        return errors_new(error_allocator(), BURROW_S("unexpected result"));
+    return BURROW_NO_ERROR;
+}

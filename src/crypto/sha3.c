@@ -22,6 +22,7 @@
 #include "burrow/hash.h"
 #include "burrow/io.h"
 #include "burrow/mem.h"
+#include "burrow/mem/arena.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
 #include "burrow/type.h"
@@ -1052,4 +1053,39 @@ CRYPTO_FIPS_TEXT void burrow__sha3_write(Sha3 *d, const void *p, Int n) {
 
 CRYPTO_FIPS_TEXT void burrow__sha3_read(Sha3 *d, void *out, Int n) {
     sha3_squeeze(d, (Byte *)out, n);
+}
+
+/* ------------------------------------------------------------------- CAST */
+
+/* From Go's src/crypto/internal/fips140/sha3/cast.go. Go's Sum appends the 32
+ * bytes a cSHAKE128 gives by default, which is what reading them gives here. */
+
+CRYPTO_FIPS_RODATA static const Byte sha3_cast_input[16] = {
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+};
+
+CRYPTO_FIPS_RODATA static const Byte sha3_cast_want[32] = {
+    0xd2, 0x17, 0x37, 0x39, 0xf6, 0xa1, 0xe4, 0x6e, 0x81, 0xe5, 0x70,
+    0xe3, 0x1b, 0x10, 0x4c, 0x82, 0xc5, 0x48, 0xee, 0xe6, 0x09, 0xf5,
+    0x89, 0x52, 0x52, 0xa4, 0x69, 0xd4, 0xd0, 0x76, 0x68, 0x6b,
+};
+
+CRYPTO_FIPS_TEXT Error burrow__sha3_cast(void *arg) {
+    Int n = (Int)sizeof sha3_cast_input;
+    Slice input = slice_from((void *)(uintptr_t)sha3_cast_input, n, n, TYPE_BYTE);
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Sha3SHAKE *h = sha3_new_cshake128(arena_allocator(&ar), input, input);
+    if (h == NULL) {
+        arena_free(&ar);
+        return burrow_err_out_of_memory;
+    }
+    Byte got[32];
+    sha3_shake_write(h, input, NULL);
+    sha3_shake_read(h, slice_from(got, 32, 32, TYPE_BYTE), NULL);
+    arena_free(&ar);
+    if (memcmp(got, sha3_cast_want, sizeof got) != 0)
+        return errors_new(error_allocator(), BURROW_S("unexpected result"));
+    return BURROW_NO_ERROR;
 }

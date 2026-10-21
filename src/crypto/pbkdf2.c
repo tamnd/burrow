@@ -11,9 +11,11 @@
 
 #include "burrow/core.h"
 #include "burrow/crypto/hmac.h"
+#include "burrow/crypto/sha256.h"
 #include "burrow/error.h"
 #include "burrow/hash.h"
 #include "burrow/mem.h"
+#include "burrow/mem/arena.h"
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
@@ -80,4 +82,44 @@ CRYPTO_FIPS_TEXT Slice pbkdf2_key(Alloc *a, HashNewFunc h, Str password, Slice s
     }
     BURROW_OUT(err, BURROW_NO_ERROR);
     return slice_sub(dk, 0, key_length);
+}
+
+/* ------------------------------------------------------------------- CAST */
+
+/* From Go's src/crypto/internal/fips140/pbkdf2/cast.go.
+ *
+ * Per IG 10.3.A:
+ *   "if the module implements an approved PBKDF (SP 800-132), the module
+ *    shall perform a CAST, at minimum, on the derivation of the Master
+ *   Key (MK) as specified in Section 5.3 of SP 800-132"
+ *   "The Iteration Count parameter does not need to be among those
+ *   supported by the module in the approved mode but shall be at least
+ *   two." */
+
+CRYPTO_FIPS_RODATA static const Byte pbkdf2_cast_salt[16] = {
+    0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x11,
+    0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19,
+};
+
+CRYPTO_FIPS_RODATA static const Byte pbkdf2_cast_want[14] = {
+    0xC7, 0x58, 0x76, 0xC0, 0x71, 0x1C, 0x29, 0x75, 0x2D, 0x3A, 0xA6, 0xDF, 0x29, 0x96,
+};
+
+CRYPTO_FIPS_TEXT Error burrow__pbkdf2_cast(void *arg) {
+    Int n = (Int)sizeof pbkdf2_cast_salt;
+    Slice salt = slice_from((void *)(uintptr_t)pbkdf2_cast_salt, n, n, TYPE_BYTE);
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Error err = BURROW_NO_ERROR;
+    Slice mk = pbkdf2_key(arena_allocator(&ar), sha256_new, BURROW_S("password"), salt,
+                          2, 14, &err);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        return err;
+    }
+    bool ok = mk.len == (Int)sizeof pbkdf2_cast_want &&
+              memcmp(mk.p, pbkdf2_cast_want, sizeof pbkdf2_cast_want) == 0;
+    arena_free(&ar);
+    return ok ? BURROW_NO_ERROR
+              : errors_new(error_allocator(), BURROW_S("unexpected result"));
 }

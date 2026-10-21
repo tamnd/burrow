@@ -674,6 +674,10 @@ CRYPTO_FIPS_TEXT static bool ecdsa_fips_check_private(const EcdsaFipsCurve *c, S
     return ok;
 }
 
+/* The self-tests, which come after verifyGeneric, as they use it. */
+static void ecdsa_fips_self_test(void);
+static void ecdsa_fips_self_test_deterministic(void);
+
 /* Sign: the hedged signature, with a nonce from an HMAC_DRBG over SHA-512
  * seeded with random bytes, the key and the hash. */
 CRYPTO_FIPS_TEXT static bool ecdsa_fips_sign(const EcdsaFipsCurve *c, Slice d,
@@ -683,6 +687,7 @@ CRYPTO_FIPS_TEXT static bool ecdsa_fips_sign(const EcdsaFipsCurve *c, Slice d,
         ecdsa_set_error(err, "ecdsa: hash cannot be empty");
         return false;
     }
+    ecdsa_fips_self_test();
 
     /* The nonce comes from a DRBG with random bytes as its entropy, and the
      * key and the hash as its personalization string, padded to blocks as
@@ -717,6 +722,7 @@ CRYPTO_FIPS_TEXT static bool ecdsa_fips_sign_deterministic(const EcdsaFipsCurve 
         ecdsa_set_error(err, "ecdsa: hash cannot be empty");
         return false;
     }
+    ecdsa_fips_self_test_deterministic();
     uint8_t h[NISTEC_MAX_ELEMENT_BYTES];
     burrow__ecdsa_bits2octets(c, hash, h);
 
@@ -731,15 +737,10 @@ CRYPTO_FIPS_TEXT static bool ecdsa_fips_sign_deterministic(const EcdsaFipsCurve 
     return ok;
 }
 
-/* Verify and verifyGeneric. */
-CRYPTO_FIPS_TEXT static bool ecdsa_fips_verify(const EcdsaFipsCurve *c, Slice q,
-                                               Slice hash, Slice sig_r, Slice sig_s,
-                                               Error *err) {
-    if (hash.len == 0) {
-        ecdsa_set_error(err, "ecdsa: hash cannot be empty");
-        return false;
-    }
-
+/* verifyGeneric. */
+CRYPTO_FIPS_TEXT static bool ecdsa_verify_generic(const EcdsaFipsCurve *c, Slice q,
+                                                  Slice hash, Slice sig_r, Slice sig_s,
+                                                  Error *err) {
     const NistecCurve *nist = c->nist;
     NistecPoint big_q, p1;
     Error e2 = BURROW_NO_ERROR;
@@ -812,6 +813,173 @@ done:
     bigmod_nat_free(&w);
     bigmod_nat_free(&v);
     return ok;
+}
+
+/* ------------------------------------------------------------- self-tests */
+
+/* From Go's src/crypto/internal/fips140/ecdsa/cast.go. */
+
+/* testPrivateKey, the key of RFC 9500, Section 2.3. */
+CRYPTO_FIPS_RODATA static const uint8_t ecdsa_cast_q[65] = {
+    0x04, 0x42, 0x25, 0x48, 0xF8, 0x8F, 0xB7, 0x82, 0xFF, 0xB5, 0xEC, 0xA3, 0x74,
+    0x44, 0x52, 0xC7, 0x2A, 0x1E, 0x55, 0x8F, 0xBD, 0x6F, 0x73, 0xBE, 0x5E, 0x48,
+    0xE9, 0x32, 0x32, 0xCC, 0x45, 0xC5, 0xB1, 0x6C, 0x4C, 0xD1, 0x0C, 0x4C, 0xB8,
+    0xD5, 0xB8, 0xA1, 0x71, 0x39, 0xE9, 0x48, 0x82, 0xC8, 0x99, 0x25, 0x72, 0x99,
+    0x34, 0x25, 0xF4, 0x14, 0x19, 0xAB, 0x7E, 0x90, 0xA4, 0x2A, 0x49, 0x42, 0x72,
+};
+
+CRYPTO_FIPS_RODATA static const uint8_t ecdsa_cast_d[32] = {
+    0xE6, 0xCB, 0x5B, 0xDD, 0x80, 0xAA, 0x45, 0xAE, 0x9C, 0x95, 0xE8,
+    0xC1, 0x54, 0x76, 0x67, 0x9F, 0xFE, 0xC9, 0x53, 0xC1, 0x68, 0x51,
+    0xE7, 0x11, 0xE7, 0x43, 0x93, 0x95, 0x89, 0xC6, 0x4F, 0xC1,
+};
+
+/* testHash. */
+CRYPTO_FIPS_RODATA static const uint8_t ecdsa_cast_hash[64] = {
+    0x17, 0x1b, 0x1f, 0x5e, 0x9f, 0x8f, 0x8c, 0x5c, 0x42, 0xe8, 0x06, 0x59, 0x7b,
+    0x54, 0xc7, 0xb4, 0x49, 0x05, 0xa1, 0xdb, 0x3a, 0x3c, 0x31, 0xd3, 0xb7, 0x56,
+    0x45, 0x8c, 0xc2, 0xd6, 0x88, 0x62, 0x9e, 0xd6, 0x7b, 0x9b, 0x25, 0x68, 0xd6,
+    0xc6, 0x18, 0x94, 0x1e, 0xfe, 0xe3, 0x33, 0x78, 0xa6, 0xe1, 0xce, 0x13, 0x88,
+    0x81, 0x26, 0x02, 0x52, 0xdf, 0xc2, 0x0a, 0xf2, 0x67, 0x49, 0x0a, 0x20,
+};
+
+CRYPTO_FIPS_RODATA static const uint8_t ecdsa_cast_z[16] = {
+    0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+    0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10,
+};
+
+CRYPTO_FIPS_RODATA static const uint8_t ecdsa_cast_pers_str[16] = {
+    0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18,
+    0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20,
+};
+
+/* The R and S of the signature each test wants, one after the other. */
+CRYPTO_FIPS_RODATA static const uint8_t ecdsa_cast_want[64] = {
+    0x33, 0x64, 0x96, 0xff, 0x8a, 0xfe, 0xaa, 0x0b, 0x2c, 0x4a, 0x1a, 0x97, 0x77,
+    0xcc, 0x84, 0xa5, 0x7e, 0x88, 0x1f, 0x16, 0x2d, 0xe0, 0x29, 0xf7, 0x62, 0xc2,
+    0x34, 0x18, 0x10, 0x9c, 0x69, 0x8a, 0x97, 0x53, 0x2e, 0x13, 0x6e, 0xd0, 0x9b,
+    0x30, 0x8a, 0xdf, 0x4f, 0xe0, 0x54, 0x82, 0x14, 0x83, 0x5e, 0x93, 0xc7, 0x79,
+    0x4b, 0x18, 0xa3, 0xf1, 0x8a, 0x60, 0xae, 0x52, 0x31, 0xe4, 0x2e, 0x4e,
+};
+
+CRYPTO_FIPS_RODATA static const uint8_t ecdsa_cast_det_want[64] = {
+    0x9f, 0xc3, 0x83, 0x32, 0x6e, 0xd9, 0x4f, 0x8e, 0x24, 0xa0, 0x19, 0xef, 0x1d,
+    0x3a, 0xc3, 0x55, 0xdd, 0x4b, 0x98, 0xae, 0x78, 0xa7, 0xaf, 0xd3, 0xfd, 0xf3,
+    0x22, 0x1c, 0x8b, 0xd6, 0x11, 0x7b, 0xd6, 0x52, 0x87, 0x41, 0x71, 0xbd, 0x66,
+    0xd1, 0xaf, 0x6c, 0x61, 0xdd, 0xd8, 0xa7, 0xbb, 0xd2, 0xf7, 0xd5, 0x47, 0x70,
+    0xe9, 0xe4, 0xac, 0x0a, 0xb9, 0xfa, 0x0f, 0xbd, 0x3b, 0x9b, 0xc2, 0xfe,
+};
+
+/* What both CASTs do once they have their DRBG: sign testHash with
+ * testPrivateKey, verify the signature without the self-tests, and compare
+ * it with want. */
+CRYPTO_FIPS_TEXT static Error ecdsa_cast_sign(Arena *ar, EcdsaDrbg *drbg,
+                                              const uint8_t want[64]) {
+    const EcdsaFipsCurve *c = burrow__ecdsa_fips_p256();
+    Slice d = ecdsa_bytes(ecdsa_cast_d, 32);
+    Slice hash = ecdsa_bytes(ecdsa_cast_hash, 64);
+    uint8_t r[32], s[32];
+    Error err = BURROW_NO_ERROR;
+    bool ok = burrow__ecdsa_sign_with_drbg(c, d, drbg, hash, r, s, &err);
+    memset(drbg->v, 0, (size_t)drbg->size);
+    memset(drbg->k, 0, (size_t)drbg->size);
+    arena_free(ar);
+    if (!ok)
+        return err;
+    if (!ecdsa_verify_generic(c, ecdsa_bytes(ecdsa_cast_q, 65), hash,
+                              ecdsa_bytes(r, 32), ecdsa_bytes(s, 32), &err))
+        return err;
+    if (memcmp(r, want, 32) != 0 || memcmp(s, want + 32, 32) != 0)
+        return errors_new(error_allocator(), BURROW_S("unexpected result"));
+    return BURROW_NO_ERROR;
+}
+
+CRYPTO_FIPS_TEXT static Error ecdsa_cast(void *arg) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Slice pers = ecdsa_bytes(ecdsa_cast_pers_str, 16);
+    EcdsaDrbg *drbg =
+        ecdsa_new_drbg(arena_allocator(&ar), sha512_new, ecdsa_bytes(ecdsa_cast_z, 16),
+                       slice_nil(TYPE_BYTE), &pers, 1, false);
+    return ecdsa_cast_sign(&ar, drbg, ecdsa_cast_want);
+}
+
+CRYPTO_FIPS_TEXT static Error ecdsa_cast_deterministic(void *arg) {
+    const EcdsaFipsCurve *c = burrow__ecdsa_fips_p256();
+    uint8_t h[32];
+    burrow__ecdsa_bits2octets(c, ecdsa_bytes(ecdsa_cast_hash, 64), h);
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    EcdsaDrbg *drbg =
+        ecdsa_new_drbg(arena_allocator(&ar), sha512_new, ecdsa_bytes(ecdsa_cast_d, 32),
+                       ecdsa_bytes(h, 32), NULL, 0, false);
+    return ecdsa_cast_sign(&ar, drbg, ecdsa_cast_det_want);
+}
+
+CRYPTO_FIPS_TEXT static void ecdsa_self_test_once(void *env) {
+    burrow__fips140_cast("ECDSA P-256 SHA2-512 sign and verify", ecdsa_cast, NULL);
+}
+
+CRYPTO_FIPS_TEXT static void ecdsa_self_test_deterministic_once(void *env) {
+    burrow__fips140_cast("DetECDSA P-256 SHA2-512 sign", ecdsa_cast_deterministic,
+                         NULL);
+}
+
+static SyncOnce ecdsa_self_test;
+static SyncOnce ecdsa_self_test_deterministic;
+
+/* fipsSelfTest and fipsSelfTestDeterministic, Go's sync.OnceFuncs. */
+CRYPTO_FIPS_TEXT static void ecdsa_fips_self_test(void) {
+    sync_once_do(&ecdsa_self_test, BURROW_FN(Func, ecdsa_self_test_once, NULL));
+}
+
+CRYPTO_FIPS_TEXT static void ecdsa_fips_self_test_deterministic(void) {
+    sync_once_do(&ecdsa_self_test_deterministic,
+                 BURROW_FN(Func, ecdsa_self_test_deterministic_once, NULL));
+}
+
+/* Verify. */
+CRYPTO_FIPS_TEXT static bool ecdsa_fips_verify(const EcdsaFipsCurve *c, Slice q,
+                                               Slice hash, Slice sig_r, Slice sig_s,
+                                               Error *err) {
+    if (hash.len == 0) {
+        ecdsa_set_error(err, "ecdsa: hash cannot be empty");
+        return false;
+    }
+    ecdsa_fips_self_test();
+    return ecdsa_verify_generic(c, q, hash, sig_r, sig_s, err);
+}
+
+/* A key fipsPCT checks: the curve, the private scalar and the public point. */
+typedef struct EcdsaPctKey {
+    const EcdsaFipsCurve *c;
+    Slice d;
+    Slice q;
+} EcdsaPctKey;
+
+/* fipsPCT's test. Go derives the nonce with P-256's bits2octets whatever the
+ * curve of the key, and so does this. */
+CRYPTO_FIPS_TEXT static Error ecdsa_pct(void *arg) {
+    const EcdsaPctKey *k = arg;
+    Slice hash = ecdsa_bytes(ecdsa_cast_hash, 64);
+    uint8_t h[32];
+    burrow__ecdsa_bits2octets(burrow__ecdsa_fips_p256(), hash, h);
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    EcdsaDrbg *drbg = ecdsa_new_drbg(arena_allocator(&ar), sha512_new, k->d,
+                                     ecdsa_bytes(h, 32), NULL, 0, false);
+    uint8_t r[NISTEC_MAX_ELEMENT_BYTES], s[NISTEC_MAX_ELEMENT_BYTES];
+    Error err = BURROW_NO_ERROR;
+    bool ok = burrow__ecdsa_sign_with_drbg(k->c, k->d, drbg, hash, r, s, &err);
+    memset(drbg->v, 0, (size_t)drbg->size);
+    memset(drbg->k, 0, (size_t)drbg->size);
+    arena_free(&ar);
+    if (!ok)
+        return err;
+    if (!ecdsa_fips_verify(k->c, k->q, hash, ecdsa_bytes(r, k->c->size),
+                           ecdsa_bytes(s, k->c->size), &err))
+        return err;
+    return BURROW_NO_ERROR;
 }
 
 /* -------------------------------------------------------------- the keys */
@@ -1263,6 +1431,10 @@ CRYPTO_FIPS_TEXT EcdsaPrivateKey *ecdsa_generate_key(Alloc *a, EllipticCurve c,
     Int qn = 1 + 2 * fc->nist->element_bytes;
     EcdsaPrivateKey *priv = ecdsa_private_from_fips(a, c, ecdsa_bytes(k, fc->size),
                                                     ecdsa_bytes(q, qn), err);
+    if (priv != NULL) {
+        EcdsaPctKey pk = {fc, ecdsa_bytes(k, fc->size), ecdsa_bytes(q, qn)};
+        burrow__fips140_pct("ECDSA PCT", ecdsa_pct, &pk);
+    }
     memset(k, 0, sizeof k);
     return priv;
 }

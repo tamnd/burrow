@@ -96,6 +96,10 @@ CRYPTO_FIPS_TEXT static Int cipher_cbc_block_size(void *self) {
 CRYPTO_FIPS_TEXT static void cipher_cbc_encrypt(void *self, Slice dst, Slice src) {
     CipherCbc *x = (CipherCbc *)self;
     cipher_cbc_check(x, dst, src);
+    /* Not in Go: Go's AES CBC is a type of its own, and the generic one, for
+     * other blocks, records nothing. */
+    if (x->aes != NULL)
+        burrow__fips140_record_approved();
     Int bs = x->block_size;
     Byte *d = (Byte *)dst.p;
     Byte *s = (Byte *)src.p;
@@ -185,6 +189,8 @@ CRYPTO_FIPS_TEXT static void cipher_cbc_decrypt_aes(CipherCbc *x, Byte *d,
 CRYPTO_FIPS_TEXT static void cipher_cbc_decrypt(void *self, Slice dst, Slice src) {
     CipherCbc *x = (CipherCbc *)self;
     cipher_cbc_check(x, dst, src);
+    if (x->aes != NULL)
+        burrow__fips140_record_approved();
     if (src.len == 0)
         return;
     if (x->aes != NULL)
@@ -272,6 +278,9 @@ CRYPTO_FIPS_TEXT static void cipher_aes_ctr_blocks(const AesBlock *b, Byte *dst,
 CRYPTO_FIPS_TEXT static void cipher_aes_ctr_xor_at(CipherAesCtr *c, Byte *dst,
                                                    const Byte *src, Int len,
                                                    uint64_t offset) {
+    /* Both callers have made Go's checks already. */
+    burrow__fips140_record_approved();
+
     uint64_t q = offset / AES_BLOCK_SIZE;
     uint64_t lo = c->ivlo + q;
     uint64_t hi = c->ivhi + (lo < q);

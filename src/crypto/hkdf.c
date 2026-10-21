@@ -28,6 +28,8 @@
 CRYPTO_FIPS_TEXT Slice hkdf_extract(Alloc *a, HashNewFunc h, Slice secret, Slice salt,
                                     Error *err) {
     BURROW_OUT(err, BURROW_NO_ERROR);
+    if (secret.len < 112 / 8)
+        burrow__fips140_record_non_approved();
     /* A missing salt is a block of zeros as long as the sum, and HMAC pads
      * an empty key with zeros to the block size anyway, so an empty salt
      * gives the same answer without making the zeros. */
@@ -36,6 +38,7 @@ CRYPTO_FIPS_TEXT Slice hkdf_extract(Alloc *a, HashNewFunc h, Slice secret, Slice
         BURROW_OUT(err, burrow_err_out_of_memory);
         return slice_nil(TYPE_BYTE);
     }
+    burrow__hmac_mark_as_used_in_kdf(ext);
     hash_write(ext, secret, NULL);
     return hash_sum(a, ext, slice_nil(TYPE_BYTE));
 }
@@ -49,6 +52,7 @@ CRYPTO_FIPS_TEXT static Slice hkdf_expand_unchecked(Alloc *a, HashNewFunc h, Sli
         BURROW_OUT(err, burrow_err_out_of_memory);
         return slice_nil(TYPE_BYTE);
     }
+    burrow__hmac_mark_as_used_in_kdf(exp);
     Slice inf = slice_from((void *)(uintptr_t)info.p, info.len, info.len, TYPE_BYTE);
     Byte counter = 0;
     Slice buf = slice_nil(TYPE_BYTE);

@@ -263,6 +263,11 @@ struct burrow__G {
      * runs it next. */
     bool dit_wanted;
 
+    /* The FIPS 140-3 service indicator, from src/crypto/fips140_cast.c. Go's
+     * g.fipsIndicator. Only this goroutine reads or writes it, so it is not
+     * atomic, and it is not copied to the goroutines this one starts. */
+    uint8_t fips_indicator;
+
     /* The profiling labels runtime/pprof has set on this goroutine, or NULL.
      * Go's g.labels. Copied to every goroutine it starts, so work started under
      * a label is still labelled. The runtime never looks inside it; it is
@@ -649,6 +654,12 @@ bool burrow__sched_running(void);
  * pprof_do. */
 void burrow__set_prof_label(void *labels);
 BURROW_BORROWS(ret) void *burrow__get_prof_label(void);
+
+/* Go's fips_getIndicator and fips_setIndicator: the FIPS 140-3 service
+ * indicator of the calling goroutine. A thread that is not running a goroutine
+ * keeps it in a thread local instead. */
+uint8_t burrow__fips_get_indicator(void);
+void burrow__fips_set_indicator(uint8_t indicator);
 
 /* The P at index i, or NULL if i is not in range. Every P exists for as long as
  * the scheduler is running, whether or not an M is holding it. */

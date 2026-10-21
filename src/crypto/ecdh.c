@@ -434,6 +434,7 @@ CRYPTO_FIPS_TEXT static int ecdh_read(IoReader r, uint8_t *p, Int n, Error *err)
         burrow__crypto_rand_system(s);
         return 1;
     }
+    burrow__fips140_record_non_approved();
     Error e = BURROW_NO_ERROR;
     (void)io_read_full(r, s, &e);
     if (BURROW_FAILED(e)) {
@@ -452,11 +453,17 @@ CRYPTO_FIPS_TEXT EcdhPrivateKey *ecdh_curve_generate_key(const EcdhCurve *c, All
     rand = burrow__crypto_rand_custom_reader(rand);
 
     if (c->nist == NULL) {
+        /* io.ReadFull, as X25519 is outside the module and has no use for
+         * drbg.ReadWithReader. */
         uint8_t key[ECDH_X25519_SIZE];
-        if (!ecdh_read(rand, key, ECDH_X25519_SIZE, err))
+        Slice ks = slice_from(key, ECDH_X25519_SIZE, ECDH_X25519_SIZE, TYPE_BYTE);
+        Error e = BURROW_NO_ERROR;
+        (void)io_read_full(rand, ks, &e);
+        if (BURROW_FAILED(e)) {
+            BURROW_OUT(err, e);
             return NULL;
-        EcdhPrivateKey *k = ecdh_x25519_new_private(
-            a, slice_from(key, ECDH_X25519_SIZE, ECDH_X25519_SIZE, TYPE_BYTE), err);
+        }
+        EcdhPrivateKey *k = ecdh_x25519_new_private(a, ks, err);
         memset(key, 0, sizeof key);
         return k;
     }
@@ -466,6 +473,7 @@ CRYPTO_FIPS_TEXT EcdhPrivateKey *ecdh_curve_generate_key(const EcdhCurve *c, All
      * often than that. The xor keeps a reader that gives all zeros or all ones
      * from making a key, since either is a bad scalar, and P-521 drops the
      * seven bits above its 521. */
+    burrow__fips140_record_approved();
     Int n = c->nist->element_bytes;
     uint8_t key[NISTEC_MAX_ELEMENT_BYTES];
     for (;;) {
@@ -538,6 +546,7 @@ CRYPTO_FIPS_TEXT Slice ecdh_private_key_ecdh(const EcdhPrivateKey *k, Alloc *a,
     } else {
         const NistecCurve *nc = k->curve->nist;
         ecdh_fips_self_test();
+        burrow__fips140_record_approved();
         if (k->public_key.public_key.len == 1) {
             ecdh_set_error(err, "crypto/ecdh: public key is the identity element");
             return slice_nil(TYPE_BYTE);

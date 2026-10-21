@@ -510,6 +510,10 @@ CRYPTO_FIPS_TEXT static Int gcm_overhead(void *self) {
 CRYPTO_FIPS_TEXT static Slice gcm_seal(void *self, Alloc *a, Slice dst, Slice nonce,
                                        Slice plaintext, Slice additional_data) {
     const CipherGcm *g = (const CipherGcm *)self;
+    /* Not in Go: Go's GCM for other blocks is a type of its own, which records
+     * nothing. */
+    if (g->aes != NULL)
+        burrow__fips140_record_non_approved();
     if (nonce.len != g->nonce_size)
         panic_str(BURROW_S("crypto/cipher: incorrect nonce length given to GCM"));
     if (g->nonce_size == 0)
@@ -558,6 +562,8 @@ CRYPTO_FIPS_TEXT static Slice gcm_open(void *self, Alloc *a, Slice dst, Slice no
     if (gcm_any_overlap(out, n, additional_data.p, additional_data.len))
         panic_str(BURROW_S(
             "crypto/cipher: invalid buffer overlap of output and additional data"));
+    if (g->aes != NULL)
+        burrow__fips140_record_approved();
     if (!gcm_open_into(g, out, (const Byte *)nonce.p, nonce.len, (Byte *)ciphertext.p,
                        ciphertext.len, (const Byte *)additional_data.p,
                        additional_data.len)) {
@@ -616,6 +622,7 @@ CRYPTO_FIPS_TEXT static Slice gcm_random_seal(void *self, Alloc *a, Slice dst,
     /* gcm.SealWithRandomNonce, whose remaining checks cannot fail from here. */
     if ((uint64_t)plaintext.len > GCM_MAX_PLAINTEXT)
         panic_str(BURROW_S("crypto/cipher: message too large for GCM"));
+    burrow__fips140_record_approved();
     burrow__crypto_rand_system(gcm_bytes(out, GCM_STANDARD_NONCE_SIZE));
     gcm_seal_into(g, ct, out, GCM_STANDARD_NONCE_SIZE, pt, plaintext.len,
                   (const Byte *)additional_data.p, additional_data.len);
@@ -662,6 +669,7 @@ CRYPTO_FIPS_TEXT static Slice gcm_random_open(void *self, Alloc *a, Slice dst,
         in += GCM_STANDARD_NONCE_SIZE;
     }
     /* g.GCM.Open into out[:0], whose own checks pass by construction. */
+    burrow__fips140_record_approved();
     if (!gcm_open_into(g, out, nc, GCM_STANDARD_NONCE_SIZE, in, in_len,
                        (const Byte *)additional_data.p, additional_data.len)) {
         if (n > 0)

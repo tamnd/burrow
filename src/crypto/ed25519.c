@@ -167,6 +167,7 @@ CRYPTO_FIPS_TEXT static void ed_expand_seed(EdPrivate *k) {
 
 /* newPrivateKeyFromSeed, for a seed already known to be 32 bytes. */
 CRYPTO_FIPS_TEXT static void ed_private_from_seed(EdPrivate *k, const uint8_t *seed) {
+    burrow__fips140_record_approved();
     memcpy(k->seed, seed, ED25519_SEED_SIZE);
     ed_expand_seed(k);
     Edwards25519Point A;
@@ -242,6 +243,12 @@ CRYPTO_FIPS_TEXT static void ed_sign_with_dom(uint8_t signature[ED25519_SIGNATUR
 CRYPTO_FIPS_TEXT static Error ed_sign_variant(uint8_t signature[ED25519_SIGNATURE_SIZE],
                                               const EdPrivate *k, Slice message,
                                               EdDom dom, Str context) {
+    /* FIPS 186-5 specifies Ed25519 and Ed25519ph (with context), but not
+     * Ed25519ctx. */
+    if (dom == ED_DOM_CTX)
+        burrow__fips140_record_non_approved();
+    else
+        burrow__fips140_record_approved();
     if (dom == ED_DOM_PH) {
         if (message.len != SHA512_SIZE)
             return ed_error_n("ed25519: bad Ed25519ph message hash length: ",
@@ -450,6 +457,7 @@ ed25519_options_as_signer_opts(const Ed25519Options *o) {
 CRYPTO_FIPS_TEXT static Error ed_unpack_private(EdPrivate *k, Ed25519PrivateKey priv) {
     if (priv.len == 0)
         runtime_index_out_of_range(0, 0);
+    burrow__fips140_record_approved();
     if (priv.len != ED25519_PRIVATE_KEY_SIZE)
         return ed_error_n("ed25519: bad private key length: ", priv.len);
     ed_private_from_bytes(k, priv.p);
@@ -599,6 +607,7 @@ CRYPTO_FIPS_TEXT Slice ed25519_sign(Alloc *a, Ed25519PrivateKey priv, Slice mess
         ed_panic_n("ed25519: bad private key: ed25519: bad private key length: ",
                    priv.len);
     ed_fips_self_test();
+    burrow__fips140_record_approved();
     uint8_t signature[ED25519_SIGNATURE_SIZE];
     ed_sign_with_dom(signature, &k, message, ED_DOM_PURE, BURROW_STR_EMPTY);
     return ed_copy(a, signature, ED25519_SIGNATURE_SIZE);
@@ -623,6 +632,7 @@ CRYPTO_FIPS_TEXT Error ed25519_verify_with_options(Ed25519PublicKey pub, Slice m
     EdDom dom;
     if (opts->hash == CRYPTO_SHA512) {
         ed_fips_self_test();
+        burrow__fips140_record_approved();
         dom = ED_DOM_PH;
         if (message.len != SHA512_SIZE)
             return ed_error_n("ed25519: bad Ed25519ph message hash length: ",
@@ -632,12 +642,16 @@ CRYPTO_FIPS_TEXT Error ed25519_verify_with_options(Ed25519PublicKey pub, Slice m
                               opts->context.len);
     } else if (opts->hash == 0 && opts->context.len != 0) {
         ed_fips_self_test();
+        /* FIPS 186-5 specifies Ed25519 and Ed25519ph (with context), but not
+         * Ed25519ctx. */
+        burrow__fips140_record_non_approved();
         dom = ED_DOM_CTX;
         if (opts->context.len > 255)
             return ed_error_n("ed25519: bad Ed25519ctx context length: ",
                               opts->context.len);
     } else if (opts->hash == 0) {
         ed_fips_self_test();
+        burrow__fips140_record_approved();
         dom = ED_DOM_PURE;
     } else {
         return ed_error(

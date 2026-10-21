@@ -465,6 +465,12 @@ Slice burrow__tls_prf10(Alloc *a, Slice secret, Str label, Slice seed, Int key_l
 Slice burrow__tls_prf12(Alloc *a, HashNewFunc h, Slice secret, Str label, Slice seed,
                         Int key_len);
 
+/* tls12.MasterSecret implements the TLS 1.2 extended master secret derivation,
+ * as defined in RFC 7627 and allowed by SP 800-135, Revision 1, Section 4.2.2.
+ * A nil Slice when a is out of memory. */
+Slice burrow__tls12_master_secret(Alloc *a, HashNewFunc hash, Slice pre_master_secret,
+                                  Slice transcript);
+
 /* The PRF of prf_kind, which is how the callers of a prfFunc call it. */
 Slice burrow__tls_prf(Alloc *a, TlsPrfKind prf_kind, Slice secret, Str label,
                       Slice seed, Int key_len);

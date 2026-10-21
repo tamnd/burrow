@@ -32,6 +32,10 @@ typedef struct Hmac {
     Byte *ipad;
     Byte *opad;
     Int block_size;
+
+    /* forHKDF and keyLen are stored to inform the service indicator decision. */
+    bool for_hkdf;
+    Int key_len;
 } Hmac;
 
 CRYPTO_FIPS_TEXT static Int hmac_write(void *self, Slice p, Error *err) {
@@ -40,6 +44,14 @@ CRYPTO_FIPS_TEXT static Int hmac_write(void *self, Slice p, Error *err) {
 
 CRYPTO_FIPS_TEXT static Slice hmac_sum(void *self, Alloc *a, Slice in) {
     Hmac *h = self;
+    /* Per FIPS 140-3 IG C.M, key lengths below 112 bits are only allowed for
+     * legacy use (i.e. verification only) and we don't support that. However,
+     * HKDF uses the HMAC key for the salt, which is allowed to be shorter. */
+    if (h->key_len < 112 / 8 && !h->for_hkdf)
+        burrow__fips140_record_non_approved();
+    if (!burrow__fips140_approved_hash(h->inner))
+        burrow__fips140_record_non_approved();
+
     if (in.elem == NULL)
         in = slice_nil(TYPE_BYTE);
     Int orig = in.len;
@@ -77,6 +89,7 @@ CRYPTO_FIPS_TEXT Hash hmac_new(Alloc *a, HashNewFunc h, Slice key) {
     Hmac *hm = BURROW_NEW(a, Hmac);
     if (hm == NULL)
         return nil;
+    hm->key_len = key.len;
     hm->outer = h(a);
     hm->inner = h(a);
     if (hm->outer.vt == NULL || hm->inner.vt == NULL)
@@ -107,6 +120,16 @@ CRYPTO_FIPS_TEXT Hash hmac_new(Alloc *a, HashNewFunc h, Slice key) {
     hash_write(hm->inner, slice_from(hm->ipad, bs, bs, TYPE_BYTE), NULL);
     Hash r = {&hmac_vt, hm};
     return r;
+}
+
+CRYPTO_FIPS_TEXT void burrow__hmac_mark_as_used_in_kdf(Hash h) {
+    if (h.vt == &hmac_vt)
+        ((Hmac *)h.data)->for_hkdf = true;
+}
+
+CRYPTO_FIPS_TEXT bool burrow__fips140_approved_hash(Hash h) {
+    return burrow__sha256_is_digest(h) || burrow__sha512_is_digest(h) ||
+           burrow__sha3_is_digest(h);
 }
 
 CRYPTO_FIPS_TEXT bool hmac_equal(Slice mac1, Slice mac2) {

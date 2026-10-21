@@ -128,6 +128,7 @@ CRYPTO_FIPS_TEXT static bool ecdsa_read(IoReader r, Slice b, Error *err) {
         burrow__crypto_rand_system(b);
         return true;
     }
+    burrow__fips140_record_non_approved();
     Error e = BURROW_NO_ERROR;
     (void)io_read_full(r, b, &e);
     if (BURROW_FAILED(e)) {
@@ -478,6 +479,8 @@ CRYPTO_FIPS_TEXT static EcdsaDrbg *ecdsa_new_drbg(Alloc *a, HashNewFunc hf,
                                                   Slice entropy, Slice nonce,
                                                   const Slice *parts, Int nparts,
                                                   bool aligned) {
+    /* HMAC_DRBG_Instantiate_algorithm, per Section 10.1.2.3. */
+    burrow__fips140_record_approved();
     EcdsaDrbg *d = BURROW_NEW(a, EcdsaDrbg);
     if (d == NULL)
         panic_str(BURROW_S("crypto/ecdsa: out of memory"));
@@ -520,6 +523,8 @@ CRYPTO_FIPS_TEXT EcdsaDrbg *burrow__ecdsa_new_drbg(Alloc *a, HashNewFunc h,
 }
 
 CRYPTO_FIPS_TEXT void burrow__ecdsa_drbg_generate(EcdsaDrbg *d, Slice out) {
+    /* HMAC_DRBG_Generate_algorithm, per Section 10.1.2.5. */
+    burrow__fips140_record_approved();
     if (out.len > ECDSA_MAX_REQUEST_SIZE)
         panic_str(BURROW_S("ecdsa: internal error: request size exceeds maximum"));
     /* Step 1 of SP 800-90A Rev. 1, Section 10.1.2.5. */
@@ -655,6 +660,7 @@ CRYPTO_FIPS_TEXT static bool ecdsa_fips_check_public(const EcdsaFipsCurve *c, Sl
 /* NewPrivateKey, the same for D and Q. */
 CRYPTO_FIPS_TEXT static bool ecdsa_fips_check_private(const EcdsaFipsCurve *c, Slice d,
                                                       Slice q, Error *err) {
+    burrow__fips140_record_approved();
     if (!ecdsa_fips_check_public(c, q, err))
         return false;
     if (d.len != c->size) {
@@ -687,6 +693,7 @@ CRYPTO_FIPS_TEXT static bool ecdsa_fips_sign(const EcdsaFipsCurve *c, Slice d,
         ecdsa_set_error(err, "ecdsa: hash cannot be empty");
         return false;
     }
+    burrow__fips140_record_approved();
     ecdsa_fips_self_test();
 
     /* The nonce comes from a DRBG with random bytes as its entropy, and the
@@ -722,6 +729,7 @@ CRYPTO_FIPS_TEXT static bool ecdsa_fips_sign_deterministic(const EcdsaFipsCurve 
         ecdsa_set_error(err, "ecdsa: hash cannot be empty");
         return false;
     }
+    burrow__fips140_record_approved();
     ecdsa_fips_self_test_deterministic();
     uint8_t h[NISTEC_MAX_ELEMENT_BYTES];
     burrow__ecdsa_bits2octets(c, hash, h);
@@ -950,6 +958,7 @@ CRYPTO_FIPS_TEXT static bool ecdsa_fips_verify(const EcdsaFipsCurve *c, Slice q,
         ecdsa_set_error(err, "ecdsa: hash cannot be empty");
         return false;
     }
+    burrow__fips140_record_approved();
     ecdsa_fips_self_test();
     return ecdsa_verify_generic(c, q, hash, sig_r, sig_s, err);
 }
@@ -1427,6 +1436,7 @@ CRYPTO_FIPS_TEXT EcdsaPrivateKey *ecdsa_generate_key(Alloc *a, EllipticCurve c,
     if (fc == NULL)
         return ecdsa_generate_legacy(a, c, rand, err);
 
+    burrow__fips140_record_approved();
     uint8_t k[NISTEC_MAX_ELEMENT_BYTES];
     uint8_t q[NISTEC_MAX_POINT_BYTES];
     if (!burrow__ecdsa_random_point(fc, BURROW_FN(EcdsaFill, ecdsa_reader_fill, &rand),

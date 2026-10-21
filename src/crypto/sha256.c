@@ -372,6 +372,9 @@ static void sha256_update(Sha256Digest *d, const Byte *p, Int n);
 
 /* Always writes all 32 bytes. SHA-224 keeps the first 28. */
 CRYPTO_FIPS_TEXT static void sha256_check_sum(Sha256Digest *d, Byte out[SHA256_SIZE]) {
+    /* Go records it in Sum, and every sum here, the one-shot ones too, comes
+     * through this. */
+    burrow__fips140_record_approved();
     /* Padding: add 1 bit and 0 bits until 56 bytes mod 64, then the length in
      * bits as a big endian 64 bit number. */
     uint64_t len = d->len;
@@ -555,6 +558,10 @@ CRYPTO_FIPS_TEXT static Hash sha256_make(Alloc *a, bool is224) {
     sha256_reset(d);
     Hash h = {&sha256_vt.hash, d};
     return h;
+}
+
+CRYPTO_FIPS_TEXT bool burrow__sha256_is_digest(Hash h) {
+    return h.vt == &sha256_vt.hash;
 }
 
 CRYPTO_FIPS_TEXT Hash sha256_new(Alloc *a) {

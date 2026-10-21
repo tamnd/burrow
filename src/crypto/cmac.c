@@ -58,6 +58,7 @@ CRYPTO_FIPS_TEXT void burrow__cmac_init(Cmac *c, const AesBlock *b) {
 }
 
 CRYPTO_FIPS_TEXT void burrow__cmac_mac(Cmac *c, Byte out[AES_BLOCK_SIZE], Slice m) {
+    burrow__fips140_record_approved();
     Byte x[AES_BLOCK_SIZE] = {0};
     Slice xs = cmac_bytes(x, AES_BLOCK_SIZE);
     if (m.len == 0) {
@@ -98,6 +99,7 @@ CRYPTO_FIPS_TEXT void burrow__counter_kdf_init(CounterKdf *kdf, const AesBlock *
 CRYPTO_FIPS_TEXT void burrow__counter_kdf_derive_key(CounterKdf *kdf, Byte out[32],
                                                      Byte label,
                                                      const Byte context[12]) {
+    burrow__fips140_record_approved();
     Byte input[AES_BLOCK_SIZE] = {0};
     input[2] = label;
     memcpy(input + 4, context, 12);

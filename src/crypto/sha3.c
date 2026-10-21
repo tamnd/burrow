@@ -526,6 +526,9 @@ CRYPTO_FIPS_TEXT static void sha3_absorb(Sha3 *d, const Byte *p, Int len) {
 }
 
 CRYPTO_FIPS_TEXT static void sha3_squeeze(Sha3 *d, Byte *out, Int len) {
+    /* Go records it in Digest.Sum and SHAKE.Read, and every sum and read
+     * here, the one-shot ones too, comes through this. */
+    burrow__fips140_record_approved();
     if (!d->squeezing)
         sha3_pad_and_permute(d);
     while (len > 0) {
@@ -771,6 +774,10 @@ CRYPTO_FIPS_TEXT HashCloner sha3_as_cloner(Sha3 *d) {
 CRYPTO_FIPS_TEXT Hash sha3_as_hash(Sha3 *d) {
     Hash h = {&sha3_vt.hash, d};
     return h;
+}
+
+CRYPTO_FIPS_TEXT bool burrow__sha3_is_digest(Hash h) {
+    return h.vt == &sha3_vt.hash;
 }
 
 /* The one shot sums, on a Sha3 on the stack. */

@@ -1169,6 +1169,7 @@ CRYPTO_FIPS_TEXT static Slice mldsa_sign_message(const MldsaPrivateKey *priv, Al
                                                  Slice msg, Str context,
                                                  const Byte *random, Error *err) {
     mldsa_fips_self_test();
+    burrow__fips140_record_approved();
     Byte mu[64];
     if (!mldsa_compute_message_hash(mu, priv->pub.tr, msg, context)) {
         mldsa_set_error(err, "mldsa: context too long");
@@ -1190,6 +1191,7 @@ CRYPTO_FIPS_TEXT static Slice mldsa_sign_mu(const MldsaPrivateKey *priv, Alloc *
                                             const MldsaRejectionHook *hook,
                                             Error *err) {
     mldsa_fips_self_test();
+    burrow__fips140_record_approved();
     if (mu.len != 64) {
         mldsa_set_error(err, "mldsa: invalid message hash length");
         return slice_nil(TYPE_BYTE);
@@ -1326,6 +1328,7 @@ CRYPTO_FIPS_TEXT static Error mldsa_verify_internal(const MldsaPublicKey *pub,
 CRYPTO_FIPS_TEXT Error burrow__mldsa_verify_external_mu(const MldsaPublicKey *pk,
                                                         Slice mu, Slice sig) {
     mldsa_fips_self_test();
+    burrow__fips140_record_approved();
     if (mu.len != 64)
         return mldsa_error("mldsa: invalid message hash length");
     return mldsa_verify_internal(pk, mu.p, sig);
@@ -1656,6 +1659,7 @@ mldsa_generate_key(Alloc *a, const MldsaParameters *params, Error *err) {
         return NULL;
     }
     mldsa_fips_self_test();
+    burrow__fips140_record_approved();
     Byte seed[32];
     burrow__crypto_rand_system(slice_from(seed, 32, 32, TYPE_BYTE));
     MldsaPrivateKey *priv = mldsa_private_key_from_seed(params, a, seed, err);
@@ -1672,6 +1676,7 @@ mldsa_new_private_key(Alloc *a, const MldsaParameters *params, Slice seed, Error
         return NULL;
     }
     mldsa_fips_self_test();
+    burrow__fips140_record_approved();
     if (seed.len != MLDSA_PRIVATE_KEY_SIZE) {
         mldsa_set_error(err, "mldsa: invalid seed length");
         return NULL;
@@ -1840,6 +1845,7 @@ CRYPTO_FIPS_TEXT Error mldsa_verify(const MldsaPublicKey *pk, Slice message,
     if (pk->p == NULL)
         return mldsa_error("mldsa: zero public key");
     mldsa_fips_self_test();
+    burrow__fips140_record_approved();
     Str context = opts != NULL ? opts->context : BURROW_STR_EMPTY;
     Byte mu[64];
     if (!mldsa_compute_message_hash(mu, pk->tr, message, context))

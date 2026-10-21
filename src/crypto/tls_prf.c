@@ -124,6 +124,36 @@ CRYPTO_FIPS_TEXT Slice burrow__tls_prf12(Alloc *a, HashNewFunc h, Slice secret,
     return ok ? result : slice_nil(TYPE_BYTE);
 }
 
+CRYPTO_FIPS_TEXT Slice burrow__tls12_master_secret(Alloc *a, HashNewFunc hash,
+                                                   Slice pre_master_secret,
+                                                   Slice transcript) {
+    /* "The TLS 1.2 KDF is an approved KDF when the following conditions are
+     * satisfied: [...] (3) P_HASH uses either SHA-256, SHA-384 or SHA-512." */
+    Arena scratch;
+    arena_init(&scratch, NULL, 0);
+    Hash h = hash(arena_allocator(&scratch));
+    if (h.vt == NULL) {
+        arena_free(&scratch);
+        return slice_nil(TYPE_BYTE);
+    }
+    /* Not in Go: the 46 is Go's, so SHA-384, whose size is 48, is recorded as
+     * not approved here, as it is in Go. */
+    if (burrow__sha256_is_digest(h)) {
+        if (hash_size(h) != 32)
+            burrow__fips140_record_non_approved();
+    } else if (burrow__sha512_is_digest(h)) {
+        if (hash_size(h) != 46 && hash_size(h) != 64)
+            burrow__fips140_record_non_approved();
+    } else {
+        burrow__fips140_record_non_approved();
+    }
+    arena_free(&scratch);
+
+    return burrow__tls_prf12(a, hash, pre_master_secret,
+                             BURROW_S("extended master secret"), transcript,
+                             TLS_MASTER_SECRET_LENGTH);
+}
+
 CRYPTO_FIPS_TEXT Slice burrow__tls_prf(Alloc *a, TlsPrfKind prf_kind, Slice secret,
                                        Str label, Slice seed, Int key_len) {
     switch (prf_kind) {
@@ -195,9 +225,8 @@ CRYPTO_FIPS_TEXT Slice burrow__tls_ext_master_from_pre_master_secret(
     if (version == TLS_VERSION_TLS12) {
         /* Use the FIPS 140-3 module only for TLS 1.2 with EMS, which is the
          * only TLS 1.0-1.2 approved mode per IG D.Q. */
-        return burrow__tls_prf12(a, burrow__crypto_hash_new_func(hash),
-                                 pre_master_secret, BURROW_S("extended master secret"),
-                                 transcript, TLS_MASTER_SECRET_LENGTH);
+        return burrow__tls12_master_secret(a, burrow__crypto_hash_new_func(hash),
+                                           pre_master_secret, transcript);
     }
     return burrow__tls_prf(a, prf, pre_master_secret,
                            BURROW_S("extended master secret"), transcript,
@@ -465,9 +494,8 @@ CRYPTO_FIPS_TEXT Error burrow__tls12_cast(void *arg) {
         slice_from((void *)(uintptr_t)tls12_cast_transcript, 16, 16, TYPE_BYTE);
     Arena ar;
     arena_init(&ar, NULL, 0);
-    Slice got = burrow__tls_prf12(arena_allocator(&ar), sha256_new, input,
-                                  BURROW_S("extended master secret"), transcript,
-                                  TLS_MASTER_SECRET_LENGTH);
+    Slice got =
+        burrow__tls12_master_secret(arena_allocator(&ar), sha256_new, input, transcript);
     if (got.p == NULL) {
         arena_free(&ar);
         return burrow_err_out_of_memory;

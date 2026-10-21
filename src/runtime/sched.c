@@ -276,6 +276,24 @@ void *burrow__get_prof_label(void) {
     return thread_prof_labels;
 }
 
+/* Where the indicator goes on a thread with no goroutine. */
+static BURROW_THREAD_LOCAL uint8_t thread_fips_indicator;
+
+uint8_t burrow__fips_get_indicator(void) {
+    burrow__M *m = getm();
+    if (m != NULL && m->curg != NULL)
+        return m->curg->fips_indicator;
+    return thread_fips_indicator;
+}
+
+void burrow__fips_set_indicator(uint8_t indicator) {
+    burrow__M *m = getm();
+    if (m != NULL && m->curg != NULL)
+        m->curg->fips_indicator = indicator;
+    else
+        thread_fips_indicator = indicator;
+}
+
 /* Go's dit_setEnabled and dit_setDisabled. A thread that is not running a
  * goroutine has nothing to remember the mode on but the bit itself. */
 bool burrow__dit_set_enabled(void) {
@@ -2409,6 +2427,9 @@ static bool go_start(Func fn, size_t stack_bytes, burrow__Bubble *bubble, bool b
     newg->coro = NULL;
     newg->bubble = bubble;
     newg->dit_wanted = m != NULL && m->curg != NULL && m->curg->dit_wanted;
+    /* Go leaves a reused G with the indicator its last goroutine had, which
+     * is allowed, since the indicator means nothing until it is reset. */
+    newg->fips_indicator = 0;
     burrow__atomic_store_release_ptr(&newg->startpc, (void *)(uintptr_t)fn.f);
     burrow__atomic_store_release_ptr(
         &newg->labels, m != NULL && m->curg != NULL ? m->curg->labels : NULL);
@@ -2517,6 +2538,7 @@ bool burrow__newcoro(burrow__Coro *c, void (*f)(burrow__Coro *c, void *env),
     newg->coro = c;
     newg->bubble = m->curg->bubble;
     newg->dit_wanted = m->curg->dit_wanted;
+    newg->fips_indicator = 0;
     burrow__atomic_store_release_ptr(&newg->startpc, (void *)(uintptr_t)f);
     burrow__atomic_store_release_ptr(&newg->labels, m->curg->labels);
     burrow__atomic_store_release_u32(&newg->bubbleblocked, 0);
@@ -2922,6 +2944,7 @@ void runtime_main(Func fn) {
     mg->entry = fn.f;
     mg->arg = fn.env;
     mg->dit_wanted = false;
+    mg->fips_indicator = 0;
     mg->labels = NULL;
 
     if (!make_context(mg, BURROW_GOROUTINE_STACK))

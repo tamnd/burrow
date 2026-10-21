@@ -272,6 +272,7 @@ CRYPTO_FIPS_TEXT static bool rsa_read(IoReader r, Slice b, Error *err) {
         burrow__crypto_rand_system(b);
         return true;
     }
+    burrow__fips140_record_non_approved();
     if (b.len == 0)
         return true;
     if (r.vt == NULL)
@@ -851,6 +852,9 @@ CRYPTO_FIPS_TEXT static bool rsa_fips_encrypt(const BigmodModulus *N, Int e,
  * the CRT from leaking the key. */
 CRYPTO_FIPS_TEXT static bool rsa_fips_decrypt(const RsaFipsKey *k, Slice ciphertext,
                                               bool check, Alloc *tmp, Slice *out) {
+    if (!k->fips_approved)
+        burrow__fips140_record_non_approved();
+
     const BigmodModulus *N = k->n;
     BigmodNat *c = bigmod_nat_set_bytes(bigmod_new_nat(tmp), ciphertext, N, NULL);
     if (c == NULL)
@@ -858,6 +862,8 @@ CRYPTO_FIPS_TEXT static bool rsa_fips_decrypt(const RsaFipsKey *k, Slice ciphert
 
     BigmodNat *m = bigmod_new_nat(tmp);
     if (!k->crt) {
+        /* Legacy codepath for deprecated multi-prime keys. */
+        burrow__fips140_record_non_approved();
         bigmod_nat_exp(m, c, bigmod_nat_bytes(&k->d, tmp, N), N);
     } else {
         const BigmodModulus *P = k->p, *Q = k->q;
@@ -949,6 +955,8 @@ CRYPTO_FIPS_TEXT static Error rsa_fips_verify_pkcs1_v15(const BigmodModulus *N, 
     Error ce = rsa_check_public(N, e);
     if (BURROW_FAILED(ce))
         return ce;
+    if (!rsa_public_approved(N, e))
+        burrow__fips140_record_non_approved();
 
     /* RFC 8017 Section 8.2.2: If the length of the signature S is not k
      * octets (where k is the length in octets of the RSA modulus n), output
@@ -965,6 +973,22 @@ CRYPTO_FIPS_TEXT static Error rsa_fips_verify_pkcs1_v15(const BigmodModulus *N, 
     if (em.len != expected.len || memcmp(em.p, expected.p, (size_t)em.len) != 0)
         return rsa_err_verification;
     return BURROW_NO_ERROR;
+}
+
+CRYPTO_FIPS_TEXT static void rsa_check_approved_hash_name(Str hash) {
+    static const char *const approved[] = {
+        "SHA-224",     "SHA-256",  "SHA-384",  "SHA-512",  "SHA-512/224",
+        "SHA-512/256", "SHA3-224", "SHA3-256", "SHA3-384", "SHA3-512",
+    };
+    for (size_t i = 0; i < sizeof approved / sizeof approved[0]; i++)
+        if (str_eq(hash, str_from_cstr(approved[i])))
+            return;
+    burrow__fips140_record_non_approved();
+}
+
+CRYPTO_FIPS_TEXT static void rsa_check_approved_hash(Hash hash) {
+    if (!burrow__fips140_approved_hash(hash))
+        burrow__fips140_record_non_approved();
 }
 
 /* ------------------------------------------------------------- self-tests */
@@ -1328,6 +1352,11 @@ CRYPTO_FIPS_TEXT static Error rsa_emsa_pss_verify(Slice m_hash, Slice em, Int em
         s_len = db.len - (Int)(one - dbp) - 1;
     }
 
+    /* FIPS 186-5, Section 5.4(g): "the length (in bytes) of the salt (sLen)
+     * shall satisfy 0 ≤ sLen ≤ hLen". */
+    if (s_len > h_len)
+        burrow__fips140_record_non_approved();
+
     /* 10. If the emLen - hLen - sLen - 2 leftmost octets of DB are not zero or
      * if the octet at position emLen - hLen - sLen - 1 (the leftmost position
      * is "position 1") does not have hexadecimal value 0x01, output
@@ -1379,10 +1408,17 @@ CRYPTO_FIPS_TEXT static bool rsa_fips_sign_pss(IoReader rand, const RsaFipsKey *
                                                Hash hash, Slice hashed, Int salt_length,
                                                Alloc *tmp, Slice *out, Error *err) {
     rsa_fips_self_test();
+    burrow__fips140_record_approved();
+    rsa_check_approved_hash(hash);
+
     if (salt_length < 0) {
         rsa_set_error(err, "crypto/rsa: salt length cannot be negative");
         return false;
     }
+    /* FIPS 186-5, Section 5.4(g): "the length (in bytes) of the salt (sLen)
+     * shall satisfy 0 ≤ sLen ≤ hLen". */
+    if (salt_length > hash_size(hash))
+        burrow__fips140_record_non_approved();
     Slice salt = rsa_make(tmp, salt_length);
     if (!rsa_read(rand, salt, err))
         return false;
@@ -1418,9 +1454,14 @@ CRYPTO_FIPS_TEXT static Error rsa_fips_verify_pss(const BigmodModulus *N, Int e,
                                                   Hash hash, Slice digest, Slice sig,
                                                   Int salt_length, Alloc *tmp) {
     rsa_fips_self_test();
+    burrow__fips140_record_approved();
+    rsa_check_approved_hash(hash);
     Error ce = rsa_check_public(N, e);
     if (BURROW_FAILED(ce))
         return ce;
+    if (!rsa_public_approved(N, e))
+        burrow__fips140_record_non_approved();
+
     if (sig.len != bigmod_modulus_size(N))
         return rsa_err_verification;
 
@@ -1461,11 +1502,15 @@ CRYPTO_FIPS_TEXT static bool rsa_fips_encrypt_oaep(Hash hash, Hash mgf_hash,
                                                    Slice msg, Slice label, Alloc *tmp,
                                                    Slice *out, Error *err) {
     rsa_fips_self_test();
+    burrow__fips140_record_approved();
+    rsa_check_approved_hash(hash);
     Error ce = rsa_check_public(N, e);
     if (BURROW_FAILED(ce)) {
         BURROW_OUT(err, ce);
         return false;
     }
+    if (!rsa_public_approved(N, e))
+        burrow__fips140_record_non_approved();
     Int k = bigmod_modulus_size(N);
     Int h_len = hash_size(hash);
     if (msg.len > k - 2 * h_len - 2) {
@@ -1503,6 +1548,9 @@ CRYPTO_FIPS_TEXT static bool rsa_fips_decrypt_oaep(Hash hash, Hash mgf_hash,
                                                    Slice ciphertext, Slice label,
                                                    Alloc *tmp, Slice *out, Error *err) {
     rsa_fips_self_test();
+    burrow__fips140_record_approved();
+    rsa_check_approved_hash(hash);
+
     Int k = bigmod_modulus_size(priv->n);
     Int h_len = hash_size(hash);
     if (ciphertext.len > k || k < h_len * 2 + 2) {
@@ -1836,6 +1884,9 @@ CRYPTO_FIPS_TEXT static RsaFipsKey *rsa_fips_generate_key(Alloc *a, IoReader ran
         rsa_set_error(err, "rsa: key too small");
         return NULL;
     }
+    burrow__fips140_record_approved();
+    if (bits < 2048 || bits % 2 == 1)
+        burrow__fips140_record_non_approved();
 
     RsaScratch s;
     rsa_scratch_init(&s);
@@ -2723,6 +2774,9 @@ CRYPTO_FIPS_TEXT Slice rsa_sign_pkcs1_v15(Alloc *a, IoReader random,
     const RsaFipsKey *k = rsa_fips_private_key(priv, s.a, err);
     if (k != NULL) {
         rsa_fips_self_test();
+        burrow__fips140_record_approved();
+        rsa_check_approved_hash_name(name);
+
         Slice sig;
         if (rsa_fips_sign_pkcs1_v15(k, name, hashed, s.a, &sig, err))
             out = rsa_clone(a, sig, err);
@@ -2753,6 +2807,9 @@ CRYPTO_FIPS_TEXT Error rsa_verify_pkcs1_v15(const RsaPublicKey *pub, CryptoHash 
     BigmodModulus *N = rsa_fips_public_key(pub, s.a, &err);
     if (N != NULL) {
         rsa_fips_self_test();
+        burrow__fips140_record_approved();
+        rsa_check_approved_hash_name(name);
+
         err = rsa_fips_verify_pkcs1_v15(N, pub->e, name, hashed, sig, s.a);
     }
 
@@ -2792,6 +2849,8 @@ CRYPTO_FIPS_TEXT Slice rsa_encrypt_pkcs1_v15(Alloc *a, IoReader random,
     BigmodModulus *N = rsa_fips_public_key(pub, s.a, err);
     if (N == NULL)
         goto done;
+    /* rsa.Encrypt. */
+    burrow__fips140_record_non_approved();
     if (rsa_fail(err, rsa_check_public(N, pub->e)))
         goto done;
     Slice ct;
@@ -2822,6 +2881,8 @@ CRYPTO_FIPS_TEXT static bool rsa_decrypt_pkcs1_v15_em(const RsaPrivateKey *priv,
     const RsaFipsKey *fk = rsa_fips_private_key(priv, tmp, err);
     if (fk == NULL)
         return false;
+    /* rsa.DecryptWithoutCheck. */
+    burrow__fips140_record_non_approved();
     if (!rsa_fips_decrypt(fk, ciphertext, false, tmp, em)) {
         BURROW_OUT(err, rsa_err_decryption);
         return false;

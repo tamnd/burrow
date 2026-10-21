@@ -22,6 +22,7 @@
 #include "burrow/mem/heap.h"
 #include "burrow/net.h"
 #include "burrow/net/http.h"
+#include "burrow/netpoll.h"
 #include "burrow/sync.h"
 
 #include <stdint.h>

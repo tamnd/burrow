@@ -369,6 +369,7 @@ struct SqlTx {
     SqlStmt *stmts_last;
     Context ctx;
     ContextCancelFunc cancel;
+    SyncWaitGroup await; /* sq_tx_await_done, which sql_tx_free waits for */
     SyncAtomicInt64 refs;
 };
 
@@ -432,6 +433,7 @@ struct SqlRows {
     Arena raw_arena;
     Alloc *scan_alloc; /* what the Scan under way was given */
     Arena err_arena;
+    SyncWaitGroup await; /* sq_rows_await_done, which sql_rows_free waits for */
     SyncAtomicInt64 refs;
 };
 
@@ -2198,14 +2200,16 @@ static SqlRows *sq_query_dc(Context ctx, SqlTx *txctx, SqDC *dc, SqRelease rel,
 static Error sq_tx_rollback(SqlTx *tx, bool discard_conn);
 
 /* Tx.awaitDone. Rolls the Tx back when its context ends, which a commit or a
- * rollback also does. */
+ * rollback also does. It holds no reference of its own: sql_tx_free waits for
+ * it before it lets go of the caller's, so that a program that ends before
+ * this has run does not take the last pointer to the Tx with it. */
 static void sq_tx_await_done(void *env) {
     SqlTx *tx = (SqlTx *)env;
     (void)chan_recv(context_done(tx->ctx), NULL);
     ArenaMark m = error_mark();
     (void)sq_tx_rollback(tx, !tx->keep_conn_on_rollback);
     error_release(m);
-    sq_tx_unref(tx);
+    sync_wait_group_done(&tx->await);
 }
 
 /* beginDC. */
@@ -2258,10 +2262,11 @@ static SqlTx *sq_begin_dc(SqlDB *db, Context ctx, SqDC *dc, SqRelease rel,
     tx->keep_conn_on_rollback = keep;
     tx->ctx = tctx;
     tx->cancel = cancel;
-    sync_atomic_int64_store(&tx->refs, 2);
+    sync_atomic_int64_store(&tx->refs, 1);
+    sync_wait_group_add(&tx->await, 1);
     if (!go(BURROW_FN(Func, sq_tx_await_done, tx))) {
+        sync_wait_group_done(&tx->await);
         (void)sq_tx_rollback(tx, !keep);
-        sq_tx_unref(tx);
         sq_tx_unref(tx);
         BURROW_OUT(err, burrow_err_out_of_memory);
         return NULL;
@@ -2697,6 +2702,8 @@ void sql_tx_free(SqlTx *tx) {
         return;
     if (!sync_atomic_bool_load(&tx->done))
         (void)sq_tx_rollback(tx, false);
+    /* The commit or rollback cancelled the context, so this is short. */
+    sync_wait_group_wait(&tx->await);
     sq_tx_unref(tx);
 }
 
@@ -3092,7 +3099,8 @@ static Error sq_rows_lasterr_or(const SqlRows *rs, Error err) {
 
 /* Rows.awaitDone. Go selects on the query's context as well, which here may
  * be gone by the time it is done, so closectx stands in for it, and closing
- * tells a cancel from Close apart from the query's context ending. */
+ * tells a cancel from Close apart from the query's context ending. Like
+ * sq_tx_await_done, it holds no reference, and sql_rows_free waits for it. */
 static void sq_rows_await_done(void *env) {
     SqlRows *rs = (SqlRows *)env;
     Chan *txd = rs->await_tx != NULL ? context_done(rs->await_tx->ctx) : NULL;
@@ -3109,7 +3117,7 @@ static void sq_rows_await_done(void *env) {
     }
     (void)sq_rows_close(rs, context_err(rs->closectx));
     error_release(m);
-    sq_rows_unref(rs);
+    sync_wait_group_done(&rs->await);
 }
 
 /* initContextClose. False when there was no memory for it. */
@@ -3130,9 +3138,9 @@ static bool sq_rows_init_context_close(SqlRows *rs, Context ctx, SqlTx *tx) {
         sync_atomic_int64_add(&tx->refs, 1);
         rs->await_tx = tx;
     }
-    sync_atomic_int64_add(&rs->refs, 1);
+    sync_wait_group_add(&rs->await, 1);
     if (!go(BURROW_FN(Func, sq_rows_await_done, rs))) {
-        sync_atomic_int64_add(&rs->refs, -1);
+        sync_wait_group_done(&rs->await);
         return false;
     }
     return true;
@@ -3560,6 +3568,8 @@ void sql_rows_free(SqlRows *rs) {
     if (rs == NULL)
         return;
     (void)sql_rows_close(rs);
+    /* Closing cancelled closectx, so this is short. */
+    sync_wait_group_wait(&rs->await);
     sq_rows_unref(rs);
 }
 

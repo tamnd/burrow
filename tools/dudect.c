@@ -414,10 +414,21 @@ int main(int argc, char **argv) {
     for (size_t i = 0; i < sizeof checks / sizeof checks[0]; i++) {
         t = measure(&checks[i], scale);
         bool ok = t <= T_FAIL;
-        printf("%s\t%s\t|t| %.1f\n", ok ? "ok" : "FAIL", checks[i].name, t);
-        fflush(stdout);
-        if (!ok)
+        printf("%s\t%s\t|t| %.1f", ok ? "ok" : "FAIL", checks[i].name, t);
+        /* A failure is measured twice more and those are printed too, so the
+         * log shows whether it holds on this machine. The check has failed
+         * either way. */
+        if (!ok) {
             failed = 1;
+            fflush(stdout);
+            double again = measure(&checks[i], scale);
+            printf(" (again: %.1f", again);
+            fflush(stdout);
+            again = measure(&checks[i], scale);
+            printf(", %.1f)", again);
+        }
+        printf("\n");
+        fflush(stdout);
     }
     burrow__aes_set_portable(false);
     return failed;

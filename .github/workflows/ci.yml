@@ -563,6 +563,8 @@ jobs:
         os: [ubuntu-latest, ubuntu-24.04-arm]
     steps:
       - uses: actions/checkout@v7
+      # The CPU, since a timing difference can show on one and not another.
+      - run: lscpu
       - run: make -j4 dudect
 
   # The programs under docs/examples, which the C blocks in the docs are

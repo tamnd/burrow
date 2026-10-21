@@ -1416,7 +1416,7 @@ One GODEBUG setting from Go applies: `x509rsacrt=0` makes `x509_parse_pkcs1_priv
 
 ## crypto/tls
 
-`burrow/crypto/tls.h` is the start of Go's crypto/tls. There are no connections yet. What is here is the vocabulary a handshake works with: protocol versions, cipher suites, curves, signature schemes and alerts, with the same names and numbers as Go. Inside the library the cipher suites, the TLS 1.0 to 1.2 PRF and the TLS 1.3 key schedule are already in place and tested against Go's vectors, and the record layer and handshakes will be built on them.
+`burrow/crypto/tls.h` is Go's crypto/tls: TLS clients and servers for versions 1.0 to 1.3, with session resumption, client certificates, ALPN, Encrypted Client Hello and the hooks QUIC needs. `tls_client` and `tls_server` wrap any `NetConn`, `tls_dial` and `tls_listen` do the same over the network, and `tls_conn_as_net_conn` turns the result back into a `NetConn` for code that only reads and writes. The protocol versions, cipher suites, curves, signature schemes and alerts have the same names and numbers as in Go.
 
 `tls_cipher_suites` lists the suites Go counts as secure, and `tls_insecure_cipher_suites` lists the rest. Both give fresh copies each call, sorted by ID, as Go does. `tls_cipher_suite_name` finds a name in either list and falls back to the number in hex:
 
@@ -1445,4 +1445,57 @@ print(error_text(err));
 print(tls_alert_error_error(7, a));
 ```
 
-Two GODEBUG settings from Go are read already, once, from the `GODEBUG` environment variable. `tlsmlkem=0` takes the hybrid ML-KEM key exchanges out of the defaults, and `tlssecpmlkem=0` takes out just the ones built on P-256 and P-384. They will matter once there are handshakes to use the defaults.
+A server needs a certificate. `tls_x509_key_pair` reads one and its key from PEM, and `tls_load_x509_key_pair` does the same from files. The example below runs a handshake over `net_pipe` with the key pair from Go's `ExampleX509KeyPair`. That certificate expired in 2018, so the client turns off the usual check with `insecure_skip_verify` and does its own in `verify_connection`, at a time when the certificate was still valid. This is the pattern from Go's `ExampleConfig_verifyConnection`:
+
+<!-- example: ../examples/crypto/tls.c#handshake -->
+```c
+Error err;
+TlsCertificate cert = tls_x509_key_pair(a, slice_from_str(a, BURROW_S(CERT_PEM)),
+                                        slice_from_str(a, BURROW_S(KEY_PEM)), &err);
+if (BURROW_FAILED(err))
+    return;
+TlsConfig server_config = {0};
+server_config.certificates = slice_from(&cert, 1, 1, TYPE_TLS_CERTIFICATE);
+
+Verifier v = {x509_new_cert_pool(a), a};
+x509_cert_pool_add_cert(v.roots, cert.leaf);
+TlsConfig client_config = {0};
+client_config.insecure_skip_verify = true;
+client_config.verify_connection = BURROW_FN(TlsVerifyConnectionFunc, verify, &v);
+
+NetConn c, s;
+net_pipe(heap_allocator(), &c, &s);
+TlsConn *server = tls_server(heap_allocator(), s, &server_config);
+TlsConn *client = tls_client(heap_allocator(), c, &client_config);
+SyncWaitGroup wg = {0};
+sync_wait_group_go(&wg, BURROW_FN(Func, echo, server));
+
+NetConn conn = tls_conn_as_net_conn(client);
+Byte buf[5];
+Slice b = slice_from(buf, 5, 5, TYPE_BYTE);
+io_write_string(net_conn_as_io_writer(conn), BURROW_S("hello"), &err);
+io_read_full(net_conn_as_io_reader(conn), b, &err);
+if (BURROW_FAILED(err))
+    print(error_text(err));
+else
+    printf("%.*s\n", 5, (const char *)buf);
+
+TlsConnectionState state = tls_conn_connection_state(client);
+X509Certificate **peer = state.peer_certificates.p;
+print(tls_version_name(a, state.version));
+print(tls_curve_id_string(state.curve_id, a));
+print(((Str *)peer[0]->subject.organization.p)[0]);
+
+tls_conn_close(client);
+sync_wait_group_wait(&wg);
+tls_conn_close(server);
+tls_conn_free(client);
+tls_conn_free(server);
+net_pipe_free(c);
+tls_config_release(&client_config);
+tls_config_release(&server_config);
+```
+
+The handshake runs the first time either side reads or writes, or when `tls_conn_handshake` is called. A zero `TlsConfig` is ready to use, and `tls_config_release` gives back what a config came to hold, such as the session ticket keys a server makes.
+
+Four GODEBUG settings from Go are read, once, from the `GODEBUG` environment variable. `tlsmlkem=0` takes the hybrid ML-KEM key exchanges out of the defaults, and `tlssecpmlkem=0` takes out just the ones built on P-256 and P-384. `tlssha1=1` allows SHA-1 signatures in TLS 1.2 handshakes again, and `tlsmaxrsasize` changes the largest RSA key a handshake accepts, which is 8192 bits by default.

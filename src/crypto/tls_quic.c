@@ -216,7 +216,7 @@ Error tls_quic_conn_handle_data(TlsQUICConn *q, TlsQUICEncryptionLevel level,
     }
     while (bytes_buffer_len(&c->hand) >= 4 && BURROW_OK(c->handshake_err)) {
         Slice b = bytes_buffer_bytes(&c->hand);
-        const Byte *p = (const Byte *)b.p;
+        const Byte *p = (const Byte *)slice_at(b, 0);
         Int n = (Int)p[1] << 16 | (Int)p[2] << 8 | (Int)p[3];
         if (n > TLS_MAX_HANDSHAKE) {
             burrow__tls_conn_set_handshake_err(

@@ -1639,6 +1639,11 @@ bool burrow__tls_certificate_msg_tls13_unmarshal(TlsCertificateMsgTLS13 *m, Allo
  * the way Go does for serverKeyExchangeMsg and clientKeyExchangeMsg. */
 static Slice tls_marshal_body(Alloc *a, uint8_t typ, Slice body, Error *err) {
     Int length = body.len;
+    /* length is never negative, but gcc can't see that in the amalgamation. It
+     * follows slice_make into the empty slice it makes for a length of zero
+     * and warns about the writes below (-Wstringop-overflow), so the test. */
+    if (length < 0)
+        return slice_nil(TYPE_BYTE);
     Slice xs = tls_make_bytes(a, length + 4, err);
     if (xs.p == NULL)
         return xs;
@@ -1925,6 +1930,9 @@ Slice burrow__tls_new_session_ticket_msg_marshal(const TlsNewSessionTicketMsg *m
                                                  Alloc *a, Error *err) {
     /* See RFC 5077, Section 3.3. */
     Int ticket_len = m->ticket.len;
+    /* Never negative. See tls_marshal_body. */
+    if (ticket_len < 0)
+        return slice_nil(TYPE_BYTE);
     Int length = 2 + 4 + ticket_len;
     Slice xs = tls_make_bytes(a, 4 + length, err);
     if (xs.p == NULL)

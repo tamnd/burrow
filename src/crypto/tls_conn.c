@@ -956,7 +956,7 @@ static Error thc_read_record_or_ccs(TlsConn *c, bool expect_change_cipher_spec) 
             (void)burrow__tls_half_conn_set_error_locked(&c->in, err);
         return err;
     }
-    const Byte *hdr = (const Byte *)bytes_buffer_bytes(&c->raw_input).p;
+    const Byte *hdr = (const Byte *)slice_at(bytes_buffer_bytes(&c->raw_input), 0);
     uint8_t typ = hdr[0];
 
     /* No valid TLS record has a type of 0x80, however SSLv2 handshakes start
@@ -1865,7 +1865,7 @@ Int tls_conn_read(TlsConn *c, Slice b, Error *err) {
      * already tried to reuse the HTTP connection for a new request. See
      * https://golang.org/cl/76400046 and https://golang.org/issue/3514 */
     if (n != 0 && c->input.len == 0 && bytes_buffer_len(&c->raw_input) > 0 &&
-        ((const Byte *)bytes_buffer_bytes(&c->raw_input).p)[0] ==
+        *(const Byte *)slice_at(bytes_buffer_bytes(&c->raw_input), 0) ==
             TLS_RECORD_TYPE_ALERT) {
         e = burrow__tls_conn_read_record(c);
         if (BURROW_FAILED(e))

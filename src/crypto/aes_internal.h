@@ -65,6 +65,19 @@ const char *burrow__aes_hardware(bool *available);
 bool burrow__aes_ctr_xor_key_stream_at(CipherStream s, Slice dst, Slice src,
                                        uint64_t offset);
 
+/* CMAC, from crypto/internal/fips140/aes/gcm, in cmac.c. */
+typedef struct Cmac {
+    AesBlock b;
+    Byte k1[AES_BLOCK_SIZE];
+    Byte k2[AES_BLOCK_SIZE];
+} Cmac;
+
+/* NewCMAC: c over a copy of b, with the subkeys worked out. */
+void burrow__cmac_init(Cmac *c, const AesBlock *b);
+
+/* CMAC.MAC: the tag of m into out. */
+void burrow__cmac_mac(Cmac *c, Byte out[AES_BLOCK_SIZE], Slice m);
+
 /* GCM's errOpen, "cipher: message authentication failed", which Go does not
  * export either. */
 extern const Error burrow__gcm_err_open;

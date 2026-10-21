@@ -16,8 +16,11 @@
 #include "burrow/crypto/sha3.h"
 
 #include "burrow/core.h"
+#include "burrow/declare.h"
+#include "burrow/encoding.h"
 #include "burrow/error.h"
 #include "burrow/hash.h"
+#include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
@@ -698,8 +701,47 @@ static HashCloner sha3_vt_clone(void *self, Alloc *a, Error *err) {
     return sha3_clone(self, a, err);
 }
 
+/* sha3_unmarshal_binary with the allocator argument UnmarshalBinary's shape has
+ * here, which a SHA-3 state never needs. */
+static Error sha3_m_unmarshal_binary(Sha3 *d, Alloc *a, Slice b) {
+    (void)a;
+    return sha3_unmarshal_binary(d, b);
+}
+
+/* The method set of Go's *sha3.SHA3, so that a Hash from here answers
+ * h.(hash.Cloner) and h.(encoding.BinaryMarshaler) as Go's does. */
+#define SHA3_METHODS(M, T)                                                             \
+    M(T, AppendBinary, sha3_append_binary, ENCODING_SIG_APPEND_BINARY)                 \
+    M(T, BlockSize, sha3_block_size, HASH_SIG_BLOCK_SIZE)                              \
+    M(T, Clone, sha3_clone, HASH_SIG_CLONE)                                            \
+    M(T, MarshalBinary, sha3_marshal_binary, ENCODING_SIG_MARSHAL_BINARY)              \
+    M(T, Reset, sha3_reset, HASH_SIG_RESET)                                            \
+    M(T, Size, sha3_size, HASH_SIG_SIZE)                                               \
+    M(T, Sum, sha3_sum, HASH_SIG_SUM)                                                  \
+    M(T, UnmarshalBinary, sha3_m_unmarshal_binary, ENCODING_SIG_UNMARSHAL_BINARY)      \
+    M(T, Write, sha3_write, IO_SIG_WRITE)
+
+BURROW_METHODS_DEFINE(Sha3, SHA3_METHODS);
+
+static const Type sha3_type = {
+    {(const Byte *)"SHA3", 4},
+    {(const Byte *)"crypto/sha3", 11},
+    KIND_STRUCT,
+    (uint32_t)sizeof(Sha3),
+    (uint16_t)_Alignof(Sha3),
+    0,
+    (uint16_t)(sizeof burrow__methods_Sha3 / sizeof burrow__methods_Sha3[0]),
+    NULL,
+    burrow__methods_Sha3,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
 static const HashClonerVT sha3_vt = {
-    {{NULL, sha3_vt_write},
+    {{&sha3_type, sha3_vt_write},
      sha3_vt_sum,
      sha3_vt_reset,
      sha3_vt_size,
@@ -921,9 +963,38 @@ static Int sha3_shake_vt_block_size(void *self) {
     return sha3_shake_block_size(self);
 }
 
+/* The method set of Go's *sha3.SHAKE. */
+#define SHA3_SHAKE_METHODS(M, T)                                                       \
+    M(T, AppendBinary, sha3_shake_append_binary, ENCODING_SIG_APPEND_BINARY)           \
+    M(T, BlockSize, sha3_shake_block_size, HASH_SIG_BLOCK_SIZE)                        \
+    M(T, MarshalBinary, sha3_shake_marshal_binary, ENCODING_SIG_MARSHAL_BINARY)        \
+    M(T, Read, sha3_shake_read, IO_SIG_READ)                                           \
+    M(T, Reset, sha3_shake_reset, HASH_SIG_RESET)                                      \
+    M(T, UnmarshalBinary, sha3_shake_unmarshal_binary, ENCODING_SIG_UNMARSHAL_BINARY)  \
+    M(T, Write, sha3_shake_write, IO_SIG_WRITE)
+
+BURROW_METHODS_DEFINE(Sha3SHAKE, SHA3_SHAKE_METHODS);
+
+static const Type sha3_shake_type = {
+    {(const Byte *)"SHAKE", 5},
+    {(const Byte *)"crypto/sha3", 11},
+    KIND_STRUCT,
+    (uint32_t)sizeof(Sha3SHAKE),
+    (uint16_t)_Alignof(Sha3SHAKE),
+    0,
+    (uint16_t)(sizeof burrow__methods_Sha3SHAKE / sizeof burrow__methods_Sha3SHAKE[0]),
+    NULL,
+    burrow__methods_Sha3SHAKE,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
 static const HashXOFVT sha3_shake_vt = {
-    {NULL, sha3_shake_vt_write},
-    {NULL, sha3_shake_vt_read},
+    {&sha3_shake_type, sha3_shake_vt_write},
+    {&sha3_shake_type, sha3_shake_vt_read},
     sha3_shake_vt_reset,
     sha3_shake_vt_block_size,
 };

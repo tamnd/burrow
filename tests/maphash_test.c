@@ -539,13 +539,8 @@ static Hash make_hash(Alloc *a) {
     return maphash_hash_as_hash(h);
 }
 
-static HashCloner make_cloner(Alloc *a) {
-    MaphashHash *h = BURROW_NEW(a, MaphashHash);
-    return maphash_hash_as_cloner(h);
-}
-
 static void TestHashInterface(TestingT *t) {
-    testhash_with_clone(t, make_hash, make_cloner);
+    testhash_hash(t, make_hash);
 }
 
 /* Not in Go's test file, where the compiler checks these. */

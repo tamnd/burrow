@@ -9,9 +9,7 @@
  * a slicing table, which only a package with its hands on the internals can
  * build for an arbitrary polynomial, so those two are left out.
  *
- * TestArchIEEE and TestArchCastagnoli wait for the hardware paths, and
- * TestGoldenMarshal and TestMarshalTableMismatch for hash state marshaling (#185). The
- * marshaled states are dropped from the golden table until then.
+ * TestArchIEEE and TestArchCastagnoli wait for the hardware paths.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -22,6 +20,7 @@
 #include "testhash.h"
 
 #include "burrow/burrow.h"
+#include "burrow/encoding.h"
 #include "burrow/hash/crc32.h"
 #include "burrow/mem/arena.h"
 
@@ -51,7 +50,7 @@ static Hash make_ieee(Alloc *a) {
 }
 
 static void TestHashInterface(TestingT *t) {
-    testhash_without_clone(t, make_ieee);
+    testhash_hash(t, make_ieee);
 }
 
 typedef struct Golden {
@@ -59,64 +58,126 @@ typedef struct Golden {
     const char *rep;
     Int rep_len;
     Int count;
+    Str half_state_ieee, half_state_castagnoli;
 } Golden;
 
-#define G(ieee, castagnoli, rep, count)                                                \
-    {(ieee), (castagnoli), (rep), (Int)sizeof(rep) - 1, (count)}
+#define G(ieee, castagnoli, rep, count, half_ieee, half_cast)                          \
+    {(ieee), (castagnoli), (rep), (Int)sizeof(rep) - 1, (count), half_ieee, half_cast}
 
 static const Golden golden[] = {
-    G(0x0, 0x0, "", 1),
-    G(0xe8b7be43, 0xc1d04330, "a", 1),
-    G(0x9e83486d, 0xe2a22936, "ab", 1),
-    G(0x352441c2, 0x364b3fb7, "abc", 1),
-    G(0xed82cd11, 0x92c80a31, "abcd", 1),
-    G(0x8587d865, 0xc450d697, "abcde", 1),
-    G(0x4b8e39ef, 0x53bceff1, "abcdef", 1),
-    G(0x312a6aa6, 0xe627f441, "abcdefg", 1),
-    G(0xaeef2a50, 0xa9421b7, "abcdefgh", 1),
-    G(0x8da988af, 0x2ddc99fc, "abcdefghi", 1),
-    G(0x3981703a, 0xe6599437, "abcdefghij", 1),
-    G(0x6b9cdfe7, 0xb2cc01fe, "Discard medicine more than two years old.", 1),
+    G(0x0, 0x0, "", 1, BURROW_S_INIT("crc\x01\xca\x87\x91M\x00\x00\x00\x00"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\x00\x00\x00\x00")),
+    G(0xe8b7be43, 0xc1d04330, "a", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\x00\x00\x00\x00"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\x00\x00\x00\x00")),
+    G(0x9e83486d, 0xe2a22936, "ab", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\xe8\xb7\xbe\x43"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\xc1\xd0\x43\x30")),
+    G(0x352441c2, 0x364b3fb7, "abc", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\xe8\xb7\xbe\x43"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\xc1\xd0\x43\x30")),
+    G(0xed82cd11, 0x92c80a31, "abcd", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\x9e\x83Hm"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\xe2\xa2)6")),
+    G(0x8587d865, 0xc450d697, "abcde", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\x9e\x83Hm"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\xe2\xa2)6")),
+    G(0x4b8e39ef, 0x53bceff1, "abcdef", 1, BURROW_S_INIT("crc\x01\xca\x87\x91M5$A\xc2"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\x36K\?\xb7")),
+    G(0x312a6aa6, 0xe627f441, "abcdefg", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M5$A\xc2"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\x36K\?\xb7")),
+    G(0xaeef2a50, 0xa9421b7, "abcdefgh", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\xed\x82\xcd\x11"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\x92\xc8\x0a\x31")),
+    G(0x8da988af, 0x2ddc99fc, "abcdefghi", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\xed\x82\xcd\x11"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\x92\xc8\x0a\x31")),
+    G(0x3981703a, 0xe6599437, "abcdefghij", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\x85\x87\xd8\x65"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\xc4P\xd6\x97")),
+    G(0x6b9cdfe7, 0xb2cc01fe, "Discard medicine more than two years old.", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\xfd\xe5\xc2J"),
+      BURROW_S_INIT("crc\x01wB\x84\x81S\"(\xe0")),
     G(0xc90ef73f, 0xe28207f,
-      "He who has a shady past knows that nice guys finish last.", 1),
-    G(0xb902341f, 0xbe93f964, "I wouldn't marry him with a ten foot pole.", 1),
+      "He who has a shady past knows that nice guys finish last.", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\x01\xc7\x8b+"),
+      BURROW_S_INIT("crc\x01wB\x84\x81'\xdaR\x15")),
+    G(0xb902341f, 0xbe93f964, "I wouldn't marry him with a ten foot pole.", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\x9d\x13\xce\x10"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\xc3\xed\xabG")),
     G(0x42080e8, 0x9e3be0c3,
-      "Free! Free!/A trip/to Mars/for 900/empty jars/Burma Shave", 1),
+      "Free! Free!/A trip/to Mars/for 900/empty jars/Burma Shave", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M-\xed\xf7\x94"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\xce\xce\x62\x81")),
     G(0x154c6d11, 0xf505ef04,
-      "The days of the digital watch are numbered.  -Tom Stoppard", 1),
-    G(0x4c418325, 0x85d3dc82, "Nepal premier won't resign.", 1),
+      "The days of the digital watch are numbered.  -Tom Stoppard", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91MOa\xa5\x0d"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\xd3s\x9dP")),
+    G(0x4c418325, 0x85d3dc82, "Nepal premier won't resign.", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\xa8S9\x85"),
+      BURROW_S_INIT("crc\x01wB\x84\x81{\x90\x8a\x14")),
     G(0x33955150, 0xc5142380,
-      "For every action there is an equal and opposite government program.", 1),
+      "For every action there is an equal and opposite government program.", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91Ma\xe9>\x86"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\xaa@\xc4\x1c")),
     G(0x26216a4b, 0x75eb77dd,
-      "His money is twice tainted: 'taint yours and 'taint mine.", 1),
+      "His money is twice tainted: 'taint yours and 'taint mine.", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\\\x1an\x88"),
+      BURROW_S_INIT("crc\x01wB\x84\x81W\x07\x38Z")),
     G(0x1abbe45e, 0x91ebe9f7,
       "There is no reason for any individual to have a computer in their home. -Ken "
       "Olsen, 1977",
-      1),
+      1, BURROW_S_INIT("crc\x01\xca\x87\x91M\xb7\xf5\xf2\xca"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\xc4o\x9d\x85")),
     G(0xc89a94f7, 0xf0b1168e,
-      "It's a tiny change to the code and not completely disgusting. - Bob Manchek", 1),
-    G(0xab3abe14, 0x572b74e2, "size:  a.out:  bad magic", 1),
-    G(0xbab102b6, 0x8a58a6d5, "The major problem is with sendmail.  -Mark Horton", 1),
+      "It's a tiny change to the code and not completely disgusting. - Bob Manchek", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\x84g1\xe8"),
+      BURROW_S_INIT("crc\x01wB\x84\x81#\x98\x0c\xab")),
+    G(0xab3abe14, 0x572b74e2, "size:  a.out:  bad magic", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\x8a\x0f\xad\x08"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\x80\xc9n\xd8")),
+    G(0xbab102b6, 0x8a58a6d5, "The major problem is with sendmail.  -Mark Horton", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\x07\xf0\xb3\x15"),
+      BURROW_S_INIT("crc\x01wB\x84\x81liS\xcc")),
     G(0x999149d7, 0x9c426c50,
-      "Give me a rock, paper and scissors and I will move the world.  CCFestoon", 1),
-    G(0x6d52a33c, 0x735400a4, "If the enemy is within range, then so are you.", 1),
+      "Give me a rock, paper and scissors and I will move the world.  CCFestoon", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\x0f\x61\xbc."),
+      BURROW_S_INIT("crc\x01wB\x84\x81\xdb\xcd\x8f\x43")),
+    G(0x6d52a33c, 0x735400a4, "If the enemy is within range, then so are you.", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91My\x1b\x99\xf8"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\xaa\x42\x03\x37")),
     G(0x90631e8d, 0xbec49c95,
-      "It's well we cannot hear the screams/That we create in others' dreams.", 1),
+      "It's well we cannot hear the screams/That we create in others' dreams.", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\x08qfY"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\x16y\xa1\xd2")),
     G(0x78309130, 0xa95a2079,
-      "You remind me of a TV show, but that's all right: I watch it anyway.", 1),
-    G(0x7d0a377f, 0xde2e65c5, "C is as portable as Stonehedge!!", 1),
+      "You remind me of a TV show, but that's all right: I watch it anyway.", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\xbdO,\xc2"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\x66&\xc5\xe4")),
+    G(0x7d0a377f, 0xde2e65c5, "C is as portable as Stonehedge!!", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\xf7\xd6\x00\xd5"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\x64\x65\\\xf8")),
     G(0x8c79fd79, 0x297a88ed,
       "Even if I could be Shakespeare, I think I should still choose to be Faraday. - "
       "A. Huxley",
-      1),
+      1, BURROW_S_INIT("crc\x01\xca\x87\x91Ml+\xb8\xa7"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\xbf\xd6S\xdd")),
     G(0xa20b7167, 0x66ed1d8b,
       "The fugacity of a constituent in a mixture of gases at a given temperature is "
       "proportional to its mole fraction.  Lewis-Randall Rule",
-      1),
+      1, BURROW_S_INIT("crc\x01\xca\x87\x91M<lR["),
+      BURROW_S_INIT("crc\x01wB\x84\x81{\xaco\xb1")),
     G(0x8e0bb443, 0xdcded527,
-      "How can you write a big system without C++?  -Paul Glick", 1),
-    G(0x1010dab0, 0x8a11661f, "01234567", 1024),
-    G(0x772d04d7, 0x5a6f5c45, "a", 1089),
+      "How can you write a big system without C++?  -Paul Glick", 1,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\x0e\x88\x89\xed"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\x33\xd7\x43\x7f")),
+    G(0x1010dab0, 0x8a11661f, "01234567", 1024,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\x92\xe5\xba\xf3"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\x1a\x02\x88Y")),
+    G(0x772d04d7, 0x5a6f5c45, "a", 1089,
+      BURROW_S_INIT("crc\x01\xca\x87\x91M\xe7\xd0\x89\xd1"),
+      BURROW_S_INIT("crc\x01wB\x84\x81\x95\x42\xa9(")),
 };
 
 enum { ngolden = sizeof golden / sizeof golden[0] };
@@ -203,6 +264,103 @@ static void TestSimple(TestingT *t) {
     Alloc *a = arena_allocator(&ar);
     test_golden_ieee(t, update_with, copy_table(a, CRC32_IEEE));
     test_golden_castagnoli(t, update_with, copy_table(a, CRC32_CASTAGNOLI));
+    arena_free(&ar);
+}
+
+/* Not in Go: Go writes TestGoldenMarshal's two subtests out in full. They differ
+ * only in the table, the golden state and the name in the messages. */
+typedef struct MarshalCase {
+    const char *name;
+    uint32_t poly;
+    bool castagnoli;
+} MarshalCase;
+
+static void golden_marshal(void *env, TestingT *t) {
+    const MarshalCase *tt = env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    const Crc32Table *table = crc32_make_table(a, tt->poly);
+    for (int i = 0; i < ngolden; i++) {
+        const Golden *g = &golden[i];
+        Str want = tt->castagnoli ? g->half_state_castagnoli : g->half_state_ieee;
+        Slice p = testhash_repeat(a, g->rep, g->rep_len, g->count, "");
+        Str in = {(const Byte *)p.p, p.len};
+        HashHash32 h = crc32_new(a, table);
+        HashHash32 h2 = crc32_new(a, table);
+        Hash hh = hash_hash32_as_hash(h);
+        Hash hh2 = hash_hash32_as_hash(h2);
+        Any ha = BURROW_ANY(TYPE_OF(Hash), &hh);
+        Any ha2 = BURROW_ANY(TYPE_OF(Hash), &hh2);
+
+        hash_write(hh, slice_sub(p, 0, p.len / 2), NULL);
+
+        Error err = BURROW_NO_ERROR;
+        Slice state = encoding_marshal_binary(a, ha, &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "could not marshal: %v", err);
+            continue;
+        }
+
+        Slice state_append =
+            encoding_append_binary(a, ha, slice_make(a, TYPE_BYTE, 4, 32), &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "could not marshal: %v", err);
+            continue;
+        }
+        state_append = slice_sub(state_append, 4, state_append.len);
+
+        Str st = {(const Byte *)state.p, state.len};
+        Str sa = {(const Byte *)state_append.p, state_append.len};
+        if (!str_eq(st, want)) {
+            testing_t_errorf_v(t, "%s(%q) state = %q, want %q", tt->name, in, st, want);
+            continue;
+        }
+
+        if (!str_eq(sa, want)) {
+            testing_t_errorf_v(t, "%s(%q) state = %q, want %q", tt->name, in, sa, want);
+            continue;
+        }
+
+        err = encoding_unmarshal_binary(a, ha2, state);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "could not unmarshal: %v", err);
+            continue;
+        }
+
+        hash_write(hh, slice_sub(p, p.len / 2, p.len), NULL);
+        hash_write(hh2, slice_sub(p, p.len / 2, p.len), NULL);
+
+        if (hash_hash32_sum32(h) != hash_hash32_sum32(h2))
+            testing_t_errorf_v(t, "%s(%s) = 0x%x != marshaled 0x%x", tt->name, in,
+                               hash_hash32_sum32(h), hash_hash32_sum32(h2));
+    }
+    arena_free(&ar);
+}
+
+static void TestGoldenMarshal(TestingT *t) {
+    MarshalCase ieee = {"IEEE", CRC32_IEEE, false};
+    MarshalCase castagnoli = {"Castagnoli", CRC32_CASTAGNOLI, true};
+    testing_t_run(t, BURROW_S("IEEE"), BURROW_FN(TestingTFunc, golden_marshal, &ieee));
+    testing_t_run(t, BURROW_S("Castagnoli"),
+                  BURROW_FN(TestingTFunc, golden_marshal, &castagnoli));
+}
+
+static void TestMarshalTableMismatch(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Hash h1 = hash_hash32_as_hash(crc32_new(a, crc32_ieee_table));
+    Hash h2 = hash_hash32_as_hash(crc32_new(a, crc32_make_table(a, CRC32_CASTAGNOLI)));
+
+    Error err = BURROW_NO_ERROR;
+    Slice state1 = encoding_marshal_binary(a, BURROW_ANY(TYPE_OF(Hash), &h1), &err);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "could not marshal: %v", err);
+
+    err = encoding_unmarshal_binary(a, BURROW_ANY(TYPE_OF(Hash), &h2), state1);
+    if (!BURROW_FAILED(err))
+        testing_t_errorf_v(t, "no error when one was expected");
     arena_free(&ar);
 }
 
@@ -370,6 +528,8 @@ static void BenchmarkCRC32(TestingB *b) {
     X(TestCastagnoliRace)                                                              \
     X(TestHashInterface)                                                               \
     X(TestSimple)                                                                      \
+    X(TestGoldenMarshal)                                                               \
+    X(TestMarshalTableMismatch)                                                        \
     X(TestSlicing)                                                                     \
     X(TestMakeTable)                                                                   \
     X(TestGolden)                                                                      \

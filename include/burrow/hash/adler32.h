@@ -28,7 +28,9 @@ extern "C" {
 #define ADLER32_SIZE 4
 
 /* A new Hash32 computing the Adler-32 checksum, allocated from a. Sum appends
- * the checksum big endian. */
+ * the checksum big endian. The returned Hash32 also implements
+ * encoding.BinaryMarshaler and encoding.BinaryUnmarshaler to marshal and
+ * unmarshal the internal state of the hash. */
 BURROW_OWNS(ret) HashHash32 adler32_new(Alloc *a);
 
 /* The Adler-32 checksum of data. */

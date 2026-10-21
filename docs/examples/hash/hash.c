@@ -39,6 +39,8 @@ static void oneshot(Alloc *a) {
 static void streaming(Alloc *a) {
     // doc: stream
     HashHash32 h = crc32_new_ieee(a);
+    if (h.vt == NULL)
+        return; // out of memory
     Hash as_hash = hash_hash32_as_hash(h);
     hash_write(as_hash, slice_from_str(a, BURROW_S("hello, ")), NULL);
     hash_write(as_hash, slice_from_str(a, BURROW_S("world")), NULL);
@@ -81,6 +83,8 @@ static void crypto(Alloc *a) {
 
     // doc: cryptostream
     Hash h = sha512_new512256(a);
+    if (h.vt == NULL)
+        return; // out of memory
     hash_write(h, slice_from_str(a, BURROW_S("hello, ")), NULL);
     hash_write(h, slice_from_str(a, BURROW_S("world")), NULL);
     Slice digest = hash_sum(a, h, slice_nil(TYPE_BYTE));
@@ -118,6 +122,46 @@ static void sha3(Alloc *a) {
     // doc: end
 }
 
+static void print_hex(Alloc *a, Slice b) {
+    Str hex = hex_encode_to_string(a, b);
+    printf(BURROW_STR_FMT "\n", BURROW_STR_ARG(hex));
+}
+
+static void saving(Alloc *a) {
+    // doc: marshal
+    Hash h = sha256_new(a);
+    if (h.vt == NULL)
+        return; // out of memory
+    hash_write(h, slice_from_str(a, BURROW_S("hello, ")), NULL);
+    Error err = BURROW_NO_ERROR;
+    Slice state = encoding_marshal_binary(a, BURROW_ANY(TYPE_OF(Hash), &h), &err);
+    if (BURROW_FAILED(err))
+        return;
+    // doc: end
+    printf("%lld bytes of state\n", (long long)state.len);
+
+    // doc: unmarshal
+    Hash h2 = sha256_new(a);
+    if (h2.vt == NULL)
+        return; // out of memory
+    err = encoding_unmarshal_binary(a, BURROW_ANY(TYPE_OF(Hash), &h2), state);
+    if (BURROW_FAILED(err))
+        return;
+    hash_write(h2, slice_from_str(a, BURROW_S("world")), NULL);
+    // doc: end
+    print_hex(a, hash_sum(a, h2, slice_nil(TYPE_BYTE)));
+
+    // doc: clone
+    if (hash_is_cloner(h)) {
+        Hash h3 = hash_cloner_as_hash(hash_clone(a, h, &err));
+        if (BURROW_FAILED(err))
+            return;
+        hash_write(h3, slice_from_str(a, BURROW_S("world")), NULL);
+        print_hex(a, hash_sum(a, h3, slice_nil(TYPE_BYTE)));
+    }
+    // doc: end
+}
+
 int main(void) {
     Arena ar;
     arena_init(&ar, heap_allocator(), 0);
@@ -127,6 +171,7 @@ int main(void) {
     fnv(a);
     crypto(a);
     sha3(a);
+    saving(a);
     arena_free(&ar);
     return 0;
 }
@@ -148,4 +193,7 @@ sha1: b7 e2 3e c2 9a f2 2b 0b 4e 41 da 31 e8 68 d5 72 26 12 1c 84
 bfb3959527d7a3f2f09def2f6915452d55a8f122df9e164d6f31c7fcf6093e14
 7c9896ea84a2a1b80b2183a3f2b4e43c
 sha3-224: 92 7b 36 2e af 84 a7 57 85 bb ec 33 70 d1 c9 71 13 49 e9 3f 11 04 ed a0 60 78 42 21
+108 bytes of state
+09ca7e4eaa6e8ae9c7d261167129184883644d07dfba7cbfbc4c8a2e08360d5b
+09ca7e4eaa6e8ae9c7d261167129184883644d07dfba7cbfbc4c8a2e08360d5b
 */

@@ -3,10 +3,12 @@
  *
  * Go's file has no table of known answers, since cryptotest and the ACVP
  * wrapper check those, so TestGolden here is a table that Go's crypto/sha3
- * produced, for every function this package has. TestClone and
- * TestUnmarshalErrors are not in Go's file either: the first stands in for the
- * Clone half of cryptotest.TestHash and the second checks the three errors
- * UnmarshalBinary can give. TestAllocations has nothing to check here, since
+ * produced, for every function this package has. TestClone, TestUnmarshalErrors
+ * and TestMarshalThroughHash are not in Go's file either: the first calls
+ * sha3_clone directly, next to the Clone half of cryptotest.TestHash that
+ * TestSHA3Hash runs, the second checks the three errors UnmarshalBinary can
+ * give, and the third finds MarshalBinary on a Hash the way
+ * h.(encoding.BinaryMarshaler) does. TestAllocations has nothing to check here, since
  * nothing allocates except what is asked for.
  *
  * Copyright 2014 The Go Authors. All rights reserved.
@@ -298,7 +300,7 @@ static void TestGolden(TestingT *t) {
 }
 
 static void run_testhash(void *env, TestingT *t) {
-    testhash_without_clone(t, ((const Digest *)env)->make);
+    testhash_hash(t, ((const Digest *)env)->make);
 }
 
 static void TestSHA3Hash(TestingT *t) {
@@ -308,8 +310,8 @@ static void TestSHA3Hash(TestingT *t) {
             BURROW_FN(TestingTFunc, run_testhash, (void *)(uintptr_t)&test_digests[i]));
 }
 
-/* The Clone half of cryptotest.TestHash: a clone taken part way carries on
- * from there, and neither copy disturbs the other. */
+/* A clone taken part way carries on from there, and neither copy disturbs the
+ * other. */
 static void TestClone(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -844,6 +846,42 @@ static void BenchmarkSha3_512_1MiB(TestingB *b) {
     bench_hash(b, sha3_new512, 1024, 1024);
 }
 
+/* Not in Go: the encoding calls find MarshalBinary and UnmarshalBinary on a
+ * Hash from sha3_as_hash, and give the same state as sha3_marshal_binary. */
+static void TestMarshalThroughHash(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Sha3 *d = sha3_new256(a);
+    sha3_write(d, bytes_of("abc"), NULL);
+    Hash h = sha3_as_hash(d);
+    Any ha = BURROW_ANY(TYPE_OF(Hash), &h);
+    if (!encoding_is_binary_marshaler(ha) || !encoding_is_binary_unmarshaler(ha)) {
+        arena_free(&ar);
+        testing_t_fatalf_v(t, "sha3_as_hash does not implement the binary marshalers");
+    }
+    Error err = BURROW_NO_ERROR;
+    Slice got = encoding_marshal_binary(a, ha, &err);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        testing_t_fatalf_v(t, "MarshalBinary: %v", err);
+    }
+    Slice want = sha3_marshal_binary(d, a, NULL);
+    if (!testhash_equal(got, want))
+        testing_t_errorf_v(t, "got %x, want %x", got, want);
+
+    Hash h2 = sha3_as_hash(sha3_new256(a));
+    err = encoding_unmarshal_binary(a, BURROW_ANY(TYPE_OF(Hash), &h2), got);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        testing_t_fatalf_v(t, "UnmarshalBinary: %v", err);
+    }
+    if (!testhash_equal(hash_sum(a, h2, slice_nil(TYPE_BYTE)),
+                        sha3_sum(d, a, slice_nil(TYPE_BYTE))))
+        testing_t_errorf_v(t, "the unmarshaled hash gives a different sum");
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestGolden)                                                                      \
     X(TestSHA3Hash)                                                                    \
@@ -857,6 +895,7 @@ static void BenchmarkSha3_512_1MiB(TestingB *b) {
     X(TestCSHAKELargeS)                                                                \
     X(TestMarshalUnmarshal)                                                            \
     X(TestUnmarshalErrors)                                                             \
+    X(TestMarshalThroughHash)                                                          \
     X(TestZeroValue)                                                                   \
     X(BenchmarkSha3_512_MTU)                                                           \
     X(BenchmarkSha3_384_MTU)                                                           \

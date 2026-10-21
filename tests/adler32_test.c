@@ -1,10 +1,6 @@
 /* Derived from Go's src/hash/adler32/adler32_test.go.
  * Go source: go1.27.1.
  *
- * TestGoldenMarshal is not here yet. It needs the hash state to marshal, which
- * waits on encoding.BinaryMarshaler and a way to ask a Hash for it (#185). Its golden states are dropped from the
- * table until then.
- *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -14,6 +10,7 @@
 #include "testhash.h"
 
 #include "burrow/burrow.h"
+#include "burrow/encoding.h"
 #include "burrow/hash/adler32.h"
 #include "burrow/mem/arena.h"
 
@@ -22,7 +19,7 @@ static Hash make_adler32(Alloc *a) {
 }
 
 static void TestHashInterface(TestingT *t) {
-    testhash_without_clone(t, make_adler32);
+    testhash_hash(t, make_adler32);
 }
 
 /* The input is rep written count times and then tail, which is how the table
@@ -33,73 +30,90 @@ typedef struct Golden {
     Int rep_len;
     Int count;
     const char *tail;
+    Str half_state; /* marshaled hash state after first half of in written */
 } Golden;
 
-#define G(out, rep, count, tail) {(out), (rep), (Int)sizeof(rep) - 1, (count), (tail)}
+#define G(out, rep, count, tail, half)                                                 \
+    {(out), (rep), (Int)sizeof(rep) - 1, (count), (tail), half}
 
 static const Golden golden[] = {
-    G(0x00000001, "", 1, ""),
-    G(0x00620062, "a", 1, ""),
-    G(0x012600c4, "ab", 1, ""),
-    G(0x024d0127, "abc", 1, ""),
-    G(0x03d8018b, "abcd", 1, ""),
-    G(0x05c801f0, "abcde", 1, ""),
-    G(0x081e0256, "abcdef", 1, ""),
-    G(0x0adb02bd, "abcdefg", 1, ""),
-    G(0x0e000325, "abcdefgh", 1, ""),
-    G(0x118e038e, "abcdefghi", 1, ""),
-    G(0x158603f8, "abcdefghij", 1, ""),
-    G(0x3f090f02, "Discard medicine more than two years old.", 1, ""),
-    G(0x46d81477, "He who has a shady past knows that nice guys finish last.", 1, ""),
-    G(0x40ee0ee1, "I wouldn't marry him with a ten foot pole.", 1, ""),
-    G(0x16661315, "Free! Free!/A trip/to Mars/for 900/empty jars/Burma Shave", 1, ""),
-    G(0x5b2e1480, "The days of the digital watch are numbered.  -Tom Stoppard", 1, ""),
-    G(0x8c3c09ea, "Nepal premier won't resign.", 1, ""),
+    G(0x00000001, "", 1, "", BURROW_S_INIT("adl\x01\x00\x00\x00\x01")),
+    G(0x00620062, "a", 1, "", BURROW_S_INIT("adl\x01\x00\x00\x00\x01")),
+    G(0x012600c4, "ab", 1, "", BURROW_S_INIT("adl\x01\x00\x62\x00\x62")),
+    G(0x024d0127, "abc", 1, "", BURROW_S_INIT("adl\x01\x00\x62\x00\x62")),
+    G(0x03d8018b, "abcd", 1, "", BURROW_S_INIT("adl\x01\x01&\x00\xc4")),
+    G(0x05c801f0, "abcde", 1, "", BURROW_S_INIT("adl\x01\x01&\x00\xc4")),
+    G(0x081e0256, "abcdef", 1, "", BURROW_S_INIT("adl\x01\x02M\x01'")),
+    G(0x0adb02bd, "abcdefg", 1, "", BURROW_S_INIT("adl\x01\x02M\x01'")),
+    G(0x0e000325, "abcdefgh", 1, "", BURROW_S_INIT("adl\x01\x03\xd8\x01\x8b")),
+    G(0x118e038e, "abcdefghi", 1, "", BURROW_S_INIT("adl\x01\x03\xd8\x01\x8b")),
+    G(0x158603f8, "abcdefghij", 1, "", BURROW_S_INIT("adl\x01\x05\xc8\x01\xf0")),
+    G(0x3f090f02, "Discard medicine more than two years old.", 1, "",
+      BURROW_S_INIT("adl\x01NU\x07\x87")),
+    G(0x46d81477, "He who has a shady past knows that nice guys finish last.", 1, "",
+      BURROW_S_INIT("adl\x01\x89\x8e\x09\xe9")),
+    G(0x40ee0ee1, "I wouldn't marry him with a ten foot pole.", 1, "",
+      BURROW_S_INIT("adl\x01R\x09\x07g")),
+    G(0x16661315, "Free! Free!/A trip/to Mars/for 900/empty jars/Burma Shave", 1, "",
+      BURROW_S_INIT("adl\x01\x7f\xbb\x09\x10")),
+    G(0x5b2e1480, "The days of the digital watch are numbered.  -Tom Stoppard", 1, "",
+      BURROW_S_INIT("adl\x01\x99:\x0a~")),
+    G(0x8c3c09ea, "Nepal premier won't resign.", 1, "",
+      BURROW_S_INIT("adl\x01\"\x05\x05\x05")),
     G(0x45ac18fd, "For every action there is an equal and opposite government program.",
-      1, ""),
-    G(0x53c61462, "His money is twice tainted: 'taint yours and 'taint mine.", 1, ""),
+      1, "", BURROW_S_INIT("adl\x01\xcc\xfa\x0c\x00")),
+    G(0x53c61462, "His money is twice tainted: 'taint yours and 'taint mine.", 1, "",
+      BURROW_S_INIT("adl\x01\x93\xa9\x0a\x08")),
     G(0x7e511e63,
       "There is no reason for any individual to have a computer in their home. -Ken "
       "Olsen, 1977",
-      1, ""),
+      1, "", BURROW_S_INIT("adl\x01\x65\xf5\x10\x14")),
     G(0xe4801a6a,
       "It's a tiny change to the code and not completely disgusting. - Bob Manchek", 1,
-      ""),
-    G(0x61b507df, "size:  a.out:  bad magic", 1, ""),
-    G(0xb8631171, "The major problem is with sendmail.  -Mark Horton", 1, ""),
+      "", BURROW_S_INIT("adl\x01\xee\x00\x0c\xb2")),
+    G(0x61b507df, "size:  a.out:  bad magic", 1, "",
+      BURROW_S_INIT("adl\x01\x1a\xfc\x04\x1d")),
+    G(0xb8631171, "The major problem is with sendmail.  -Mark Horton", 1, "",
+      BURROW_S_INIT("adl\x01mi\x08\xdc")),
     G(0x8b5e1904,
-      "Give me a rock, paper and scissors and I will move the world.  CCFestoon", 1,
-      ""),
-    G(0x7cc6102b, "If the enemy is within range, then so are you.", 1, ""),
+      "Give me a rock, paper and scissors and I will move the world.  CCFestoon", 1, "",
+      BURROW_S_INIT("adl\x01\xe3\x0a\x0c\x9f")),
+    G(0x7cc6102b, "If the enemy is within range, then so are you.", 1, "",
+      BURROW_S_INIT("adl\x01_\xe0\x08\x1e")),
     G(0x700318e7,
-      "It's well we cannot hear the screams/That we create in others' dreams.", 1, ""),
+      "It's well we cannot hear the screams/That we create in others' dreams.", 1, "",
+      BURROW_S_INIT("adl\x01\xdb\x98\x0c\x87")),
     G(0x1e601747,
-      "You remind me of a TV show, but that's all right: I watch it anyway.", 1, ""),
-    G(0xb55b0b09, "C is as portable as Stonehedge!!", 1, ""),
+      "You remind me of a TV show, but that's all right: I watch it anyway.", 1, "",
+      BURROW_S_INIT("adl\x01\xcc}\x0b\x83")),
+    G(0xb55b0b09, "C is as portable as Stonehedge!!", 1, "",
+      BURROW_S_INIT("adl\x01,^\x05\xad")),
     G(0x39111dd0,
       "Even if I could be Shakespeare, I think I should still choose to be Faraday. - "
       "A. Huxley",
-      1, ""),
+      1, "", BURROW_S_INIT("adl\x01M\xd1\x0e\xc8")),
     G(0x91dd304f,
       "The fugacity of a constituent in a mixture of gases at a given temperature is "
       "proportional to its mole fraction.  Lewis-Randall Rule",
-      1, ""),
-    G(0x2e5d1316, "How can you write a big system without C++?  -Paul Glick", 1, ""),
+      1, "", BURROW_S_INIT("adl\x01#\xd8\x17\xd7")),
+    G(0x2e5d1316, "How can you write a big system without C++?  -Paul Glick", 1, "",
+      BURROW_S_INIT("adl\x01\x8fU\x0a\x0f")),
     G(0xd0201df6,
       "'Invariant assertions' is the most elegant programming technique!  -Tom "
       "Szymanski",
-      1, ""),
-    G(0x211297c8, "\xff", 5548, "8"),
-    G(0xbaa198c8, "\xff", 5549, "9"),
-    G(0x553499be, "\xff", 5550, "0"),
-    G(0xf0c19abe, "\xff", 5551, "1"),
-    G(0x8d5c9bbe, "\xff", 5552, "2"),
-    G(0x2af69cbe, "\xff", 5553, "3"),
-    G(0xc9809dbe, "\xff", 5554, "4"),
-    G(0x69189ebe, "\xff", 5555, "5"),
-    G(0x86af0001, "\x00", 100000, ""),
-    G(0x79660b4d, "a", 100000, ""),
-    G(0x110588ee, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", 10000, ""),
+      1, "", BURROW_S_INIT("adl\x01/\x98\x0e\xc4")),
+    G(0x211297c8, "\xff", 5548, "8", BURROW_S_INIT("adl\x01\x9a\xa6\xcb\xc1")),
+    G(0xbaa198c8, "\xff", 5549, "9", BURROW_S_INIT("adl\x01gu\xcc\xc0")),
+    G(0x553499be, "\xff", 5550, "0", BURROW_S_INIT("adl\x01gu\xcc\xc0")),
+    G(0xf0c19abe, "\xff", 5551, "1", BURROW_S_INIT("adl\x01\x35\x43\xcd\xbf")),
+    G(0x8d5c9bbe, "\xff", 5552, "2", BURROW_S_INIT("adl\x01\x35\x43\xcd\xbf")),
+    G(0x2af69cbe, "\xff", 5553, "3", BURROW_S_INIT("adl\x01\x04\x10\xce\xbe")),
+    G(0xc9809dbe, "\xff", 5554, "4", BURROW_S_INIT("adl\x01\x04\x10\xce\xbe")),
+    G(0x69189ebe, "\xff", 5555, "5", BURROW_S_INIT("adl\x01\xd3\xcd\xcf\xbd")),
+    G(0x86af0001, "\x00", 100000, "", BURROW_S_INIT("adl\x01\xc3P\x00\x01")),
+    G(0x79660b4d, "a", 100000, "", BURROW_S_INIT("adl\x01\x81k\x05\xa7")),
+    G(0x110588ee, "ABCDEFGHIJKLMNOPQRSTUVWXYZ", 10000, "",
+      BURROW_S_INIT("adl\x01\x65\xd2\xc4p")),
 };
 
 /* checksum is a slow but simple implementation of the Adler-32 checksum. It is
@@ -140,6 +154,68 @@ static void TestGolden(TestingT *t) {
     arena_free(&ar);
 }
 
+static void TestGoldenMarshal(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    for (size_t i = 0; i < sizeof golden / sizeof golden[0]; i++) {
+        const Golden *g = &golden[i];
+        Slice p = testhash_repeat(a, g->rep, g->rep_len, g->count, g->tail);
+        Str in = {(const Byte *)p.p, p.len};
+        HashHash32 h = adler32_new(a);
+        HashHash32 h2 = adler32_new(a);
+        Hash hh = hash_hash32_as_hash(h);
+        Hash hh2 = hash_hash32_as_hash(h2);
+        Any ha = BURROW_ANY(TYPE_OF(Hash), &hh);
+        Any ha2 = BURROW_ANY(TYPE_OF(Hash), &hh2);
+
+        hash_write(hh, slice_sub(p, 0, p.len / 2), NULL);
+
+        Error err = BURROW_NO_ERROR;
+        Slice state = encoding_marshal_binary(a, ha, &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "could not marshal: %v", err);
+            continue;
+        }
+
+        Slice state_append =
+            encoding_append_binary(a, ha, slice_make(a, TYPE_BYTE, 4, 32), &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "could not marshal: %v", err);
+            continue;
+        }
+        state_append = slice_sub(state_append, 4, state_append.len);
+
+        Str st = {(const Byte *)state.p, state.len};
+        Str sa = {(const Byte *)state_append.p, state_append.len};
+        if (!str_eq(st, g->half_state)) {
+            testing_t_errorf_v(t, "checksum(%q) state = %q, want %q", in, st,
+                               g->half_state);
+            continue;
+        }
+
+        if (!str_eq(sa, g->half_state)) {
+            testing_t_errorf_v(t, "checksum(%q) state = %q, want %q", in, sa,
+                               g->half_state);
+            continue;
+        }
+
+        err = encoding_unmarshal_binary(a, ha2, state);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "could not unmarshal: %v", err);
+            continue;
+        }
+
+        hash_write(hh, slice_sub(p, p.len / 2, p.len), NULL);
+        hash_write(hh2, slice_sub(p, p.len / 2, p.len), NULL);
+
+        if (hash_hash32_sum32(h) != hash_hash32_sum32(h2))
+            testing_t_errorf_v(t, "checksum(%q) = 0x%x != marshaled (0x%x)", in,
+                               hash_hash32_sum32(h), hash_hash32_sum32(h2));
+    }
+    arena_free(&ar);
+}
+
 static void BenchmarkAdler32KB(TestingB *b) {
     testing_b_set_bytes(b, 1024);
     Byte data[1024];
@@ -167,6 +243,7 @@ static void BenchmarkAdler32KB(TestingB *b) {
 #define TESTS(X)                                                                       \
     X(TestHashInterface)                                                               \
     X(TestGolden)                                                                      \
+    X(TestGoldenMarshal)                                                               \
     X(BenchmarkAdler32KB)
 
 TESTING_MAIN(TESTS)

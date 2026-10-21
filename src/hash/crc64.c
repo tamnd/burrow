@@ -8,12 +8,18 @@
 
 #include "burrow/hash/crc64.h"
 #include "burrow/core.h"
+#include "burrow/declare.h"
+#include "burrow/encoding.h"
+#include "burrow/error.h"
 #include "burrow/func.h"
 #include "burrow/hash.h"
+#include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/slice.h"
 #include "burrow/sync.h"
 #include "burrow/type.h"
+
+#include <string.h>
 
 /* The tables for ISO and ECMA. Go builds them on first use. They are constants
  * here, printed from Go's own tables by tools/gen-crc-tables.sh. */
@@ -330,14 +336,139 @@ static uint64_t digest64_sum64(void *self) {
     return ((Digest64 *)self)->crc;
 }
 
+#define CRC64_MAGIC "crc\x02"
+enum { crc64_marshaled_size = 4 + 8 + 8 };
+
+BURROW_SENTINEL_ERROR(crc64_err_identifier,
+                      "hash/crc64: invalid hash state identifier");
+BURROW_SENTINEL_ERROR(crc64_err_size, "hash/crc64: invalid hash state size");
+BURROW_SENTINEL_ERROR(crc64_err_tables, "hash/crc64: tables do not match");
+
+static void crc64_put_be64(Byte *b, uint64_t v) {
+    for (int i = 0; i < 8; i++)
+        b[i] = (Byte)(v >> (56 - 8 * i));
+}
+
+static uint64_t crc64_be64(const Byte *p) {
+    uint64_t v = 0;
+    for (int i = 0; i < 8; i++)
+        v = v << 8 | p[i];
+    return v;
+}
+
+/* tableSum returns the ISO checksum of table t. */
+static uint64_t table_sum64(const Crc64Table *t) {
+    Byte a[2048];
+    Int n = 0;
+    if (t != NULL) {
+        for (Int i = 0; i < 256; i++)
+            crc64_put_be64(a + 8 * i, t->v[i]);
+        n = 2048;
+    }
+    return update64(0, &iso_table, slice_from(a, n, 2048, TYPE_BYTE));
+}
+
+static Slice digest64_append_binary(Digest64 *d, Alloc *a, Slice b, Error *err) {
+    Byte st[crc64_marshaled_size];
+    memcpy(st, CRC64_MAGIC, 4);
+    crc64_put_be64(st + 4, table_sum64(d->tab));
+    crc64_put_be64(st + 12, d->crc);
+    if (b.elem == NULL)
+        b = slice_nil(TYPE_BYTE);
+    Int len = b.len;
+    Slice r = slice_append(a, b, st, crc64_marshaled_size);
+    BURROW_OUT(err, r.len == len + crc64_marshaled_size ? BURROW_NO_ERROR
+                                                        : burrow_err_out_of_memory);
+    return r;
+}
+
+static Slice digest64_marshal_binary(Digest64 *d, Alloc *a, Error *err) {
+    Slice b = slice_make(a, TYPE_BYTE, 0, crc64_marshaled_size);
+    if (b.p == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return slice_nil(TYPE_BYTE);
+    }
+    return digest64_append_binary(d, a, b, err);
+}
+
+static Error digest64_unmarshal_binary(Digest64 *d, Alloc *a, Slice b) {
+    (void)a;
+    const Byte *p = b.p;
+    if (b.len < 4 || memcmp(p, CRC64_MAGIC, 4) != 0)
+        return crc64_err_identifier;
+    if (b.len != crc64_marshaled_size)
+        return crc64_err_size;
+    if (table_sum64(d->tab) != crc64_be64(p + 4))
+        return crc64_err_tables;
+    d->crc = crc64_be64(p + 12);
+    return BURROW_NO_ERROR;
+}
+
+static HashCloner digest64_clone(void *self, Alloc *a, Error *err);
+
+/* The method set of Go's *crc64.digest, so that a Hash from here answers
+ * h.(hash.Cloner) and h.(encoding.BinaryMarshaler) as Go's does. */
+#define DIGEST64_METHODS(M, T)                                                         \
+    M(T, AppendBinary, digest64_append_binary, ENCODING_SIG_APPEND_BINARY)             \
+    M(T, BlockSize, digest64_block_size, HASH_SIG_BLOCK_SIZE)                          \
+    M(T, Clone, digest64_clone, HASH_SIG_CLONE)                                        \
+    M(T, MarshalBinary, digest64_marshal_binary, ENCODING_SIG_MARSHAL_BINARY)          \
+    M(T, Reset, digest64_reset, HASH_SIG_RESET)                                        \
+    M(T, Size, digest64_size, HASH_SIG_SIZE)                                           \
+    M(T, Sum, digest64_sum, HASH_SIG_SUM)                                              \
+    M(T, Sum64, digest64_sum64, HASH_SIG_SUM64)                                        \
+    M(T, UnmarshalBinary, digest64_unmarshal_binary, ENCODING_SIG_UNMARSHAL_BINARY)    \
+    M(T, Write, digest64_write, IO_SIG_WRITE)
+
+BURROW_METHODS_DEFINE(Digest64, DIGEST64_METHODS);
+
+static const Type digest64_type = {
+    {(const Byte *)"digest", 6},
+    {(const Byte *)"hash/crc64", 10},
+    KIND_STRUCT,
+    (uint32_t)sizeof(Digest64),
+    (uint16_t)_Alignof(Digest64),
+    0,
+    (uint16_t)(sizeof burrow__methods_Digest64 / sizeof burrow__methods_Digest64[0]),
+    NULL,
+    burrow__methods_Digest64,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
 static const HashHash64VT digest64_vt = {
-    {{NULL, digest64_write},
+    {{&digest64_type, digest64_write},
      digest64_sum,
      digest64_reset,
      digest64_size,
      digest64_block_size},
     digest64_sum64,
 };
+
+/* The same digest, seen as the hash.Cloner Clone returns. */
+static const HashClonerVT digest64_cloner_vt = {
+    {{&digest64_type, digest64_write},
+     digest64_sum,
+     digest64_reset,
+     digest64_size,
+     digest64_block_size},
+    digest64_clone,
+};
+
+static HashCloner digest64_clone(void *self, Alloc *a, Error *err) {
+    Digest64 *r = BURROW_NEW(a, Digest64);
+    if (r == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return (HashCloner){NULL, NULL};
+    }
+    *r = *(Digest64 *)self;
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    HashCloner h = {&digest64_cloner_vt, r};
+    return h;
+}
 
 HashHash64 crc64_new(Alloc *a, const Crc64Table *tab) {
     Digest64 *d = BURROW_NEW(a, Digest64);

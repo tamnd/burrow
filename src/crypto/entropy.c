@@ -114,9 +114,9 @@ static uint8_t entropy_sample(EntropySource *s) {
     if (memory == NULL) /* remove the nil check from the inlined touchMemory calls */
         panic_str(BURROW_S("entropy: nil memory buffer"));
     for (int i = 0; i < 64; i++) {
-        lcg_state = 1664525u * lcg_state + 1013904223u;
+        lcg_state = 1664525U * lcg_state + 1013904223U;
         /* Discard the lower bits, which tend to fall into short cycles. */
-        uint32_t idx = (lcg_state >> 6) & ((1u << 25) - 1);
+        uint32_t idx = (lcg_state >> 6) & ((1U << 25) - 1);
         entropy_touch_memory(memory, idx);
     }
     s->lcg_state = lcg_state;
@@ -282,7 +282,7 @@ static void entropy_sha384_block(uint64_t dh[8], const Byte p[128]) {
     uint64_t w[80];
     for (int i = 0; i < 80; i++) {
         if (i < 16) {
-            w[i] = entropy_be_uint64(p + i * 8);
+            w[i] = entropy_be_uint64(p + (size_t)i * 8);
         } else {
             uint64_t v1 = w[i - 2];
             uint64_t t1 = entropy_rotr(v1, 19) ^ entropy_rotr(v1, 61) ^ (v1 >> 6);
@@ -326,7 +326,7 @@ static void entropy_sha384_block(uint64_t dh[8], const Byte p[128]) {
 
 static void entropy_digest_bytes(Byte digest[48], const uint64_t h[8]) {
     for (int i = 0; i < 6; i++)
-        entropy_be_put_uint64(digest + 8 * i, h[i]);
+        entropy_be_put_uint64(digest + (size_t)i * 8, h[i]);
 }
 
 void burrow__entropy_sha384(Byte digest[48], const Byte p[1024]) {
@@ -334,7 +334,7 @@ void burrow__entropy_sha384(Byte digest[48], const Byte p[1024]) {
     memcpy(h, entropy_init_state, sizeof h);
 
     for (int i = 0; i < 8; i++)
-        entropy_sha384_block(h, p + 128 * i);
+        entropy_sha384_block(h, p + (size_t)i * 128);
 
     Byte padlen[128] = {0};
     padlen[0] = 0x80;

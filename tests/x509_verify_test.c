@@ -5,9 +5,8 @@
  * Go's table driven tests are loops here rather than subtests, with the name
  * of the case in each message. generatePEMCertWithRepeatSAN signs with a new
  * ECDSA P-256 key where Go makes a 4096 bit RSA one; the tests only look at
- * the names in it. TestSystemVerify only runs on Windows, as in Go.
- * TestIssue51759 only runs on macOS in Go, to test the platform verifier there,
- * which is not here yet, so it is left out.
+ * the names in it. TestSystemVerify only runs on Windows, as in Go,
+ * and TestIssue51759 only on macOS.
  *
  * Copyright 2011 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -29,9 +28,12 @@
 #include "burrow/math/big.h"
 #include "burrow/mem/arena.h"
 #include "burrow/net.h"
+#include "burrow/os.h"
+#include "burrow/os/exec.h"
 #include "burrow/panic.h"
 #include "burrow/platform.h"
 #include "burrow/sort.h"
+#include "burrow/strconv.h"
 #include "burrow/strings.h"
 #include "burrow/testing.h"
 #include "burrow/time.h"
@@ -558,6 +560,161 @@ static void TestSystemRootsErrorUnwrap(TestingT *t) {
     Error err = x509_system_roots_error_as_error(e, a);
     if (!errors_is(err, err1))
         testing_t_error_v(t, "errors.Is failed, wanted success");
+    arena_free(&ar);
+}
+
+/* macosMajorVersion */
+static Int macos_major_version(TestingT *t, Alloc *a, Error *err) {
+    (void)t;
+    ExecCmd *cmd =
+        exec_command_v(a, BURROW_S("sw_vers"), 1, BURROW_S("-productVersion"));
+    if (cmd == NULL) {
+        *err = burrow_err_out_of_memory;
+        return 0;
+    }
+    Error e = BURROW_NO_ERROR;
+    Slice out = exec_cmd_output(cmd, a, &e);
+    if (BURROW_FAILED(e)) {
+        Str cs = exec_cmd_string(cmd, a);
+        const ExecExitError *ee = errors_as(e, TYPE_EXEC_EXIT_ERROR);
+        if (ee != NULL && ee->stderr_.len > 0) {
+            Str es = str_from_bytes((const Byte *)ee->stderr_.p, ee->stderr_.len);
+            *err = fmt_errorf_v("%v: %v\n%s", cs, e, es);
+        } else {
+            *err = fmt_errorf_v("%v: %v", cs, e);
+        }
+        exec_cmd_free(cmd);
+        return 0;
+    }
+    Str so = str_from_bytes((const Byte *)out.p, out.len);
+    bool ok = false;
+    Str before = strings_cut(so, BURROW_S("."), NULL, &ok);
+    Error aerr = BURROW_NO_ERROR;
+    Int major = strconv_atoi(before, &aerr);
+    if (!ok || BURROW_FAILED(aerr)) {
+        Str cs = exec_cmd_string(cmd, a);
+        *err = fmt_errorf_v("%v: unexpected output: %q", cs, so);
+        exec_cmd_free(cmd);
+        return 0;
+    }
+    exec_cmd_free(cmd);
+    return major;
+}
+
+/* badCertData contains a cert that we parse as valid
+ * but that macOS SecCertificateCreateWithData rejects. */
+static const uint8_t bad_cert_data[] = {
+    0x30, 0x82, 0x01, 0x55, 0x30, 0x82, 0x01, 0x07, 0xa0, 0x03, 0x02, 0x01, 0x02, 0x02,
+    0x01, 0x02, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x30, 0x52, 0x31, 0x50, 0x30,
+    0x4e, 0x06, 0x03, 0x55, 0x04, 0x03, 0x13, 0x47, 0x64, 0x65, 0x72, 0x70, 0x6b, 0x65,
+    0x79, 0x38, 0x64, 0x63, 0x35, 0x38, 0x31, 0x30, 0x30, 0x62, 0x32, 0x34, 0x39, 0x33,
+    0x36, 0x31, 0x34, 0x65, 0x65, 0x31, 0x36, 0x39, 0x32, 0x38, 0x33, 0x31, 0x61, 0x34,
+    0x36, 0x31, 0x66, 0x33, 0x66, 0x34, 0x64, 0x64, 0x33, 0x66, 0x39, 0x62, 0x33, 0x62,
+    0x30, 0x38, 0x38, 0x65, 0x32, 0x34, 0x34, 0x66, 0x38, 0x38, 0x37, 0x66, 0x38, 0x31,
+    0x62, 0x34, 0x39, 0x30, 0x36, 0x61, 0x63, 0x32, 0x36, 0x30, 0x1e, 0x17, 0x0d, 0x32,
+    0x32, 0x30, 0x31, 0x31, 0x32, 0x32, 0x33, 0x35, 0x37, 0x35, 0x35, 0x5a, 0x17, 0x0d,
+    0x32, 0x32, 0x30, 0x33, 0x31, 0x33, 0x32, 0x33, 0x35, 0x37, 0x35, 0x35, 0x5a, 0x30,
+    0x52, 0x31, 0x50, 0x30, 0x4e, 0x06, 0x03, 0x55, 0x04, 0x03, 0x13, 0x47, 0x64, 0x65,
+    0x72, 0x70, 0x6b, 0x65, 0x79, 0x38, 0x64, 0x63, 0x35, 0x38, 0x31, 0x30, 0x30, 0x62,
+    0x32, 0x34, 0x39, 0x33, 0x36, 0x31, 0x34, 0x65, 0x65, 0x31, 0x36, 0x39, 0x32, 0x38,
+    0x33, 0x31, 0x61, 0x34, 0x36, 0x31, 0x66, 0x33, 0x66, 0x34, 0x64, 0x64, 0x33, 0x66,
+    0x39, 0x62, 0x33, 0x62, 0x30, 0x38, 0x38, 0x65, 0x32, 0x34, 0x34, 0x66, 0x38, 0x38,
+    0x37, 0x66, 0x38, 0x31, 0x62, 0x34, 0x39, 0x30, 0x36, 0x61, 0x63, 0x32, 0x36, 0x30,
+    0x2a, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x21, 0x00, 0x62, 0x41, 0xd8,
+    0x65, 0xad, 0x57, 0xcb, 0xef, 0x5a, 0x89, 0xb5, 0x22, 0x1e, 0x52, 0x9d, 0xba, 0x0e,
+    0x3a, 0x10, 0x34, 0x32, 0x51, 0x40, 0x7f, 0xbd, 0xfb, 0x7b, 0x6b, 0x73, 0x04, 0xd1,
+    0xc2, 0xa3, 0x02, 0x30, 0x00, 0x30, 0x05, 0x06, 0x03, 0x2b, 0x65, 0x70, 0x03, 0x41,
+    0x00, 0x5b, 0xa7, 0x06, 0x79, 0x86, 0x28, 0x94, 0x97, 0x9e, 0x4c, 0x77, 0x41, 0x00,
+    0x01, 0x78, 0xaa, 0xbc, 0xbd, 0x20, 0xc3, 0x8a, 0x5d, 0x0a, 0x28, 0xce, 0x85, 0x21,
+    0xd9, 0x81, 0x30, 0xf5, 0x9a, 0x25, 0x49, 0x19, 0x3c, 0xff, 0x6f, 0xf1, 0xea, 0x61,
+    0x66, 0x40, 0xb1, 0xa7, 0xaf, 0xfd, 0xe9, 0x52, 0xc7, 0x0f, 0x8d, 0x26, 0xd5, 0xfc,
+    0x0f, 0x3b, 0xcf, 0x98, 0x82, 0x84, 0x61, 0xbc, 0x0d,
+};
+
+typedef struct Issue51759 {
+    X509Certificate *bad_cert;
+    X509Certificate *good_cert;
+} Issue51759;
+
+static void issue51759_leaf(void *env, TestingT *t) {
+    Issue51759 *c = env;
+    ARENA(a);
+    X509VerifyOptions opts = {0};
+    Str expected_err = BURROW_S("invalid leaf certificate");
+    Error err = BURROW_NO_ERROR;
+    (void)x509_certificate_verify(c->bad_cert, a, opts, &err);
+    if (!BURROW_FAILED(err) || !str_eq(error_text(err), expected_err))
+        testing_t_fatalf_v(t, "unexpected error: want %q, got %q", expected_err,
+                           error_text(err));
+    arena_free(&ar);
+}
+
+static void issue51759_intermediate(void *env, TestingT *t) {
+    Issue51759 *c = env;
+    ARENA(a);
+    X509VerifyOptions opts = {0};
+    X509CertPool *intermediates = x509_new_cert_pool(a);
+    x509_cert_pool_add_cert(intermediates, c->bad_cert);
+    opts.intermediates = intermediates;
+    Str expected_err = BURROW_S("SecCertificateCreateWithData: invalid certificate");
+    Error err = BURROW_NO_ERROR;
+    (void)x509_certificate_verify(c->good_cert, a, opts, &err);
+    if (!BURROW_FAILED(err) || !str_eq(error_text(err), expected_err))
+        testing_t_fatalf_v(t, "unexpected error: want %q, got %q", expected_err,
+                           error_text(err));
+    arena_free(&ar);
+}
+
+static void TestIssue51759(TestingT *t) {
+    if (strcmp(burrow_os_name(), "darwin") != 0) {
+        testing_t_skip_v(t, "only affects darwin");
+        return;
+    }
+
+    ARENA(a);
+    SKIP_WITHOUT_EXEC(t);
+    Error lerr = BURROW_NO_ERROR;
+    (void)exec_look_path(a, BURROW_S("sw_vers"), &lerr);
+    if (BURROW_FAILED(lerr)) {
+        Str path = BURROW_S("sw_vers");
+        testing_t_skipf_v(t, "skipping test: %s: %s", path, lerr);
+        arena_free(&ar);
+        return;
+    }
+    Error verr = BURROW_NO_ERROR;
+    Int vers = macos_major_version(t, a, &verr);
+    if (BURROW_FAILED(verr)) {
+        Str builder = os_getenv(a, BURROW_S("GO_BUILDER_NAME"));
+        if (builder.len > 0)
+            testing_t_fatalf_v(t, "unable to determine macOS version: %s", verr);
+        else
+            testing_t_skip_v(t, "unable to determine macOS version");
+        arena_free(&ar);
+        return;
+    } else if (vers < 11) {
+        testing_t_skip_v(t, "behavior only enforced in macOS 11 and after");
+        arena_free(&ar);
+        return;
+    }
+
+    Issue51759 c = {0};
+    Error err = BURROW_NO_ERROR;
+    c.bad_cert = x509_parse_certificate(
+        a,
+        slice_from((void *)(uintptr_t)bad_cert_data, (Int)sizeof bad_cert_data,
+                   (Int)sizeof bad_cert_data, TYPE_BYTE),
+        &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+
+    testing_t_run(t, BURROW_S("leaf"), BURROW_FN(TestingTFunc, issue51759_leaf, &c));
+
+    c.good_cert = certificate_from_pem(a, google_leaf, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+
+    testing_t_run(t, BURROW_S("intermediate"),
+                  BURROW_FN(TestingTFunc, issue51759_intermediate, &c));
     arena_free(&ar);
 }
 
@@ -1723,6 +1880,7 @@ static void TestSystemCertPool(TestingT *t) {
     X(TestPathologicalChains)                                                          \
     X(TestSystemRootsError)                                                            \
     X(TestSystemRootsErrorUnwrap)                                                      \
+    X(TestIssue51759)                                                                  \
     X(TestPathBuilding)                                                                \
     X(TestEKUEnforcement)                                                              \
     X(TestVerifyEKURootAsLeaf)                                                         \

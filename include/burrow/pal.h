@@ -497,6 +497,62 @@ typedef void (*PalCertChainFn)(void *env, const PalCertChain *chain);
 bool pal_cert_verify(const PalCertVerifyOpts *opts, PalCertChainFn fn, void *env,
                      PalErrno *err);
 
+/* The macOS and iOS verifier, for crypto/x509's systemVerify in Go's
+ * root_darwin.go. The leaf and the intermediates go into a SecTrust with the
+ * SSL server policy for server_name, or for no name when server_name_len is 0,
+ * and SecTrustEvaluateWithError decides. With has_date, date is the time to
+ * verify at, in seconds since the first of January 2001 UTC, which is what
+ * CFDateCreate takes.
+ *
+ * fn is called once. In what it gets, failed is the step that failed, with
+ * status the OSStatus of the calls that return one. When evaluation fails,
+ * code is CFErrorGetCode of the error and desc its description in UTF-8, empty
+ * when it has none or the description is not UTF-8, good until fn returns.
+ * When nothing failed, n is how many certificates SecTrustCopyCertificateChain
+ * gave, and after fn, cert_fn gets each of them in order, with its DER, good
+ * until cert_fn returns, or with a len of -1 when SecCertificateCopyData gave
+ * nothing.
+ *
+ * The frameworks are not linked, so they are loaded on each call. Returns
+ * false and says why when they cannot be, and on every system but macOS and
+ * iOS, where the error is PAL_ENOTSUP. */
+typedef enum PalTrustStep {
+    PAL_TRUST_OK,
+    PAL_TRUST_LEAF,         /* SecCertificateCreateWithData, for the leaf */
+    PAL_TRUST_INTERMEDIATE, /* SecCertificateCreateWithData, for an intermediate */
+    PAL_TRUST_POLICY,       /* SecPolicyCreateSSL */
+    PAL_TRUST_CREATE,       /* SecTrustCreateWithCertificates */
+    PAL_TRUST_DATE,         /* SecTrustSetVerifyDate */
+    PAL_TRUST_EVALUATE,     /* SecTrustEvaluateWithError */
+    PAL_TRUST_CHAIN,        /* SecTrustCopyCertificateChain */
+} PalTrustStep;
+
+typedef struct PalTrustOpts {
+    const uint8_t *leaf;
+    int64_t leaf_len;
+    const uint8_t *const *intermediates;
+    const int64_t *intermediate_lens;
+    int64_t n_intermediates;
+    const char *server_name;
+    int64_t server_name_len;
+    bool has_date;
+    double date;
+} PalTrustOpts;
+
+typedef struct PalTrustResult {
+    PalTrustStep failed;
+    int32_t status;
+    int64_t code;
+    const char *desc;
+    int64_t desc_len;
+    int64_t n;
+} PalTrustResult;
+
+typedef void (*PalTrustFn)(void *env, const PalTrustResult *r);
+typedef void (*PalTrustCertFn)(void *env, int64_t i, const uint8_t *der, int64_t len);
+bool pal_trust_evaluate(const PalTrustOpts *opts, PalTrustFn fn, PalTrustCertFn cert_fn,
+                        void *env, PalErrno *err);
+
 /* ------------------------------------------------------------------ threads
  *
  * OS threads, which in Go's terms is an M. Goroutines are not here: they are

@@ -2033,6 +2033,221 @@ static Slice x509_system_verify(const X509Certificate *c, const X509VerifyOption
 
 #endif /* BURROW_OS_WINDOWS */
 
+#if defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
+
+/* systemVerify, from Go's root_darwin.go. The Security framework is called in
+ * src/pal/certverify_darwin.c, and this is what Go does with what it says. */
+
+/* various macOS error codes that can be returned from
+ * SecTrustEvaluateWithError that we can map to Go cert
+ * verification error types. */
+#define X509_MAC_ERR_SEC_CERTIFICATE_EXPIRED (-67818)
+#define X509_MAC_ERR_SEC_HOST_NAME_MISMATCH (-67602)
+#define X509_MAC_ERR_SEC_NOT_TRUSTED (-67843)
+
+typedef struct X509MacVerify {
+    const X509Certificate *c;
+    const X509VerifyOptions *opts;
+    Alloc *a;
+    Slice chain;
+    Error err;
+} X509MacVerify;
+
+/* Go's OSStatus.Error. */
+static Error x509_mac_os_status(const char *call, int32_t status) {
+    Str name = str_from_cstr(call);
+    int64_t st = status;
+    return fmt_errorf_v("%s error: %d", name, st);
+}
+
+/* Not in Go: what the PAL says about everything up to the chain, which is
+ * the first half of Go's systemVerify. */
+static void x509_mac_result(void *env, const PalTrustResult *r) {
+    X509MacVerify *v = env;
+    switch (r->failed) {
+    case PAL_TRUST_OK:
+        v->chain = slice_make(v->a, TYPE_X509_CERTIFICATE_PTR, 0, (Int)r->n);
+        return;
+    case PAL_TRUST_LEAF:
+        v->err = errors_new(error_allocator(), BURROW_S("invalid leaf certificate"));
+        return;
+    case PAL_TRUST_INTERMEDIATE:
+        v->err =
+            errors_new(error_allocator(),
+                       BURROW_S("SecCertificateCreateWithData: invalid certificate"));
+        return;
+    case PAL_TRUST_POLICY:
+        v->err = x509_mac_os_status("SecPolicyCreateSSL", 0);
+        return;
+    case PAL_TRUST_CREATE:
+        v->err = x509_mac_os_status("SecTrustCreateWithCertificates", r->status);
+        return;
+    case PAL_TRUST_DATE:
+        v->err = x509_mac_os_status("SecTrustSetVerifyDate", r->status);
+        return;
+    case PAL_TRUST_EVALUATE: {
+        Str desc = {(const Byte *)r->desc, (Int)r->desc_len};
+        switch (r->code) {
+        case X509_MAC_ERR_SEC_CERTIFICATE_EXPIRED:
+            v->err = x509_invalid(v->c, X509_EXPIRED, desc);
+            return;
+        case X509_MAC_ERR_SEC_HOST_NAME_MISMATCH: {
+            X509HostnameError e = {v->c, v->opts->dns_name};
+            v->err = x509_hostname_error_as_error(e, error_allocator());
+            return;
+        }
+        case X509_MAC_ERR_SEC_NOT_TRUSTED: {
+            X509UnknownAuthorityError e = {v->c};
+            v->err = x509_unknown_authority_error_as_error(e, error_allocator());
+            return;
+        }
+        default:
+            v->err = fmt_errorf_v("x509: %s", desc);
+            return;
+        }
+    }
+    case PAL_TRUST_CHAIN:
+        v->err = x509_mac_os_status("SecTrustCopyCertificateChain", 0);
+        return;
+    default:
+        v->err = errors_new(error_allocator(),
+                            BURROW_S("x509: macos certificate verification internal "
+                                     "error"));
+        return;
+    }
+}
+
+/* exportCertificate returns a *Certificate for a SecCertificateRef.
+ *
+ * Not in Go: the PAL has already called SecCertificateCopyData, and a len of
+ * -1 is where that gave nothing. */
+static void x509_mac_cert(void *env, int64_t i, const uint8_t *der, int64_t len) {
+    X509MacVerify *v = env;
+    (void)i;
+    if (BURROW_FAILED(v->err))
+        return;
+    if (len < 0) {
+        v->err =
+            errors_new(error_allocator(), BURROW_S("x509: invalid certificate object"));
+        return;
+    }
+    Slice data = bytes_clone(
+        v->a, slice_from((void *)(uintptr_t)der, (Int)len, (Int)len, TYPE_BYTE));
+    Error err = BURROW_NO_ERROR;
+    X509Certificate *cert = x509_parse_certificate(v->a, data, &err);
+    if (BURROW_FAILED(err)) {
+        v->err = err;
+        return;
+    }
+    v->chain = slice_append(v->a, v->chain, &cert, 1);
+}
+
+static Slice x509_system_verify(const X509Certificate *c, const X509VerifyOptions *opts,
+                                Alloc *a, Error *err) {
+    Slice none = slice_nil(TYPE_X509_CERTIFICATE_CHAIN);
+    Arena scratch;
+    arena_init(&scratch, heap_allocator(), 0);
+    Alloc *s = arena_allocator(&scratch);
+
+    PalTrustOpts po;
+    memset(&po, 0, sizeof po);
+    po.leaf = c->raw.p;
+    po.leaf_len = c->raw.len;
+    Int ni = burrow__x509_cert_pool_len(opts->intermediates);
+    if (ni > 0) {
+        const uint8_t **ders = BURROW_NEW_N(s, const uint8_t *, (size_t)ni);
+        int64_t *lens = BURROW_NEW_N(s, int64_t, (size_t)ni);
+        if (ders == NULL || lens == NULL) {
+            arena_free(&scratch);
+            *err = burrow_err_out_of_memory;
+            return none;
+        }
+        for (Int i = 0; i < ni; i++) {
+            const X509Certificate *im =
+                burrow__x509_cert_pool_cert(opts->intermediates, i, NULL);
+            ders[i] = im->raw.p;
+            lens[i] = im->raw.len;
+        }
+        po.intermediates = ders;
+        po.intermediate_lens = lens;
+        po.n_intermediates = ni;
+    }
+    po.server_name = (const char *)opts->dns_name.p;
+    po.server_name_len = opts->dns_name.len;
+    if (!time_is_zero(opts->current_time)) {
+        /* TimeToCFDateRef */
+        Time ref = time_date(2001, TIME_JANUARY, 1, 0, 0, 0, 0, time_utc_loc);
+        po.has_date = true;
+        po.date = duration_seconds(time_sub(opts->current_time, ref));
+    }
+
+    /* TODO(roland): we may want to allow passing in SCTs via VerifyOptions and
+     * set them via SecTrustSetSignedCertificateTimestamps, since Apple will
+     * always enforce its SCT requirements, and there are still _some_ people
+     * using TLS or OCSP for that. */
+
+    X509MacVerify v;
+    memset(&v, 0, sizeof v);
+    v.c = c;
+    v.opts = opts;
+    v.a = a;
+    v.chain = slice_nil(TYPE_X509_CERTIFICATE_PTR);
+    v.err = BURROW_NO_ERROR;
+    PalErrno pe = PAL_OK;
+    bool ok = pal_trust_evaluate(&po, x509_mac_result, x509_mac_cert, &v, &pe);
+    arena_free(&scratch);
+    if (!ok) {
+        /* Not in Go, which links the frameworks: they could not be loaded. */
+        *err = errors_new(error_allocator(), str_from_cstr(pal_errno_string(pe)));
+        return none;
+    }
+    if (BURROW_FAILED(v.err)) {
+        *err = v.err;
+        return none;
+    }
+    if (v.chain.len == 0) {
+        /* This should _never_ happen, but to be safe */
+        *err =
+            errors_new(error_allocator(),
+                       BURROW_S("x509: macos certificate verification internal error"));
+        return none;
+    }
+
+    X509Certificate *const *chain = v.chain.p;
+    if (opts->dns_name.len > 0) {
+        /* If we have a DNS name, apply our own name verification */
+        Error herr = x509_certificate_verify_hostname(chain[0], opts->dns_name);
+        if (BURROW_FAILED(herr)) {
+            *err = herr;
+            return none;
+        }
+    }
+
+    Slice key_usages = opts->key_usages;
+    X509ExtKeyUsage server_auth = X509_EXT_KEY_USAGE_SERVER_AUTH;
+    if (key_usages.len == 0)
+        key_usages = slice_from(&server_auth, 1, 1, TYPE_INT);
+
+    Slice chains = slice_make(a, TYPE_X509_CERTIFICATE_CHAIN, 0, 1);
+    chains = slice_append(a, chains, &v.chain, 1);
+
+    /* If any key usage is acceptable then we're done. */
+    const X509ExtKeyUsage *ekus = key_usages.p;
+    for (Int i = 0; i < key_usages.len; i++) {
+        if (ekus[i] == X509_EXT_KEY_USAGE_ANY)
+            return chains;
+    }
+
+    if (!x509_check_chain_for_key_usage(a, v.chain, key_usages)) {
+        *err = x509_invalid(c, X509_INCOMPATIBLE_USAGE, BURROW_STR_EMPTY);
+        return none;
+    }
+
+    return chains;
+}
+
+#endif /* BURROW_OS_DARWIN || BURROW_OS_IOS */
+
 Slice x509_certificate_verify(const X509Certificate *c, Alloc *a,
                               X509VerifyOptions opts, Error *err) {
     Slice none = slice_nil(TYPE_X509_CERTIFICATE_CHAIN);
@@ -2048,7 +2263,7 @@ Slice x509_certificate_verify(const X509Certificate *c, Alloc *a,
         }
     }
 
-#if defined(BURROW_OS_WINDOWS)
+#if defined(BURROW_OS_WINDOWS) || defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
     /* Use platform verifiers, where available, if Roots is from
      * SystemCertPool. */
     {
@@ -2070,9 +2285,6 @@ Slice x509_certificate_verify(const X509Certificate *c, Alloc *a,
     }
 #endif
 
-    /* Not in Go: on macOS and iOS Go hands a verify with no roots to the
-     * platform. Until that is here the system pool stands in, and there it is
-     * empty unless SSL_CERT_FILE or SSL_CERT_DIR says otherwise. */
     if (opts.roots == NULL) {
         opts.roots = burrow__x509_system_roots_pool();
         if (opts.roots == NULL) {

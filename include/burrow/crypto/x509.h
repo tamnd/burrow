@@ -880,9 +880,8 @@ BURROW_SLICE_TYPE_DECL(X509CertificateChain, X509CertificatePtr);
  * and the roots have certificates added to the system pool, the chains come
  * from those as usual.
  *
- * Go asks the platform on macOS and iOS too. That is not here yet, and the
- * system pool there is empty, so this gives an UnknownAuthorityError unless
- * SSL_CERT_FILE or SSL_CERT_DIR names some roots. */
+ * On macOS and iOS it asks the Security framework the same way, through
+ * SecTrustEvaluateWithError, and the chain is the one SecTrust built. */
 BURROW_OWNS(ret) Slice x509_certificate_verify(const X509Certificate *c, Alloc *a,
                                                X509VerifyOptions opts, Error *err);
 

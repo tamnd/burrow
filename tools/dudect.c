@@ -3,16 +3,16 @@
  *
  * This is the method of "Dude, is my code constant time?" by Reparaz, Balasch
  * and Verbauwhede (https://eprint.iacr.org/2016/1123). Each check runs one
- * operation many times, with inputs from two classes picked at random for
- * each run: class 0 is one fixed input and class 1 is a fresh random one.
- * Where it can, the fixed input is all zeros, or the smallest valid value,
- * because code that does less work for a zero byte or a zero window shows up
- * most clearly against an input that is all zero. It reads the cycle counter around every call, and then runs Welch's t-test on
- * the two classes' times, once on all of them and once with the slowest runs
- * cut off at each of a series of percentiles, as the paper does. A |t| above
- * 10 fails the check, which is the paper's line for code that is clearly not
- * constant time. Below that, the test found nothing, which is not a proof:
- * more runs can find a smaller leak.
+ * operation many times, with inputs from two classes picked at random for each
+ * run: class 0 is one fixed input and class 1 is a fresh random one. Where it
+ * can, the fixed input is all zeros, or 1 where zero is not a valid key,
+ * because code that skips work on a zero byte or a zero window does that on
+ * every part of such an input. It reads the cycle counter around every call,
+ * and then runs Welch's t-test on the two classes' times, once on all of them
+ * and once with the slowest runs cut off at each of a series of percentiles, as
+ * the paper does. A |t| above 10 fails the check, which is the paper's line for
+ * code that is clearly not constant time. Below that, the test found nothing,
+ * which is not a proof: more runs can find a smaller leak.
  *
  * The first check is a comparison that returns at the first byte that
  * differs. It has to fail. If it doesn't, the timer or the machine is too

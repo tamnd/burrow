@@ -22,6 +22,10 @@
 #include "check.h"
 
 #include "burrow/burrow.h"
+#include "burrow/crypto/aes.h"
+#include "burrow/crypto/ed25519.h"
+#include "burrow/crypto/mlkem.h"
+#include "burrow/crypto/sha256.h"
 #include "burrow/os/exec.h"
 #include "burrow/path/filepath.h"
 #include "burrow/unicode.h"
@@ -200,8 +204,25 @@ static bool in_section(const Byte *const b[4], int i, const void *p) {
     return (uintptr_t)b[2 * i] <= u && u < (uintptr_t)b[2 * i + 1];
 }
 
+/* Not in Go: Go's test is in a package whose other tests use the whole module,
+ * so all of it is in the test program. Here the test is a program of its own,
+ * and a linker that leaves out what nothing refers to, as MSVC's does, would
+ * leave out most of the module and fail the size check below. These are a few
+ * of the module's algorithms for the test to refer to. */
+static void (*volatile const fips_keep[])(void) = {
+    (void (*)(void))sha256_sum256,
+    (void (*)(void))aes_new_cipher,
+    (void (*)(void))ed25519_sign,
+    (void (*)(void))mlkem_generate_key768,
+};
+
 static void TestIntegrityCheckInfo(TestingT *t) {
     MUST_SUPPORT_FIPS140(t);
+
+    /* Not in Go: see fips_keep. */
+    for (size_t i = 0; i < sizeof fips_keep / sizeof fips_keep[0]; i++)
+        if (fips_keep[i] == NULL)
+            testing_t_errorf_v(t, "fips_keep[%d] is nil", (Int)i);
 
     /* Check that the checktest symbols are initialized properly. */
     if (burrow__fips140_checktest_rodata != 2)

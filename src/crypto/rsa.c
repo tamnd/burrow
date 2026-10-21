@@ -1400,6 +1400,12 @@ CRYPTO_FIPS_TEXT static bool rsa_pss_max_salt_length(const BigmodModulus *N, Has
     Int salt_length = (bigmod_modulus_bit_len(N) - 1 + 7) / 8 - 2 - hash_size(hash);
     if (salt_length < 0)
         return false;
+    /* FIPS 186-5, Section 5.4(g): "the length (in bytes) of the salt (sLen)
+     * shall satisfy 0 ≤ sLen ≤ hLen". */
+    if (burrow__fips140_enabled() && salt_length > hash_size(hash)) {
+        *out = hash_size(hash);
+        return true;
+    }
     *out = salt_length;
     return true;
 }

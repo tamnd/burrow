@@ -42,6 +42,8 @@ For data that arrives in pieces, make a hash and write to it. `crc32_new_ieee` r
 <!-- example: ../examples/hash/hash.c#stream -->
 ```c
 HashHash32 h = crc32_new_ieee(a);
+if (h.vt == NULL)
+    return; // out of memory
 Hash as_hash = hash_hash32_as_hash(h);
 hash_write(as_hash, slice_from_str(a, BURROW_S("hello, ")), NULL);
 hash_write(as_hash, slice_from_str(a, BURROW_S("world")), NULL);
@@ -123,6 +125,8 @@ The streaming versions are a plain `Hash`, made from the allocator you pass:
 <!-- example: ../examples/hash/hash.c#cryptostream -->
 ```c
 Hash h = sha512_new512256(a);
+if (h.vt == NULL)
+    return; // out of memory
 hash_write(h, slice_from_str(a, BURROW_S("hello, ")), NULL);
 hash_write(h, slice_from_str(a, BURROW_S("world")), NULL);
 Slice digest = hash_sum(a, h, slice_nil(TYPE_BYTE));
@@ -303,6 +307,8 @@ As in Go, the hashes from md5, sha1, sha256, sha512, sha3, adler32, crc32, crc64
 <!-- example: ../examples/hash/hash.c#marshal -->
 ```c
 Hash h = sha256_new(a);
+if (h.vt == NULL)
+    return; // out of memory
 hash_write(h, slice_from_str(a, BURROW_S("hello, ")), NULL);
 Error err = BURROW_NO_ERROR;
 Slice state = encoding_marshal_binary(a, BURROW_ANY(TYPE_OF(Hash), &h), &err);
@@ -315,6 +321,8 @@ For SHA-256 that is 108 bytes, laid out byte for byte the way Go lays it out, so
 <!-- example: ../examples/hash/hash.c#unmarshal -->
 ```c
 Hash h2 = sha256_new(a);
+if (h2.vt == NULL)
+    return; // out of memory
 err = encoding_unmarshal_binary(a, BURROW_ANY(TYPE_OF(Hash), &h2), state);
 if (BURROW_FAILED(err))
     return;

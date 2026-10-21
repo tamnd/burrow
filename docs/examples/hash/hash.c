@@ -39,6 +39,8 @@ static void oneshot(Alloc *a) {
 static void streaming(Alloc *a) {
     // doc: stream
     HashHash32 h = crc32_new_ieee(a);
+    if (h.vt == NULL)
+        return; // out of memory
     Hash as_hash = hash_hash32_as_hash(h);
     hash_write(as_hash, slice_from_str(a, BURROW_S("hello, ")), NULL);
     hash_write(as_hash, slice_from_str(a, BURROW_S("world")), NULL);
@@ -81,6 +83,8 @@ static void crypto(Alloc *a) {
 
     // doc: cryptostream
     Hash h = sha512_new512256(a);
+    if (h.vt == NULL)
+        return; // out of memory
     hash_write(h, slice_from_str(a, BURROW_S("hello, ")), NULL);
     hash_write(h, slice_from_str(a, BURROW_S("world")), NULL);
     Slice digest = hash_sum(a, h, slice_nil(TYPE_BYTE));
@@ -126,6 +130,8 @@ static void print_hex(Alloc *a, Slice b) {
 static void saving(Alloc *a) {
     // doc: marshal
     Hash h = sha256_new(a);
+    if (h.vt == NULL)
+        return; // out of memory
     hash_write(h, slice_from_str(a, BURROW_S("hello, ")), NULL);
     Error err = BURROW_NO_ERROR;
     Slice state = encoding_marshal_binary(a, BURROW_ANY(TYPE_OF(Hash), &h), &err);
@@ -136,6 +142,8 @@ static void saving(Alloc *a) {
 
     // doc: unmarshal
     Hash h2 = sha256_new(a);
+    if (h2.vt == NULL)
+        return; // out of memory
     err = encoding_unmarshal_binary(a, BURROW_ANY(TYPE_OF(Hash), &h2), state);
     if (BURROW_FAILED(err))
         return;

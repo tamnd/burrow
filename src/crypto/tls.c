@@ -12,6 +12,7 @@
 #include "burrow/atomic.h"
 #include "burrow/core.h"
 #include "burrow/crypto.h"
+#include "burrow/crypto/fips140.h"
 #include "burrow/declare.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
@@ -463,10 +464,11 @@ bool burrow__tls_is_alert(Error err, uint8_t *e) {
 
 enum {
     TLS_DEBUG_KNOWN = 1 << 0,
-    TLS_DEBUG_MLKEM_OFF = 1 << 1,      /* tlsmlkem=0 */
-    TLS_DEBUG_SECP_MLKEM_OFF = 1 << 2, /* tlssecpmlkem=0 */
-    TLS_DEBUG_SHA1_ON = 1 << 3,        /* tlssha1=1 */
-    TLS_DEBUG_MAX_RSA_SET = 1 << 4,    /* tlsmaxrsasize=N */
+    TLS_DEBUG_MLKEM_OFF = 1 << 1,       /* tlsmlkem=0 */
+    TLS_DEBUG_SECP_MLKEM_OFF = 1 << 2,  /* tlssecpmlkem=0 */
+    TLS_DEBUG_SHA1_ON = 1 << 3,         /* tlssha1=1 */
+    TLS_DEBUG_MAX_RSA_SET = 1 << 4,     /* tlsmaxrsasize=N */
+    TLS_DEBUG_FIPS140_EMS_OFF = 1 << 5, /* fips140ems=0 */
 };
 
 static uint32_t tls_debug_flags;
@@ -518,6 +520,8 @@ static uint32_t tls_debug_parse(const char *value) {
         f |= TLS_DEBUG_SECP_MLKEM_OFF;
     if (tls_godebug_is(value, "tlssha1", "1"))
         f |= TLS_DEBUG_SHA1_ON;
+    if (tls_godebug_is(value, "fips140ems", "0"))
+        f |= TLS_DEBUG_FIPS140_EMS_OFF;
     Str max = tls_godebug_value(value, "tlsmaxrsasize");
     if (max.len > 0) {
         ArenaMark mark = error_mark();
@@ -558,9 +562,45 @@ bool burrow__tls_godebug_max_rsa_size(Int *max) {
     return true;
 }
 
+bool burrow__tls_godebug_fips140ems_off(void) {
+    return (tls_debug_load() & TLS_DEBUG_FIPS140_EMS_OFF) != 0;
+}
+
 void burrow__tls_godebug_set(const char *value) {
     burrow__atomic_store_release_u32(&tls_debug_flags,
                                      value != NULL ? tls_debug_parse(value) : 0);
+}
+
+/* -------------------------------------------------------------- fips140tls */
+
+/* Not in Go: required is an atomic.Bool there, which an init function sets when
+ * fips140.Enabled(). There are no init functions here, so it starts out unknown
+ * and the first Required reads fips140_enabled. */
+enum {
+    TLS_FIPS140_UNKNOWN = 0,
+    TLS_FIPS140_NOT_REQUIRED = 1,
+    TLS_FIPS140_REQUIRED = 2,
+};
+
+static uint32_t tls_fips140_required;
+
+void burrow__tls_fips140_force(void) {
+    burrow__atomic_store_release_u32(&tls_fips140_required, TLS_FIPS140_REQUIRED);
+}
+
+bool burrow__tls_fips140_required(void) {
+    uint32_t r = burrow__atomic_load_acquire_u32(&tls_fips140_required);
+    if (r == TLS_FIPS140_UNKNOWN) {
+        uint32_t want =
+            fips140_enabled() ? TLS_FIPS140_REQUIRED : TLS_FIPS140_NOT_REQUIRED;
+        if (burrow__atomic_cas_u32(&tls_fips140_required, &r, want))
+            r = want;
+    }
+    return r == TLS_FIPS140_REQUIRED;
+}
+
+void burrow__tls_fips140_testing_only_abandon(void) {
+    burrow__atomic_store_release_u32(&tls_fips140_required, TLS_FIPS140_NOT_REQUIRED);
 }
 
 /* ---------------------------------------------------------------- defaults */
@@ -611,6 +651,66 @@ const TlsSignatureScheme burrow__tls_default_supported_signature_algorithms[15] 
     TLS_PKCS1_WITH_SHA1,
     TLS_ECDSA_WITH_SHA1,
 };
+
+/* These FIPS 140-3 policies allow anything approved by SP 800-140C and SP
+ * 800-140D, and tested as part of the Go Cryptographic Module.
+ *
+ * Notably, not SHA-1, 3DES, RC4, ChaCha20Poly1305, RSA PKCS #1 v1.5 key
+ * transport, or TLS 1.0–1.1 (because we don't test its KDF).
+ *
+ * These are not default lists, but filters to apply to the default or
+ * configured lists. Missing items are treated as if they were not implemented.
+ *
+ * They are applied when the fips140 GODEBUG is "on" or "only". */
+
+const uint16_t burrow__tls_allowed_supported_versions_fips[2] = {
+    TLS_VERSION_TLS12,
+    TLS_VERSION_TLS13,
+};
+
+const TlsCurveID burrow__tls_allowed_curve_preferences_fips[7] = {
+    TLS_X25519MLKEM768, TLS_SEC_P256_R1_MLKEM768, TLS_SEC_P384_R1_MLKEM1024,
+    TLS_MLKEM1024,      TLS_CURVE_P256,           TLS_CURVE_P384,
+    TLS_CURVE_P521,
+};
+
+const TlsSignatureScheme burrow__tls_allowed_signature_algorithms_fips[13] = {
+    TLS_PSS_WITH_SHA256,
+    TLS_ECDSA_WITH_P256_AND_SHA256,
+    TLS_ED25519,
+    TLS_MLDSA44,
+    TLS_MLDSA65,
+    TLS_MLDSA87,
+    TLS_PSS_WITH_SHA384,
+    TLS_PSS_WITH_SHA512,
+    TLS_PKCS1_WITH_SHA256,
+    TLS_PKCS1_WITH_SHA384,
+    TLS_PKCS1_WITH_SHA512,
+    TLS_ECDSA_WITH_P384_AND_SHA384,
+    TLS_ECDSA_WITH_P521_AND_SHA512,
+};
+
+const uint16_t burrow__tls_allowed_cipher_suites_fips[6] = {
+    TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256,
+    TLS_TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384,
+    TLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256,
+    TLS_TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384,
+    TLS_TLS_ECDHE_ECDSA_WITH_AES_128_CBC_SHA256,
+    TLS_TLS_ECDHE_RSA_WITH_AES_128_CBC_SHA256,
+};
+
+const uint16_t burrow__tls_allowed_cipher_suites_tls13_fips[2] = {
+    TLS_TLS_AES_128_GCM_SHA256,
+    TLS_TLS_AES_256_GCM_SHA384,
+};
+
+bool burrow__tls_contains_u16(const uint16_t *list, Int n, uint16_t v) {
+    for (Int i = 0; i < n; i++) {
+        if (list[i] == v)
+            return true;
+    }
+    return false;
+}
 
 /* -------------------------------------------------------- signature schemes */
 
@@ -687,10 +787,17 @@ unsupported:
 
 bool burrow__tls_is_disabled_signature_algorithm(uint16_t version, TlsSignatureScheme s,
                                                  bool is_cert) {
+    if (burrow__tls_fips140_required() &&
+        !burrow__tls_contains_u16(burrow__tls_allowed_signature_algorithms_fips, 13, s))
+        return true;
+
     switch (s) {
     case TLS_MLDSA44:
     case TLS_MLDSA65:
     case TLS_MLDSA87:
+        /* ML-DSA is not available in FIPS 140-3 module v1.0.0. */
+        if (str_eq(fips140_version(), BURROW_S("v1.0.0")))
+            return true;
         /* ML-DSA codepoints are only defined for TLS 1.3. */
         if (version < TLS_VERSION_TLS13)
             return true;

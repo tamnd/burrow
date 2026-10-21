@@ -29,6 +29,7 @@
 #include "burrow/fmt.h"
 #include "burrow/io.h"
 #include "burrow/map.h"
+#include "burrow/math/big.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
@@ -369,16 +370,29 @@ Time burrow__tls_config_time(const TlsConfig *c) {
 
 Slice burrow__tls_config_cipher_suites(const TlsConfig *c, Alloc *a,
                                        bool aes_gcm_preferred) {
-    if (slice_is_nil(c->cipher_suites))
-        return burrow__tls_default_cipher_suites(a, aes_gcm_preferred);
-    Slice cipher_suites = burrow__tls_supported_cipher_suites(a, aes_gcm_preferred);
-    uint16_t *p = (uint16_t *)cipher_suites.p;
-    Int n = 0;
-    for (Int i = 0; i < cipher_suites.len; i++) {
-        if (tcfg_contains_u16(c->cipher_suites, p[i]))
-            p[n++] = p[i];
+    Slice cipher_suites;
+    if (slice_is_nil(c->cipher_suites)) {
+        cipher_suites = burrow__tls_default_cipher_suites(a, aes_gcm_preferred);
+    } else {
+        cipher_suites = burrow__tls_supported_cipher_suites(a, aes_gcm_preferred);
+        uint16_t *p = (uint16_t *)cipher_suites.p;
+        Int n = 0;
+        for (Int i = 0; i < cipher_suites.len; i++) {
+            if (tcfg_contains_u16(c->cipher_suites, p[i]))
+                p[n++] = p[i];
+        }
+        cipher_suites.len = n;
     }
-    cipher_suites.len = n;
+    if (burrow__tls_fips140_required()) {
+        uint16_t *p = (uint16_t *)cipher_suites.p;
+        Int n = 0;
+        for (Int i = 0; i < cipher_suites.len; i++) {
+            if (burrow__tls_contains_u16(burrow__tls_allowed_cipher_suites_fips, 6,
+                                         p[i]))
+                p[n++] = p[i];
+        }
+        cipher_suites.len = n;
+    }
     return cipher_suites;
 }
 
@@ -398,6 +412,10 @@ Int burrow__tls_config_supported_versions(const TlsConfig *c, bool is_client,
     Int n = 0;
     for (int i = 0; i < 4; i++) {
         uint16_t v = tcfg_supported_versions[i];
+        if (burrow__tls_fips140_required() &&
+            !burrow__tls_contains_u16(burrow__tls_allowed_supported_versions_fips, 2,
+                                      v))
+            continue;
         if ((c == NULL || c->min_version == 0) && v < TLS_VERSION_TLS12)
             continue;
         if (is_client && c != NULL &&
@@ -466,6 +484,9 @@ bool burrow__tls_config_supports_curve(const TlsConfig *c, uint16_t version,
         if (!burrow__tls_default_curve_enabled(x))
             return false;
     }
+    if (burrow__tls_fips140_required() &&
+        !burrow__tls_contains_u16(burrow__tls_allowed_curve_preferences_fips, 7, x))
+        return false;
     if (version < TLS_VERSION_TLS13 && burrow__tls_is_tls13_only_key_exchange(x))
         return false;
     return true;
@@ -1212,9 +1233,63 @@ Error tls_certificate_verification_error_as_error(
     return (Error){&tcfg_cve_vt, b};
 }
 
+BURROW_SENTINEL_ERROR(tcfg_err_no_fips_chains,
+                      "tls: no FIPS compatible certificate chains found");
+
+static bool tcfg_fips_allow_chain(const X509CertificateChain *chain) {
+    if (chain->len == 0)
+        return false;
+
+    X509Certificate *const *certs = chain->p;
+    for (Int i = 0; i < chain->len; i++) {
+        if (!burrow__tls_is_certificate_allowed_fips(certs[i]))
+            return false;
+    }
+
+    return true;
+}
+
 Slice burrow__tls_fips_allowed_chains(Slice chains, Error *err) {
-    (void)err;
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    if (!burrow__tls_fips140_required())
+        return chains;
+
+    X509CertificateChain *p = chains.p;
+    Int n = 0;
+    for (Int i = 0; i < chains.len; i++) {
+        if (tcfg_fips_allow_chain(&p[i]))
+            p[n++] = p[i];
+    }
+    chains.len = n;
+
+    if (n == 0) {
+        BURROW_OUT(err, tcfg_err_no_fips_chains);
+        return slice_nil(TYPE_X509_CERTIFICATE_CHAIN);
+    }
+
     return chains;
+}
+
+bool burrow__tls_is_certificate_allowed_fips(const X509Certificate *c) {
+    Any k = c->public_key;
+    if (k.t == TYPE_RSA_PUBLIC_KEY) {
+        const RsaPublicKey *pub = k.data;
+        return big_int_bit_len(pub->n) >= 2048;
+    }
+    if (k.t == TYPE_ECDSA_PUBLIC_KEY) {
+        const EcdsaPublicKey *pub = k.data;
+        return tcfg_curve_is(pub->curve, elliptic_p256()) ||
+               tcfg_curve_is(pub->curve, elliptic_p384()) ||
+               tcfg_curve_is(pub->curve, elliptic_p521());
+    }
+    if (k.t == TYPE_ED25519_PUBLIC_KEY)
+        return true;
+    if (k.t == TYPE_MLDSA_PUBLIC_KEY) {
+        /* Only for the native module. Not in Go: there is no BoringCrypto, so
+         * this is always the native module. */
+        return true;
+    }
+    return false;
 }
 
 /* Whether some certificate in chain is outside its validity period at now. */

@@ -212,6 +212,45 @@ bool burrow__tls_godebug_sha1(void);
  * *max. */
 bool burrow__tls_godebug_max_rsa_size(Int *max);
 
+/* Whether GODEBUG has fips140ems=0. fips140ems is a GODEBUG variable that can
+ * be set to 0 to disable the enforcement of Extended Master Secret in FIPS
+ * 140-3 mode. */
+bool burrow__tls_godebug_fips140ems_off(void);
+
+/* ------------------------------------------------------------- fips140tls */
+
+/* Package fips140tls controls whether crypto/tls requires FIPS-approved
+ * settings. */
+
+/* Force forces crypto/tls to restrict TLS configurations to FIPS-approved
+ * settings. By design, this call is impossible to undo (except in tests). */
+void burrow__tls_fips140_force(void);
+
+/* Required reports whether FIPS-approved settings are required.
+ *
+ * Required is true if FIPS 140-3 mode is enabled with GODEBUG=fips140=on, or if
+ * the crypto/tls/fipsonly package is imported by a Go+BoringCrypto build.
+ *
+ * Not in Go: there is no crypto/tls/fipsonly package and no BoringCrypto, so
+ * only fips140=on and fips140=only make it true, besides Force. */
+bool burrow__tls_fips140_required(void);
+
+/* TestingOnlyAbandon */
+void burrow__tls_fips140_testing_only_abandon(void);
+
+/* allowedSupportedVersionsFIPS, allowedCurvePreferencesFIPS,
+ * allowedSignatureAlgorithmsFIPS, allowedCipherSuitesFIPS and
+ * allowedCipherSuitesTLS13FIPS: the FIPS 140-3 policies, which are filters to
+ * apply to the default or configured lists when Required. */
+extern const uint16_t burrow__tls_allowed_supported_versions_fips[2];
+extern const TlsCurveID burrow__tls_allowed_curve_preferences_fips[7];
+extern const TlsSignatureScheme burrow__tls_allowed_signature_algorithms_fips[13];
+extern const uint16_t burrow__tls_allowed_cipher_suites_fips[6];
+extern const uint16_t burrow__tls_allowed_cipher_suites_tls13_fips[2];
+
+/* Not in Go: slices.Contains for the n uint16_t at list. */
+bool burrow__tls_contains_u16(const uint16_t *list, Int n, uint16_t v);
+
 /* --------------------------------------------------------- cipher suites */
 
 #define TLS_SUITE_ECDHE (1 << 0)
@@ -332,8 +371,7 @@ bool burrow__tls_type_and_hash_from_signature_scheme(TlsSignatureScheme s,
                                                      uint8_t *sig_type,
                                                      CryptoHash *hash, Error *err);
 
-/* isDisabledSignatureAlgorithm, which reads tlssha1 from GODEBUG. There is no
- * FIPS 140-3 mode here, so the checks Go makes for one never fire. */
+/* isDisabledSignatureAlgorithm, which reads tlssha1 from GODEBUG. */
 bool burrow__tls_is_disabled_signature_algorithm(uint16_t version, TlsSignatureScheme s,
                                                  bool is_cert);
 
@@ -1916,10 +1954,19 @@ BURROW_BORROWS(ret, name) Str burrow__tls_hostname_in_sni(Str name);
 Error burrow__tls_conn_verify_server_certificate(TlsConn *c, Slice certificates);
 
 /* fipsAllowedChains returns chains that are allowed to be used in a TLS
- * connection based on the current fips140tls enforcement setting. burrow has
- * no FIPS 140-3 mode, so the chains come back as they are. */
+ * connection based on the current fips140tls enforcement setting.
+ *
+ * If fips140tls is not required, the chains are returned as-is with no
+ * processing. Otherwise, the returned chains are filtered to only those allowed
+ * by FIPS 140-3. If this results in no chains it returns an error.
+ *
+ * Not in Go: chains is a []X509CertificateChain, which is filtered in place. On
+ * an error the result is nil. */
 BURROW_BORROWS(ret, chains) Slice burrow__tls_fips_allowed_chains(Slice chains,
                                                                   Error *err);
+
+/* isCertificateAllowedFIPS */
+bool burrow__tls_is_certificate_allowed_fips(const X509Certificate *c);
 
 /* anyValidVerifiedChain reports if at least one of the chains in
  * verifiedChains is valid, as indicated by none of the certificates being

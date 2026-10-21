@@ -4129,6 +4129,12 @@ static TlsConfig *mlkem_get_config_for_client(void *envp, TlsClientHelloInfo *he
     MLKEMEnv *env = (MLKEMEnv *)envp;
     TlsCurveID buf[MLKEM_MAX_CURVES];
     Slice expect_client = mlkem_curves(env->test->expect_client, buf);
+    Int n = 0;
+    for (Int i = 0; i < expect_client.len; i++) {
+        if (!(burrow__tls_fips140_required() && buf[i] == TLS_X25519))
+            buf[n++] = buf[i];
+    }
+    expect_client.len = n;
     bool equal = hello->supported_curves.len == expect_client.len;
     for (Int i = 0; equal && i < expect_client.len; i++)
         equal = *(const TlsCurveID *)slice_at(hello->supported_curves, i) == buf[i];
@@ -4141,8 +4147,8 @@ static TlsConfig *mlkem_get_config_for_client(void *envp, TlsClientHelloInfo *he
 
 static void handshake_mlkem(void *envp, TestingT *t) {
     const MLKEMTest *test = (const MLKEMTest *)envp;
-    /* There is no FIPS mode here, so X25519 is never skipped or taken out of
-     * the expected client curves. */
+    if (burrow__tls_fips140_required() && test->expect_selected == TLS_X25519)
+        testing_t_skip_v(t, "X25519 not supported in FIPS mode");
     if (test->godebug != NULL)
         burrow__tls_godebug_set(test->godebug);
     else
@@ -4365,8 +4371,8 @@ static void mldsa_rejected_version(TestingT *t, const MLDSACase *c, TlsConfig *s
 
 static void handshake_mldsa(void *env, TestingT *t) {
     const MLDSACase *c = (const MLDSACase *)env;
-    /* There is no FIPS 140-3 module here, so nothing is skipped, and the
-     * branches for module v1.0.0 never run. */
+    /* There is no FIPS 140-3 module v1.0.0 here, so the branches for it never
+     * run. */
     testing_t_parallel(t);
     Arena ar;
     arena_init(&ar, NULL, 0);

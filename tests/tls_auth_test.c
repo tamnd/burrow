@@ -1,10 +1,10 @@
 /* Derived from Go's src/crypto/tls/auth_test.go.
  * Go source: go1.27.1.
  *
- * There is no FIPS 140-3 mode here, so the skips Go makes for one are left
- * out, and the cases that set GODEBUG run one after another rather than the
- * others in parallel. The certificates come from tls_test_gen.h, which is
- * generated from Go's certificates_test.go.
+ * The cases that set GODEBUG run one after another rather than the others in
+ * parallel. There is no FIPS 140-3 module here to be v1.0.0, so
+ * MustMinimumFIPS140ModuleVersion never skips. The certificates come from
+ * tls_test_gen.h, which is generated from Go's certificates_test.go.
  *
  * Copyright 2017 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -211,6 +211,8 @@ typedef struct SelectionEnv {
 static void signature_selection(void *envp, TestingT *t) {
     const SelectionEnv *env = (const SelectionEnv *)envp;
     const SelectionTest *test = env->test;
+    if (burrow__tls_fips140_required() && test->expected_hash == CRYPTO_SHA1)
+        testing_t_skip_v(t, "skipping test not compatible with TLS FIPS mode");
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);

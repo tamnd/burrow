@@ -221,12 +221,15 @@ static const TlsSuiteTLS13 *ts13_pick_cipher_suite(const TlsClientHelloMsg *ch) 
     const uint16_t *offered = ch->cipher_suites.p;
     Int noffered = ch->cipher_suites.len;
     const uint16_t *preference_list = burrow__tls_default_cipher_suites_tls13;
+    Int npreference = 3;
     if (!burrow__tls_has_aes_gcm_hardware_support() ||
         !burrow__tls_is_aes_gcm_preferred(offered, noffered))
         preference_list = burrow__tls_default_cipher_suites_tls13_no_aes;
-    /* There is no FIPS 140-3 mode here, so allowedCipherSuitesTLS13FIPS is
-     * never the list. */
-    for (Int i = 0; i < 3; i++) {
+    if (burrow__tls_fips140_required()) {
+        preference_list = burrow__tls_allowed_cipher_suites_tls13_fips;
+        npreference = 2;
+    }
+    for (Int i = 0; i < npreference; i++) {
         const TlsSuiteTLS13 *suite = burrow__tls_mutual_cipher_suite_tls13(
             offered, noffered, preference_list[i]);
         if (suite != NULL)

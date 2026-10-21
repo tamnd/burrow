@@ -55,6 +55,8 @@ BURROW_SENTINEL_ERROR(tcl_err_next_protos, "tls: invalid NextProtos value");
 BURROW_SENTINEL_ERROR(tcl_err_next_protos_large, "tls: NextProtos values too large");
 BURROW_SENTINEL_ERROR(tcl_err_no_versions, "tls: no supported versions satisfy "
                                            "MinVersion and MaxVersion");
+BURROW_SENTINEL_ERROR(tcl_err_fips_ems,
+                      "tls: FIPS 140-3 requires the use of Extended Master Secret");
 BURROW_SENTINEL_ERROR(tcl_err_no_curves,
                       "tls: no supported key exchange methods (CurveIDs)");
 BURROW_SENTINEL_ERROR(tcl_err_curve_accepted, "tls: internal error: supportsCurve "
@@ -323,12 +325,17 @@ Error burrow__tls_conn_make_client_hello(TlsConn *c, Alloc *a,
         if (min_version >= TLS_VERSION_TLS13)
             hello->cipher_suites = slice_nil(TYPE_UINT16);
 
-        /* There is no FIPS 140-3 mode here, so Go's allowedCipherSuitesTLS13FIPS
-         * never comes into it. */
-        const uint16_t *tls13 = burrow__tls_has_aes_gcm_hardware_support()
-                                    ? burrow__tls_default_cipher_suites_tls13
-                                    : burrow__tls_default_cipher_suites_tls13_no_aes;
-        hello->cipher_suites = slice_append(a, hello->cipher_suites, tls13, 3);
+        const uint16_t *tls13;
+        Int ntls13 = 3;
+        if (burrow__tls_fips140_required()) {
+            tls13 = burrow__tls_allowed_cipher_suites_tls13_fips;
+            ntls13 = 2;
+        } else if (burrow__tls_has_aes_gcm_hardware_support()) {
+            tls13 = burrow__tls_default_cipher_suites_tls13;
+        } else {
+            tls13 = burrow__tls_default_cipher_suites_tls13_no_aes;
+        }
+        hello->cipher_suites = slice_append(a, hello->cipher_suites, tls13, ntls13);
         if (hello->cipher_suites.p == NULL)
             return burrow_err_out_of_memory;
 
@@ -547,8 +554,11 @@ static Error tcl_load_session(TlsConn *c, Alloc *a, TlsClientHelloMsg *hello,
                                             session->cipher_suite) == NULL)
             return tcl_no_session(l, cs);
 
-        /* FIPS 140-3 requires the use of Extended Master Secret. There is no
-         * FIPS 140-3 mode here. */
+        /* FIPS 140-3 requires the use of Extended Master Secret. */
+        if (!session->ext_master_secret && burrow__tls_fips140_required()) {
+            if (!burrow__tls_godebug_fips140ems_off())
+                return tcl_no_session(l, cs);
+        }
 
         hello->session_ticket = session->ticket;
         l->cs = cs;
@@ -1144,8 +1154,12 @@ static Error tcl_finish_full_handshake(TclState *hs, TlsKeyAgreement *key_agreem
             hs->a, c->vers, hs->suite, pre_master_secret,
             burrow__tls_finished_hash_sum(&hs->finished_hash, hs->a));
     } else {
-        /* FIPS 140-3 requires the use of Extended Master Secret. There is no
-         * FIPS 140-3 mode here. */
+        if (burrow__tls_fips140_required()) {
+            if (!burrow__tls_godebug_fips140ems_off()) {
+                (void)burrow__tls_conn_send_alert(c, TLS_ALERT_HANDSHAKE_FAILURE);
+                return tcl_err_fips_ems;
+            }
+        }
         hs->master_secret = burrow__tls_master_from_pre_master_secret(
             hs->a, c->vers, hs->suite, pre_master_secret, hs->hello->random,
             hs->server_hello->random);

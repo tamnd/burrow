@@ -1,10 +1,16 @@
-/* Derived from Go's src/crypto/cipher/gcm_test.go.
+/* Derived from Go's src/crypto/cipher/gcm_test.go and
+ * gcm_wycheproof_test.go.
  * Go source: go1.27.1.
  *
  * TestGCMExtraMethods is left out for the reason aes_test.c gives for
  * TestExtraMethods, and TestGCMNoncesFIPSV1 because it is about the FIPS 140
  * module's internal constructors and service indicator, which burrow does not
- * have. TestGCMWycheproof waits for the Wycheproof vectors.
+ * have.
+ *
+ * TestGCMWycheproof's vectors are in gcm_test_gen.h, which
+ * tools/gen-gcm-tests.sh writes from the Wycheproof module version Go's tests
+ * pin, after putting each one through Go. Go runs each one as a parallel
+ * subtest; here the subtests run one after another.
  *
  * Go skips TestGCMAsm where there is no assembly. Here the AES path and the
  * wrapped path are different code even without the instructions, batched
@@ -19,11 +25,17 @@
 #include "testcipher.h"
 
 #include "burrow/burrow.h"
+#include "burrow/bytes.h"
 #include "burrow/crypto/aes.h"
 #include "burrow/crypto/cipher.h"
 #include "burrow/crypto/rand.h"
 #include "burrow/encoding/hex.h"
+#include "burrow/slices.h"
 
+#include "gcm_test_gen.h"
+
+#include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 /* wrap hides the AES block behind a table of its own, so that GCM cannot see
@@ -925,6 +937,101 @@ static void TestGCMWithRandomNonce(TestingT *t) {
     arena_free(&ar);
 }
 
+static void gcm_wycheproof(void *env, TestingT *t) {
+    const GenWycheproof *tv = env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+
+    Error err = BURROW_NO_ERROR;
+    CipherBlock aes_cipher = aes_new_cipher(a, unhex(a, tv->key), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "failed to construct cipher: %s", err);
+        arena_free(&ar);
+        testing_t_fail_now(t);
+    }
+    CipherAEAD aead = cipher_new_gcm(a, aes_cipher, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "failed to construct cipher: %s", err);
+        arena_free(&ar);
+        testing_t_fail_now(t);
+    }
+
+    Slice iv = unhex(a, tv->iv);
+    Slice tag = unhex(a, tv->tag);
+    Slice ct = unhex(a, tv->ct);
+    Slice msg = unhex(a, tv->msg);
+    Slice aad = unhex(a, tv->aad);
+    Slice parts[2] = {ct, tag};
+
+    /* The Go implementation panics on invalid nonce sizes rather than
+     * returning an error. Verify this behavior. */
+    if (iv.len != cipher_aead_nonce_size(aead)) {
+        Slice ct_with_tag = slices_concat(a, parts, 2);
+        TestcipherAEADEnv e = {0};
+        e.aead = aead;
+        TestcipherOp seal = {testcipher_seal_op, &e, a, {0}, msg, iv, aad};
+        if (!testcipher_panics(&seal))
+            testing_t_errorf_v(t, "%s: expected panic but didn't get one", "Seal");
+        TestcipherOp open = {testcipher_open_op, &e, a, {0}, ct_with_tag, iv, aad};
+        if (!testcipher_panics(&open))
+            testing_t_errorf_v(t, "%s: expected panic but didn't get one", "Open");
+        arena_free(&ar);
+        return;
+    }
+
+    Slice gen_ct = cipher_aead_seal(aead, a, slice_nil(TYPE_BYTE), iv, msg, aad);
+    Slice gen_msg =
+        cipher_aead_open(aead, a, slice_nil(TYPE_BYTE), iv, gen_ct, aad, &err);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "failed to decrypt generated ciphertext: %s", err);
+    if (!bytes_equal(gen_msg, msg))
+        testing_t_errorf_v(t, "unexpected roundtripped plaintext: got %x, want %x",
+                           gen_msg, msg);
+
+    Slice ct_with_tag = slices_concat(a, parts, 2);
+    err = BURROW_NO_ERROR;
+    Slice msg2 =
+        cipher_aead_open(aead, a, slice_nil(TYPE_BYTE), iv, ct_with_tag, aad, &err);
+    bool want_pass = tv->want_pass;
+    if (!want_pass && !BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "decryption succeeded when it should've failed");
+    } else if (want_pass) {
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "decryption failed: %s", err);
+            arena_free(&ar);
+            testing_t_fail_now(t);
+        }
+        if (!bytes_equal(gen_ct, ct_with_tag))
+            testing_t_errorf_v(
+                t, "generated ciphertext doesn't match expected: got %x, want %x",
+                gen_ct, ct_with_tag);
+        if (!bytes_equal(msg, msg2))
+            testing_t_errorf_v(
+                t, "decrypted ciphertext doesn't match expected: got %x, want %x", msg2,
+                msg);
+    }
+    arena_free(&ar);
+}
+
+static void gcm_wycheproof_all(void *env, TestingT *t) {
+    (void)env;
+    for (size_t i = 0; i < sizeof gen_wycheproof / sizeof gen_wycheproof[0]; i++) {
+        const GenWycheproof *tv = &gen_wycheproof[i];
+        char name[256];
+        if (tv->comment[0] != '\0')
+            snprintf(name, sizeof name, "%s #%d %s", tv->file, tv->tc_id, tv->comment);
+        else
+            snprintf(name, sizeof name, "%s #%d", tv->file, tv->tc_id);
+        testing_t_run(t, str_from_cstr(name),
+                      BURROW_FN(TestingTFunc, gcm_wycheproof, (void *)(uintptr_t)tv));
+    }
+}
+
+static void TestGCMWycheproof(TestingT *t) {
+    testcipher_all_implementations(t, gcm_wycheproof_all, NULL);
+}
+
 /* --------------------------------------------------------------- benchmarks */
 
 /* From Go's benchmark_test.go. */
@@ -1001,6 +1108,7 @@ static void BenchmarkAESGCM(TestingB *b) {
     X(TestGCMAsm)                                                                      \
     X(TestGCMAEAD)                                                                     \
     X(TestGCMWithRandomNonce)                                                          \
+    X(TestGCMWycheproof)                                                               \
     X(BenchmarkAESGCM)
 
 TESTING_MAIN(TESTS)

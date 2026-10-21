@@ -1,7 +1,9 @@
 #!/bin/sh
 # Regenerates tests/chacha20poly1305_test_gen.h: the test vectors of
 # golang.org/x/crypto's chacha20, internal/poly1305 and chacha20poly1305, at
-# the version Go vendors into the standard library.
+# the version Go vendors into the standard library, and the Wycheproof vectors
+# of crypto/internal/cryptotest's TestChaCha20Poly1305Wycheproof, from the
+# module version Go's tests pin.
 #
 # The vector files are Go source, so they are compiled as they are into a
 # program that prints them. Every vector goes through x/crypto itself first and
@@ -29,6 +31,12 @@ version=$(sed -n 's/^# golang\.org\/x\/crypto \(.*\)$/\1/p' "$goroot/src/vendor/
 dir=$( (cd "$tmp" && go mod download -json "golang.org/x/crypto@$version") |
 	sed -n 's/^[[:space:]]*"Dir": "\(.*\)",$/\1/p')
 
+# The version Go's tests pin, from cryptotest/wycheproof/schemaversion.go.
+wycheproof_version=$(sed -n 's/^const wycheproofVersion = "\(.*\)"$/\1/p' \
+	"$goroot/src/crypto/internal/cryptotest/wycheproof/schemaversion.go")
+wycheproof_dir=$( (cd "$tmp" && go mod download -json "github.com/c2sp/wycheproof@$wycheproof_version") |
+	sed -n 's/^[[:space:]]*"Dir": "\(.*\)",$/\1/p')
+
 mkdir "$tmp/gen"
 sed 's/^package chacha20$/package main/' "$dir/chacha20/vectors_test.go" \
 	>"$tmp/gen/chacha20_vectors.go"
@@ -51,8 +59,11 @@ import (
 	"crypto/cipher"
 	"encoding/binary"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"log"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"golang.org/x/crypto/chacha20"
@@ -85,6 +96,32 @@ func lit(s string) string {
 		log.Fatalf("literal of %d characters is too long", len(s))
 	}
 	return `"` + s + `"`
+}
+
+// A C string literal of any text, for the Wycheproof comments, which have
+// quotes and question marks in them.
+func cstr(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '"' || c == '\\':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		case c == '?':
+			b.WriteString(`\077`)
+		case c >= ' ' && c <= '~':
+			b.WriteByte(c)
+		default:
+			fmt.Fprintf(&b, "\\%03o", c)
+		}
+	}
+	b.WriteByte('"')
+	if b.Len() > 4095+2 {
+		log.Fatalf("literal of %d characters is too long", b.Len()-2)
+	}
+	return b.String()
 }
 
 func split(s string) []string {
@@ -226,6 +263,123 @@ typedef struct {
 		fmt.Printf("    {%s, %s, %s, %s, %s},\n", parts(v.plaintext), parts(v.aad), lit(v.key),
 			lit(v.nonce), parts(v.out))
 	}
+	fmt.Printf("};\n\n")
+
+	wycheproof(os.Args[1])
+}
+
+// Whether f panics, which is what wycheproof.MustPanic wants.
+func panics(f func()) (panicked bool) {
+	defer func() {
+		if recover() != nil {
+			panicked = true
+		}
+	}()
+	f()
+	return false
+}
+
+// The vectors of TestChaCha20Poly1305Wycheproof, each put through what the
+// test does with it.
+func wycheproof(dir string) {
+	fmt.Printf(`typedef struct {
+    const char *file;
+    int tc_id;
+    const char *comment;
+    const char *key, *iv, *aad, *msg, *ct, *tag;
+    bool want_pass;
+} GenWycheproof;
+
+`)
+	fmt.Printf("/* The Wycheproof tests: the file, the tcId, the comment, the key, the IV,\n")
+	fmt.Printf(" * the additional data, the message, the ciphertext and the tag in hex, and\n")
+	fmt.Printf(" * whether the test is valid. */\n")
+	fmt.Printf("static const GenWycheproof gen_wycheproof[] = {\n")
+	for _, tc := range []struct {
+		file      string
+		newCipher func([]byte) (cipher.AEAD, error)
+	}{
+		{"chacha20_poly1305_test.json", chacha20poly1305.New},
+		{"xchacha20_poly1305_test.json", chacha20poly1305.NewX},
+	} {
+		data, err := os.ReadFile(filepath.Join(dir, "testvectors_v1", tc.file))
+		if err != nil {
+			log.Fatal(err)
+		}
+		var wp struct {
+			TestGroups []struct {
+				Tests []struct {
+					TcId    int      `json:"tcId"`
+					Comment string   `json:"comment"`
+					Key     string   `json:"key"`
+					Iv      string   `json:"iv"`
+					Aad     string   `json:"aad"`
+					Msg     string   `json:"msg"`
+					Ct      string   `json:"ct"`
+					Tag     string   `json:"tag"`
+					Result  string   `json:"result"`
+					Flags   []string `json:"flags"`
+				} `json:"tests"`
+			} `json:"testGroups"`
+		}
+		if err := json.Unmarshal(data, &wp); err != nil {
+			log.Fatal(err)
+		}
+		for _, tg := range wp.TestGroups {
+			for _, tv := range tg.Tests {
+				// wycheproof.ShouldPass with no flags that pass.
+				var wantPass bool
+				switch tv.Result {
+				case "valid":
+					wantPass = true
+				case "invalid":
+					wantPass = false
+				case "acceptable":
+					wantPass = true
+					for _, f := range tv.Flags {
+						log.Fatalf("%s #%d: unspecified flag: %q", tc.file, tv.TcId, f)
+					}
+				default:
+					log.Fatalf("%s #%d: unexpected result %q", tc.file, tv.TcId, tv.Result)
+				}
+				fail := func(format string, args ...any) {
+					log.Fatalf("%s #%d: x/crypto: %s", tc.file, tv.TcId, fmt.Sprintf(format, args...))
+				}
+				aead, err := tc.newCipher(unhex(tv.Key))
+				if err != nil {
+					fail("failed to construct cipher: %s", err)
+				}
+				iv, tag, ct, msg, aad := unhex(tv.Iv), unhex(tv.Tag), unhex(tv.Ct), unhex(tv.Msg), unhex(tv.Aad)
+				ctWithTag := append(ct, tag...)
+				if len(iv) != aead.NonceSize() {
+					if !panics(func() { aead.Seal(nil, iv, msg, aad) }) {
+						fail("Seal: expected panic but didn't get one")
+					}
+					if !panics(func() { aead.Open(nil, iv, ctWithTag, aad) }) {
+						fail("Open: expected panic but didn't get one")
+					}
+				} else {
+					genCT := aead.Seal(nil, iv, msg, aad)
+					genMsg, err := aead.Open(nil, iv, genCT, aad)
+					if err != nil || !bytes.Equal(genMsg, msg) {
+						fail("the generated ciphertext does not open to the message")
+					}
+					msg2, err := aead.Open(nil, iv, ctWithTag, aad)
+					switch {
+					case !wantPass && err == nil:
+						fail("decryption succeeded when it should've failed")
+					case wantPass && err != nil:
+						fail("decryption failed: %s", err)
+					case wantPass && (!bytes.Equal(genCT, ctWithTag) || !bytes.Equal(msg, msg2)):
+						fail("the ciphertext or the message does not match")
+					}
+				}
+				fmt.Printf("    {%s, %d, %s, %s, %s, %s, %s, %s, %s, %v},\n", cstr(tc.file),
+					tv.TcId, cstr(tv.Comment), cstr(tv.Key), cstr(tv.Iv), cstr(tv.Aad), cstr(tv.Msg),
+					cstr(tv.Ct), cstr(tv.Tag), wantPass)
+			}
+		}
+	}
 	fmt.Printf("};\n")
 }
 GO
@@ -235,7 +389,9 @@ GO
 /* Generated by tools/gen-chacha20poly1305-tests.sh; do not edit.
  *
  * The test vectors of golang.org/x/crypto/chacha20, internal/poly1305 and
- * chacha20poly1305 at $version, which $(go env GOVERSION) vendors. */
+ * chacha20poly1305 at $version, which $(go env GOVERSION) vendors, and the
+ * Wycheproof vectors of TestChaCha20Poly1305Wycheproof, from
+ * github.com/c2sp/wycheproof at $wycheproof_version. */
 
 #ifndef BURROW_TESTS_CHACHA20POLY1305_TEST_GEN_H
 #define BURROW_TESTS_CHACHA20POLY1305_TEST_GEN_H
@@ -244,7 +400,7 @@ GO
 #include <stdint.h>
 
 EOF
-	(cd "$tmp/gen" && GOFLAGS=-mod=mod go run .)
+	(cd "$tmp/gen" && GOFLAGS=-mod=mod go run . "$wycheproof_dir")
 	cat <<'EOF'
 
 #endif /* BURROW_TESTS_CHACHA20POLY1305_TEST_GEN_H */

@@ -57,6 +57,8 @@ tests/rsa_test_gen.h
 tests/hmac_test_gen.h
 tests/hkdf_test_gen.h
 tests/pbkdf2_test_gen.h
+tests/gcm_test_gen.h
+tests/cipher_test_gen.h
 tests/x509_test_gen.h
 tests/x509_parse_test_gen.h
 tests/x509_verify_test_gen.h

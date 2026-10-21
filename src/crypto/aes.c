@@ -809,12 +809,16 @@ CRYPTO_FIPS_TEXT static Int aes_block_size(void *self) {
 }
 
 CRYPTO_FIPS_TEXT static void aes_encrypt(void *self, Slice dst, Slice src) {
+    /* AES-ECB is not approved in FIPS 140-3 mode. */
+    burrow__fips140_record_non_approved();
     aes_check(dst, src);
     burrow__aes_encrypt_blocks((const AesBlock *)self, (Byte *)dst.p,
                                (const Byte *)src.p, 1);
 }
 
 CRYPTO_FIPS_TEXT static void aes_decrypt(void *self, Slice dst, Slice src) {
+    /* AES-ECB is not approved in FIPS 140-3 mode. */
+    burrow__fips140_record_non_approved();
     aes_check(dst, src);
     burrow__aes_decrypt_blocks((const AesBlock *)self, (Byte *)dst.p,
                                (const Byte *)src.p, 1);

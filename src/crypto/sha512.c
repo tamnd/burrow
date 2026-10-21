@@ -462,6 +462,9 @@ static void sha512_update(Sha512Digest *d, const Byte *p, Int n);
 
 /* Always writes all 64 bytes. The shorter sums keep a prefix. */
 CRYPTO_FIPS_TEXT static void sha512_check_sum(Sha512Digest *d, Byte out[SHA512_SIZE]) {
+    /* Go records it in Sum, and every sum here, the one-shot ones too, comes
+     * through this. */
+    burrow__fips140_record_approved();
     /* Padding: add 1 bit and 0 bits until 112 bytes mod 128, then the length
      * in bits as a big endian 128 bit number, of which the top half is always
      * zero here. */
@@ -658,6 +661,10 @@ CRYPTO_FIPS_TEXT static Hash sha512_make(Alloc *a, Int size) {
     sha512_reset(d);
     Hash h = {&sha512_vt.hash, d};
     return h;
+}
+
+CRYPTO_FIPS_TEXT bool burrow__sha512_is_digest(Hash h) {
+    return h.vt == &sha512_vt.hash;
 }
 
 CRYPTO_FIPS_TEXT Hash sha512_new(Alloc *a) {

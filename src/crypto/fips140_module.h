@@ -53,6 +53,7 @@
 
 #include "burrow/core.h"
 #include "burrow/error.h"
+#include "burrow/hash.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -123,6 +124,55 @@ void burrow__fips140_cast(const char *name, FipsSelfTest f, void *arg);
 /* The same for a Pairwise Consistency Test, which every key pair the module
  * generates goes through. Go's fips140.PCT. */
 void burrow__fips140_pct(const char *name, FipsSelfTest f, void *arg);
+
+/* The service indicator lets users of the module query whether invoked
+ * services are approved. Three states are stored in a per-goroutine value by
+ * the runtime. The indicator starts at indicatorUnset after a reset. Invoking
+ * an approved service transitions to indicatorTrue. Invoking a non-approved
+ * service transitions to indicatorFalse, and it can't leave that state until a
+ * reset. The idea is that functions can "delegate" checks to inner functions,
+ * and if there's anything non-approved in the stack, the final result is
+ * negative. Finally, we expose indicatorUnset as negative to the user, so that
+ * we don't need to explicitly annotate fully non-approved services. */
+
+/* ResetServiceIndicator clears the service indicator for the running
+ * goroutine. */
+void burrow__fips140_reset_service_indicator(void);
+
+/* ServiceIndicator returns true if and only if all services invoked by this
+ * goroutine since the last ResetServiceIndicator call are approved.
+ *
+ * If ResetServiceIndicator was not called before by this goroutine, its return
+ * value is undefined. */
+bool burrow__fips140_service_indicator(void);
+
+/* RecordApproved is an internal function that records the use of an approved
+ * service. It does not override RecordNonApproved calls in the same span.
+ *
+ * It should be called by exposed functions that perform a whole cryptographic
+ * alrgorithm (e.g. by Sum, not by New, unless a cryptographic Instantiate
+ * algorithm is performed) and should be called after any checks that may cause
+ * the function to error out or panic. */
+void burrow__fips140_record_approved(void);
+
+/* RecordNonApproved is an internal function that records the use of a
+ * non-approved service. It overrides any RecordApproved calls in the same
+ * span. */
+void burrow__fips140_record_non_approved(void);
+
+/* Whether h is one of the digests of the module, the types Go's hmac.go and
+ * rsa/pkcs1v22.go switch on to decide whether a hash is approved: SHA-256 and
+ * SHA-224, SHA-512 and the hashes made from it, and SHA-3, but not SHAKE. */
+bool burrow__sha256_is_digest(Hash h);
+bool burrow__sha512_is_digest(Hash h);
+bool burrow__sha3_is_digest(Hash h);
+
+/* Not in Go: the three above together, which is the switch itself. */
+bool burrow__fips140_approved_hash(Hash h);
+
+/* MarkAsUsedInKDF records that this HMAC instance is used as part of a KDF.
+ * Does nothing to a hash that is not an HMAC. */
+void burrow__hmac_mark_as_used_in_kdf(Hash h);
 
 /* Not in Go: turns FIPS 140-3 mode on, as GODEBUG=fips140=on does in Go, or
  * fips140=debug with debug true. Like Go's init functions it then checks that

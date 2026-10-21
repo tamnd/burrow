@@ -24,9 +24,29 @@
 #include <stdint.h>
 #include <string.h>
 
+CRYPTO_FIPS_TEXT static void pbkdf2_set_service_indicator(Slice salt, Int key_length) {
+    /* The HMAC construction will handle the hash function considerations for
+     * the service indicator. The remaining PBKDF2 considerations outlined by SP
+     * 800-132 pertain to salt and keyLength. */
+
+    /* The length of the randomly-generated portion of the salt shall be at
+     * least 128 bits. */
+    if (salt.len < 128 / 8)
+        burrow__fips140_record_non_approved();
+
+    /* Per FIPS 140-3 IG C.M, key lengths below 112 bits are only allowed for
+     * legacy use (i.e. verification only) and we don't support that. */
+    if (key_length < 112 / 8)
+        burrow__fips140_record_non_approved();
+
+    burrow__fips140_record_approved();
+}
+
 CRYPTO_FIPS_TEXT Slice pbkdf2_key(Alloc *a, HashNewFunc h, Str password, Slice salt,
                                   Int iter, Int key_length, Error *err) {
     Slice nil = slice_nil(TYPE_BYTE);
+    pbkdf2_set_service_indicator(salt, key_length);
+
     if (key_length <= 0) {
         BURROW_OUT(err,
                    errors_new(error_allocator(),
@@ -40,6 +60,7 @@ CRYPTO_FIPS_TEXT Slice pbkdf2_key(Alloc *a, HashNewFunc h, Str password, Slice s
         BURROW_OUT(err, burrow_err_out_of_memory);
         return nil;
     }
+    burrow__hmac_mark_as_used_in_kdf(prf);
     Int hash_len = hash_size(prf);
     /* Go tests keyLength+hashLen < keyLength, which relies on the sum wrapping.
      * Here the same limit is tested before anything is added, and only then is

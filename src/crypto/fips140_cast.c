@@ -1,5 +1,6 @@
-/* Derived from Go's src/crypto/internal/fips140/cast.go, and the handling of
- * the fips140 setting in src/crypto/internal/fips140/fips140.go.
+/* Derived from Go's src/crypto/internal/fips140/cast.go and indicator.go, and
+ * the handling of the fips140 setting in
+ * src/crypto/internal/fips140/fips140.go.
  * Go source: go1.27.1.
  *
  * In Go, the init function of crypto/internal/fips140 reads GODEBUG and turns
@@ -30,6 +31,7 @@
 #include "burrow/pal.h"
 #include "burrow/panic.h"
 #include "burrow/runtime.h"
+#include "burrow/sched.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -54,6 +56,29 @@ static char fips_fail_cast[128];
 
 CRYPTO_FIPS_TEXT bool burrow__fips140_enabled(void) {
     return burrow__atomic_load_acquire_u32(&fips_mode) != FIPS_MODE_OFF;
+}
+
+enum {
+    INDICATOR_UNSET,
+    INDICATOR_FALSE,
+    INDICATOR_TRUE,
+};
+
+CRYPTO_FIPS_TEXT void burrow__fips140_reset_service_indicator(void) {
+    burrow__fips_set_indicator(INDICATOR_UNSET);
+}
+
+CRYPTO_FIPS_TEXT bool burrow__fips140_service_indicator(void) {
+    return burrow__fips_get_indicator() == INDICATOR_TRUE;
+}
+
+CRYPTO_FIPS_TEXT void burrow__fips140_record_approved(void) {
+    if (burrow__fips_get_indicator() == INDICATOR_UNSET)
+        burrow__fips_set_indicator(INDICATOR_TRUE);
+}
+
+CRYPTO_FIPS_TEXT void burrow__fips140_record_non_approved(void) {
+    burrow__fips_set_indicator(INDICATOR_FALSE);
 }
 
 /* Panics with what Go's panic says, in the error arena, which lasts as long as

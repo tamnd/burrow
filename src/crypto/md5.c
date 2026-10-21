@@ -22,6 +22,8 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "fips140only_internal.h"
+
 #include <string.h>
 
 typedef struct Md5Digest {
@@ -162,7 +164,14 @@ static void md5_update(Md5Digest *d, const Byte *p, Int n) {
     }
 }
 
+BURROW_FIPS140ONLY_ERROR(md5_err_fips140only,
+                         "crypto/md5: use of MD5 is not allowed in FIPS 140-only mode");
+
 static void md5_check_sum(Md5Digest *d, Byte out[MD5_SIZE]) {
+    if (burrow__fips140only_enforced())
+        panic_str(
+            BURROW_S("crypto/md5: use of MD5 is not allowed in FIPS 140-only mode"));
+
     /* Padding: add 1 bit and 0 bits until 56 bytes mod 64, then the length in
      * bits as a little endian 64 bit number. */
     Byte tmp[1 + 63 + 8] = {0x80};
@@ -182,6 +191,10 @@ static void md5_check_sum(Md5Digest *d, Byte out[MD5_SIZE]) {
 }
 
 static Int md5_write(void *self, Slice p, Error *err) {
+    if (burrow__fips140only_enforced()) {
+        BURROW_OUT(err, md5_err_fips140only);
+        return 0;
+    }
     md5_update(self, (const Byte *)p.p, p.len);
     BURROW_OUT(err, BURROW_NO_ERROR);
     return p.len;

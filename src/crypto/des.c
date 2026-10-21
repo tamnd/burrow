@@ -17,6 +17,7 @@
 #include "burrow/type.h"
 
 #include "des_internal.h"
+#include "fips140only_internal.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -509,7 +510,15 @@ static void des_decrypt(void *self, Slice dst, Slice src) {
 static const CipherBlockVT des_block_vt = {NULL, des_block_size, des_encrypt,
                                            des_decrypt};
 
+BURROW_FIPS140ONLY_ERROR(des_err_fips140only,
+                         "crypto/des: use of DES is not allowed in FIPS 140-only mode");
+
 CipherBlock des_new_cipher(Alloc *a, Slice key, Error *err) {
+    if (burrow__fips140only_enforced()) {
+        BURROW_OUT(err, des_err_fips140only);
+        return (CipherBlock){NULL, NULL};
+    }
+
     if (key.len != 8) {
         BURROW_OUT(err, des_key_size_error_as_error(key.len, error_allocator()));
         return (CipherBlock){NULL, NULL};
@@ -563,7 +572,16 @@ static void triple_des_decrypt(void *self, Slice dst, Slice src) {
 static const CipherBlockVT triple_des_block_vt = {
     NULL, des_block_size, triple_des_encrypt, triple_des_decrypt};
 
+BURROW_FIPS140ONLY_ERROR(
+    des_err_triple_fips140only,
+    "crypto/des: use of TripleDES is not allowed in FIPS 140-only mode");
+
 CipherBlock des_new_triple_des_cipher(Alloc *a, Slice key, Error *err) {
+    if (burrow__fips140only_enforced()) {
+        BURROW_OUT(err, des_err_triple_fips140only);
+        return (CipherBlock){NULL, NULL};
+    }
+
     if (key.len != 24) {
         BURROW_OUT(err, des_key_size_error_as_error(key.len, error_allocator()));
         return (CipherBlock){NULL, NULL};

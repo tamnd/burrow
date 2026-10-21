@@ -14,9 +14,11 @@
 #include "burrow/math/big.h"
 #include "burrow/mem.h"
 #include "burrow/mem/heap.h"
+#include "burrow/panic.h"
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "fips140only_internal.h"
 #include "rand_internal.h"
 
 #include <stdint.h>
@@ -112,8 +114,14 @@ static Byte *dsa_buf_at(Slice b, Int i) {
 
 /* ----------------------------------------------------------- parameters */
 
+BURROW_FIPS140ONLY_ERROR(dsa_err_fips140only,
+                         "crypto/dsa: use of DSA is not allowed in FIPS 140-only mode");
+
 Error dsa_generate_parameters(DsaParameters *params, Alloc *a, IoReader rand,
                               DsaParameterSizes sizes) {
+    if (burrow__fips140only_enforced())
+        return dsa_err_fips140only;
+
     /* This does not follow FIPS 186-3 exactly, in that it does not use a
      * verification seed to make the primes, as Go does not. */
     Int l, n;
@@ -208,6 +216,9 @@ done:
 /* ------------------------------------------------------------------- keys */
 
 Error dsa_generate_key(DsaPrivateKey *priv, Alloc *a, IoReader rand) {
+    if (burrow__fips140only_enforced())
+        return dsa_err_fips140only;
+
     const DsaParameters *params = &priv->public_key.parameters;
     if (params->p == NULL || params->q == NULL || params->g == NULL) {
         return dsa_error("crypto/dsa: parameters not set up before generating key");
@@ -252,10 +263,15 @@ static void dsa_fermat_inverse(BigInt *z, const BigInt *k, const BigInt *p) {
 
 BigInt *dsa_sign(Alloc *a, IoReader rand, const DsaPrivateKey *priv, Slice hash,
                  BigInt **s, Error *err) {
+    *s = NULL;
+    if (burrow__fips140only_enforced()) {
+        BURROW_OUT(err, dsa_err_fips140only);
+        return NULL;
+    }
+
     if (rand.vt == NULL)
         rand = burrow__crypto_rand_nil_reader();
     rand = burrow__crypto_rand_custom_reader(rand);
-    *s = NULL;
 
     /* FIPS 186-3, section 4.6. */
     const DsaParameters *params = &priv->public_key.parameters;
@@ -324,6 +340,10 @@ done:
 }
 
 bool dsa_verify(const DsaPublicKey *pub, Slice hash, const BigInt *r, const BigInt *s) {
+    if (burrow__fips140only_enforced())
+        panic_str(
+            BURROW_S("crypto/dsa: use of DSA is not allowed in FIPS 140-only mode"));
+
     /* FIPS 186-3, section 4.7. */
     const DsaParameters *params = &pub->parameters;
     if (big_int_sign(params->p) == 0)

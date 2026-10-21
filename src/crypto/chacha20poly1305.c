@@ -13,6 +13,7 @@
 
 #include "burrow/core.h"
 #include "burrow/crypto/cipher.h"
+#include "burrow/crypto/fips140.h"
 #include "burrow/crypto/subtle.h"
 #include "burrow/error.h"
 #include "burrow/math/bits.h"
@@ -905,6 +906,12 @@ static const CipherAEADVT xchacha20poly1305_vt = {
 
 static CipherAEAD chacha20poly1305_make(Alloc *a, Slice key, const CipherAEADVT *vt,
                                         Error *err) {
+    if (fips140_enforced()) {
+        BURROW_OUT(err,
+                   chacha20_error("chacha20poly1305: use of ChaCha20Poly1305 is not "
+                                  "allowed in FIPS 140-only mode"));
+        return (CipherAEAD){NULL, NULL};
+    }
     if (key.len != CHACHA20POLY1305_KEY_SIZE) {
         BURROW_OUT(err, chacha20_error("chacha20poly1305: bad key length"));
         return (CipherAEAD){NULL, NULL};

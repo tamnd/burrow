@@ -204,6 +204,18 @@ bool burrow__sha3_is_digest(Hash h);
 /* Not in Go: the three above together, which is the switch itself. */
 bool burrow__fips140_approved_hash(Hash h);
 
+/* The module's hmac.New, which crypto/hmac's checks what fips140=only allows
+ * before calling. */
+Hash burrow__hmac_new(Alloc *a, HashNewFunc h, Slice key);
+
+/* The module's hkdf.Extract and hkdf.Expand, which crypto/hkdf's check what
+ * fips140=only allows before calling, and crypto/tls's key schedule calls as
+ * they are. */
+Slice burrow__hkdf_extract(Alloc *a, HashNewFunc h, Slice secret, Slice salt,
+                           Error *err);
+Slice burrow__hkdf_expand(Alloc *a, HashNewFunc h, Slice prk, Str info, Int key_length,
+                          Error *err);
+
 /* MarkAsUsedInKDF records that this HMAC instance is used as part of a KDF.
  * Does nothing to a hash that is not an HMAC. */
 void burrow__hmac_mark_as_used_in_kdf(Hash h);

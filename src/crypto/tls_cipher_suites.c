@@ -26,6 +26,7 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "aes_internal.h"
 #include "chacha20poly1305.h"
 #include "crypto_internal.h"
 #include "internal.h"
@@ -333,7 +334,7 @@ static CipherAEAD tls_new_aes_gcm(Alloc *a, Slice key) {
     tls_check_error(err);
     if (block.vt == NULL)
         return (CipherAEAD){NULL, NULL};
-    CipherAEAD aead = cipher_new_gcm(a, block, &err);
+    CipherAEAD aead = burrow__gcm_new(a, block, &err);
     tls_check_error(err);
     return aead;
 }

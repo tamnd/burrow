@@ -23,6 +23,7 @@
 
 #include "edwards25519.h"
 #include "fips140_module.h"
+#include "fips140only_internal.h"
 #include "nistec.h"
 #include "rand_internal.h"
 
@@ -274,8 +275,16 @@ CRYPTO_FIPS_TEXT static int ecdh_is_zero(const uint8_t *x, Int n) {
     return acc == 0;
 }
 
+BURROW_FIPS140ONLY_ERROR(
+    ecdh_err_x25519_fips140only,
+    "crypto/ecdh: use of X25519 is not allowed in FIPS 140-only mode");
+
 CRYPTO_FIPS_TEXT static EcdhPrivateKey *ecdh_x25519_new_private(Alloc *a, Slice key,
                                                                 Error *err) {
+    if (burrow__fips140only_enforced()) {
+        BURROW_OUT(err, ecdh_err_x25519_fips140only);
+        return NULL;
+    }
     if (key.len != ECDH_X25519_SIZE) {
         ecdh_set_error(err, "crypto/ecdh: invalid private key size");
         return NULL;
@@ -448,6 +457,10 @@ CRYPTO_FIPS_TEXT static int ecdh_read(IoReader r, uint8_t *p, Int n, Error *err)
 
 CRYPTO_FIPS_TEXT EcdhPrivateKey *ecdh_curve_generate_key(const EcdhCurve *c, Alloc *a,
                                                          IoReader rand, Error *err) {
+    if (c->nist == NULL && burrow__fips140only_enforced()) {
+        BURROW_OUT(err, ecdh_err_x25519_fips140only);
+        return NULL;
+    }
     if (rand.vt == NULL)
         rand = burrow__crypto_rand_nil_reader();
     rand = burrow__crypto_rand_custom_reader(rand);
@@ -473,6 +486,13 @@ CRYPTO_FIPS_TEXT EcdhPrivateKey *ecdh_curve_generate_key(const EcdhCurve *c, All
      * often than that. The xor keeps a reader that gives all zeros or all ones
      * from making a key, since either is a bad scalar, and P-521 drops the
      * seven bits above its 521. */
+    if (burrow__fips140only_enforced() &&
+        !burrow__fips140only_approved_random_reader(rand)) {
+        ecdh_set_error(
+            err,
+            "crypto/ecdh: only crypto/rand.Reader is allowed in FIPS 140-only mode");
+        return NULL;
+    }
     burrow__fips140_record_approved();
     Int n = c->nist->element_bytes;
     uint8_t key[NISTEC_MAX_ELEMENT_BYTES];
@@ -504,6 +524,10 @@ CRYPTO_FIPS_TEXT EcdhPublicKey *ecdh_curve_new_public_key(const EcdhCurve *c, Al
                                                           Slice key, Error *err) {
     const uint8_t *k = key.p;
     if (c->nist == NULL) {
+        if (burrow__fips140only_enforced()) {
+            BURROW_OUT(err, ecdh_err_x25519_fips140only);
+            return NULL;
+        }
         if (key.len != ECDH_X25519_SIZE) {
             ecdh_set_error(err, "crypto/ecdh: invalid public key");
             return NULL;

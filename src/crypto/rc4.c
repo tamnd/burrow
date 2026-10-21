@@ -17,6 +17,8 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "fips140only_internal.h"
+
 #include <stdint.h>
 #include <string.h>
 
@@ -112,7 +114,14 @@ Str rc4_key_size_error_error(Rc4KeySizeError k, Alloc *a) {
 
 /* ---------------------------------------------------------------- Cipher */
 
+BURROW_FIPS140ONLY_ERROR(rc4_err_fips140only,
+                         "crypto/rc4: use of RC4 is not allowed in FIPS 140-only mode");
+
 Rc4Cipher *rc4_new_cipher(Alloc *a, Slice key, Error *err) {
+    if (burrow__fips140only_enforced()) {
+        BURROW_OUT(err, rc4_err_fips140only);
+        return NULL;
+    }
     Int k = key.len;
     if (k < 1 || k > 256) {
         BURROW_OUT(err, rc4_key_size_error_as_error(k, error_allocator()));

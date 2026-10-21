@@ -101,4 +101,10 @@ void burrow__counter_kdf_derive_key(CounterKdf *kdf, Byte out[32], Byte label,
  * export either. */
 extern const Error burrow__gcm_err_open;
 
+/* AES-GCM with the standard nonce and tag sizes, from the module rather than
+ * through cipher.NewGCM, which fips140=only does not allow. Go's crypto/tls
+ * and crypto/hpke get theirs this way, with gcm.NewGCMForTLS12, NewGCMForTLS13
+ * and NewGCMForHPKE. */
+CipherAEAD burrow__gcm_new(Alloc *a, CipherBlock b, Error *err);
+
 #endif /* BURROW_CRYPTO_AES_INTERNAL_H */

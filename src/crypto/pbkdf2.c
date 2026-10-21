@@ -20,6 +20,7 @@
 #include "burrow/type.h"
 
 #include "fips140_module.h"
+#include "fips140only_internal.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -42,8 +43,10 @@ CRYPTO_FIPS_TEXT static void pbkdf2_set_service_indicator(Slice salt, Int key_le
     burrow__fips140_record_approved();
 }
 
-CRYPTO_FIPS_TEXT Slice pbkdf2_key(Alloc *a, HashNewFunc h, Str password, Slice salt,
-                                  Int iter, Int key_length, Error *err) {
+/* The module's pbkdf2.Key. */
+CRYPTO_FIPS_TEXT static Slice pbkdf2_module_key(Alloc *a, HashNewFunc h, Str password,
+                                                Slice salt, Int iter, Int key_length,
+                                                Error *err) {
     Slice nil = slice_nil(TYPE_BYTE);
     pbkdf2_set_service_indicator(salt, key_length);
 
@@ -53,9 +56,9 @@ CRYPTO_FIPS_TEXT Slice pbkdf2_key(Alloc *a, HashNewFunc h, Str password, Slice s
                               BURROW_S("pbkdf2: keyLength must be larger than 0")));
         return nil;
     }
-    Hash prf = hmac_new(a, h,
-                        slice_from((void *)(uintptr_t)password.p, password.len,
-                                   password.len, TYPE_BYTE));
+    Hash prf = burrow__hmac_new(a, h,
+                                slice_from((void *)(uintptr_t)password.p, password.len,
+                                           password.len, TYPE_BYTE));
     if (prf.vt == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);
         return nil;
@@ -105,6 +108,34 @@ CRYPTO_FIPS_TEXT Slice pbkdf2_key(Alloc *a, HashNewFunc h, Str password, Slice s
     return slice_sub(dk, 0, key_length);
 }
 
+BURROW_FIPS140ONLY_ERROR(pbkdf2_err_short_key_fips140only,
+                         "crypto/pbkdf2: use of keys shorter than 112 bits is not "
+                         "allowed in FIPS 140-only mode");
+BURROW_FIPS140ONLY_ERROR(pbkdf2_err_short_salt_fips140only,
+                         "crypto/pbkdf2: use of salts shorter than 128 bits is not "
+                         "allowed in FIPS 140-only mode");
+BURROW_FIPS140ONLY_ERROR(pbkdf2_err_hash_fips140only,
+                         "crypto/pbkdf2: use of hash functions other than SHA-2 or "
+                         "SHA-3 is not allowed in FIPS 140-only mode");
+
+CRYPTO_FIPS_TEXT Slice pbkdf2_key(Alloc *a, HashNewFunc h, Str password, Slice salt,
+                                  Int iter, Int key_length, Error *err) {
+    if (burrow__fips140only_enforced()) {
+        Error e = BURROW_NO_ERROR;
+        if (key_length < 112 / 8)
+            e = pbkdf2_err_short_key_fips140only;
+        else if (salt.len < 128 / 8)
+            e = pbkdf2_err_short_salt_fips140only;
+        else if (!burrow__fips140only_approved_hash_func(h))
+            e = pbkdf2_err_hash_fips140only;
+        if (BURROW_FAILED(e)) {
+            BURROW_OUT(err, e);
+            return slice_nil(TYPE_BYTE);
+        }
+    }
+    return pbkdf2_module_key(a, h, password, salt, iter, key_length, err);
+}
+
 /* ------------------------------------------------------------------- CAST */
 
 /* From Go's src/crypto/internal/fips140/pbkdf2/cast.go.
@@ -133,8 +164,8 @@ CRYPTO_FIPS_TEXT Error burrow__pbkdf2_cast(void *arg) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Error err = BURROW_NO_ERROR;
-    Slice mk = pbkdf2_key(arena_allocator(&ar), sha256_new, BURROW_S("password"), salt,
-                          2, 14, &err);
+    Slice mk = pbkdf2_module_key(arena_allocator(&ar), sha256_new, BURROW_S("password"),
+                                 salt, 2, 14, &err);
     if (BURROW_FAILED(err)) {
         arena_free(&ar);
         return err;

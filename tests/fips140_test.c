@@ -2,12 +2,8 @@
  * enforcement_test.go.
  * Go source: go1.27.1.
  *
- * Go's TestWithoutEnforcement runs itself again under GODEBUG=fips140=only
- * and checks that crypto/des is refused outside WithoutEnforcement and allowed
- * inside it. burrow's crypto/des does not look at fips140=only yet, so here the
- * test asks fips140_enforced, which is what crypto/des asks in Go. TestGODEBUG
- * is burrow's own: it goes through the settings that are accepted and the ones
- * that panic.
+ * TestGODEBUG is burrow's own: it goes through the settings that are accepted
+ * and the ones that panic.
  *
  * Copyright 2025 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -18,6 +14,7 @@
 #include "fipstest.h"
 
 #include "burrow/burrow.h"
+#include "burrow/crypto/des.h"
 #include "burrow/crypto/fips140.h"
 
 #include <string.h>
@@ -100,10 +97,18 @@ static void TestVersion(TestingT *t) {
         testing_t_errorf_v(t, "Version() = %q, want %q", v, BURROW_S("latest"));
 }
 
-/* Not in Go: isAllowed is the line that sets result, and asks fips140_enforced
- * instead of crypto/des. */
+static bool is_allowed(void) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Error err = BURROW_NO_ERROR;
+    (void)des_new_cipher(arena_allocator(&ar),
+                         slice_make(arena_allocator(&ar), TYPE_BYTE, 8, 8), &err);
+    arena_free(&ar);
+    return !BURROW_FAILED(err);
+}
+
 static void expect_allowed(TestingT *t, const char *why, bool expected) {
-    bool result = !fips140_enforced();
+    bool result = is_allowed();
     if (result != expected)
         testing_t_fatalf_v(t, "%s: expected: %t, got: %t", str_from_cstr(why), expected,
                            result);
@@ -139,7 +144,7 @@ static void without_nested(void *env, TestingT *t) {
 
 static void inherit_send(void *env) {
     Chan *ch = env;
-    bool allowed = !fips140_enforced();
+    bool allowed = is_allowed();
     chan_send(ch, &allowed);
 }
 

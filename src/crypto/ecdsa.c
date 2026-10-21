@@ -34,6 +34,7 @@
 #include "cryptobyte.h"
 #include "ecdsa_internal.h"
 #include "fips140_module.h"
+#include "fips140only_internal.h"
 #include "nistec.h"
 #include "rand_internal.h"
 
@@ -415,7 +416,7 @@ struct EcdsaDrbg {
 };
 
 CRYPTO_FIPS_TEXT static Hash ecdsa_drbg_hmac(EcdsaDrbg *d, Slice key) {
-    Hash h = hmac_new(d->a, d->h, key);
+    Hash h = burrow__hmac_new(d->a, d->h, key);
     if (h.vt == NULL)
         panic_str(BURROW_S("crypto/ecdsa: out of memory"));
     return h;
@@ -1288,6 +1289,13 @@ CRYPTO_FIPS_TEXT static void ecdsa_nil_deref(void) {
 
 CRYPTO_FIPS_TEXT static EcdsaPrivateKey *
 ecdsa_generate_legacy(Alloc *a, EllipticCurve c, IoReader rand, Error *err) {
+    if (burrow__fips140only_enforced()) {
+        ecdsa_set_error(
+            err,
+            "crypto/ecdsa: use of custom curves is not allowed in FIPS 140-only mode");
+        return NULL;
+    }
+
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *tmp = arena_allocator(&ar);
@@ -1315,6 +1323,13 @@ done:
 CRYPTO_FIPS_TEXT static Slice ecdsa_sign_legacy(Alloc *a, const EcdsaPrivateKey *priv,
                                                 IoReader csprng, Slice hash,
                                                 Error *err) {
+    if (burrow__fips140only_enforced()) {
+        ecdsa_set_error(
+            err,
+            "crypto/ecdsa: use of custom curves is not allowed in FIPS 140-only mode");
+        return slice_nil(TYPE_BYTE);
+    }
+
     EllipticCurve c = priv->public_key.curve;
     Slice out = slice_nil(TYPE_BYTE);
     Arena ar;
@@ -1383,6 +1398,10 @@ done:
 
 CRYPTO_FIPS_TEXT static bool ecdsa_verify_legacy(const EcdsaPublicKey *pub, Slice hash,
                                                  Slice sig) {
+    if (burrow__fips140only_enforced())
+        panic_str(BURROW_S("crypto/ecdsa: use of custom curves is not allowed in FIPS "
+                           "140-only mode"));
+
     Slice rb, sb;
     if (!ecdsa_parse_signature(sig, &rb, &sb))
         return false;
@@ -1436,6 +1455,13 @@ CRYPTO_FIPS_TEXT EcdsaPrivateKey *ecdsa_generate_key(Alloc *a, EllipticCurve c,
     if (fc == NULL)
         return ecdsa_generate_legacy(a, c, rand, err);
 
+    if (burrow__fips140only_enforced() &&
+        !burrow__fips140only_approved_random_reader(rand)) {
+        ecdsa_set_error(
+            err,
+            "crypto/ecdsa: only crypto/rand.Reader is allowed in FIPS 140-only mode");
+        return NULL;
+    }
     burrow__fips140_record_approved();
     uint8_t k[NISTEC_MAX_ELEMENT_BYTES];
     uint8_t q[NISTEC_MAX_POINT_BYTES];
@@ -1496,6 +1522,13 @@ ecdsa_parse_raw_private_key(Alloc *a, EllipticCurve curve, Slice data, Error *er
 CRYPTO_FIPS_TEXT static Slice ecdsa_sign_fips(Alloc *a, const EcdsaFipsCurve *c,
                                               const EcdsaPrivateKey *priv,
                                               IoReader rand, Slice hash, Error *err) {
+    if (burrow__fips140only_enforced() &&
+        !burrow__fips140only_approved_random_reader(rand)) {
+        ecdsa_set_error(
+            err,
+            "crypto/ecdsa: only crypto/rand.Reader is allowed in FIPS 140-only mode");
+        return slice_nil(TYPE_BYTE);
+    }
     uint8_t d[NISTEC_MAX_ELEMENT_BYTES];
     uint8_t q[NISTEC_MAX_POINT_BYTES];
     if (ecdsa_private_to_fips(c, priv, d, q, err) == 0)
@@ -1747,6 +1780,11 @@ ecdsa_sign_fips_deterministic(Alloc *a, const EcdsaFipsCurve *c, CryptoHash hash
         goto done;
     }
     HashNewFunc h = burrow__crypto_hash_new_func(hash_func);
+    if (burrow__fips140only_enforced() && !burrow__fips140only_approved_hash_func(h)) {
+        ecdsa_set_error(err, "crypto/ecdsa: use of hash functions other than SHA-2 or "
+                             "SHA-3 is not allowed in FIPS 140-only mode");
+        goto done;
+    }
     uint8_t r[NISTEC_MAX_ELEMENT_BYTES], s[NISTEC_MAX_ELEMENT_BYTES];
     if (!ecdsa_fips_sign_deterministic(c, h, ecdsa_bytes(d, c->size), hash, r, s, err))
         goto done;

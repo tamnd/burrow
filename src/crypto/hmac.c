@@ -20,6 +20,7 @@
 #include "burrow/type.h"
 
 #include "fips140_module.h"
+#include "fips140only_internal.h"
 
 #include <string.h>
 
@@ -84,7 +85,7 @@ static const HashVT hmac_vt = {
     {NULL, hmac_write}, hmac_sum, hmac_reset, hmac_size, hmac_block_size,
 };
 
-CRYPTO_FIPS_TEXT Hash hmac_new(Alloc *a, HashNewFunc h, Slice key) {
+CRYPTO_FIPS_TEXT Hash burrow__hmac_new(Alloc *a, HashNewFunc h, Slice key) {
     Hash nil = {NULL, NULL};
     Hmac *hm = BURROW_NEW(a, Hmac);
     if (hm == NULL)
@@ -120,6 +121,18 @@ CRYPTO_FIPS_TEXT Hash hmac_new(Alloc *a, HashNewFunc h, Slice key) {
     hash_write(hm->inner, slice_from(hm->ipad, bs, bs, TYPE_BYTE), NULL);
     Hash r = {&hmac_vt, hm};
     return r;
+}
+
+CRYPTO_FIPS_TEXT Hash hmac_new(Alloc *a, HashNewFunc h, Slice key) {
+    if (burrow__fips140only_enforced()) {
+        if (key.len < 112 / 8)
+            panic_str(BURROW_S("crypto/hmac: use of keys shorter than 112 bits is not "
+                               "allowed in FIPS 140-only mode"));
+        if (!burrow__fips140only_approved_hash_func(h))
+            panic_str(BURROW_S("crypto/hmac: use of hash functions other than SHA-2 or "
+                               "SHA-3 is not allowed in FIPS 140-only mode"));
+    }
+    return burrow__hmac_new(a, h, key);
 }
 
 CRYPTO_FIPS_TEXT void burrow__hmac_mark_as_used_in_kdf(Hash h) {
@@ -158,7 +171,7 @@ CRYPTO_FIPS_TEXT Error burrow__hmac_cast(void *arg) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
-    Hash h = hmac_new(a, sha256_new, input);
+    Hash h = burrow__hmac_new(a, sha256_new, input);
     if (h.vt == NULL) {
         arena_free(&ar);
         return burrow_err_out_of_memory;

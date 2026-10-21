@@ -11,6 +11,7 @@
 #include "burrow/core.h"
 #include "burrow/crypto.h"
 #include "burrow/crypto/ecdh.h"
+#include "burrow/crypto/fips140.h"
 #include "burrow/crypto/hkdf.h"
 #include "burrow/crypto/hmac.h"
 #include "burrow/crypto/mlkem.h"
@@ -83,7 +84,8 @@ CRYPTO_FIPS_TEXT static Slice tls13_expand_label(Alloc *scratch, HashNewFunc h,
         memcpy(q, context.p, (size_t)context.len);
 
     Error err = BURROW_NO_ERROR;
-    Slice out = hkdf_expand(scratch, h, secret, str_from_bytes(p, n), length, &err);
+    Slice out =
+        burrow__hkdf_expand(scratch, h, secret, str_from_bytes(p, n), length, &err);
     if (BURROW_FAILED(err))
         return slice_nil(TYPE_BYTE);
     return out;
@@ -113,7 +115,7 @@ CRYPTO_FIPS_TEXT static Slice tls13_extract(Alloc *scratch, HashNewFunc h,
             return new_secret;
     }
     Error err = BURROW_NO_ERROR;
-    Slice out = hkdf_extract(scratch, h, new_secret, current_secret, &err);
+    Slice out = burrow__hkdf_extract(scratch, h, new_secret, current_secret, &err);
     if (BURROW_FAILED(err))
         return slice_nil(TYPE_BYTE);
     return out;
@@ -529,6 +531,48 @@ tke_ecdh_client_shared_secret(const TkeEcdh *ke, Alloc *a,
     return shared_key;
 }
 
+/* The ECDH half of a hybrid, which Go runs under fips140.WithoutEnforcement,
+ * being a hybrid of ML-KEM, which is Approved. Not in Go: the arguments and
+ * results of the three calls, for the Func that fips140_without_enforcement
+ * runs. */
+typedef struct TkeEcdhCall {
+    enum { TKE_ECDH_KEY_SHARES, TKE_ECDH_SERVER, TKE_ECDH_CLIENT } op;
+    const TkeEcdh *ke;
+    Alloc *a;
+    IoReader rand;
+    TlsKeySharePrivateKeys *priv;
+    const TlsKeySharePrivateKeys *cpriv;
+    Slice key_share;
+    TlsKeyShare *ks;
+    Error *err;
+    bool ok;
+    Slice shared_key;
+} TkeEcdhCall;
+
+CRYPTO_FIPS_TEXT static void tke_ecdh_call_run(void *env) {
+    TkeEcdhCall *c = env;
+    switch (c->op) {
+    case TKE_ECDH_KEY_SHARES:
+        c->ok = tke_ecdh_key_shares(c->ke, c->a, c->rand, c->priv, c->ks, c->err);
+        break;
+    case TKE_ECDH_SERVER:
+        c->shared_key = tke_ecdh_server_shared_secret(c->ke, c->a, c->rand,
+                                                      c->key_share, c->ks, c->err);
+        break;
+    case TKE_ECDH_CLIENT:
+        c->shared_key =
+            tke_ecdh_client_shared_secret(c->ke, c->a, c->cpriv, c->key_share, c->err);
+        break;
+    default:
+        break;
+    }
+}
+
+CRYPTO_FIPS_TEXT static void tke_ecdh_call(TkeEcdhCall *c) {
+    c->shared_key = slice_nil(TYPE_BYTE);
+    fips140_without_enforcement(BURROW_FN(Func, tke_ecdh_call_run, c));
+}
+
 /* The rest of hybridKeyExchange.serverSharedSecret once the share is split, with
  * the halves in s and what it gives in a. */
 CRYPTO_FIPS_TEXT static Slice
@@ -536,9 +580,15 @@ tke_hybrid_server_shared_secret(const TlsKeyExchange *ke, Alloc *a, Alloc *s,
                                 IoReader rand, Slice ecdh_share_data,
                                 Slice mlkem_share_data, TlsKeyShare *ks, Error *err) {
     TlsKeyShare ecdh_ks = {0};
-    /* Go runs this under fips140.WithoutEnforcement, as keyShares does. */
-    Slice ecdh_shared_secret = tke_ecdh_server_shared_secret(
-        &ke->ecdh, s, rand, ecdh_share_data, &ecdh_ks, err);
+    TkeEcdhCall c = {.op = TKE_ECDH_SERVER,
+                     .ke = &ke->ecdh,
+                     .a = s,
+                     .rand = rand,
+                     .key_share = ecdh_share_data,
+                     .ks = &ecdh_ks,
+                     .err = err};
+    tke_ecdh_call(&c);
+    Slice ecdh_shared_secret = c.shared_key;
     if (ecdh_shared_secret.p == NULL)
         return slice_nil(TYPE_BYTE);
     Slice mlkem_key_share = slice_nil(TYPE_BYTE);
@@ -566,9 +616,14 @@ tke_hybrid_server_shared_secret(const TlsKeyExchange *ke, Alloc *a, Alloc *s,
 CRYPTO_FIPS_TEXT static Slice tke_hybrid_client_shared_secret(
     const TlsKeyExchange *ke, Alloc *a, Alloc *s, const TlsKeySharePrivateKeys *priv,
     Slice ecdh_share_data, Slice mlkem_share_data, Error *err) {
-    /* Go runs this under fips140.WithoutEnforcement, as keyShares does. */
-    Slice ecdh_shared_secret =
-        tke_ecdh_client_shared_secret(&ke->ecdh, s, priv, ecdh_share_data, err);
+    TkeEcdhCall c = {.op = TKE_ECDH_CLIENT,
+                     .ke = &ke->ecdh,
+                     .a = s,
+                     .cpriv = priv,
+                     .key_share = ecdh_share_data,
+                     .err = err};
+    tke_ecdh_call(&c);
+    Slice ecdh_shared_secret = c.shared_key;
     if (ecdh_shared_secret.p == NULL)
         return slice_nil(TYPE_BYTE);
     Slice mlkem_shared_secret =
@@ -620,10 +675,15 @@ CRYPTO_FIPS_TEXT bool burrow__tls_key_exchange_key_shares(const TlsKeyExchange *
         return false;
     }
 
-    /* Go runs the ECDH part under fips140.WithoutEnforcement, being a hybrid of
-     * ML-KEM, which is Approved. Enforcement is never on in burrow. */
-    if (tke_ecdh_key_shares(&ke->ecdh, a, rand, priv, &out[1], err) &&
-        tke_mlkem_generate_key(ke->mlkem1024, a, priv, err)) {
+    TkeEcdhCall c = {.op = TKE_ECDH_KEY_SHARES,
+                     .ke = &ke->ecdh,
+                     .a = a,
+                     .rand = rand,
+                     .priv = priv,
+                     .ks = &out[1],
+                     .err = err};
+    tke_ecdh_call(&c);
+    if (c.ok && tke_mlkem_generate_key(ke->mlkem1024, a, priv, err)) {
         Slice ek =
             crypto_encapsulator_bytes(crypto_decapsulator_encapsulator(priv->mlkem), a);
         Slice share_data = slice_nil(TYPE_BYTE);

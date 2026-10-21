@@ -117,6 +117,7 @@ static void TestAllCASTs(TestingT *t) {
             continue;
         Slice data = os_read_file(a, filepath_join_v(a, 2, fips_dir, name), &err);
         if (BURROW_FAILED(err)) {
+            regexp_free(cast_re);
             arena_free(&ar);
             testing_t_fatalf_v(t, "WalkDir: %s", error_text(err));
         }
@@ -126,6 +127,8 @@ static void TestAllCASTs(TestingT *t) {
             found = BURROW_APPEND(Str, a, found,
                                   BURROW_AT(Str, BURROW_AT(Slice, ms, j), 2));
     }
+    /* Not in Go: the search memory is not from a, and Go has a collector. */
+    regexp_free(cast_re);
 
     /* Not in Go: "ML-KEM PCT" is in allCASTs twice because Go has it once in
      * the file of each parameter set. burrow has it once, in the macro that

@@ -397,7 +397,9 @@ BURROW_OWNS(ret) SqlDB *sql_open_db(DriverConnector c);
  * connection in use closes when it is returned. Calling it twice is fine. */
 BURROW_OWNS(ret) Error sql_db_close(SqlDB *db);
 
-/* Closes db if it is open and lets go of it. */
+/* Closes db if it is open and lets go of it. It first waits for the goroutines
+ * that open new connections and close old ones, which the close has stopped by
+ * then. */
 void sql_db_free(SqlDB *db);
 
 /* DB.PingContext and DB.Ping. Gets a connection, opening one if none is idle,

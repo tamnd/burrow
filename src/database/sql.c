@@ -331,6 +331,7 @@ struct SqlDB {
     Context opener_ctx;
     ContextCancelFunc opener_cancel;
 
+    SyncWaitGroup workers; /* sq_opener and sq_cleaner, which sql_db_free waits for */
     SyncAtomicInt64 refs;
 };
 
@@ -999,7 +1000,7 @@ static void sq_opener(void *env) {
         sync_mutex_lock(&db->mu);
     }
     sync_mutex_unlock(&db->mu);
-    sq_db_unref(db);
+    sync_wait_group_done(&db->workers);
 }
 
 /* conn. A connection, idle or new, or one handed over by putConn when the
@@ -1272,7 +1273,7 @@ static void sq_cleaner(void *env) {
         db->cleaner_ch = NULL;
         sync_mutex_unlock(&db->mu);
         chan_free(ch);
-        sq_db_unref(db);
+        sync_wait_group_done(&db->workers);
         return;
     }
 
@@ -1302,23 +1303,27 @@ static void sq_cleaner(void *env) {
     }
     time_timer_free(t);
     chan_free(ch);
-    sq_db_unref(db);
+    sync_wait_group_done(&db->workers);
 }
 
-/* startCleanerLocked. */
+/* startCleanerLocked.
+ *
+ * Not in Go: a closed DB starts no cleaner. Go's would find the DB closed the
+ * first time it woke and stop, having done nothing, and here sql_db_free has
+ * stopped waiting for workers by then. */
 static void sq_start_cleaner_locked(SqlDB *db) {
     if ((db->max_lifetime > 0 || db->max_idle_time > 0) && db->num_open > 0 &&
-        db->cleaner_ch == NULL) {
+        db->cleaner_ch == NULL && !db->closed) {
         Chan *ch = chan_make(heap_allocator(), TYPE_BOOL, 1);
         if (ch == NULL)
             return;
         db->cleaner_ch = ch;
         db->cleaner_start = sq_shortest_idle_time_locked(db);
-        sq_db_ref(db);
+        sync_wait_group_add(&db->workers, 1);
         if (!go(BURROW_FN(Func, sq_cleaner, db))) {
             db->cleaner_ch = NULL;
             chan_free(ch);
-            sync_atomic_int64_add(&db->refs, -1);
+            sync_wait_group_done(&db->workers);
         }
     }
 }
@@ -1467,6 +1472,8 @@ void sql_db_free(SqlDB *db) {
     if (db == NULL)
         return;
     (void)sql_db_close(db);
+    /* The close stopped the opener and woke the cleaner, so this is short. */
+    sync_wait_group_wait(&db->workers);
     sq_db_unref(db);
 }
 
@@ -2299,7 +2306,8 @@ SqlDB *sql_open_db(DriverConnector c) {
         return NULL;
     }
     db->opener_cancel = cancel;
-    sync_atomic_int64_store(&db->refs, 2);
+    sync_atomic_int64_store(&db->refs, 1);
+    sync_wait_group_add(&db->workers, 1);
     if (!go(BURROW_FN(Func, sq_opener, db))) {
         BURROW_CALLF0(cancel);
         context_release(db->opener_ctx);

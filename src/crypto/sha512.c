@@ -746,6 +746,7 @@ CRYPTO_FIPS_RODATA static const Byte sha512_cast_want[64] = {
 };
 
 CRYPTO_FIPS_TEXT Error burrow__sha512_cast(void *arg) {
+    (void)arg;
     Byte got[SHA512_SIZE];
     Int n = (Int)sizeof sha512_cast_input;
     sha512_one_shot(SHA512_SIZE,

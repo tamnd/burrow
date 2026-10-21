@@ -459,6 +459,7 @@ CRYPTO_FIPS_RODATA static const Byte tls12_cast_want[48] = {
 };
 
 CRYPTO_FIPS_TEXT Error burrow__tls12_cast(void *arg) {
+    (void)arg;
     Slice input = slice_from((void *)(uintptr_t)tls12_cast_input, 16, 16, TYPE_BYTE);
     Slice transcript =
         slice_from((void *)(uintptr_t)tls12_cast_transcript, 16, 16, TYPE_BYTE);

@@ -133,6 +133,7 @@ CRYPTO_FIPS_RODATA static const Byte cmac_cast_want[32] = {
 };
 
 CRYPTO_FIPS_TEXT Error burrow__ctrkdf_cast(void *arg) {
+    (void)arg;
     Arena ar;
     arena_init(&ar, NULL, 0);
     Error err = BURROW_NO_ERROR;

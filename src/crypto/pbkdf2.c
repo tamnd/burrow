@@ -106,6 +106,7 @@ CRYPTO_FIPS_RODATA static const Byte pbkdf2_cast_want[14] = {
 };
 
 CRYPTO_FIPS_TEXT Error burrow__pbkdf2_cast(void *arg) {
+    (void)arg;
     Int n = (Int)sizeof pbkdf2_cast_salt;
     Slice salt = slice_from((void *)(uintptr_t)pbkdf2_cast_salt, n, n, TYPE_BYTE);
     Arena ar;

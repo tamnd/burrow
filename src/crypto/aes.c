@@ -894,6 +894,7 @@ CRYPTO_FIPS_TEXT static Slice aes_cast_bytes(const Byte *p) {
 }
 
 CRYPTO_FIPS_TEXT Error burrow__aes_cast(void *arg) {
+    (void)arg;
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);

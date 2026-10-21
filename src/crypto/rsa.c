@@ -1112,6 +1112,7 @@ CRYPTO_FIPS_TEXT static Slice rsa_cast_bytes(const uint8_t *p, Int n) {
 }
 
 CRYPTO_FIPS_TEXT static Error rsa_cast(void *arg) {
+    (void)arg;
     RsaScratch s;
     rsa_scratch_init(&s);
     Error err = BURROW_NO_ERROR;
@@ -1143,6 +1144,7 @@ CRYPTO_FIPS_TEXT static Error rsa_cast(void *arg) {
 }
 
 CRYPTO_FIPS_TEXT static void rsa_self_test_once(void *env) {
+    (void)env;
     burrow__fips140_cast("RSASSA-PKCS-v1.5 2048-bit sign and verify", rsa_cast, NULL);
 }
 

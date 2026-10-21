@@ -374,6 +374,7 @@ CRYPTO_FIPS_RODATA static const uint8_t ecdh_cast_want[32] = {
 };
 
 CRYPTO_FIPS_TEXT static Error ecdh_cast(void *arg) {
+    (void)arg;
     Int dn = (Int)sizeof ecdh_cast_private_key, qn = (Int)sizeof ecdh_cast_public_key;
     Slice d = slice_from((void *)(uintptr_t)ecdh_cast_private_key, dn, dn, TYPE_BYTE);
     Slice q = slice_from((void *)(uintptr_t)ecdh_cast_public_key, qn, qn, TYPE_BYTE);
@@ -387,6 +388,7 @@ CRYPTO_FIPS_TEXT static Error ecdh_cast(void *arg) {
 }
 
 CRYPTO_FIPS_TEXT static void ecdh_self_test_once(void *env) {
+    (void)env;
     burrow__fips140_cast("KAS-ECC-SSC P-256", ecdh_cast, NULL);
 }
 

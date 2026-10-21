@@ -123,6 +123,7 @@ CRYPTO_FIPS_RODATA static const Byte hkdf_cast_want[32] = {
 };
 
 CRYPTO_FIPS_TEXT Error burrow__hkdf_cast(void *arg) {
+    (void)arg;
     Int n = (Int)sizeof hkdf_cast_input;
     Slice input = slice_from((void *)(uintptr_t)hkdf_cast_input, n, n, TYPE_BYTE);
     Str info = str_from_bytes(hkdf_cast_input, n);

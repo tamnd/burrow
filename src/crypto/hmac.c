@@ -129,6 +129,7 @@ CRYPTO_FIPS_RODATA static const Byte hmac_cast_want[32] = {
 };
 
 CRYPTO_FIPS_TEXT Error burrow__hmac_cast(void *arg) {
+    (void)arg;
     Int n = (Int)sizeof hmac_cast_input;
     Slice input = slice_from((void *)(uintptr_t)hmac_cast_input, n, n, TYPE_BYTE);
     Arena ar;

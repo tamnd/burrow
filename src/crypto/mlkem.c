@@ -788,6 +788,7 @@ CRYPTO_FIPS_RODATA static const Byte mlkem_cast_k[32] = {
 };
 
 CRYPTO_FIPS_TEXT static Error mlkem_cast(void *arg) {
+    (void)arg;
     MlkemDecapsulationKey768 dk;
     memset(&dk, 0, sizeof dk);
     MlkemView v = mlkem_view_dk768(&dk);
@@ -805,6 +806,7 @@ CRYPTO_FIPS_TEXT static Error mlkem_cast(void *arg) {
 }
 
 CRYPTO_FIPS_TEXT static void mlkem_self_test_once(void *env) {
+    (void)env;
     burrow__fips140_cast("ML-KEM-768", mlkem_cast, NULL);
 }
 

@@ -1586,10 +1586,12 @@ CRYPTO_FIPS_TEXT Error burrow__mldsa_fips140_cast(const MldsaRejectionHook *hook
 }
 
 CRYPTO_FIPS_TEXT static Error mldsa_cast(void *arg) {
+    (void)arg;
     return burrow__mldsa_fips140_cast(NULL);
 }
 
 CRYPTO_FIPS_TEXT static void mldsa_self_test_once(void *env) {
+    (void)env;
     burrow__fips140_cast("ML-DSA-44", mldsa_cast, NULL);
 }
 

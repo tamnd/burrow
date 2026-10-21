@@ -326,6 +326,7 @@ CRYPTO_FIPS_TEXT static Error ed_public_point(Edwards25519Point *A,
 }
 
 CRYPTO_FIPS_TEXT static Error ed_cast(void *arg) {
+    (void)arg;
     static const char msg[] = "CAST";
     EdPrivate k;
     ed_private_from_seed(&k, ed_cast_seed);
@@ -345,6 +346,7 @@ CRYPTO_FIPS_TEXT static Error ed_cast(void *arg) {
 }
 
 CRYPTO_FIPS_TEXT static void ed_self_test_once(void *env) {
+    (void)env;
     burrow__fips140_cast("Ed25519 sign and verify", ed_cast, NULL);
 }
 

@@ -187,6 +187,7 @@ CRYPTO_FIPS_RODATA static const Byte drbg_cast_want[32] = {
 };
 
 CRYPTO_FIPS_TEXT Error burrow__drbg_cast(void *arg) {
+    (void)arg;
     DrbgCounter c;
     burrow__drbg_new_counter(&c, drbg_cast_entropy);
     burrow__drbg_counter_reseed(&c, drbg_cast_reseed_entropy,

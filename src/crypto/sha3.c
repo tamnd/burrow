@@ -1072,6 +1072,7 @@ CRYPTO_FIPS_RODATA static const Byte sha3_cast_want[32] = {
 };
 
 CRYPTO_FIPS_TEXT Error burrow__sha3_cast(void *arg) {
+    (void)arg;
     Int n = (Int)sizeof sha3_cast_input;
     Slice input = slice_from((void *)(uintptr_t)sha3_cast_input, n, n, TYPE_BYTE);
     Arena ar;

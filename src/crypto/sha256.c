@@ -603,6 +603,7 @@ CRYPTO_FIPS_RODATA static const Byte sha256_cast_want[32] = {
 };
 
 CRYPTO_FIPS_TEXT Error burrow__sha256_cast(void *arg) {
+    (void)arg;
     Sha256Digest d;
     Byte got[SHA256_SIZE];
     d.is224 = false;

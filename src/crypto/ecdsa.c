@@ -895,6 +895,7 @@ CRYPTO_FIPS_TEXT static Error ecdsa_cast_sign(Arena *ar, EcdsaDrbg *drbg,
 }
 
 CRYPTO_FIPS_TEXT static Error ecdsa_cast(void *arg) {
+    (void)arg;
     Arena ar;
     arena_init(&ar, NULL, 0);
     Slice pers = ecdsa_bytes(ecdsa_cast_pers_str, 16);
@@ -905,6 +906,7 @@ CRYPTO_FIPS_TEXT static Error ecdsa_cast(void *arg) {
 }
 
 CRYPTO_FIPS_TEXT static Error ecdsa_cast_deterministic(void *arg) {
+    (void)arg;
     const EcdsaFipsCurve *c = burrow__ecdsa_fips_p256();
     uint8_t h[32];
     burrow__ecdsa_bits2octets(c, ecdsa_bytes(ecdsa_cast_hash, 64), h);
@@ -917,10 +919,12 @@ CRYPTO_FIPS_TEXT static Error ecdsa_cast_deterministic(void *arg) {
 }
 
 CRYPTO_FIPS_TEXT static void ecdsa_self_test_once(void *env) {
+    (void)env;
     burrow__fips140_cast("ECDSA P-256 SHA2-512 sign and verify", ecdsa_cast, NULL);
 }
 
 CRYPTO_FIPS_TEXT static void ecdsa_self_test_deterministic_once(void *env) {
+    (void)env;
     burrow__fips140_cast("DetECDSA P-256 SHA2-512 sign", ecdsa_cast_deterministic,
                          NULL);
 }

@@ -124,6 +124,11 @@ extern const NistecCurve burrow__nistec_p256;
 extern const NistecCurve burrow__nistec_p384;
 extern const NistecCurve burrow__nistec_p521;
 
+/* P256OrdInverse sets k to the inverse of k modulo ord(G). k is encoded as four
+ * uint64 limbs in little-endian order, and must be reduced. If k is zero, the
+ * result is zero. In nistec_p256_ordinv.c. */
+void burrow__p256_ord_inverse(uint64_t k[4]);
+
 /* crypto/internal/fips140/subtle's ConstantTimeLessOrEqBytes on two arrays of
  * n bytes: 1 if x <= y as big endian numbers and 0 if not, in time that does
  * not depend on either. */

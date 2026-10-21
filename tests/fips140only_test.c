@@ -257,6 +257,21 @@ static const HashCase non_approved_hashes[] = {
 #define N_NON_APPROVED                                                                 \
     ((int)(sizeof non_approved_hashes / sizeof non_approved_hashes[0]))
 
+/* Not in Go: the deferred function, apart from the function that recovers, so
+ * that nothing it makes lives across the setjmp. n is -1 when there was no
+ * panic. */
+static void expect_panic_recovered(TestingT *t, bool is_string, const char *msg,
+                                   Int n) {
+    testing_t_helper(t);
+    if (n < 0) {
+        testing_t_errorf_v(t, "expected panic");
+        return;
+    }
+    Str s = str_from_bytes((const Byte *)msg, n);
+    if (!is_string || !strings_contains(s, S("FIPS 140-only")))
+        testing_t_errorf_v(t, "unexpected panic: %s", s);
+}
+
 static void expect_panic(TestingT *t, void (*f)(Only *), Only *o) {
     testing_t_helper(t);
     char msg[256];
@@ -272,13 +287,7 @@ static void expect_panic(TestingT *t, void (*f)(Only *), Only *o) {
         memcpy(msg, s.p, (size_t)n);
     }
     BURROW_TRY_END;
-    if (n < 0) {
-        testing_t_errorf_v(t, "expected panic");
-        return;
-    }
-    Str s = str_from_bytes((const Byte *)msg, n);
-    if (!is_string || !strings_contains(s, S("FIPS 140-only")))
-        testing_t_errorf_v(t, "unexpected panic: %s", s);
+    expect_panic_recovered(t, is_string, msg, n);
 }
 
 static void expect_err(TestingT *t, Error err) {

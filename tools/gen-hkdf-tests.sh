@@ -141,7 +141,10 @@ func main() {
 				case "invalid":
 					wantPass = false
 				case "acceptable":
-					log.Fatalf("%s #%d: unspecified flag: %q", file.name, tv.TcId, tv.Flags)
+					wantPass = true
+					for _, f := range tv.Flags {
+						log.Fatalf("%s #%d: unspecified flag: %q", file.name, tv.TcId, f)
+					}
 				default:
 					log.Fatalf("%s #%d: unexpected result %q", file.name, tv.TcId, tv.Result)
 				}

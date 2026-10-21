@@ -1,10 +1,12 @@
-/* Derived from Go's src/crypto/pbkdf2/pbkdf2_test.go.
+/* Derived from Go's src/crypto/pbkdf2/pbkdf2_test.go and
+ * pbkdf2_wycheproof_test.go.
  * Go source: go1.27.1.
  *
  * The vectors are RFC 6070's for SHA-1 and Go's for SHA-256, with the outputs
  * written as hex. TestPBKDF2ServiceIndicator is about Go's FIPS module, which
- * is not here, and TestWycheproof waits for the Wycheproof vectors, which are
- * fetched in CI rather than kept in the tree.
+ * is not here. The Wycheproof vectors Go fetches as a module are in
+ * pbkdf2_test_gen.h, which tools/gen-pbkdf2-tests.sh writes. Go runs each one
+ * as a parallel subtest; here the subtests run one after another.
  *
  * Copyright 2012 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -17,9 +19,13 @@
 #include "burrow/crypto/pbkdf2.h"
 #include "burrow/crypto/sha1.h"
 #include "burrow/crypto/sha256.h"
+#include "burrow/crypto/sha512.h"
 #include "burrow/encoding/hex.h"
 
+#include "pbkdf2_test_gen.h"
+
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 typedef struct Pbkdf2Vector {
@@ -163,11 +169,82 @@ static void TestZeroKeyLength(TestingT *t) {
     arena_free(&ar);
 }
 
+/* ----------------------------------------------------------- Wycheproof */
+
+static const struct {
+    const char *file;
+    HashNewFunc h;
+} files_to_hash[] = {
+    {"pbkdf2_hmacsha1_test.json", sha1_new},
+    {"pbkdf2_hmacsha224_test.json", sha256_new224},
+    {"pbkdf2_hmacsha256_test.json", sha256_new},
+    {"pbkdf2_hmacsha384_test.json", sha512_new384},
+    {"pbkdf2_hmacsha512_test.json", sha512_new},
+};
+
+static HashNewFunc wycheproof_hash(const char *file) {
+    for (size_t i = 0; i < NELEM(files_to_hash); i++)
+        if (strcmp(files_to_hash[i].file, file) == 0)
+            return files_to_hash[i].h;
+    return NULL;
+}
+
+static Slice unhex(Alloc *a, const char *s) {
+    return hex_decode_string(a, str_from_cstr(s), NULL);
+}
+
+static void pbkdf2_wycheproof(void *env, TestingT *t) {
+    const GenWycheproof *tv = env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+
+    Slice password = unhex(a, tv->password);
+    Slice salt = unhex(a, tv->salt);
+    Slice expected_dk = unhex(a, tv->dk);
+    bool want_pass = tv->want_pass;
+
+    Error err;
+    Slice dk = pbkdf2_key(a, wycheproof_hash(tv->file),
+                          str_from_bytes((const Byte *)password.p, password.len), salt,
+                          tv->iteration_count, tv->dk_len, &err);
+    if (BURROW_FAILED(err)) {
+        if (want_pass)
+            testing_t_fatalf_v(t, "Key: %s", error_text(err));
+        arena_free(&ar);
+        return;
+    }
+    if (!want_pass)
+        testing_t_fatalf_v(t, "Key unexpectedly succeeded");
+    if (dk.len != expected_dk.len ||
+        (dk.len != 0 && memcmp(dk.p, expected_dk.p, (size_t)dk.len) != 0))
+        testing_t_errorf_v(
+            t, "derived key mismatch: got %x, want %x",
+            str_from_bytes((const Byte *)dk.p, dk.len),
+            str_from_bytes((const Byte *)expected_dk.p, expected_dk.len));
+    arena_free(&ar);
+}
+
+static void TestWycheproof(TestingT *t) {
+    for (size_t i = 0; i < NELEM(gen_wycheproof); i++) {
+        const GenWycheproof *tv = &gen_wycheproof[i];
+        char name[256];
+        if (tv->comment[0] != '\0')
+            snprintf(name, sizeof name, "%s #%d %s", tv->file, tv->tc_id, tv->comment);
+        else
+            snprintf(name, sizeof name, "%s #%d", tv->file, tv->tc_id);
+        testing_t_run(
+            t, str_from_cstr(name),
+            BURROW_FN(TestingTFunc, pbkdf2_wycheproof, (void *)(uintptr_t)tv));
+    }
+}
+
 #define TESTS(X)                                                                       \
     X(TestWithHMACSHA1)                                                                \
     X(TestWithHMACSHA256)                                                              \
     X(TestMaxKeyLength)                                                                \
     X(TestZeroKeyLength)                                                               \
+    X(TestWycheproof)                                                                  \
     X(BenchmarkHMACSHA1)                                                               \
     X(BenchmarkHMACSHA256)
 

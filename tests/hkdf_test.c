@@ -1,10 +1,11 @@
-/* Derived from Go's src/crypto/hkdf/hkdf_test.go.
+/* Derived from Go's src/crypto/hkdf/hkdf_test.go and hkdf_wycheproof_test.go.
  * Go source: go1.27.1.
  *
  * The table is Go's, with the bytes written as hex and a nil salt or info as
  * NULL. TestFIPSServiceIndicator is about Go's FIPS module, which is not here.
- * TestHKDFWycheproof waits for the Wycheproof vectors, which are fetched in CI
- * rather than kept in the tree.
+ * The Wycheproof vectors Go fetches as a module are in hkdf_test_gen.h, which
+ * tools/gen-hkdf-tests.sh writes. Go runs each one as a parallel subtest; here
+ * the subtests run one after another.
  *
  * Copyright 2014 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -20,8 +21,12 @@
 #include "burrow/crypto/sha256.h"
 #include "burrow/crypto/sha512.h"
 #include "burrow/encoding/hex.h"
+#include "burrow/slices.h"
+
+#include "hkdf_test_gen.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 typedef struct HkdfTest {
@@ -181,6 +186,78 @@ static void TestHKDFLimit(TestingT *t) {
     arena_free(&ar);
 }
 
+/* ----------------------------------------------------------- Wycheproof */
+
+static const struct {
+    const char *file;
+    HashNewFunc h;
+} files_to_hash[] = {
+    {"hkdf_sha1_test.json", sha1_new},
+    {"hkdf_sha256_test.json", sha256_new},
+    {"hkdf_sha384_test.json", sha512_new384},
+    {"hkdf_sha512_test.json", sha512_new},
+};
+
+static HashNewFunc wycheproof_hash(const char *file) {
+    for (size_t i = 0; i < NELEM(files_to_hash); i++)
+        if (strcmp(files_to_hash[i].file, file) == 0)
+            return files_to_hash[i].h;
+    return NULL;
+}
+
+/* An output key of a Wycheproof test, which the generator has cut into
+ * pieces C99 can take as literals. */
+static Slice unhex_parts(Alloc *a, const char *const parts[9]) {
+    Slice b[9];
+    Int n = 0;
+    while (n < 9 && parts[n] != NULL) {
+        b[n] = unhex(a, parts[n]);
+        n++;
+    }
+    return slices_concat(a, b, n);
+}
+
+static void hkdf_wycheproof(void *env, TestingT *t) {
+    const GenWycheproof *tv = env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+
+    Slice ikm = unhex(a, tv->ikm);
+    Slice salt = unhex(a, tv->salt);
+    Str info = as_str(unhex(a, tv->info));
+    bool want_pass = tv->want_pass;
+
+    Error err;
+    Slice okm = hkdf_key(a, wycheproof_hash(tv->file), ikm, salt, info, tv->size, &err);
+    if (!want_pass) {
+        if (BURROW_OK(err))
+            testing_t_errorf_v(t, "Key succeeded for invalid vector");
+        arena_free(&ar);
+        return;
+    }
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "Key: %s", error_text(err));
+    Slice expected_okm = unhex_parts(a, tv->okm);
+    if (!same(okm, expected_okm))
+        testing_t_errorf_v(t, "output key mismatch: got %x, want %x", as_str(okm),
+                           as_str(expected_okm));
+    arena_free(&ar);
+}
+
+static void TestHKDFWycheproof(TestingT *t) {
+    for (size_t i = 0; i < NELEM(gen_wycheproof); i++) {
+        const GenWycheproof *tv = &gen_wycheproof[i];
+        char name[256];
+        if (tv->comment[0] != '\0')
+            snprintf(name, sizeof name, "%s #%d %s", tv->file, tv->tc_id, tv->comment);
+        else
+            snprintf(name, sizeof name, "%s #%d", tv->file, tv->tc_id);
+        testing_t_run(t, str_from_cstr(name),
+                      BURROW_FN(TestingTFunc, hkdf_wycheproof, (void *)(uintptr_t)tv));
+    }
+}
+
 static void benchmark_hkdf(TestingB *b, HashNewFunc hasher, Int block) {
     static Byte master_bytes[] = {0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07};
     static Byte salt_bytes[] = {0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17};
@@ -224,6 +301,7 @@ static void Benchmark64ByteSHA512Single(TestingB *b) {
 #define TESTS(X)                                                                       \
     X(TestHKDF)                                                                        \
     X(TestHKDFLimit)                                                                   \
+    X(TestHKDFWycheproof)                                                              \
     X(Benchmark16ByteMD5Single)                                                        \
     X(Benchmark20ByteSHA1Single)                                                       \
     X(Benchmark32ByteSHA256Single)                                                     \

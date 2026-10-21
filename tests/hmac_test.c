@@ -1,5 +1,9 @@
-/* Derived from Go's src/crypto/hmac/hmac_test.go.
+/* Derived from Go's src/crypto/hmac/hmac_test.go and hmac_wycheproof_test.go.
  * Go source: go1.27.1.
+ *
+ * The Wycheproof vectors Go fetches as a module are in hmac_test_gen.h, which
+ * tools/gen-hmac-tests.sh writes. Go runs each one as a parallel subtest; here
+ * the subtests run one after another.
  *
  * The table is Go's, keys written as hex. Go runs the table a second time
  * through a wrapper that hides the hashes' MarshalBinary, which changes the
@@ -17,6 +21,7 @@
 #include "testhash.h"
 
 #include "burrow/burrow.h"
+#include "burrow/bytes.h"
 #include "burrow/crypto/hmac.h"
 #include "burrow/crypto/md5.h"
 #include "burrow/crypto/sha1.h"
@@ -25,7 +30,10 @@
 #include "burrow/crypto/sha512.h"
 #include "burrow/encoding/hex.h"
 
+#include "hmac_test_gen.h"
+
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 typedef struct HmacTest {
@@ -370,6 +378,84 @@ static void TestHMACHash(TestingT *t) {
     }
 }
 
+/* ----------------------------------------------------------- Wycheproof */
+
+static Hash new_sha3_224(Alloc *a) {
+    Sha3 *d = sha3_new224(a);
+    if (d == NULL)
+        return (Hash){NULL, NULL};
+    return sha3_as_hash(d);
+}
+
+static Hash new_sha3_384(Alloc *a) {
+    Sha3 *d = sha3_new384(a);
+    if (d == NULL)
+        return (Hash){NULL, NULL};
+    return sha3_as_hash(d);
+}
+
+static Hash new_sha3_512(Alloc *a) {
+    Sha3 *d = sha3_new512(a);
+    if (d == NULL)
+        return (Hash){NULL, NULL};
+    return sha3_as_hash(d);
+}
+
+static const struct {
+    const char *file;
+    HashNewFunc h;
+} files_to_hash[] = {
+    {"hmac_sha1_test.json", sha1_new},
+    {"hmac_sha224_test.json", sha256_new224},
+    {"hmac_sha256_test.json", sha256_new},
+    {"hmac_sha3_224_test.json", new_sha3_224},
+    {"hmac_sha3_256_test.json", new_sha3_256},
+    {"hmac_sha3_384_test.json", new_sha3_384},
+    {"hmac_sha3_512_test.json", new_sha3_512},
+    {"hmac_sha384_test.json", sha512_new384},
+    {"hmac_sha512_test.json", sha512_new},
+    {"hmac_sha512_224_test.json", sha512_new512224},
+    {"hmac_sha512_256_test.json", sha512_new512256},
+};
+
+static HashNewFunc wycheproof_hash(const char *file) {
+    for (size_t i = 0; i < NELEM(files_to_hash); i++)
+        if (strcmp(files_to_hash[i].file, file) == 0)
+            return files_to_hash[i].h;
+    return NULL;
+}
+
+static void hmac_wycheproof(void *env, TestingT *t) {
+    const GenWycheproof *tv = env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Int tag_size = tv->tag_size / 8;
+
+    Hash hm = hmac_new(a, wycheproof_hash(tv->file), unhex(a, tv->key));
+    hash_write(hm, unhex(a, tv->msg), NULL);
+    /* Truncate the computed tag to match the expected tag size. */
+    Slice computed_tag = slice_sub(hash_sum(a, hm, slice_nil(TYPE_BYTE)), 0, tag_size);
+    bool got = bytes_equal(unhex(a, tv->tag), computed_tag);
+    bool want = tv->want;
+    if (want != got)
+        testing_t_errorf_v(t, "unexpected result");
+    arena_free(&ar);
+}
+
+static void TestHMACWycheproof(TestingT *t) {
+    for (size_t i = 0; i < NELEM(gen_wycheproof); i++) {
+        const GenWycheproof *tv = &gen_wycheproof[i];
+        char name[256];
+        if (tv->comment[0] != '\0')
+            snprintf(name, sizeof name, "%s #%d %s", tv->file, tv->tc_id, tv->comment);
+        else
+            snprintf(name, sizeof name, "%s #%d", tv->file, tv->tc_id);
+        testing_t_run(t, str_from_cstr(name),
+                      BURROW_FN(TestingTFunc, hmac_wycheproof, (void *)(uintptr_t)tv));
+    }
+}
+
 static void bench_sha256(TestingB *b, Int size) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -424,6 +510,7 @@ static void BenchmarkNewWriteSum(TestingB *b) {
     X(TestNonUniqueHash)                                                               \
     X(TestEqual)                                                                       \
     X(TestHMACHash)                                                                    \
+    X(TestHMACWycheproof)                                                              \
     X(BenchmarkHMACSHA256_1K)                                                          \
     X(BenchmarkHMACSHA256_32)                                                          \
     X(BenchmarkNewWriteSum)

@@ -391,13 +391,20 @@ static Poly1305U128 poly1305_mul64(uint64_t a, uint64_t b) {
     return r;
 }
 
+/* Not in Go: Go panics in place, once in add128 and twice in updateGeneric.
+ * The check has a function of its own here so that tools/ctgrind.supp can name
+ * it, since it tests a value that comes from the key. */
+static void poly1305_no_overflow(uint64_t c) {
+    if (c != 0)
+        panic_str(BURROW_S("poly1305: unexpected overflow"));
+}
+
 static Poly1305U128 poly1305_add128(Poly1305U128 a, Poly1305U128 b) {
     uint64_t c;
     Poly1305U128 r;
     r.lo = bits_add64(a.lo, b.lo, 0, &c);
     r.hi = bits_add64(a.hi, b.hi, c, &c);
-    if (c != 0)
-        panic_str(BURROW_S("poly1305: unexpected overflow"));
+    poly1305_no_overflow(c);
     return r;
 }
 
@@ -470,10 +477,8 @@ static void poly1305_update(uint64_t h[3], const uint64_t r[2], const Byte *msg,
          * products.
          *
          * This also means that the product doesn't have a fifth limb (t4). */
-        if (h2r0.hi != 0)
-            panic_str(BURROW_S("poly1305: unexpected overflow"));
-        if (h2r1.hi != 0)
-            panic_str(BURROW_S("poly1305: unexpected overflow"));
+        poly1305_no_overflow(h2r0.hi);
+        poly1305_no_overflow(h2r1.hi);
 
         Poly1305U128 m0 = h0r0;
         /* These two additions don't overflow thanks again to the 4 masked bits

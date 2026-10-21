@@ -16,8 +16,12 @@
  * Not in Go. */
 
 #include "burrow/burrow.h"
+#include "burrow/crypto/aes.h"
+#include "burrow/crypto/cipher.h"
 #include "burrow/crypto/ecdh.h"
+#include "burrow/crypto/ecdsa.h"
 #include "burrow/crypto/ed25519.h"
+#include "burrow/crypto/elliptic.h"
 #include "burrow/crypto/hmac.h"
 #include "burrow/crypto/mlkem.h"
 #include "burrow/crypto/rand.h"
@@ -26,7 +30,10 @@
 #include "burrow/crypto/subtle.h"
 #include "burrow/mem/arena.h"
 
+#include "../src/crypto/aes_internal.h"
 #include "../src/crypto/bigmod.h"
+#include "../src/crypto/chacha20poly1305.h"
+#include "../src/crypto/ecdsa_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -107,6 +114,63 @@ static void check_hashes(void) {
     end("crypto/sha256, crypto/sha512 and crypto/hmac");
 }
 
+/* AES with each key size, on a secret block, the portable code or the AES
+ * instructions as hardware says, and GCM over it. The ciphertext is public, and
+ * so is whether Open accepts it. */
+static void check_aes(const char *name, bool portable) {
+    Byte key[32], pt[100], block[16];
+    Byte nonce[12] = {0};
+    Byte ad[] = "additional data that is not secret";
+    Error err = {0};
+    begin();
+    Alloc *a = arena_allocator(&arena);
+    burrow__aes_set_portable(portable);
+    for (Int n = 16; n <= 32; n += 8) {
+        CipherBlock b = aes_new_cipher(a, secret_bytes(key, n), &err);
+        check_failed(name, err);
+        Slice bs = secret_bytes(block, 16);
+        cipher_block_encrypt(b, bs, bs);
+        cipher_block_decrypt(b, bs, bs);
+        public_(block, sizeof block);
+        CipherAEAD g = cipher_new_gcm(a, b, &err);
+        check_failed(name, err);
+        Slice ads = bytes(ad, (Int)sizeof ad - 1);
+        Slice ct = cipher_aead_seal(g, a, (Slice){0}, bytes(nonce, 12),
+                                    secret_bytes(pt, (Int)sizeof pt), ads);
+        public_(ct.p, (size_t)ct.len);
+        Slice out = cipher_aead_open(g, a, (Slice){0}, bytes(nonce, 12), ct, ads, &err);
+        check_failed(name, err);
+        public_(out.p, (size_t)out.len);
+    }
+    burrow__aes_set_portable(false);
+    end(name);
+}
+
+/* ChaCha20-Poly1305 and XChaCha20-Poly1305, which have only the portable code. */
+static void check_chacha20poly1305(void) {
+    Byte key[CHACHA20_KEY_SIZE], pt[100];
+    Byte nonce[24] = {0};
+    Byte ad[] = "additional data that is not secret";
+    Error err = {0};
+    begin();
+    Alloc *a = arena_allocator(&arena);
+    for (int x = 0; x < 2; x++) {
+        Slice k = secret_bytes(key, (Int)sizeof key);
+        CipherAEAD c = x == 0 ? chacha20poly1305_new(a, k, &err)
+                              : chacha20poly1305_new_x(a, k, &err);
+        check_failed("crypto/internal/chacha20poly1305", err);
+        Slice ns = bytes(nonce, cipher_aead_nonce_size(c));
+        Slice ads = bytes(ad, (Int)sizeof ad - 1);
+        Slice ct = cipher_aead_seal(c, a, (Slice){0}, ns,
+                                    secret_bytes(pt, (Int)sizeof pt), ads);
+        public_(ct.p, (size_t)ct.len);
+        Slice out = cipher_aead_open(c, a, (Slice){0}, ns, ct, ads, &err);
+        check_failed("crypto/internal/chacha20poly1305", err);
+        public_(out.p, (size_t)out.len);
+    }
+    end("crypto/internal/chacha20poly1305");
+}
+
 static void check_ed25519(void) {
     Byte seed[ED25519_SEED_SIZE];
     Byte msg[] = "a message that is not secret";
@@ -145,6 +209,37 @@ static void check_ecdh(const char *name, const EcdhCurve *c) {
     ecdh_private_key_free(k);
     ecdh_private_key_free(g);
     ecdh_private_key_free(peer);
+    end(name);
+}
+
+/* ECDSA's sign, the one under the FIPS module, with a secret scalar and a
+ * DRBG seeded with secret entropy for the nonce. The conversion from the
+ * big.Int in a PrivateKey is left out, because math/big is not constant time,
+ * in Go either. */
+static void check_ecdsa(const char *name, EllipticCurve curve,
+                        const EcdsaFipsCurve *c) {
+    Byte key[66], entropy[48], hash[32] = {1, 2, 3};
+    uint8_t r[66], s[66];
+    Error err = {0};
+    begin();
+    Alloc *a = arena_allocator(&arena);
+    EcdsaPrivateKey *k = ecdsa_generate_key(a, curve, crypto_rand_reader, &err);
+    check_failed(name, err);
+    Slice kb = ecdsa_private_key_bytes(k, a, &err);
+    check_failed(name, err);
+    memcpy(key, kb.p, (size_t)kb.len);
+    secret(key, (size_t)kb.len);
+    EcdsaDrbg *drbg = burrow__ecdsa_new_drbg(
+        a, sha512_new, secret_bytes(entropy, (Int)sizeof entropy), slice_nil(TYPE_BYTE),
+        slice_nil(TYPE_BYTE));
+    bool ok = burrow__ecdsa_sign_with_drbg(c, bytes(key, kb.len), drbg,
+                                           bytes(hash, (Int)sizeof hash), r, s, &err);
+    public_(&ok, sizeof ok);
+    public_(&err, sizeof err);
+    check_failed(name, err);
+    public_(r, sizeof r);
+    public_(s, sizeof s);
+    ecdsa_private_key_free(k);
     end(name);
 }
 
@@ -206,11 +301,20 @@ static void check_bigmod(void) {
 int main(void) {
     check_subtle();
     check_hashes();
+    check_aes("crypto/aes and GCM, portable", true);
+    bool hw = false;
+    if (burrow__aes_hardware(&hw) != NULL && hw)
+        check_aes("crypto/aes and GCM, AES instructions", false);
+    check_chacha20poly1305();
     check_ed25519();
     check_ecdh("crypto/ecdh X25519", ecdh_x25519());
     check_ecdh("crypto/ecdh P-256", ecdh_p256());
     check_ecdh("crypto/ecdh P-384", ecdh_p384());
     check_ecdh("crypto/ecdh P-521", ecdh_p521());
+    check_ecdsa("crypto/ecdsa P-224", elliptic_p224(), burrow__ecdsa_fips_p224());
+    check_ecdsa("crypto/ecdsa P-256", elliptic_p256(), burrow__ecdsa_fips_p256());
+    check_ecdsa("crypto/ecdsa P-384", elliptic_p384(), burrow__ecdsa_fips_p384());
+    check_ecdsa("crypto/ecdsa P-521", elliptic_p521(), burrow__ecdsa_fips_p521());
     check_mlkem();
     check_bigmod();
     return 0;

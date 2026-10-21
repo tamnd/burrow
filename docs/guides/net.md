@@ -1683,7 +1683,7 @@ The server and the client put the same limits on what they read as Go does, and 
 | A form body read by `http_request_parse_form` | 10 MiB | `http_max_bytes_reader` on the body, which then sets the limit |
 | Memory for the files in a multipart form parsed by `http_request_form_value`, `http_request_post_form_value` and `http_request_form_file` | 32 MiB, and the rest goes to temporary files | `http_request_parse_multipart_form` with a size of your own, called first |
 | Parts and headers in a multipart form | 1000 parts and 10000 headers | `GODEBUG=multipartmaxparts=N` and `multipartmaxheaders=N` |
-| Cookies in a `Cookie` header | 3000 | `GODEBUG=httpcookiemaxnum=N`, and 0 takes it away |
+| Cookies read from a request's `Cookie` headers or a response's `Set-Cookie` headers | 3000 | `GODEBUG=httpcookiemaxnum=N`, and 0 takes it away |
 | Parameters in a query | 10000 | `GODEBUG=urlmaxqueryparams=N`, and 0 takes it away |
 | A chunk size line | 4096 bytes, and longer is `http_err_line_too_long` | Nothing |
 | Chunk extensions and other overhead in a chunked body | Each chunk may bring 16 bytes and twice its data in overhead, and 16 KiB more than that ends the body with an error | Nothing |

@@ -441,6 +441,62 @@ bool pal_tz_key_names(const char *key, int64_t key_len, char *std, int64_t *std_
 bool pal_tz_english_name(const char *std, int64_t std_len, const char *dst,
                          int64_t dst_len, char *out, int64_t *out_len, PalErrno *err);
 
+/* ------------------------------------------------------- certificate chains
+ *
+ * The Windows verifier, for crypto/x509's systemVerify in Go's
+ * root_windows.go. The leaf and the intermediates go into a store in memory,
+ * CertGetCertificateChain builds chains from them and from the system's root
+ * stores, the lower quality ones as well, and fn gets each chain context, the
+ * best one first.
+ *
+ * usages are the extended key usage OIDs in dotted form, and any_usage asks
+ * for no usage in particular. With has_time, unix_nano is the time to verify
+ * at, and without it the time is now.
+ *
+ * In what fn gets, trust_error is the context's TrustStatus.ErrorStatus. When
+ * that is zero and ssl_policy is set, the context is also checked against the
+ * SSL server policy for server_name, and policy_checked says so. policy_ok
+ * says whether CertVerifyCertificateChainPolicy succeeded, with policy_err set
+ * when it did not, and policy_status is the error it found in the chain.
+ * server_name must not hold a NUL; one that does fails the check with
+ * PAL_EINVAL. certs and lens are the certificates of the last simple chain, in
+ * order, and n is how many, or -1 when the context has no simple chain. They
+ * are only good until fn returns.
+ *
+ * crypt32 is not linked, so it is loaded on each call. Returns false and says
+ * why when making the store or the chain fails, and on every system but
+ * Windows, where the error is PAL_ENOTSUP. */
+typedef struct PalCertVerifyOpts {
+    const uint8_t *leaf;
+    int64_t leaf_len;
+    const uint8_t *const *intermediates;
+    const int64_t *intermediate_lens;
+    int64_t n_intermediates;
+    const char *const *usages;
+    int64_t n_usages;
+    bool any_usage;
+    bool has_time;
+    int64_t unix_nano;
+    bool ssl_policy;
+    const char *server_name;
+    int64_t server_name_len;
+} PalCertVerifyOpts;
+
+typedef struct PalCertChain {
+    uint32_t trust_error;
+    bool policy_checked;
+    bool policy_ok;
+    PalErrno policy_err;
+    uint32_t policy_status;
+    const uint8_t *const *certs;
+    const int64_t *lens;
+    int64_t n;
+} PalCertChain;
+
+typedef void (*PalCertChainFn)(void *env, const PalCertChain *chain);
+bool pal_cert_verify(const PalCertVerifyOpts *opts, PalCertChainFn fn, void *env,
+                     PalErrno *err);
+
 /* ------------------------------------------------------------------ threads
  *
  * OS threads, which in Go's terms is an M. Goroutines are not here: they are

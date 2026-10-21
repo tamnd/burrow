@@ -18,11 +18,12 @@
 #ifndef BURROW_CRYPTO_NISTEC_P256_TABLE_H
 #define BURROW_CRYPTO_NISTEC_P256_TABLE_H
 
+#include "fips140_module.h"
 #include "nistec.h"
 
 #include <stdint.h>
 
-static const uint64_t p256_generator_tables[43][32][2][4] = {
+CRYPTO_FIPS_RODATA static const uint64_t p256_generator_tables[43][32][2][4] = {
     {
         {{0x79e730d418a9143c, 0x75ba95fc5fedb601, 0x79fb732b77622510, 0x18905f76a53755c6},
          {0xddf25357ce95560a, 0x8b4ab8e4ba19e45c, 0xd2e88688dd21f325, 0x8571ff1825885d85}},

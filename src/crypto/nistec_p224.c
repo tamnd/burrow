@@ -26,6 +26,8 @@
 #include "burrow/slice.h"
 #include "burrow/sync.h"
 
+#include "fips140_module.h"
+
 #include <stdint.h>
 #include <string.h>
 
@@ -37,7 +39,7 @@ _Static_assert(sizeof(fiat_p224_limb) == sizeof(NistecLimb),
 
 enum { p224_element_length = 28 };
 
-static void p224_reverse(uint8_t *v) {
+CRYPTO_FIPS_TEXT static void p224_reverse(uint8_t *v) {
     for (int i = 0; i < p224_element_length / 2; i++) {
         uint8_t t = v[i];
         v[i] = v[p224_element_length - 1 - i];
@@ -47,57 +49,62 @@ static void p224_reverse(uint8_t *v) {
 
 /* ------------------------------------------------------------- element */
 
-static NistecP224Element *p224_one(NistecP224Element *e) {
+CRYPTO_FIPS_TEXT static NistecP224Element *p224_one(NistecP224Element *e) {
     fiat_p224_set_one(e->l);
     return e;
 }
 
-static NistecP224Element *p224_add(NistecP224Element *e, const NistecP224Element *t1,
-                                   const NistecP224Element *t2) {
+CRYPTO_FIPS_TEXT static NistecP224Element *p224_add(NistecP224Element *e,
+                                                    const NistecP224Element *t1,
+                                                    const NistecP224Element *t2) {
     fiat_p224_add(e->l, t1->l, t2->l);
     return e;
 }
 
-static NistecP224Element *p224_sub(NistecP224Element *e, const NistecP224Element *t1,
-                                   const NistecP224Element *t2) {
+CRYPTO_FIPS_TEXT static NistecP224Element *p224_sub(NistecP224Element *e,
+                                                    const NistecP224Element *t1,
+                                                    const NistecP224Element *t2) {
     fiat_p224_sub(e->l, t1->l, t2->l);
     return e;
 }
 
-static NistecP224Element *p224_mul(NistecP224Element *e, const NistecP224Element *t1,
-                                   const NistecP224Element *t2) {
+CRYPTO_FIPS_TEXT static NistecP224Element *p224_mul(NistecP224Element *e,
+                                                    const NistecP224Element *t1,
+                                                    const NistecP224Element *t2) {
     fiat_p224_mul(e->l, t1->l, t2->l);
     return e;
 }
 
-static NistecP224Element *p224_square(NistecP224Element *e,
-                                      const NistecP224Element *t) {
+CRYPTO_FIPS_TEXT static NistecP224Element *p224_square(NistecP224Element *e,
+                                                       const NistecP224Element *t) {
     fiat_p224_square(e->l, t->l);
     return e;
 }
 
 /* Writes the 28 byte big endian encoding of e to out. */
-static void p224_bytes(const NistecP224Element *e, uint8_t *out) {
+CRYPTO_FIPS_TEXT static void p224_bytes(const NistecP224Element *e, uint8_t *out) {
     fiat_p224_non_montgomery_domain_field_element tmp;
     fiat_p224_from_montgomery(tmp, e->l);
     fiat_p224_to_bytes(out, tmp);
     p224_reverse(out);
 }
 
-static void p224_from_canonical_bytes(NistecP224Element *e, const uint8_t *in) {
+CRYPTO_FIPS_TEXT static void p224_from_canonical_bytes(NistecP224Element *e,
+                                                       const uint8_t *in) {
     fiat_p224_non_montgomery_domain_field_element tmp;
     fiat_p224_from_bytes(tmp, in);
     fiat_p224_to_montgomery(e->l, tmp);
 }
 
-static int p224_equal(const NistecP224Element *e, const NistecP224Element *t) {
+CRYPTO_FIPS_TEXT static int p224_equal(const NistecP224Element *e,
+                                       const NistecP224Element *t) {
     uint8_t eb[p224_element_length], tb[p224_element_length];
     p224_bytes(e, eb);
     p224_bytes(t, tb);
     return burrow__nistec_equal_bytes(eb, tb, p224_element_length);
 }
 
-static int p224_is_zero(const NistecP224Element *e) {
+CRYPTO_FIPS_TEXT static int p224_is_zero(const NistecP224Element *e) {
     uint8_t eb[p224_element_length], zero[p224_element_length];
     memset(zero, 0, sizeof zero);
     p224_bytes(e, eb);
@@ -106,8 +113,8 @@ static int p224_is_zero(const NistecP224Element *e) {
 
 /* Sets e to the value of the 28 big endian bytes at v. Go's SetBytes also
  * takes a slice of the wrong length, which nothing here passes it. */
-static NistecP224Element *p224_set_bytes(NistecP224Element *e, const uint8_t *v,
-                                         Error *err) {
+CRYPTO_FIPS_TEXT static NistecP224Element *
+p224_set_bytes(NistecP224Element *e, const uint8_t *v, Error *err) {
     /* Check for non-canonical encodings (p + k, 2p + k, etc.) by comparing to
      * the encoding of -1 mod p, so p - 1, the highest canonical encoding. */
     NistecP224Element zero, one, minus_one;
@@ -128,16 +135,18 @@ static NistecP224Element *p224_set_bytes(NistecP224Element *e, const uint8_t *v,
 }
 
 /* Sets v to a if cond is 1 and to b if cond is 0. */
-static NistecP224Element *p224_select(NistecP224Element *v, const NistecP224Element *a,
-                                      const NistecP224Element *b, int cond) {
+CRYPTO_FIPS_TEXT static NistecP224Element *p224_select(NistecP224Element *v,
+                                                       const NistecP224Element *a,
+                                                       const NistecP224Element *b,
+                                                       int cond) {
     fiat_p224_selectznz(v->l, (fiat_p224_uint1)cond, b->l, a->l);
     return v;
 }
 
 /* Sets e to 1/x and returns e. If x is 0, the result is 0. Inversion is
  * exponentiation by p - 2. */
-static NistecP224Element *p224_invert(NistecP224Element *e,
-                                      const NistecP224Element *x) {
+CRYPTO_FIPS_TEXT static NistecP224Element *p224_invert(NistecP224Element *e,
+                                                       const NistecP224Element *x) {
     NistecP224Element z_, t0_, t1_, t2_;
     NistecP224Element *z = &z_, *t0 = &t0_, *t1 = &t1_, *t2 = &t2_;
     /* Inversion is implemented as exponentiation with exponent p − 2.
@@ -206,7 +215,7 @@ static NistecP224Element *p224_invert(NistecP224Element *e,
 static NistecP224Element p224_gg[96];
 static SyncOnce p224_gg_once;
 
-static void p224_gg_init(void *env) {
+CRYPTO_FIPS_TEXT static void p224_gg_init(void *env) {
     (void)env;
     static const uint8_t g[p224_element_length] = {
         0x6a, 0x0f, 0xec, 0x67, 0x85, 0x98, 0xa7, 0x92, 0x0c, 0x55,
@@ -219,7 +228,8 @@ static void p224_gg_init(void *env) {
 }
 
 /* Sets r to a square root candidate for x. r and x must not overlap. */
-static void p224_sqrt_candidate(NistecP224Element *r, const NistecP224Element *x) {
+CRYPTO_FIPS_TEXT static void p224_sqrt_candidate(NistecP224Element *r,
+                                                 const NistecP224Element *x) {
     /* Since p = 1 mod 4, we can't use the exponentiation by (p + 1) / 4 like
      * for the other primes. Instead, implement a variation of Tonelli-Shanks.
      * The constant-time implementation is adapted from Thomas Pornin's ecGFp5.
@@ -316,7 +326,8 @@ static void p224_sqrt_candidate(NistecP224Element *r, const NistecP224Element *x
 
 /* Sets e to a square root of x. If x is not a square, returns 0 and leaves e
  * unchanged. e and x can overlap. */
-static int p224_sqrt(NistecP224Element *e, const NistecP224Element *x) {
+CRYPTO_FIPS_TEXT static int p224_sqrt(NistecP224Element *e,
+                                      const NistecP224Element *x) {
     NistecP224Element candidate, square;
     p224_sqrt_candidate(&candidate, x);
     p224_square(&square, &candidate);
@@ -332,7 +343,7 @@ static int p224_sqrt(NistecP224Element *e, const NistecP224Element *x) {
 static NistecP224Element p224_b_value;
 static SyncOnce p224_b_once;
 
-static void p224_b_init(void *env) {
+CRYPTO_FIPS_TEXT static void p224_b_init(void *env) {
     (void)env;
     static const uint8_t b[p224_element_length] = {
         0xb4, 0x05, 0x0a, 0x85, 0x0c, 0x04, 0xb3, 0xab, 0xf5, 0x41,
@@ -342,20 +353,20 @@ static void p224_b_init(void *env) {
     p224_set_bytes(&p224_b_value, b, NULL);
 }
 
-static const NistecP224Element *p224_b(void) {
+CRYPTO_FIPS_TEXT static const NistecP224Element *p224_b(void) {
     sync_once_do(&p224_b_once, BURROW_FN(Func, p224_b_init, NULL));
     return &p224_b_value;
 }
 
 /* Sets p to the point at infinity. */
-static NistecP224Point *p224_point_new(NistecP224Point *p) {
+CRYPTO_FIPS_TEXT static NistecP224Point *p224_point_new(NistecP224Point *p) {
     memset(&p->x, 0, sizeof p->x);
     p224_one(&p->y);
     memset(&p->z, 0, sizeof p->z);
     return p;
 }
 
-static NistecP224Point *p224_point_set_generator(NistecP224Point *p) {
+CRYPTO_FIPS_TEXT static NistecP224Point *p224_point_set_generator(NistecP224Point *p) {
     static const uint8_t x[p224_element_length] = {
         0xb7, 0x0e, 0x0c, 0xbd, 0x6b, 0xb4, 0xbf, 0x7f, 0x32, 0x13,
         0x90, 0xb9, 0x4a, 0x03, 0xc1, 0xd3, 0x56, 0xc2, 0x11, 0x22,
@@ -373,8 +384,8 @@ static NistecP224Point *p224_point_set_generator(NistecP224Point *p) {
 }
 
 /* Sets y2 to x^3 - 3x + b, and returns y2. */
-static NistecP224Element *p224_polynomial(NistecP224Element *y2,
-                                          const NistecP224Element *x) {
+CRYPTO_FIPS_TEXT static NistecP224Element *p224_polynomial(NistecP224Element *y2,
+                                                           const NistecP224Element *x) {
     p224_square(y2, x);
     p224_mul(y2, y2, x);
 
@@ -386,8 +397,9 @@ static NistecP224Element *p224_polynomial(NistecP224Element *y2,
     return p224_add(y2, y2, p224_b());
 }
 
-static int p224_check_on_curve(const NistecP224Element *x, const NistecP224Element *y,
-                               Error *err) {
+CRYPTO_FIPS_TEXT static int p224_check_on_curve(const NistecP224Element *x,
+                                                const NistecP224Element *y,
+                                                Error *err) {
     /* y^2 = x^3 - 3x + b */
     NistecP224Element rhs, lhs;
     p224_polynomial(&rhs, x);
@@ -404,7 +416,8 @@ static int p224_check_on_curve(const NistecP224Element *x, const NistecP224Eleme
  * specified in SEC 1, Version 2.0, Section 2.3.4. If the point is not on the
  * curve, it returns NULL and an error, and the receiver is unchanged.
  * Otherwise, it returns p. */
-static NistecP224Point *p224_point_set_bytes(NistecP224Point *p, Slice b, Error *err) {
+CRYPTO_FIPS_TEXT static NistecP224Point *p224_point_set_bytes(NistecP224Point *p,
+                                                              Slice b, Error *err) {
     const uint8_t *bb = b.p;
     NistecP224Element x, y;
 
@@ -464,7 +477,7 @@ static NistecP224Point *p224_point_set_bytes(NistecP224Point *p, Slice b, Error 
 /* Writes the uncompressed or infinity encoding of p, as specified in SEC 1,
  * Version 2.0, Section 2.3.3, and returns its length. Note that the encoding
  * of the point at infinity is shorter than all other encodings. */
-static Int p224_point_bytes(const NistecP224Point *p, uint8_t *out) {
+CRYPTO_FIPS_TEXT static Int p224_point_bytes(const NistecP224Point *p, uint8_t *out) {
     /* The SEC 1 representation of the point at infinity is a single zero byte,
      * and only infinity has z = 0. */
     if (p224_is_zero(&p->z) == 1) {
@@ -486,7 +499,8 @@ static Int p224_point_bytes(const NistecP224Point *p, uint8_t *out) {
 /* Writes the encoding of the x-coordinate of p, as specified in SEC 1, Version
  * 2.0, Section 2.3.5, or returns NULL and an error if p is the point at
  * infinity. */
-static uint8_t *p224_point_bytes_x(const NistecP224Point *p, uint8_t *out, Error *err) {
+CRYPTO_FIPS_TEXT static uint8_t *p224_point_bytes_x(const NistecP224Point *p,
+                                                    uint8_t *out, Error *err) {
     if (p224_is_zero(&p->z) == 1) {
         BURROW_OUT(err, errors_new(error_allocator(),
                                    BURROW_S("P224 point is the point at infinity")));
@@ -504,7 +518,8 @@ static uint8_t *p224_point_bytes_x(const NistecP224Point *p, uint8_t *out, Error
 /* Writes the compressed or infinity encoding of p, as specified in SEC 1,
  * Version 2.0, Section 2.3.3, and returns its length. Note that the encoding
  * of the point at infinity is shorter than all other encodings. */
-static Int p224_point_bytes_compressed(const NistecP224Point *p, uint8_t *out) {
+CRYPTO_FIPS_TEXT static Int p224_point_bytes_compressed(const NistecP224Point *p,
+                                                        uint8_t *out) {
     if (p224_is_zero(&p->z) == 1) {
         out[0] = 0;
         return 1;
@@ -525,8 +540,9 @@ static Int p224_point_bytes_compressed(const NistecP224Point *p, uint8_t *out) {
 }
 
 /* Sets q = p1 + p2, and returns q. The points may overlap. */
-static NistecP224Point *p224_point_add(NistecP224Point *q, const NistecP224Point *p1,
-                                       const NistecP224Point *p2) {
+CRYPTO_FIPS_TEXT static NistecP224Point *p224_point_add(NistecP224Point *q,
+                                                        const NistecP224Point *p1,
+                                                        const NistecP224Point *p2) {
     /* Complete addition formula for a = -3 from "Complete addition formulas for
      * prime order elliptic curves" (https://eprint.iacr.org/2015/1060), A.2. */
 
@@ -586,8 +602,8 @@ static NistecP224Point *p224_point_add(NistecP224Point *q, const NistecP224Point
 }
 
 /* Sets q = p + p, and returns q. The points may overlap. */
-static NistecP224Point *p224_point_double(NistecP224Point *q,
-                                          const NistecP224Point *p) {
+CRYPTO_FIPS_TEXT static NistecP224Point *p224_point_double(NistecP224Point *q,
+                                                           const NistecP224Point *p) {
     /* Complete addition formula for a = -3 from "Complete addition formulas for
      * prime order elliptic curves" (https://eprint.iacr.org/2015/1060), A.2. */
 
@@ -638,8 +654,10 @@ static NistecP224Point *p224_point_double(NistecP224Point *q,
 }
 
 /* Sets q to p1 if cond == 1, and to p2 if cond == 0. */
-static NistecP224Point *p224_point_select(NistecP224Point *q, const NistecP224Point *p1,
-                                          const NistecP224Point *p2, int cond) {
+CRYPTO_FIPS_TEXT static NistecP224Point *p224_point_select(NistecP224Point *q,
+                                                           const NistecP224Point *p1,
+                                                           const NistecP224Point *p2,
+                                                           int cond) {
     p224_select(&q->x, &p1->x, &p2->x, cond);
     p224_select(&q->y, &p1->y, &p2->y, cond);
     p224_select(&q->z, &p1->z, &p2->z, cond);
@@ -657,7 +675,8 @@ typedef struct P224Table {
 /* Selects the n-th multiple of the table base point into p. It works in
  * constant time by iterating over every entry of the table. n must be in
  * [0, 15]. */
-static void p224_table_select(const P224Table *table, NistecP224Point *p, uint8_t n) {
+CRYPTO_FIPS_TEXT static void p224_table_select(const P224Table *table,
+                                               NistecP224Point *p, uint8_t n) {
     if (n >= 16)
         panic_str(BURROW_S(
             "nistec: internal error: p224Table called with out-of-bounds value"));
@@ -669,9 +688,9 @@ static void p224_table_select(const P224Table *table, NistecP224Point *p, uint8_
 }
 
 /* Sets p = scalar * q, and returns p. */
-static NistecP224Point *p224_point_scalar_mult(NistecP224Point *p,
-                                               const NistecP224Point *q, Slice scalar,
-                                               Error *err) {
+CRYPTO_FIPS_TEXT static NistecP224Point *
+p224_point_scalar_mult(NistecP224Point *p, const NistecP224Point *q, Slice scalar,
+                       Error *err) {
     (void)err;
     const uint8_t *s = scalar.p;
 
@@ -721,9 +740,9 @@ static NistecP224Point *p224_point_scalar_mult(NistecP224Point *p,
 static P224Table p224_generator_table[p224_element_length * 2];
 static SyncOnce p224_generator_table_once;
 
-static void p224_generator_table_init(void *env) {
+CRYPTO_FIPS_TEXT static void p224_generator_table_init(void *env) {
     (void)env;
-    NistecP224Point base;
+    NistecP224Point base = {0};
     p224_point_set_generator(&base);
     for (int i = 0; i < p224_element_length * 2; i++) {
         p224_generator_table[i].p[0] = base;
@@ -738,8 +757,8 @@ static void p224_generator_table_init(void *env) {
 }
 
 /* Sets p = scalar * B, where B is the canonical generator, and returns p. */
-static NistecP224Point *p224_point_scalar_base_mult(NistecP224Point *p, Slice scalar,
-                                                    Error *err) {
+CRYPTO_FIPS_TEXT static NistecP224Point *
+p224_point_scalar_base_mult(NistecP224Point *p, Slice scalar, Error *err) {
     if (scalar.len != p224_element_length) {
         BURROW_OUT(err,
                    errors_new(error_allocator(), BURROW_S("invalid scalar length")));
@@ -776,54 +795,59 @@ static NistecP224Point *p224_point_scalar_base_mult(NistecP224Point *p, Slice sc
 
 /* ---------------------------------------------------------------- curve */
 
-static NistecPoint *p224_v_point_new(NistecPoint *p) {
+CRYPTO_FIPS_TEXT static NistecPoint *p224_v_point_new(NistecPoint *p) {
     p224_point_new(&p->p224);
     return p;
 }
 
-static NistecPoint *p224_v_set_generator(NistecPoint *p) {
+CRYPTO_FIPS_TEXT static NistecPoint *p224_v_set_generator(NistecPoint *p) {
     p224_point_set_generator(&p->p224);
     return p;
 }
 
-static NistecPoint *p224_v_set(NistecPoint *p, const NistecPoint *q) {
+CRYPTO_FIPS_TEXT static NistecPoint *p224_v_set(NistecPoint *p, const NistecPoint *q) {
     p->p224 = q->p224;
     return p;
 }
 
-static NistecPoint *p224_v_set_bytes(NistecPoint *p, Slice b, Error *err) {
+CRYPTO_FIPS_TEXT static NistecPoint *p224_v_set_bytes(NistecPoint *p, Slice b,
+                                                      Error *err) {
     return p224_point_set_bytes(&p->p224, b, err) == NULL ? NULL : p;
 }
 
-static Int p224_v_bytes(const NistecPoint *p, uint8_t *out) {
+CRYPTO_FIPS_TEXT static Int p224_v_bytes(const NistecPoint *p, uint8_t *out) {
     return p224_point_bytes(&p->p224, out);
 }
 
-static uint8_t *p224_v_bytes_x(const NistecPoint *p, uint8_t *out, Error *err) {
+CRYPTO_FIPS_TEXT static uint8_t *p224_v_bytes_x(const NistecPoint *p, uint8_t *out,
+                                                Error *err) {
     return p224_point_bytes_x(&p->p224, out, err);
 }
 
-static Int p224_v_bytes_compressed(const NistecPoint *p, uint8_t *out) {
+CRYPTO_FIPS_TEXT static Int p224_v_bytes_compressed(const NistecPoint *p,
+                                                    uint8_t *out) {
     return p224_point_bytes_compressed(&p->p224, out);
 }
 
-static NistecPoint *p224_v_add(NistecPoint *q, const NistecPoint *p1,
-                               const NistecPoint *p2) {
+CRYPTO_FIPS_TEXT static NistecPoint *p224_v_add(NistecPoint *q, const NistecPoint *p1,
+                                                const NistecPoint *p2) {
     p224_point_add(&q->p224, &p1->p224, &p2->p224);
     return q;
 }
 
-static NistecPoint *p224_v_double(NistecPoint *q, const NistecPoint *p) {
+CRYPTO_FIPS_TEXT static NistecPoint *p224_v_double(NistecPoint *q,
+                                                   const NistecPoint *p) {
     p224_point_double(&q->p224, &p->p224);
     return q;
 }
 
-static NistecPoint *p224_v_scalar_mult(NistecPoint *p, const NistecPoint *q,
-                                       Slice scalar, Error *err) {
+CRYPTO_FIPS_TEXT static NistecPoint *
+p224_v_scalar_mult(NistecPoint *p, const NistecPoint *q, Slice scalar, Error *err) {
     return p224_point_scalar_mult(&p->p224, &q->p224, scalar, err) == NULL ? NULL : p;
 }
 
-static NistecPoint *p224_v_scalar_base_mult(NistecPoint *p, Slice scalar, Error *err) {
+CRYPTO_FIPS_TEXT static NistecPoint *p224_v_scalar_base_mult(NistecPoint *p,
+                                                             Slice scalar, Error *err) {
     return p224_point_scalar_base_mult(&p->p224, scalar, err) == NULL ? NULL : p;
 }
 

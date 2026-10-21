@@ -22,6 +22,7 @@
 #include "burrow/panic.h"
 #include "burrow/slice.h"
 
+#include "fips140_module.h"
 #include "tls_internal.h"
 
 #include <stdbool.h>
@@ -29,7 +30,7 @@
 #include <string.h>
 
 /* A copy of s in a, nil when s is nil or a is out of memory. */
-static Slice tls13_keep(Alloc *a, Slice s) {
+CRYPTO_FIPS_TEXT static Slice tls13_keep(Alloc *a, Slice s) {
     if (s.p == NULL)
         return slice_nil(TYPE_BYTE);
     Slice out = slice_make(a, TYPE_BYTE, s.len, s.len);
@@ -41,8 +42,9 @@ static Slice tls13_keep(Alloc *a, Slice s) {
 
 /* ExpandLabel into scratch, which the callers here use for what they throw
  * away. */
-static Slice tls13_expand_label(Alloc *scratch, HashNewFunc h, Slice secret, Str label,
-                                Slice context, Int length) {
+CRYPTO_FIPS_TEXT static Slice tls13_expand_label(Alloc *scratch, HashNewFunc h,
+                                                 Slice secret, Str label, Slice context,
+                                                 Int length) {
     static const char prefix[] = "tls13 ";
     Int pl = (Int)sizeof prefix - 1;
     if (pl + label.len > 255 || context.len > 255) {
@@ -86,8 +88,9 @@ static Slice tls13_expand_label(Alloc *scratch, HashNewFunc h, Slice secret, Str
     return out;
 }
 
-Slice burrow__tls13_expand_label(Alloc *a, HashNewFunc h, Slice secret, Str label,
-                                 Slice context, Int length) {
+CRYPTO_FIPS_TEXT Slice burrow__tls13_expand_label(Alloc *a, HashNewFunc h, Slice secret,
+                                                  Str label, Slice context,
+                                                  Int length) {
     Arena scratch;
     arena_init(&scratch, NULL, 0);
     Slice out = tls13_keep(a, tls13_expand_label(arena_allocator(&scratch), h, secret,
@@ -97,8 +100,8 @@ Slice burrow__tls13_expand_label(Alloc *a, HashNewFunc h, Slice secret, Str labe
 }
 
 /* extract, into scratch. A nil new_secret is zeros as long as the hash. */
-static Slice tls13_extract(Alloc *scratch, HashNewFunc h, Slice new_secret,
-                           Slice current_secret) {
+CRYPTO_FIPS_TEXT static Slice tls13_extract(Alloc *scratch, HashNewFunc h,
+                                            Slice new_secret, Slice current_secret) {
     if (slice_is_nil(new_secret)) {
         Hash probe = h(scratch);
         if (probe.vt == NULL)
@@ -116,8 +119,9 @@ static Slice tls13_extract(Alloc *scratch, HashNewFunc h, Slice new_secret,
 }
 
 /* deriveSecret, into scratch. A nil transcript is a fresh hash. */
-static Slice tls13_derive_secret(Alloc *scratch, HashNewFunc h, Slice secret, Str label,
-                                 Hash transcript) {
+CRYPTO_FIPS_TEXT static Slice tls13_derive_secret(Alloc *scratch, HashNewFunc h,
+                                                  Slice secret, Str label,
+                                                  Hash transcript) {
     if (transcript.vt == NULL) {
         transcript = h(scratch);
         if (transcript.vt == NULL)
@@ -130,8 +134,8 @@ static Slice tls13_derive_secret(Alloc *scratch, HashNewFunc h, Slice secret, St
 }
 
 /* deriveSecret, into a. */
-static Slice tls13_derive(Alloc *a, HashNewFunc h, Slice secret, Str label,
-                          Hash transcript) {
+CRYPTO_FIPS_TEXT static Slice tls13_derive(Alloc *a, HashNewFunc h, Slice secret,
+                                           Str label, Hash transcript) {
     Arena scratch;
     arena_init(&scratch, NULL, 0);
     Slice out = tls13_keep(a, tls13_derive_secret(arena_allocator(&scratch), h, secret,
@@ -141,7 +145,8 @@ static Slice tls13_derive(Alloc *a, HashNewFunc h, Slice secret, Str label,
 }
 
 /* extract(new_secret, deriveSecret(secret, "derived", nil)), into a. */
-static Slice tls13_next_stage(Alloc *a, HashNewFunc h, Slice secret, Slice new_secret) {
+CRYPTO_FIPS_TEXT static Slice tls13_next_stage(Alloc *a, HashNewFunc h, Slice secret,
+                                               Slice new_secret) {
     Arena scratch;
     arena_init(&scratch, NULL, 0);
     Alloc *s = arena_allocator(&scratch);
@@ -154,7 +159,9 @@ static Slice tls13_next_stage(Alloc *a, HashNewFunc h, Slice secret, Slice new_s
     return out;
 }
 
-Tls13EarlySecret burrow__tls13_new_early_secret(Alloc *a, HashNewFunc h, Slice psk) {
+CRYPTO_FIPS_TEXT Tls13EarlySecret burrow__tls13_new_early_secret(Alloc *a,
+                                                                 HashNewFunc h,
+                                                                 Slice psk) {
     Arena scratch;
     arena_init(&scratch, NULL, 0);
     Tls13EarlySecret s = {
@@ -166,21 +173,19 @@ Tls13EarlySecret burrow__tls13_new_early_secret(Alloc *a, HashNewFunc h, Slice p
     return s;
 }
 
-Slice burrow__tls13_early_secret_resumption_binder_key(const Tls13EarlySecret *s,
-                                                       Alloc *a) {
+CRYPTO_FIPS_TEXT Slice
+burrow__tls13_early_secret_resumption_binder_key(const Tls13EarlySecret *s, Alloc *a) {
     return tls13_derive(a, s->hash, s->secret, BURROW_S("res binder"),
                         (Hash){NULL, NULL});
 }
 
-Slice burrow__tls13_early_secret_client_early_traffic_secret(const Tls13EarlySecret *s,
-                                                             Alloc *a,
-                                                             Hash transcript) {
+CRYPTO_FIPS_TEXT Slice burrow__tls13_early_secret_client_early_traffic_secret(
+    const Tls13EarlySecret *s, Alloc *a, Hash transcript) {
     return tls13_derive(a, s->hash, s->secret, BURROW_S("c e traffic"), transcript);
 }
 
-Tls13HandshakeSecret
-burrow__tls13_early_secret_handshake_secret(const Tls13EarlySecret *s, Alloc *a,
-                                            Slice shared_secret) {
+CRYPTO_FIPS_TEXT Tls13HandshakeSecret burrow__tls13_early_secret_handshake_secret(
+    const Tls13EarlySecret *s, Alloc *a, Slice shared_secret) {
     Tls13HandshakeSecret hs = {
         tls13_next_stage(a, s->hash, s->secret, shared_secret),
         s->hash,
@@ -188,7 +193,7 @@ burrow__tls13_early_secret_handshake_secret(const Tls13EarlySecret *s, Alloc *a,
     return hs;
 }
 
-Tls13ExporterMasterSecret
+CRYPTO_FIPS_TEXT Tls13ExporterMasterSecret
 burrow__tls13_early_secret_early_exporter_master_secret(const Tls13EarlySecret *s,
                                                         Alloc *a, Hash transcript) {
     Tls13ExporterMasterSecret e = {
@@ -198,17 +203,17 @@ burrow__tls13_early_secret_early_exporter_master_secret(const Tls13EarlySecret *
     return e;
 }
 
-Slice burrow__tls13_handshake_secret_client_handshake_traffic_secret(
+CRYPTO_FIPS_TEXT Slice burrow__tls13_handshake_secret_client_handshake_traffic_secret(
     const Tls13HandshakeSecret *s, Alloc *a, Hash transcript) {
     return tls13_derive(a, s->hash, s->secret, BURROW_S("c hs traffic"), transcript);
 }
 
-Slice burrow__tls13_handshake_secret_server_handshake_traffic_secret(
+CRYPTO_FIPS_TEXT Slice burrow__tls13_handshake_secret_server_handshake_traffic_secret(
     const Tls13HandshakeSecret *s, Alloc *a, Hash transcript) {
     return tls13_derive(a, s->hash, s->secret, BURROW_S("s hs traffic"), transcript);
 }
 
-Tls13MasterSecret
+CRYPTO_FIPS_TEXT Tls13MasterSecret
 burrow__tls13_handshake_secret_master_secret(const Tls13HandshakeSecret *s, Alloc *a) {
     Tls13MasterSecret ms = {
         tls13_next_stage(a, s->hash, s->secret, slice_nil(TYPE_BYTE)),
@@ -217,22 +222,22 @@ burrow__tls13_handshake_secret_master_secret(const Tls13HandshakeSecret *s, Allo
     return ms;
 }
 
-Slice burrow__tls13_master_secret_client_application_traffic_secret(
+CRYPTO_FIPS_TEXT Slice burrow__tls13_master_secret_client_application_traffic_secret(
     const Tls13MasterSecret *s, Alloc *a, Hash transcript) {
     return tls13_derive(a, s->hash, s->secret, BURROW_S("c ap traffic"), transcript);
 }
 
-Slice burrow__tls13_master_secret_server_application_traffic_secret(
+CRYPTO_FIPS_TEXT Slice burrow__tls13_master_secret_server_application_traffic_secret(
     const Tls13MasterSecret *s, Alloc *a, Hash transcript) {
     return tls13_derive(a, s->hash, s->secret, BURROW_S("s ap traffic"), transcript);
 }
 
-Slice burrow__tls13_master_secret_resumption_master_secret(const Tls13MasterSecret *s,
-                                                           Alloc *a, Hash transcript) {
+CRYPTO_FIPS_TEXT Slice burrow__tls13_master_secret_resumption_master_secret(
+    const Tls13MasterSecret *s, Alloc *a, Hash transcript) {
     return tls13_derive(a, s->hash, s->secret, BURROW_S("res master"), transcript);
 }
 
-Tls13ExporterMasterSecret
+CRYPTO_FIPS_TEXT Tls13ExporterMasterSecret
 burrow__tls13_master_secret_exporter_master_secret(const Tls13MasterSecret *s, Alloc *a,
                                                    Hash transcript) {
     Tls13ExporterMasterSecret e = {
@@ -242,9 +247,9 @@ burrow__tls13_master_secret_exporter_master_secret(const Tls13MasterSecret *s, A
     return e;
 }
 
-Slice burrow__tls13_exporter_master_secret_exporter(const Tls13ExporterMasterSecret *s,
-                                                    Alloc *a, Str label, Slice context,
-                                                    Int length) {
+CRYPTO_FIPS_TEXT Slice burrow__tls13_exporter_master_secret_exporter(
+    const Tls13ExporterMasterSecret *s, Alloc *a, Str label, Slice context,
+    Int length) {
     Arena scratch;
     arena_init(&scratch, NULL, 0);
     Alloc *sc = arena_allocator(&scratch);
@@ -266,15 +271,17 @@ Slice burrow__tls13_exporter_master_secret_exporter(const Tls13ExporterMasterSec
 
 /* ------------------------------------------------------- key_schedule.go */
 
-Slice burrow__tls13_next_traffic_secret(const TlsSuiteTLS13 *c, Alloc *a,
-                                        Slice traffic_secret) {
+CRYPTO_FIPS_TEXT Slice burrow__tls13_next_traffic_secret(const TlsSuiteTLS13 *c,
+                                                         Alloc *a,
+                                                         Slice traffic_secret) {
     HashNewFunc h = burrow__tls_suite13_hash_new(c);
     return burrow__tls13_expand_label(a, h, traffic_secret, BURROW_S("traffic upd"),
                                       slice_nil(TYPE_BYTE), crypto_hash_size(c->hash));
 }
 
-bool burrow__tls13_traffic_key(const TlsSuiteTLS13 *c, Alloc *a, Slice traffic_secret,
-                               Slice *key, Slice *iv) {
+CRYPTO_FIPS_TEXT bool burrow__tls13_traffic_key(const TlsSuiteTLS13 *c, Alloc *a,
+                                                Slice traffic_secret, Slice *key,
+                                                Slice *iv) {
     HashNewFunc h = burrow__tls_suite13_hash_new(c);
     *key = burrow__tls13_expand_label(a, h, traffic_secret, BURROW_S("key"),
                                       slice_nil(TYPE_BYTE), c->key_len);
@@ -283,8 +290,8 @@ bool burrow__tls13_traffic_key(const TlsSuiteTLS13 *c, Alloc *a, Slice traffic_s
     return key->p != NULL && iv->p != NULL;
 }
 
-Slice burrow__tls13_finished_hash(const TlsSuiteTLS13 *c, Alloc *a, Slice base_key,
-                                  Hash transcript) {
+CRYPTO_FIPS_TEXT Slice burrow__tls13_finished_hash(const TlsSuiteTLS13 *c, Alloc *a,
+                                                   Slice base_key, Hash transcript) {
     HashNewFunc h = burrow__tls_suite13_hash_new(c);
     Arena scratch;
     arena_init(&scratch, NULL, 0);
@@ -306,8 +313,8 @@ Slice burrow__tls13_finished_hash(const TlsSuiteTLS13 *c, Alloc *a, Slice base_k
     return out;
 }
 
-static Slice tls13_ekm_call(void *env, Alloc *a, Str label, Slice context, Int length,
-                            Error *err) {
+CRYPTO_FIPS_TEXT static Slice tls13_ekm_call(void *env, Alloc *a, Str label,
+                                             Slice context, Int length, Error *err) {
     Slice out = burrow__tls13_exporter_master_secret_exporter(
         (const Tls13ExporterMasterSecret *)env, a, label, context, length);
     if (out.p == NULL && length > 0)
@@ -315,9 +322,8 @@ static Slice tls13_ekm_call(void *env, Alloc *a, Str label, Slice context, Int l
     return out;
 }
 
-TlsEkmFunc burrow__tls13_export_keying_material(const TlsSuiteTLS13 *c, Alloc *a,
-                                                const Tls13MasterSecret *s,
-                                                Hash transcript) {
+CRYPTO_FIPS_TEXT TlsEkmFunc burrow__tls13_export_keying_material(
+    const TlsSuiteTLS13 *c, Alloc *a, const Tls13MasterSecret *s, Hash transcript) {
     (void)c;
     TlsEkmFunc f = {0};
     Tls13ExporterMasterSecret *exp_master_secret =
@@ -392,7 +398,8 @@ static const TlsKeyExchange tke_exchanges[] = {
     {0, 0, 0, {0, NULL}, TKE_MLKEM1024, TLS_MLKEM1024, true},
 };
 
-const TlsKeyExchange *burrow__tls_key_exchange_for_curve_id(TlsCurveID id, Error *err) {
+CRYPTO_FIPS_TEXT const TlsKeyExchange *
+burrow__tls_key_exchange_for_curve_id(TlsCurveID id, Error *err) {
     for (size_t i = 0; i < sizeof(tke_exchanges) / sizeof(tke_exchanges[0]); i++) {
         if (tke_exchanges[i].id == id)
             return &tke_exchanges[i];
@@ -401,7 +408,8 @@ const TlsKeyExchange *burrow__tls_key_exchange_for_curve_id(TlsCurveID id, Error
     return NULL;
 }
 
-void burrow__tls_key_share_private_keys_free(TlsKeySharePrivateKeys *k) {
+CRYPTO_FIPS_TEXT void
+burrow__tls_key_share_private_keys_free(TlsKeySharePrivateKeys *k) {
     ecdh_private_key_free(k->ecdhe);
     mlkem_decapsulation_key768_free(k->mlkem768);
     mlkem_decapsulation_key1024_free(k->mlkem1024);
@@ -409,7 +417,7 @@ void burrow__tls_key_share_private_keys_free(TlsKeySharePrivateKeys *k) {
 }
 
 /* x then y, from a, or nil when a is out of memory. */
-static Slice tke_concat(Alloc *a, Slice x, Slice y) {
+CRYPTO_FIPS_TEXT static Slice tke_concat(Alloc *a, Slice x, Slice y) {
     Slice out = slice_make(a, TYPE_BYTE, x.len + y.len, x.len + y.len);
     if (out.p == NULL)
         return out;
@@ -421,8 +429,8 @@ static Slice tke_concat(Alloc *a, Slice x, Slice y) {
 }
 
 /* mlkemGenerateKey, into priv. */
-static bool tke_mlkem_generate_key(bool k1024, Alloc *a, TlsKeySharePrivateKeys *priv,
-                                   Error *err) {
+CRYPTO_FIPS_TEXT static bool
+tke_mlkem_generate_key(bool k1024, Alloc *a, TlsKeySharePrivateKeys *priv, Error *err) {
     if (k1024) {
         priv->mlkem1024 = mlkem_generate_key1024(a, err);
         if (priv->mlkem1024 == NULL)
@@ -439,8 +447,9 @@ static bool tke_mlkem_generate_key(bool k1024, Alloc *a, TlsKeySharePrivateKeys 
 
 /* mlkemNewPublicKey and then Encapsulate: the shared key, with the ciphertext
  * in *ciphertext, both from a. */
-static Slice tke_mlkem_encapsulate(bool k1024, Alloc *a, Slice public_key,
-                                   Slice *ciphertext, Error *err) {
+CRYPTO_FIPS_TEXT static Slice tke_mlkem_encapsulate(bool k1024, Alloc *a,
+                                                    Slice public_key, Slice *ciphertext,
+                                                    Error *err) {
     Slice shared_key = slice_nil(TYPE_BYTE);
     if (k1024) {
         MlkemEncapsulationKey1024 *ek =
@@ -462,9 +471,10 @@ static Slice tke_mlkem_encapsulate(bool k1024, Alloc *a, Slice public_key,
     return shared_key;
 }
 
-static bool tke_ecdh_key_shares(const TkeEcdh *ke, Alloc *a, IoReader rand,
-                                TlsKeySharePrivateKeys *priv, TlsKeyShare *share,
-                                Error *err) {
+CRYPTO_FIPS_TEXT static bool tke_ecdh_key_shares(const TkeEcdh *ke, Alloc *a,
+                                                 IoReader rand,
+                                                 TlsKeySharePrivateKeys *priv,
+                                                 TlsKeyShare *share, Error *err) {
     EcdhPrivateKey *key = ecdh_curve_generate_key(ke->curve(), a, rand, err);
     if (key == NULL)
         return false;
@@ -479,9 +489,9 @@ static bool tke_ecdh_key_shares(const TkeEcdh *ke, Alloc *a, IoReader rand,
     return true;
 }
 
-static Slice tke_ecdh_server_shared_secret(const TkeEcdh *ke, Alloc *a, IoReader rand,
-                                           Slice client_key_share, TlsKeyShare *ks,
-                                           Error *err) {
+CRYPTO_FIPS_TEXT static Slice
+tke_ecdh_server_shared_secret(const TkeEcdh *ke, Alloc *a, IoReader rand,
+                              Slice client_key_share, TlsKeyShare *ks, Error *err) {
     Slice shared_key = slice_nil(TYPE_BYTE);
     EcdhPrivateKey *key = ecdh_curve_generate_key(ke->curve(), a, rand, err);
     if (key == NULL)
@@ -505,9 +515,10 @@ static Slice tke_ecdh_server_shared_secret(const TkeEcdh *ke, Alloc *a, IoReader
     return shared_key;
 }
 
-static Slice tke_ecdh_client_shared_secret(const TkeEcdh *ke, Alloc *a,
-                                           const TlsKeySharePrivateKeys *priv,
-                                           Slice server_key_share, Error *err) {
+CRYPTO_FIPS_TEXT static Slice
+tke_ecdh_client_shared_secret(const TkeEcdh *ke, Alloc *a,
+                              const TlsKeySharePrivateKeys *priv,
+                              Slice server_key_share, Error *err) {
     EcdhPublicKey *peer_key =
         ecdh_curve_new_public_key(ke->curve(), a, server_key_share, err);
     if (peer_key == NULL)
@@ -519,11 +530,10 @@ static Slice tke_ecdh_client_shared_secret(const TkeEcdh *ke, Alloc *a,
 
 /* The rest of hybridKeyExchange.serverSharedSecret once the share is split, with
  * the halves in s and what it gives in a. */
-static Slice tke_hybrid_server_shared_secret(const TlsKeyExchange *ke, Alloc *a,
-                                             Alloc *s, IoReader rand,
-                                             Slice ecdh_share_data,
-                                             Slice mlkem_share_data, TlsKeyShare *ks,
-                                             Error *err) {
+CRYPTO_FIPS_TEXT static Slice
+tke_hybrid_server_shared_secret(const TlsKeyExchange *ke, Alloc *a, Alloc *s,
+                                IoReader rand, Slice ecdh_share_data,
+                                Slice mlkem_share_data, TlsKeyShare *ks, Error *err) {
     TlsKeyShare ecdh_ks = {0};
     /* Go runs this under fips140.WithoutEnforcement, as keyShares does. */
     Slice ecdh_shared_secret = tke_ecdh_server_shared_secret(
@@ -552,11 +562,9 @@ static Slice tke_hybrid_server_shared_secret(const TlsKeyExchange *ke, Alloc *a,
 }
 
 /* The same for hybridKeyExchange.clientSharedSecret. */
-static Slice tke_hybrid_client_shared_secret(const TlsKeyExchange *ke, Alloc *a,
-                                             Alloc *s,
-                                             const TlsKeySharePrivateKeys *priv,
-                                             Slice ecdh_share_data,
-                                             Slice mlkem_share_data, Error *err) {
+CRYPTO_FIPS_TEXT static Slice tke_hybrid_client_shared_secret(
+    const TlsKeyExchange *ke, Alloc *a, Alloc *s, const TlsKeySharePrivateKeys *priv,
+    Slice ecdh_share_data, Slice mlkem_share_data, Error *err) {
     /* Go runs this under fips140.WithoutEnforcement, as keyShares does. */
     Slice ecdh_shared_secret =
         tke_ecdh_client_shared_secret(&ke->ecdh, s, priv, ecdh_share_data, err);
@@ -576,9 +584,10 @@ static Slice tke_hybrid_client_shared_secret(const TlsKeyExchange *ke, Alloc *a,
     return shared_key;
 }
 
-bool burrow__tls_key_exchange_key_shares(const TlsKeyExchange *ke, Alloc *a,
-                                         IoReader rand, TlsKeySharePrivateKeys *priv,
-                                         Slice *shares, Error *err) {
+CRYPTO_FIPS_TEXT bool burrow__tls_key_exchange_key_shares(const TlsKeyExchange *ke,
+                                                          Alloc *a, IoReader rand,
+                                                          TlsKeySharePrivateKeys *priv,
+                                                          Slice *shares, Error *err) {
     memset(priv, 0, sizeof *priv);
     Int n = ke->kind == TKE_HYBRID ? 2 : 1;
     *shares = slice_make(a, &burrow__tls_key_share_type, n, n);
@@ -634,10 +643,9 @@ bool burrow__tls_key_exchange_key_shares(const TlsKeyExchange *ke, Alloc *a,
     return false;
 }
 
-Slice burrow__tls_key_exchange_server_shared_secret(const TlsKeyExchange *ke, Alloc *a,
-                                                    IoReader rand,
-                                                    Slice client_key_share,
-                                                    TlsKeyShare *ks, Error *err) {
+CRYPTO_FIPS_TEXT Slice burrow__tls_key_exchange_server_shared_secret(
+    const TlsKeyExchange *ke, Alloc *a, IoReader rand, Slice client_key_share,
+    TlsKeyShare *ks, Error *err) {
     if (ke->kind == TKE_ECDH)
         return tke_ecdh_server_shared_secret(&ke->ecdh, a, rand, client_key_share, ks,
                                              err);
@@ -675,10 +683,9 @@ Slice burrow__tls_key_exchange_server_shared_secret(const TlsKeyExchange *ke, Al
     return shared_key;
 }
 
-Slice burrow__tls_key_exchange_client_shared_secret(const TlsKeyExchange *ke, Alloc *a,
-                                                    const TlsKeySharePrivateKeys *priv,
-                                                    Slice server_key_share,
-                                                    Error *err) {
+CRYPTO_FIPS_TEXT Slice burrow__tls_key_exchange_client_shared_secret(
+    const TlsKeyExchange *ke, Alloc *a, const TlsKeySharePrivateKeys *priv,
+    Slice server_key_share, Error *err) {
     if (ke->kind == TKE_ECDH)
         return tke_ecdh_client_shared_secret(&ke->ecdh, a, priv, server_key_share, err);
 

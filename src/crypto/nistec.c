@@ -14,9 +14,12 @@
 
 #include "burrow/core.h"
 
+#include "fips140_module.h"
+
 #include <stdint.h>
 
-int burrow__nistec_less_or_eq_bytes(const uint8_t *x, const uint8_t *y, Int n) {
+CRYPTO_FIPS_TEXT int burrow__nistec_less_or_eq_bytes(const uint8_t *x, const uint8_t *y,
+                                                     Int n) {
     /* A constant time subtraction chain y - x, a byte at a time from the least
      * significant end. If there is no borrow at the end, x <= y. Go does this
      * 64 bits at a time, which gives the same borrow. */
@@ -28,7 +31,8 @@ int burrow__nistec_less_or_eq_bytes(const uint8_t *x, const uint8_t *y, Int n) {
     return (int)(b ^ 1);
 }
 
-int burrow__nistec_equal_bytes(const uint8_t *x, const uint8_t *y, Int n) {
+CRYPTO_FIPS_TEXT int burrow__nistec_equal_bytes(const uint8_t *x, const uint8_t *y,
+                                                Int n) {
     uint32_t v = 0;
     for (Int i = 0; i < n; i++)
         v |= (uint32_t)(x[i] ^ y[i]);

@@ -19,25 +19,27 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "fips140_module.h"
+
 #include <stdint.h>
 
 #define FE_MASK_LOW_51_BITS ((UINT64_C(1) << 51) - 1)
 
-static const Edwards25519Element fe_zero_value = {0, 0, 0, 0, 0};
-static const Edwards25519Element fe_one_value = {1, 0, 0, 0, 0};
+CRYPTO_FIPS_RODATA static const Edwards25519Element fe_zero_value = {0, 0, 0, 0, 0};
+CRYPTO_FIPS_RODATA static const Edwards25519Element fe_one_value = {1, 0, 0, 0, 0};
 
 /* sqrt(-1), 2^((p-1)/4). */
-const Edwards25519Element burrow__fe_sqrt_m1 = {1718705420411056, 234908883556509,
-                                                2233514472574048, 2117202627021982,
-                                                765476049583133};
+CRYPTO_FIPS_RODATA const Edwards25519Element burrow__fe_sqrt_m1 = {
+    1718705420411056, 234908883556509, 2233514472574048, 2117202627021982,
+    765476049583133};
 
-static uint64_t fe_le64(const uint8_t *p) {
+CRYPTO_FIPS_TEXT static uint64_t fe_le64(const uint8_t *p) {
     return (uint64_t)p[0] | (uint64_t)p[1] << 8 | (uint64_t)p[2] << 16 |
            (uint64_t)p[3] << 24 | (uint64_t)p[4] << 32 | (uint64_t)p[5] << 40 |
            (uint64_t)p[6] << 48 | (uint64_t)p[7] << 56;
 }
 
-static void fe_put_le64(uint8_t *p, uint64_t v) {
+CRYPTO_FIPS_TEXT static void fe_put_le64(uint8_t *p, uint64_t v) {
     for (int i = 0; i < 8; i++)
         p[i] = (uint8_t)(v >> (8 * i));
 }
@@ -46,13 +48,13 @@ static void fe_put_le64(uint8_t *p, uint64_t v) {
 
 typedef Edwards25519Uint128 FeUint128;
 
-static FeUint128 fe_mul(uint64_t a, uint64_t b) {
+CRYPTO_FIPS_TEXT static FeUint128 fe_mul(uint64_t a, uint64_t b) {
     FeUint128 r;
     r.hi = bits_mul64(a, b, &r.lo);
     return r;
 }
 
-static FeUint128 fe_add_mul(FeUint128 v, uint64_t a, uint64_t b) {
+CRYPTO_FIPS_TEXT static FeUint128 fe_add_mul(FeUint128 v, uint64_t a, uint64_t b) {
     uint64_t lo, c;
     uint64_t hi = bits_mul64(a, b, &lo);
     lo = bits_add64(lo, v.lo, 0, &c);
@@ -60,35 +62,36 @@ static FeUint128 fe_add_mul(FeUint128 v, uint64_t a, uint64_t b) {
     return (FeUint128){lo, hi};
 }
 
-Edwards25519Uint128 burrow__fe_mul64(uint64_t a, uint64_t b) {
+CRYPTO_FIPS_TEXT Edwards25519Uint128 burrow__fe_mul64(uint64_t a, uint64_t b) {
     return fe_mul(a, b);
 }
 
-Edwards25519Uint128 burrow__fe_add_mul64(Edwards25519Uint128 v, uint64_t a,
-                                         uint64_t b) {
+CRYPTO_FIPS_TEXT Edwards25519Uint128 burrow__fe_add_mul64(Edwards25519Uint128 v,
+                                                          uint64_t a, uint64_t b) {
     return fe_add_mul(v, a, b);
 }
 
 /* v * 19, as v + (v + v<<3)<<1, which is what Go writes so that it is a shift
  * and two adds on machines with a slow multiply. */
-static uint64_t fe_mul19(uint64_t v) {
+CRYPTO_FIPS_TEXT static uint64_t fe_mul19(uint64_t v) {
     return v + ((v + (v << 3)) << 1);
 }
 
-static FeUint128 fe_add_mul19(FeUint128 v, uint64_t a, uint64_t b) {
+CRYPTO_FIPS_TEXT static FeUint128 fe_add_mul19(FeUint128 v, uint64_t a, uint64_t b) {
     return fe_add_mul(v, fe_mul19(a), b);
 }
 
-static FeUint128 fe_add_mul38(FeUint128 v, uint64_t a, uint64_t b) {
+CRYPTO_FIPS_TEXT static FeUint128 fe_add_mul38(FeUint128 v, uint64_t a, uint64_t b) {
     return fe_add_mul(v, fe_mul19(a), b * 2);
 }
 
-static uint64_t fe_shift_right_by_51(FeUint128 a) {
+CRYPTO_FIPS_TEXT static uint64_t fe_shift_right_by_51(FeUint128 a) {
     return (a.hi << (64 - 51)) | (a.lo >> 51);
 }
 
-void burrow__fe_mul_generic(Edwards25519Element *v, const Edwards25519Element *a,
-                            const Edwards25519Element *b) {
+CRYPTO_FIPS_TEXT void burrow__fe_mul_generic(Edwards25519Element *v,
+                                             const Edwards25519Element *a,
+                                             const Edwards25519Element *b) {
     uint64_t a0 = a->l0, a1 = a->l1, a2 = a->l2, a3 = a->l3, a4 = a->l4;
     uint64_t b0 = b->l0, b1 = b->l1, b2 = b->l2, b3 = b->l3, b4 = b->l4;
 
@@ -152,7 +155,7 @@ void burrow__fe_mul_generic(Edwards25519Element *v, const Edwards25519Element *a
 /* One squaring of the five limbs in l, in place. Squaring needs only half the
  * products a multiply does, since l_i * l_j and l_j * l_i are the same, so
  * those are doubled instead, which is where the 38s come from. */
-static void fe_square_limbs(uint64_t l[5]) {
+CRYPTO_FIPS_TEXT static void fe_square_limbs(uint64_t l[5]) {
     uint64_t l0 = l[0], l1 = l[1], l2 = l[2], l3 = l[3], l4 = l[4];
 
     FeUint128 r0 = fe_mul(l0, l0);
@@ -194,7 +197,8 @@ static void fe_square_limbs(uint64_t l[5]) {
     l[4] = (rr4 & FE_MASK_LOW_51_BITS) + (rr3 >> 51);
 }
 
-void burrow__fe_square_generic(Edwards25519Element *v, const Edwards25519Element *a) {
+CRYPTO_FIPS_TEXT void burrow__fe_square_generic(Edwards25519Element *v,
+                                                const Edwards25519Element *a) {
     uint64_t l[5] = {a->l0, a->l1, a->l2, a->l3, a->l4};
     fe_square_limbs(l);
     v->l0 = l[0];
@@ -206,7 +210,8 @@ void burrow__fe_square_generic(Edwards25519Element *v, const Edwards25519Element
 
 /* Brings the limbs back below 2^52 by carrying each one's top bits into the
  * next, and the top limb's into the bottom times 19. */
-Edwards25519Element *burrow__fe_carry_propagate(Edwards25519Element *v) {
+CRYPTO_FIPS_TEXT Edwards25519Element *
+burrow__fe_carry_propagate(Edwards25519Element *v) {
     uint64_t l0 = v->l0;
     v->l0 = (v->l0 & FE_MASK_LOW_51_BITS) + fe_mul19(v->l4 >> 51);
     v->l4 = (v->l4 & FE_MASK_LOW_51_BITS) + (v->l3 >> 51);
@@ -218,17 +223,17 @@ Edwards25519Element *burrow__fe_carry_propagate(Edwards25519Element *v) {
 
 /* ------------------------------------------------------------------- fe */
 
-Edwards25519Element *burrow__fe_zero(Edwards25519Element *v) {
+CRYPTO_FIPS_TEXT Edwards25519Element *burrow__fe_zero(Edwards25519Element *v) {
     *v = fe_zero_value;
     return v;
 }
 
-Edwards25519Element *burrow__fe_one(Edwards25519Element *v) {
+CRYPTO_FIPS_TEXT Edwards25519Element *burrow__fe_one(Edwards25519Element *v) {
     *v = fe_one_value;
     return v;
 }
 
-Edwards25519Element *burrow__fe_reduce(Edwards25519Element *v) {
+CRYPTO_FIPS_TEXT Edwards25519Element *burrow__fe_reduce(Edwards25519Element *v) {
     burrow__fe_carry_propagate(v);
 
     /* After the light reduction v < 2^255 + 2^13 * 19, but it has to be below
@@ -258,9 +263,9 @@ Edwards25519Element *burrow__fe_reduce(Edwards25519Element *v) {
     return v;
 }
 
-Edwards25519Element *burrow__fe_add(Edwards25519Element *v,
-                                    const Edwards25519Element *a,
-                                    const Edwards25519Element *b) {
+CRYPTO_FIPS_TEXT Edwards25519Element *burrow__fe_add(Edwards25519Element *v,
+                                                     const Edwards25519Element *a,
+                                                     const Edwards25519Element *b) {
     v->l0 = a->l0 + b->l0;
     v->l1 = a->l1 + b->l1;
     v->l2 = a->l2 + b->l2;
@@ -269,9 +274,9 @@ Edwards25519Element *burrow__fe_add(Edwards25519Element *v,
     return burrow__fe_carry_propagate(v);
 }
 
-Edwards25519Element *burrow__fe_subtract(Edwards25519Element *v,
-                                         const Edwards25519Element *a,
-                                         const Edwards25519Element *b) {
+CRYPTO_FIPS_TEXT Edwards25519Element *
+burrow__fe_subtract(Edwards25519Element *v, const Edwards25519Element *a,
+                    const Edwards25519Element *b) {
     /* 2 * p first, so the subtraction cannot go below zero, and then b, which
      * can be up to 2^255 + 2^13 * 19. */
     v->l0 = (a->l0 + UINT64_C(0xFFFFFFFFFFFDA)) - b->l0;
@@ -282,26 +287,26 @@ Edwards25519Element *burrow__fe_subtract(Edwards25519Element *v,
     return burrow__fe_carry_propagate(v);
 }
 
-Edwards25519Element *burrow__fe_negate(Edwards25519Element *v,
-                                       const Edwards25519Element *a) {
+CRYPTO_FIPS_TEXT Edwards25519Element *burrow__fe_negate(Edwards25519Element *v,
+                                                        const Edwards25519Element *a) {
     return burrow__fe_subtract(v, &fe_zero_value, a);
 }
 
-Edwards25519Element *burrow__fe_multiply(Edwards25519Element *v,
-                                         const Edwards25519Element *x,
-                                         const Edwards25519Element *y) {
+CRYPTO_FIPS_TEXT Edwards25519Element *
+burrow__fe_multiply(Edwards25519Element *v, const Edwards25519Element *x,
+                    const Edwards25519Element *y) {
     burrow__fe_mul_generic(v, x, y);
     return v;
 }
 
-Edwards25519Element *burrow__fe_square(Edwards25519Element *v,
-                                       const Edwards25519Element *x) {
+CRYPTO_FIPS_TEXT Edwards25519Element *burrow__fe_square(Edwards25519Element *v,
+                                                        const Edwards25519Element *x) {
     burrow__fe_square_generic(v, x);
     return v;
 }
 
-Edwards25519Element *burrow__fe_square_n(Edwards25519Element *v,
-                                         const Edwards25519Element *x, int n) {
+CRYPTO_FIPS_TEXT Edwards25519Element *
+burrow__fe_square_n(Edwards25519Element *v, const Edwards25519Element *x, int n) {
     uint64_t l[5] = {x->l0, x->l1, x->l2, x->l3, x->l4};
     for (int i = 0; i < n; i++)
         fe_square_limbs(l);
@@ -313,8 +318,8 @@ Edwards25519Element *burrow__fe_square_n(Edwards25519Element *v,
     return v;
 }
 
-Edwards25519Element *burrow__fe_invert(Edwards25519Element *v,
-                                       const Edwards25519Element *z) {
+CRYPTO_FIPS_TEXT Edwards25519Element *burrow__fe_invert(Edwards25519Element *v,
+                                                        const Edwards25519Element *z) {
     /* Exponentiation by p - 2, in 254 squarings and 11 multiplications, the
      * squarings grouped for square_n. Zero comes back as zero. */
     Edwards25519Element z11, t0, t1, t2, t;
@@ -353,13 +358,14 @@ Edwards25519Element *burrow__fe_invert(Edwards25519Element *v,
     return burrow__fe_multiply(v, &t, &z11); /* 2^255 - 21 */
 }
 
-Edwards25519Element *burrow__fe_set(Edwards25519Element *v,
-                                    const Edwards25519Element *a) {
+CRYPTO_FIPS_TEXT Edwards25519Element *burrow__fe_set(Edwards25519Element *v,
+                                                     const Edwards25519Element *a) {
     *v = *a;
     return v;
 }
 
-Edwards25519Element *burrow__fe_set_bytes(Edwards25519Element *v, Slice x, Error *err) {
+CRYPTO_FIPS_TEXT Edwards25519Element *burrow__fe_set_bytes(Edwards25519Element *v,
+                                                           Slice x, Error *err) {
     if (x.len != 32) {
         BURROW_OUT(err, errors_new(error_allocator(),
                                    BURROW_S("edwards25519: invalid field element input "
@@ -384,7 +390,7 @@ Edwards25519Element *burrow__fe_set_bytes(Edwards25519Element *v, Slice x, Error
     return v;
 }
 
-void burrow__fe_bytes(const Edwards25519Element *v, uint8_t out[32]) {
+CRYPTO_FIPS_TEXT void burrow__fe_bytes(const Edwards25519Element *v, uint8_t out[32]) {
     Edwards25519Element t = *v;
     burrow__fe_reduce(&t);
 
@@ -405,7 +411,8 @@ void burrow__fe_bytes(const Edwards25519Element *v, uint8_t out[32]) {
     fe_put_le64(out + 24, u3);
 }
 
-int burrow__fe_equal(const Edwards25519Element *v, const Edwards25519Element *u) {
+CRYPTO_FIPS_TEXT int burrow__fe_equal(const Edwards25519Element *v,
+                                      const Edwards25519Element *u) {
     uint8_t sa[32], sv[32];
     burrow__fe_bytes(u, sa);
     burrow__fe_bytes(v, sv);
@@ -414,13 +421,14 @@ int burrow__fe_equal(const Edwards25519Element *v, const Edwards25519Element *u)
 }
 
 /* All ones if cond is 1, and 0 if it is 0. */
-static uint64_t fe_mask64_bits(int cond) {
+CRYPTO_FIPS_TEXT static uint64_t fe_mask64_bits(int cond) {
     return ~((uint64_t)cond - 1);
 }
 
-Edwards25519Element *burrow__fe_select(Edwards25519Element *v,
-                                       const Edwards25519Element *a,
-                                       const Edwards25519Element *b, int cond) {
+CRYPTO_FIPS_TEXT Edwards25519Element *burrow__fe_select(Edwards25519Element *v,
+                                                        const Edwards25519Element *a,
+                                                        const Edwards25519Element *b,
+                                                        int cond) {
     uint64_t m = fe_mask64_bits(cond);
     v->l0 = (m & a->l0) | (~m & b->l0);
     v->l1 = (m & a->l1) | (~m & b->l1);
@@ -430,7 +438,8 @@ Edwards25519Element *burrow__fe_select(Edwards25519Element *v,
     return v;
 }
 
-void burrow__fe_swap(Edwards25519Element *v, Edwards25519Element *u, int cond) {
+CRYPTO_FIPS_TEXT void burrow__fe_swap(Edwards25519Element *v, Edwards25519Element *u,
+                                      int cond) {
     uint64_t m = fe_mask64_bits(cond);
     uint64_t t = m & (v->l0 ^ u->l0);
     v->l0 ^= t;
@@ -449,29 +458,29 @@ void burrow__fe_swap(Edwards25519Element *v, Edwards25519Element *u, int cond) {
     u->l4 ^= t;
 }
 
-int burrow__fe_is_negative(const Edwards25519Element *v) {
+CRYPTO_FIPS_TEXT int burrow__fe_is_negative(const Edwards25519Element *v) {
     uint8_t b[32];
     burrow__fe_bytes(v, b);
     return b[0] & 1;
 }
 
-Edwards25519Element *burrow__fe_absolute(Edwards25519Element *v,
-                                         const Edwards25519Element *u) {
+CRYPTO_FIPS_TEXT Edwards25519Element *
+burrow__fe_absolute(Edwards25519Element *v, const Edwards25519Element *u) {
     Edwards25519Element neg;
     burrow__fe_negate(&neg, u);
     return burrow__fe_select(v, &neg, u, burrow__fe_is_negative(u));
 }
 
 /* lo + hi * 2^51 = a * b. */
-static uint64_t fe_mul51(uint64_t a, uint32_t b, uint64_t *hi) {
+CRYPTO_FIPS_TEXT static uint64_t fe_mul51(uint64_t a, uint32_t b, uint64_t *hi) {
     uint64_t ml;
     uint64_t mh = bits_mul64(a, b, &ml);
     *hi = (mh << 13) | (ml >> 51);
     return ml & FE_MASK_LOW_51_BITS;
 }
 
-Edwards25519Element *burrow__fe_mult32(Edwards25519Element *v,
-                                       const Edwards25519Element *x, uint32_t y) {
+CRYPTO_FIPS_TEXT Edwards25519Element *
+burrow__fe_mult32(Edwards25519Element *v, const Edwards25519Element *x, uint32_t y) {
     uint64_t x0hi, x1hi, x2hi, x3hi, x4hi;
     uint64_t x0lo = fe_mul51(x->l0, y, &x0hi);
     uint64_t x1lo = fe_mul51(x->l1, y, &x1hi);
@@ -488,8 +497,8 @@ Edwards25519Element *burrow__fe_mult32(Edwards25519Element *v,
     return v;
 }
 
-Edwards25519Element *burrow__fe_pow22523(Edwards25519Element *v,
-                                         const Edwards25519Element *x) {
+CRYPTO_FIPS_TEXT Edwards25519Element *
+burrow__fe_pow22523(Edwards25519Element *v, const Edwards25519Element *x) {
     Edwards25519Element t0, t1, t2;
 
     burrow__fe_square(&t0, x);          /* x^2 */
@@ -525,10 +534,9 @@ Edwards25519Element *burrow__fe_pow22523(Edwards25519Element *v,
     return burrow__fe_multiply(v, &t0, x); /* 2^252 - 3 */
 }
 
-Edwards25519Element *burrow__fe_sqrt_ratio(Edwards25519Element *r,
-                                           const Edwards25519Element *u,
-                                           const Edwards25519Element *v,
-                                           int *was_square) {
+CRYPTO_FIPS_TEXT Edwards25519Element *
+burrow__fe_sqrt_ratio(Edwards25519Element *r, const Edwards25519Element *u,
+                      const Edwards25519Element *v, int *was_square) {
     Edwards25519Element t0, v2, uv3, uv7, rr, check, u_neg, r_prime;
 
     /* r = (u * v3) * (u * v7)^((p-5)/8) */

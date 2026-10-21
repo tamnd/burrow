@@ -25,6 +25,7 @@
 #include "burrow/slice.h"
 
 #include "crypto_internal.h"
+#include "fips140_module.h"
 #include "tls_internal.h"
 
 #include <stdbool.h>
@@ -34,15 +35,16 @@
 /* The largest sum of any hash here, SHA-384's being the largest in use. */
 #define TLS_PRF_MAX_SUM 64
 
-void burrow__tls_split_pre_master_secret(Slice secret, Slice *s1, Slice *s2) {
+CRYPTO_FIPS_TEXT void burrow__tls_split_pre_master_secret(Slice secret, Slice *s1,
+                                                          Slice *s2) {
     *s1 = slice_sub(secret, 0, (secret.len + 1) / 2);
     *s2 = slice_sub(secret, secret.len / 2, secret.len);
 }
 
 /* pHash implements the P_hash function, as defined in RFC 4346, Section 5.
  * The HMAC comes from scratch. False when that is out of memory. */
-static bool tls_p_hash(Alloc *scratch, HashNewFunc hash, Byte *result, Int n,
-                       Slice secret, Slice seed) {
+CRYPTO_FIPS_TEXT static bool tls_p_hash(Alloc *scratch, HashNewFunc hash, Byte *result,
+                                        Int n, Slice secret, Slice seed) {
     Byte abuf[TLS_PRF_MAX_SUM], bbuf[TLS_PRF_MAX_SUM];
     Error err = BURROW_NO_ERROR;
     Hash h = hmac_new(scratch, hash, secret);
@@ -68,7 +70,8 @@ static bool tls_p_hash(Alloc *scratch, HashNewFunc hash, Byte *result, Int n,
 }
 
 /* label and then seed, from scratch. */
-static Slice tls_label_and_seed(Alloc *scratch, Str label, Slice seed) {
+CRYPTO_FIPS_TEXT static Slice tls_label_and_seed(Alloc *scratch, Str label,
+                                                 Slice seed) {
     Slice s =
         slice_make(scratch, TYPE_BYTE, label.len + seed.len, label.len + seed.len);
     if (s.p == NULL)
@@ -80,7 +83,8 @@ static Slice tls_label_and_seed(Alloc *scratch, Str label, Slice seed) {
     return s;
 }
 
-Slice burrow__tls_prf10(Alloc *a, Slice secret, Str label, Slice seed, Int key_len) {
+CRYPTO_FIPS_TEXT Slice burrow__tls_prf10(Alloc *a, Slice secret, Str label, Slice seed,
+                                         Int key_len) {
     Slice result = slice_make(a, TYPE_BYTE, key_len, key_len);
     if (result.p == NULL && key_len > 0)
         return slice_nil(TYPE_BYTE);
@@ -104,8 +108,8 @@ Slice burrow__tls_prf10(Alloc *a, Slice secret, Str label, Slice seed, Int key_l
 
 /* tls12.PRF: the TLS 1.2 pseudo-random function, as defined in RFC 5246,
  * Section 5 and allowed by SP 800-135, Revision 1, Section 4.2.2. */
-Slice burrow__tls_prf12(Alloc *a, HashNewFunc h, Slice secret, Str label, Slice seed,
-                        Int key_len) {
+CRYPTO_FIPS_TEXT Slice burrow__tls_prf12(Alloc *a, HashNewFunc h, Slice secret,
+                                         Str label, Slice seed, Int key_len) {
     Slice result = slice_make(a, TYPE_BYTE, key_len, key_len);
     if (result.p == NULL && key_len > 0)
         return slice_nil(TYPE_BYTE);
@@ -120,8 +124,8 @@ Slice burrow__tls_prf12(Alloc *a, HashNewFunc h, Slice secret, Str label, Slice 
     return ok ? result : slice_nil(TYPE_BYTE);
 }
 
-Slice burrow__tls_prf(Alloc *a, TlsPrfKind prf_kind, Slice secret, Str label,
-                      Slice seed, Int key_len) {
+CRYPTO_FIPS_TEXT Slice burrow__tls_prf(Alloc *a, TlsPrfKind prf_kind, Slice secret,
+                                       Str label, Slice seed, Int key_len) {
     switch (prf_kind) {
     case TLS_PRF_10:
         return burrow__tls_prf10(a, secret, label, seed, key_len);
@@ -133,8 +137,9 @@ Slice burrow__tls_prf(Alloc *a, TlsPrfKind prf_kind, Slice secret, Str label,
     }
 }
 
-TlsPrfKind burrow__tls_prf_and_hash_for_version(uint16_t version, const TlsSuite *suite,
-                                                CryptoHash *hash) {
+CRYPTO_FIPS_TEXT TlsPrfKind burrow__tls_prf_and_hash_for_version(uint16_t version,
+                                                                 const TlsSuite *suite,
+                                                                 CryptoHash *hash) {
     switch (version) {
     case TLS_VERSION_TLS10:
     case TLS_VERSION_TLS11:
@@ -152,13 +157,14 @@ TlsPrfKind burrow__tls_prf_and_hash_for_version(uint16_t version, const TlsSuite
     }
 }
 
-static TlsPrfKind tls_prf_for_version(uint16_t version, const TlsSuite *suite) {
+CRYPTO_FIPS_TEXT static TlsPrfKind tls_prf_for_version(uint16_t version,
+                                                       const TlsSuite *suite) {
     CryptoHash hash;
     return burrow__tls_prf_and_hash_for_version(version, suite, &hash);
 }
 
 /* a and then b, from scratch. */
-static Slice tls_concat(Alloc *scratch, Slice a, Slice b) {
+CRYPTO_FIPS_TEXT static Slice tls_concat(Alloc *scratch, Slice a, Slice b) {
     Slice s = slice_make(scratch, TYPE_BYTE, 0, a.len + b.len);
     if (s.p == NULL && a.len + b.len > 0)
         return s;
@@ -166,11 +172,9 @@ static Slice tls_concat(Alloc *scratch, Slice a, Slice b) {
     return slice_append_slice(scratch, s, b);
 }
 
-Slice burrow__tls_master_from_pre_master_secret(Alloc *a, uint16_t version,
-                                                const TlsSuite *suite,
-                                                Slice pre_master_secret,
-                                                Slice client_random,
-                                                Slice server_random) {
+CRYPTO_FIPS_TEXT Slice burrow__tls_master_from_pre_master_secret(
+    Alloc *a, uint16_t version, const TlsSuite *suite, Slice pre_master_secret,
+    Slice client_random, Slice server_random) {
     TlsPrfKind prf = tls_prf_for_version(version, suite);
     Arena scratch;
     arena_init(&scratch, NULL, 0);
@@ -183,10 +187,9 @@ Slice burrow__tls_master_from_pre_master_secret(Alloc *a, uint16_t version,
     return out;
 }
 
-Slice burrow__tls_ext_master_from_pre_master_secret(Alloc *a, uint16_t version,
-                                                    const TlsSuite *suite,
-                                                    Slice pre_master_secret,
-                                                    Slice transcript) {
+CRYPTO_FIPS_TEXT Slice burrow__tls_ext_master_from_pre_master_secret(
+    Alloc *a, uint16_t version, const TlsSuite *suite, Slice pre_master_secret,
+    Slice transcript) {
     CryptoHash hash;
     TlsPrfKind prf = burrow__tls_prf_and_hash_for_version(version, suite, &hash);
     if (version == TLS_VERSION_TLS12) {
@@ -201,11 +204,11 @@ Slice burrow__tls_ext_master_from_pre_master_secret(Alloc *a, uint16_t version,
                            TLS_MASTER_SECRET_LENGTH);
 }
 
-bool burrow__tls_keys_from_master_secret(Alloc *a, uint16_t version,
-                                         const TlsSuite *suite, Slice master_secret,
-                                         Slice client_random, Slice server_random,
-                                         Int mac_len, Int key_len, Int iv_len,
-                                         TlsKeys *keys) {
+CRYPTO_FIPS_TEXT bool
+burrow__tls_keys_from_master_secret(Alloc *a, uint16_t version, const TlsSuite *suite,
+                                    Slice master_secret, Slice client_random,
+                                    Slice server_random, Int mac_len, Int key_len,
+                                    Int iv_len, TlsKeys *keys) {
     TlsPrfKind prf = tls_prf_for_version(version, suite);
     Arena scratch;
     arena_init(&scratch, NULL, 0);
@@ -233,8 +236,9 @@ bool burrow__tls_keys_from_master_secret(Alloc *a, uint16_t version,
 
 /* ------------------------------------------------------------ finishedHash */
 
-bool burrow__tls_new_finished_hash(Alloc *a, uint16_t version, const TlsSuite *suite,
-                                   TlsFinishedHash *h) {
+CRYPTO_FIPS_TEXT bool burrow__tls_new_finished_hash(Alloc *a, uint16_t version,
+                                                    const TlsSuite *suite,
+                                                    TlsFinishedHash *h) {
     memset(h, 0, sizeof *h);
     h->buffer = slice_nil(TYPE_BYTE);
     if (version >= TLS_VERSION_TLS12)
@@ -257,7 +261,7 @@ bool burrow__tls_new_finished_hash(Alloc *a, uint16_t version, const TlsSuite *s
            h->server_md5.vt != NULL;
 }
 
-bool burrow__tls_finished_hash_write(TlsFinishedHash *h, Slice msg) {
+CRYPTO_FIPS_TEXT bool burrow__tls_finished_hash_write(TlsFinishedHash *h, Slice msg) {
     Error err = BURROW_NO_ERROR;
     hash_write(h->client, msg, &err);
     hash_write(h->server, msg, &err);
@@ -278,7 +282,8 @@ bool burrow__tls_finished_hash_write(TlsFinishedHash *h, Slice msg) {
     return true;
 }
 
-static Int tls_finished_hash_io_write(void *self, Slice p, Error *err) {
+CRYPTO_FIPS_TEXT static Int tls_finished_hash_io_write(void *self, Slice p,
+                                                       Error *err) {
     if (!burrow__tls_finished_hash_write((TlsFinishedHash *)self, p)) {
         BURROW_OUT(err, burrow_err_out_of_memory);
         return 0;
@@ -289,11 +294,12 @@ static Int tls_finished_hash_io_write(void *self, Slice p, Error *err) {
 static const IoWriterVT tls_finished_hash_writer_vt = {NULL,
                                                        tls_finished_hash_io_write};
 
-IoWriter burrow__tls_finished_hash_writer(TlsFinishedHash *h) {
+CRYPTO_FIPS_TEXT IoWriter burrow__tls_finished_hash_writer(TlsFinishedHash *h) {
     return (IoWriter){&tls_finished_hash_writer_vt, h};
 }
 
-Slice burrow__tls_finished_hash_sum(const TlsFinishedHash *h, Alloc *a) {
+CRYPTO_FIPS_TEXT Slice burrow__tls_finished_hash_sum(const TlsFinishedHash *h,
+                                                     Alloc *a) {
     if (h->version >= TLS_VERSION_TLS12)
         return hash_sum(a, h->client, slice_nil(TYPE_BYTE));
 
@@ -305,8 +311,8 @@ Slice burrow__tls_finished_hash_sum(const TlsFinishedHash *h, Alloc *a) {
 }
 
 /* The Finished verify_data for label. */
-static Slice tls_finished_sum(const TlsFinishedHash *h, Alloc *a, Slice master_secret,
-                              Str label) {
+CRYPTO_FIPS_TEXT static Slice tls_finished_sum(const TlsFinishedHash *h, Alloc *a,
+                                               Slice master_secret, Str label) {
     Arena scratch;
     arena_init(&scratch, NULL, 0);
     Slice out = slice_nil(TYPE_BYTE);
@@ -318,24 +324,27 @@ static Slice tls_finished_sum(const TlsFinishedHash *h, Alloc *a, Slice master_s
     return out;
 }
 
-Slice burrow__tls_finished_hash_client_sum(const TlsFinishedHash *h, Alloc *a,
-                                           Slice master_secret) {
+CRYPTO_FIPS_TEXT Slice burrow__tls_finished_hash_client_sum(const TlsFinishedHash *h,
+                                                            Alloc *a,
+                                                            Slice master_secret) {
     return tls_finished_sum(h, a, master_secret, BURROW_S("client finished"));
 }
 
-Slice burrow__tls_finished_hash_server_sum(const TlsFinishedHash *h, Alloc *a,
-                                           Slice master_secret) {
+CRYPTO_FIPS_TEXT Slice burrow__tls_finished_hash_server_sum(const TlsFinishedHash *h,
+                                                            Alloc *a,
+                                                            Slice master_secret) {
     return tls_finished_sum(h, a, master_secret, BURROW_S("server finished"));
 }
 
-Slice burrow__tls_finished_hash_for_client_certificate(const TlsFinishedHash *h,
-                                                       Alloc *a, uint8_t sig_type) {
+CRYPTO_FIPS_TEXT Slice burrow__tls_finished_hash_for_client_certificate(
+    const TlsFinishedHash *h, Alloc *a, uint8_t sig_type) {
     if (sig_type == TLS_SIGNATURE_ECDSA)
         return hash_sum(a, h->server, slice_nil(TYPE_BYTE));
     return burrow__tls_finished_hash_sum(h, a);
 }
 
-void burrow__tls_finished_hash_discard_handshake_buffer(TlsFinishedHash *h) {
+CRYPTO_FIPS_TEXT void
+burrow__tls_finished_hash_discard_handshake_buffer(TlsFinishedHash *h) {
     h->buffer = slice_nil(TYPE_BYTE);
 }
 
@@ -348,8 +357,10 @@ BURROW_SENTINEL_ERROR(burrow__tls_err_no_ekm_no_ems,
                       "crypto/tls: ExportKeyingMaterial is unavailable when neither "
                       "TLS 1.3 nor Extended Master Secret are negotiated");
 
-Slice burrow__tls_ekm_from_master_secret(const TlsEkmMaster *m, Alloc *a, Str label,
-                                         Slice context, Int length, Error *err) {
+CRYPTO_FIPS_TEXT Slice burrow__tls_ekm_from_master_secret(const TlsEkmMaster *m,
+                                                          Alloc *a, Str label,
+                                                          Slice context, Int length,
+                                                          Error *err) {
     if (str_eq(label, BURROW_S("client finished")) ||
         str_eq(label, BURROW_S("server finished")) ||
         str_eq(label, BURROW_S("master secret")) ||
@@ -401,13 +412,13 @@ Slice burrow__tls_ekm_from_master_secret(const TlsEkmMaster *m, Alloc *a, Str la
     return out;
 }
 
-static Slice tls_ekm_call(void *env, Alloc *a, Str label, Slice context, Int length,
-                          Error *err) {
+CRYPTO_FIPS_TEXT static Slice tls_ekm_call(void *env, Alloc *a, Str label,
+                                           Slice context, Int length, Error *err) {
     return burrow__tls_ekm_from_master_secret((const TlsEkmMaster *)env, a, label,
                                               context, length, err);
 }
 
-TlsEkmFunc burrow__tls_ekm_func(Alloc *a, const TlsEkmMaster *m) {
+CRYPTO_FIPS_TEXT TlsEkmFunc burrow__tls_ekm_func(Alloc *a, const TlsEkmMaster *m) {
     TlsEkmFunc f = {0};
     TlsEkmMaster *c = BURROW_NEW(a, TlsEkmMaster);
     if (c == NULL)

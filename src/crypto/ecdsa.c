@@ -33,6 +33,7 @@
 #include "crypto_internal.h"
 #include "cryptobyte.h"
 #include "ecdsa_internal.h"
+#include "fips140_module.h"
 #include "nistec.h"
 #include "rand_internal.h"
 
@@ -91,20 +92,21 @@ typedef struct EcdsaPrivateBlock {
 
 /* ---------------------------------------------------------------- helpers */
 
-static void ecdsa_set_error(Error *err, const char *msg) {
+CRYPTO_FIPS_TEXT static void ecdsa_set_error(Error *err, const char *msg) {
     BURROW_OUT(err, errors_new(error_allocator(), str_from_cstr(msg)));
 }
 
-static Alloc *ecdsa_alloc(Alloc *a) {
+CRYPTO_FIPS_TEXT static Alloc *ecdsa_alloc(Alloc *a) {
     return a != NULL ? a : heap_allocator();
 }
 
-static Slice ecdsa_bytes(const uint8_t *p, Int n) {
+CRYPTO_FIPS_TEXT static Slice ecdsa_bytes(const uint8_t *p, Int n) {
     return slice_from((void *)(uintptr_t)p, n, n, TYPE_BYTE);
 }
 
 /* A copy of the n bytes at p, from a. */
-static Slice ecdsa_clone(Alloc *a, const uint8_t *p, Int n, Error *err) {
+CRYPTO_FIPS_TEXT static Slice ecdsa_clone(Alloc *a, const uint8_t *p, Int n,
+                                          Error *err) {
     Slice s = slice_make(ecdsa_alloc(a), TYPE_BYTE, n, n);
     if (s.p == NULL && n > 0) {
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -115,13 +117,13 @@ static Slice ecdsa_clone(Alloc *a, const uint8_t *p, Int n, Error *err) {
     return s;
 }
 
-static bool ecdsa_same_curve(EllipticCurve x, EllipticCurve y) {
+CRYPTO_FIPS_TEXT static bool ecdsa_same_curve(EllipticCurve x, EllipticCurve y) {
     return x.vt == y.vt && x.data == y.data;
 }
 
 /* drbg.ReadWithReader: the system generator for the default reader, which is
  * what drbg.Read is outside FIPS mode, and io.ReadFull for anything else. */
-static bool ecdsa_read(IoReader r, Slice b, Error *err) {
+CRYPTO_FIPS_TEXT static bool ecdsa_read(IoReader r, Slice b, Error *err) {
     if (burrow__crypto_rand_is_default_reader(r)) {
         burrow__crypto_rand_system(b);
         return true;
@@ -137,7 +139,7 @@ static bool ecdsa_read(IoReader r, Slice b, Error *err) {
 
 /* What the functions that take a rand do with a nil one, before
  * rand.CustomReader. */
-static IoReader ecdsa_reader(IoReader r) {
+CRYPTO_FIPS_TEXT static IoReader ecdsa_reader(IoReader r) {
     if (r.vt == NULL)
         r = burrow__crypto_rand_nil_reader();
     return burrow__crypto_rand_custom_reader(r);
@@ -157,19 +159,19 @@ struct EcdsaFipsCurve {
     uint8_t n_minus2[NISTEC_MAX_ELEMENT_BYTES];
 };
 
-static const uint8_t ecdsa_p224_order[] = {
+CRYPTO_FIPS_RODATA static const uint8_t ecdsa_p224_order[] = {
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0x16, 0xa2, 0xe0, 0xb8, 0xf0, 0x3e, 0x13, 0xdd, 0x29, 0x45, 0x5c, 0x5c, 0x2a, 0x3d};
-static const uint8_t ecdsa_p256_order[] = {
+CRYPTO_FIPS_RODATA static const uint8_t ecdsa_p256_order[] = {
     0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17,
     0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2, 0xfc, 0x63, 0x25, 0x51};
-static const uint8_t ecdsa_p384_order[] = {
+CRYPTO_FIPS_RODATA static const uint8_t ecdsa_p384_order[] = {
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xc7, 0x63, 0x4d, 0x81, 0xf4, 0x37, 0x2d, 0xdf, 0x58, 0x1a, 0x0d, 0xb2,
     0x48, 0xb0, 0xa7, 0x7a, 0xec, 0xec, 0x19, 0x6a, 0xcc, 0xc5, 0x29, 0x73};
-static const uint8_t ecdsa_p521_order[] = {
+CRYPTO_FIPS_RODATA static const uint8_t ecdsa_p521_order[] = {
     0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xfa, 0x51, 0x86, 0x87, 0x83, 0xbf, 0x2f, 0x96, 0x6b,
@@ -180,7 +182,8 @@ static EcdsaFipsCurve ecdsa_curves[4];
 static SyncOnce ecdsa_once;
 
 /* Nat.Bytes(m) into out, which has room for the size of c's order. */
-static void ecdsa_nat_bytes(const BigmodNat *x, const EcdsaFipsCurve *c, uint8_t *out) {
+CRYPTO_FIPS_TEXT static void ecdsa_nat_bytes(const BigmodNat *x,
+                                             const EcdsaFipsCurve *c, uint8_t *out) {
     Int i = c->size;
     memset(out, 0, (size_t)i);
     for (Int k = 0; k < x->len; k++) {
@@ -199,8 +202,9 @@ static void ecdsa_nat_bytes(const BigmodNat *x, const EcdsaFipsCurve *c, uint8_t
 }
 
 /* precomputeParams. */
-static void ecdsa_precompute(EcdsaFipsCurve *c, const NistecCurve *nist,
-                             const uint8_t *order, Int n) {
+CRYPTO_FIPS_TEXT static void ecdsa_precompute(EcdsaFipsCurve *c,
+                                              const NistecCurve *nist,
+                                              const uint8_t *order, Int n) {
     Error err = BURROW_NO_ERROR;
     c->nist = nist;
     c->order = order;
@@ -222,7 +226,7 @@ static void ecdsa_precompute(EcdsaFipsCurve *c, const NistecCurve *nist,
     bigmod_nat_free(&m2);
 }
 
-static void ecdsa_init(void *env) {
+CRYPTO_FIPS_TEXT static void ecdsa_init(void *env) {
     (void)env;
     ecdsa_precompute(&ecdsa_curves[0], &burrow__nistec_p224, ecdsa_p224_order,
                      (Int)sizeof ecdsa_p224_order);
@@ -234,34 +238,34 @@ static void ecdsa_init(void *env) {
                      (Int)sizeof ecdsa_p521_order);
 }
 
-static const EcdsaFipsCurve *ecdsa_fips(int i) {
+CRYPTO_FIPS_TEXT static const EcdsaFipsCurve *ecdsa_fips(int i) {
     sync_once_do(&ecdsa_once, BURROW_FN(Func, ecdsa_init, NULL));
     return &ecdsa_curves[i];
 }
 
-const EcdsaFipsCurve *burrow__ecdsa_fips_p224(void) {
+CRYPTO_FIPS_TEXT const EcdsaFipsCurve *burrow__ecdsa_fips_p224(void) {
     return ecdsa_fips(0);
 }
 
-const EcdsaFipsCurve *burrow__ecdsa_fips_p256(void) {
+CRYPTO_FIPS_TEXT const EcdsaFipsCurve *burrow__ecdsa_fips_p256(void) {
     return ecdsa_fips(1);
 }
 
-const EcdsaFipsCurve *burrow__ecdsa_fips_p384(void) {
+CRYPTO_FIPS_TEXT const EcdsaFipsCurve *burrow__ecdsa_fips_p384(void) {
     return ecdsa_fips(2);
 }
 
-const EcdsaFipsCurve *burrow__ecdsa_fips_p521(void) {
+CRYPTO_FIPS_TEXT const EcdsaFipsCurve *burrow__ecdsa_fips_p521(void) {
     return ecdsa_fips(3);
 }
 
-Int burrow__ecdsa_fips_size(const EcdsaFipsCurve *c) {
+CRYPTO_FIPS_TEXT Int burrow__ecdsa_fips_size(const EcdsaFipsCurve *c) {
     return c->size;
 }
 
 /* The FIPS curve for one whose Params are one of the four NIST curves', which
  * is how GenerateKey, SignASN1 and VerifyASN1 choose. NULL for any other. */
-static const EcdsaFipsCurve *ecdsa_fips_for_params(EllipticCurve c) {
+CRYPTO_FIPS_TEXT static const EcdsaFipsCurve *ecdsa_fips_for_params(EllipticCurve c) {
     EllipticCurveParams *p = elliptic_curve_params(c);
     if (p == elliptic_curve_params(elliptic_p224()))
         return burrow__ecdsa_fips_p224();
@@ -276,7 +280,7 @@ static const EcdsaFipsCurve *ecdsa_fips_for_params(EllipticCurve c) {
 
 /* The same for a curve that is one of the four, which is how Bytes and the
  * Parse functions choose. */
-static const EcdsaFipsCurve *ecdsa_fips_for_curve(EllipticCurve c) {
+CRYPTO_FIPS_TEXT static const EcdsaFipsCurve *ecdsa_fips_for_curve(EllipticCurve c) {
     if (ecdsa_same_curve(c, elliptic_p224()))
         return burrow__ecdsa_fips_p224();
     if (ecdsa_same_curve(c, elliptic_p256()))
@@ -291,7 +295,7 @@ static const EcdsaFipsCurve *ecdsa_fips_for_curve(EllipticCurve c) {
 /* ------------------------------------------------------- FIPS arithmetic */
 
 /* rightShift, in place on the n bytes at b. */
-static void ecdsa_right_shift(uint8_t *b, Int n, Int shift) {
+CRYPTO_FIPS_TEXT static void ecdsa_right_shift(uint8_t *b, Int n, Int shift) {
     if (shift <= 0 || shift >= 8)
         panic_str(BURROW_S("ecdsa: internal error: shift can only be by 1 to 7 bits"));
     for (Int i = n - 1; i >= 0; i--) {
@@ -303,7 +307,8 @@ static void ecdsa_right_shift(uint8_t *b, Int n, Int shift) {
 
 /* hashToNat: e = the leftmost bits of hash, as many as the order has, reduced
  * modulo it. */
-static void ecdsa_hash_to_nat(const EcdsaFipsCurve *c, BigmodNat *e, Slice hash) {
+CRYPTO_FIPS_TEXT static void ecdsa_hash_to_nat(const EcdsaFipsCurve *c, BigmodNat *e,
+                                               Slice hash) {
     uint8_t buf[NISTEC_MAX_ELEMENT_BYTES];
     if (hash.len >= c->size) {
         memcpy(buf, hash.p, (size_t)c->size);
@@ -316,7 +321,8 @@ static void ecdsa_hash_to_nat(const EcdsaFipsCurve *c, BigmodNat *e, Slice hash)
         panic_str(BURROW_S("ecdsa: internal error: truncated hash is too long"));
 }
 
-void burrow__ecdsa_bits2octets(const EcdsaFipsCurve *c, Slice hash, uint8_t *out) {
+CRYPTO_FIPS_TEXT void burrow__ecdsa_bits2octets(const EcdsaFipsCurve *c, Slice hash,
+                                                uint8_t *out) {
     Uint eb[ECDSA_LIMBS];
     BigmodNat e;
     bigmod_nat_init_buf(&e, eb, ECDSA_LIMBS);
@@ -328,14 +334,15 @@ void burrow__ecdsa_bits2octets(const EcdsaFipsCurve *c, Slice hash, uint8_t *out
 /* inverse: kInv = k^(N-2) mod N, which is k⁻¹ since N is prime. Go has an
  * assembly inversion for P-256 on 64 bit machines, which gives the same
  * number. */
-static void ecdsa_inverse(const EcdsaFipsCurve *c, BigmodNat *k_inv,
-                          const BigmodNat *k) {
+CRYPTO_FIPS_TEXT static void ecdsa_inverse(const EcdsaFipsCurve *c, BigmodNat *k_inv,
+                                           const BigmodNat *k) {
     bigmod_nat_exp(k_inv, k, ecdsa_bytes(c->n_minus2, c->size), c->n);
 }
 
 /* randomPoint, with the point as it is. */
-static bool ecdsa_random_point(const EcdsaFipsCurve *c, EcdsaFill gen, uint8_t *k_out,
-                               NistecPoint *p, Int *loops, Error *err) {
+CRYPTO_FIPS_TEXT static bool ecdsa_random_point(const EcdsaFipsCurve *c, EcdsaFill gen,
+                                                uint8_t *k_out, NistecPoint *p,
+                                                Int *loops, Error *err) {
     Int size = c->size;
     uint8_t b[NISTEC_MAX_ELEMENT_BYTES];
     Uint kb[ECDSA_LIMBS];
@@ -379,8 +386,9 @@ static bool ecdsa_random_point(const EcdsaFipsCurve *c, EcdsaFill gen, uint8_t *
     }
 }
 
-bool burrow__ecdsa_random_point(const EcdsaFipsCurve *c, EcdsaFill gen, uint8_t *k_out,
-                                uint8_t *p_out, Int *loops, Error *err) {
+CRYPTO_FIPS_TEXT bool burrow__ecdsa_random_point(const EcdsaFipsCurve *c, EcdsaFill gen,
+                                                 uint8_t *k_out, uint8_t *p_out,
+                                                 Int *loops, Error *err) {
     NistecPoint p;
     if (!ecdsa_random_point(c, gen, k_out, &p, loops, err))
         return false;
@@ -405,30 +413,30 @@ struct EcdsaDrbg {
     uint64_t reseed_counter;
 };
 
-static Hash ecdsa_drbg_hmac(EcdsaDrbg *d, Slice key) {
+CRYPTO_FIPS_TEXT static Hash ecdsa_drbg_hmac(EcdsaDrbg *d, Slice key) {
     Hash h = hmac_new(d->a, d->h, key);
     if (h.vt == NULL)
         panic_str(BURROW_S("crypto/ecdsa: out of memory"));
     return h;
 }
 
-static void ecdsa_write(Hash h, Slice p) {
+CRYPTO_FIPS_TEXT static void ecdsa_write(Hash h, Slice p) {
     (void)hash_write(h, p, NULL);
 }
 
-static void ecdsa_write_byte(Hash h, uint8_t b) {
+CRYPTO_FIPS_TEXT static void ecdsa_write_byte(Hash h, uint8_t b) {
     ecdsa_write(h, ecdsa_bytes(&b, 1));
 }
 
 /* h.Sum(dst[:0]), for a dst of d->size bytes. */
-static void ecdsa_sum_into(EcdsaDrbg *d, Hash h, uint8_t *dst) {
+CRYPTO_FIPS_TEXT static void ecdsa_sum_into(EcdsaDrbg *d, Hash h, uint8_t *dst) {
     Slice s = hash_sum(d->a, h, slice_from(dst, 0, d->size, TYPE_BYTE));
     if (s.p != dst)
         memcpy(dst, s.p, (size_t)d->size);
 }
 
 /* pad000: zeros up to the next multiple of the block size. */
-static void ecdsa_pad000(Hash h, Int written) {
+CRYPTO_FIPS_TEXT static void ecdsa_pad000(Hash h, Int written) {
     static const uint8_t zeros[256] = {0};
     Int block = hash_block_size(h);
     Int rem = written % block;
@@ -444,9 +452,10 @@ static void ecdsa_pad000(Hash h, Int written) {
 /* V || sep || entropy || nonce || the personalization string, which is the
  * one Slice in parts when it is plain and each of them padded to a block when
  * it is block aligned. */
-static void ecdsa_drbg_absorb(EcdsaDrbg *d, Hash h, uint8_t sep, Slice entropy,
-                              Slice nonce, const Slice *parts, Int nparts,
-                              bool aligned) {
+CRYPTO_FIPS_TEXT static void ecdsa_drbg_absorb(EcdsaDrbg *d, Hash h, uint8_t sep,
+                                               Slice entropy, Slice nonce,
+                                               const Slice *parts, Int nparts,
+                                               bool aligned) {
     ecdsa_write(h, ecdsa_bytes(d->v, d->size));
     ecdsa_write_byte(h, sep);
     ecdsa_write(h, entropy);
@@ -465,8 +474,10 @@ static void ecdsa_drbg_absorb(EcdsaDrbg *d, Hash h, uint8_t sep, Slice entropy,
 }
 
 /* newDRBG. */
-static EcdsaDrbg *ecdsa_new_drbg(Alloc *a, HashNewFunc hf, Slice entropy, Slice nonce,
-                                 const Slice *parts, Int nparts, bool aligned) {
+CRYPTO_FIPS_TEXT static EcdsaDrbg *ecdsa_new_drbg(Alloc *a, HashNewFunc hf,
+                                                  Slice entropy, Slice nonce,
+                                                  const Slice *parts, Int nparts,
+                                                  bool aligned) {
     EcdsaDrbg *d = BURROW_NEW(a, EcdsaDrbg);
     if (d == NULL)
         panic_str(BURROW_S("crypto/ecdsa: out of memory"));
@@ -502,12 +513,13 @@ static EcdsaDrbg *ecdsa_new_drbg(Alloc *a, HashNewFunc hf, Slice entropy, Slice 
     return d;
 }
 
-EcdsaDrbg *burrow__ecdsa_new_drbg(Alloc *a, HashNewFunc h, Slice entropy, Slice nonce,
-                                  Slice pers) {
+CRYPTO_FIPS_TEXT EcdsaDrbg *burrow__ecdsa_new_drbg(Alloc *a, HashNewFunc h,
+                                                   Slice entropy, Slice nonce,
+                                                   Slice pers) {
     return ecdsa_new_drbg(a, h, entropy, nonce, &pers, 1, false);
 }
 
-void burrow__ecdsa_drbg_generate(EcdsaDrbg *d, Slice out) {
+CRYPTO_FIPS_TEXT void burrow__ecdsa_drbg_generate(EcdsaDrbg *d, Slice out) {
     if (out.len > ECDSA_MAX_REQUEST_SIZE)
         panic_str(BURROW_S("ecdsa: internal error: request size exceeds maximum"));
     /* Step 1 of SP 800-90A Rev. 1, Section 10.1.2.5. */
@@ -539,22 +551,23 @@ void burrow__ecdsa_drbg_generate(EcdsaDrbg *d, Slice out) {
     d->reseed_counter++;
 }
 
-static bool ecdsa_drbg_fill(void *env, Slice b, Error *err) {
+CRYPTO_FIPS_TEXT static bool ecdsa_drbg_fill(void *env, Slice b, Error *err) {
     (void)err;
     burrow__ecdsa_drbg_generate(env, b);
     return true;
 }
 
-static bool ecdsa_reader_fill(void *env, Slice b, Error *err) {
+CRYPTO_FIPS_TEXT static bool ecdsa_reader_fill(void *env, Slice b, Error *err) {
     return ecdsa_read(*(IoReader *)env, b, err);
 }
 
 /* ------------------------------------------------------- FIPS operations */
 
 /* signGeneric. */
-bool burrow__ecdsa_sign_with_drbg(const EcdsaFipsCurve *c, Slice d, EcdsaDrbg *drbg,
-                                  Slice hash, uint8_t *r_out, uint8_t *s_out,
-                                  Error *err) {
+CRYPTO_FIPS_TEXT bool burrow__ecdsa_sign_with_drbg(const EcdsaFipsCurve *c, Slice d,
+                                                   EcdsaDrbg *drbg, Slice hash,
+                                                   uint8_t *r_out, uint8_t *s_out,
+                                                   Error *err) {
     uint8_t kb[NISTEC_MAX_ELEMENT_BYTES];
     NistecPoint big_r;
     if (!ecdsa_random_point(c, BURROW_FN(EcdsaFill, ecdsa_drbg_fill, drbg), kb, &big_r,
@@ -623,7 +636,8 @@ done:
 
 /* NewPublicKey, which only has to check Q, since a FIPS key here is its
  * encoding. */
-static bool ecdsa_fips_check_public(const EcdsaFipsCurve *c, Slice q, Error *err) {
+CRYPTO_FIPS_TEXT static bool ecdsa_fips_check_public(const EcdsaFipsCurve *c, Slice q,
+                                                     Error *err) {
     const uint8_t *p = q.p;
     if (q.len < 1 || p[0] == 0) {
         ecdsa_set_error(err, "ecdsa: invalid public key encoding");
@@ -639,8 +653,8 @@ static bool ecdsa_fips_check_public(const EcdsaFipsCurve *c, Slice q, Error *err
 }
 
 /* NewPrivateKey, the same for D and Q. */
-static bool ecdsa_fips_check_private(const EcdsaFipsCurve *c, Slice d, Slice q,
-                                     Error *err) {
+CRYPTO_FIPS_TEXT static bool ecdsa_fips_check_private(const EcdsaFipsCurve *c, Slice d,
+                                                      Slice q, Error *err) {
     if (!ecdsa_fips_check_public(c, q, err))
         return false;
     if (d.len != c->size) {
@@ -662,8 +676,9 @@ static bool ecdsa_fips_check_private(const EcdsaFipsCurve *c, Slice d, Slice q,
 
 /* Sign: the hedged signature, with a nonce from an HMAC_DRBG over SHA-512
  * seeded with random bytes, the key and the hash. */
-static bool ecdsa_fips_sign(const EcdsaFipsCurve *c, Slice d, IoReader rand, Slice hash,
-                            uint8_t *r, uint8_t *s, Error *err) {
+CRYPTO_FIPS_TEXT static bool ecdsa_fips_sign(const EcdsaFipsCurve *c, Slice d,
+                                             IoReader rand, Slice hash, uint8_t *r,
+                                             uint8_t *s, Error *err) {
     if (hash.len == 0) {
         ecdsa_set_error(err, "ecdsa: hash cannot be empty");
         return false;
@@ -694,9 +709,10 @@ static bool ecdsa_fips_sign(const EcdsaFipsCurve *c, Slice d, IoReader rand, Sli
 
 /* SignDeterministic: the nonce of RFC 6979, from an HMAC_DRBG over hf seeded
  * with the key and the hash. */
-static bool ecdsa_fips_sign_deterministic(const EcdsaFipsCurve *c, HashNewFunc hf,
-                                          Slice d, Slice hash, uint8_t *r, uint8_t *s,
-                                          Error *err) {
+CRYPTO_FIPS_TEXT static bool ecdsa_fips_sign_deterministic(const EcdsaFipsCurve *c,
+                                                           HashNewFunc hf, Slice d,
+                                                           Slice hash, uint8_t *r,
+                                                           uint8_t *s, Error *err) {
     if (hash.len == 0) {
         ecdsa_set_error(err, "ecdsa: hash cannot be empty");
         return false;
@@ -716,8 +732,9 @@ static bool ecdsa_fips_sign_deterministic(const EcdsaFipsCurve *c, HashNewFunc h
 }
 
 /* Verify and verifyGeneric. */
-static bool ecdsa_fips_verify(const EcdsaFipsCurve *c, Slice q, Slice hash, Slice sig_r,
-                              Slice sig_s, Error *err) {
+CRYPTO_FIPS_TEXT static bool ecdsa_fips_verify(const EcdsaFipsCurve *c, Slice q,
+                                               Slice hash, Slice sig_r, Slice sig_s,
+                                               Error *err) {
     if (hash.len == 0) {
         ecdsa_set_error(err, "ecdsa: hash cannot be empty");
         return false;
@@ -799,8 +816,8 @@ done:
 
 /* -------------------------------------------------------------- the keys */
 
-static EcdsaPublicBlock *ecdsa_new_public_block(Alloc *a, EllipticCurve curve,
-                                                Error *err) {
+CRYPTO_FIPS_TEXT static EcdsaPublicBlock *
+ecdsa_new_public_block(Alloc *a, EllipticCurve curve, Error *err) {
     a = ecdsa_alloc(a);
     EcdsaPublicBlock *b = BURROW_NEW(a, EcdsaPublicBlock);
     if (b == NULL) {
@@ -816,8 +833,8 @@ static EcdsaPublicBlock *ecdsa_new_public_block(Alloc *a, EllipticCurve curve,
     return b;
 }
 
-static EcdsaPrivateBlock *ecdsa_new_private_block(Alloc *a, EllipticCurve curve,
-                                                  Error *err) {
+CRYPTO_FIPS_TEXT static EcdsaPrivateBlock *
+ecdsa_new_private_block(Alloc *a, EllipticCurve curve, Error *err) {
     a = ecdsa_alloc(a);
     EcdsaPrivateBlock *b = BURROW_NEW(a, EcdsaPrivateBlock);
     if (b == NULL) {
@@ -835,7 +852,7 @@ static EcdsaPrivateBlock *ecdsa_new_private_block(Alloc *a, EllipticCurve curve,
     return b;
 }
 
-void ecdsa_public_key_free(EcdsaPublicKey *k) {
+CRYPTO_FIPS_TEXT void ecdsa_public_key_free(EcdsaPublicKey *k) {
     if (k == NULL)
         return;
     EcdsaPublicBlock *b = (EcdsaPublicBlock *)(void *)k; /* k is its first field */
@@ -845,7 +862,7 @@ void ecdsa_public_key_free(EcdsaPublicKey *k) {
     mem_free(a, b, sizeof *b, _Alignof(EcdsaPublicBlock));
 }
 
-void ecdsa_private_key_free(EcdsaPrivateKey *k) {
+CRYPTO_FIPS_TEXT void ecdsa_private_key_free(EcdsaPrivateKey *k) {
     if (k == NULL)
         return;
     EcdsaPrivateBlock *b = (EcdsaPrivateBlock *)(void *)k; /* k is its first field */
@@ -859,8 +876,8 @@ void ecdsa_private_key_free(EcdsaPrivateKey *k) {
 }
 
 /* pointToAffine, into x and y. */
-static bool ecdsa_point_to_affine(EllipticCurve curve, Slice p, BigInt *x, BigInt *y,
-                                  Error *err) {
+CRYPTO_FIPS_TEXT static bool ecdsa_point_to_affine(EllipticCurve curve, Slice p,
+                                                   BigInt *x, BigInt *y, Error *err) {
     const uint8_t *q = p.p;
     if (p.len == 1 && q[0] == 0) {
         /* This is not a valid point, but it is what was always returned. */
@@ -876,8 +893,9 @@ static bool ecdsa_point_to_affine(EllipticCurve curve, Slice p, BigInt *x, BigIn
 /* pointFromAffine: the uncompressed encoding of (x, y) in buf, which has room
  * for NISTEC_MAX_POINT_BYTES, and its length. The curve is one of the four
  * NIST curves, by its params. */
-static Int ecdsa_point_from_affine(EllipticCurve curve, const BigInt *x,
-                                   const BigInt *y, uint8_t *buf, Error *err) {
+CRYPTO_FIPS_TEXT static Int ecdsa_point_from_affine(EllipticCurve curve,
+                                                    const BigInt *x, const BigInt *y,
+                                                    uint8_t *buf, Error *err) {
     Int bit_size = elliptic_curve_params(curve)->bit_size;
     /* Reject values that would not get correctly encoded. */
     if (big_int_sign(x) < 0 || big_int_sign(y) < 0) {
@@ -897,8 +915,9 @@ static Int ecdsa_point_from_affine(EllipticCurve curve, const BigInt *x,
 }
 
 /* publicKeyToFIPS: pub's encoding in q, checked, and its length. */
-static Int ecdsa_public_to_fips(const EcdsaFipsCurve *c, const EcdsaPublicKey *pub,
-                                uint8_t *q, Error *err) {
+CRYPTO_FIPS_TEXT static Int ecdsa_public_to_fips(const EcdsaFipsCurve *c,
+                                                 const EcdsaPublicKey *pub, uint8_t *q,
+                                                 Error *err) {
     Int n = ecdsa_point_from_affine(pub->curve, pub->x, pub->y, q, err);
     if (n == 0)
         return 0;
@@ -909,8 +928,9 @@ static Int ecdsa_public_to_fips(const EcdsaFipsCurve *c, const EcdsaPublicKey *p
 
 /* privateKeyToFIPS: priv's scalar in d, as long as the order, and its point's
  * encoding in q, both checked, and the length of q. */
-static Int ecdsa_private_to_fips(const EcdsaFipsCurve *c, const EcdsaPrivateKey *priv,
-                                 uint8_t *d, uint8_t *q, Error *err) {
+CRYPTO_FIPS_TEXT static Int ecdsa_private_to_fips(const EcdsaFipsCurve *c,
+                                                  const EcdsaPrivateKey *priv,
+                                                  uint8_t *d, uint8_t *q, Error *err) {
     const EcdsaPublicKey *pub = &priv->public_key;
     Int n = ecdsa_point_from_affine(pub->curve, pub->x, pub->y, q, err);
     if (n == 0)
@@ -939,8 +959,8 @@ static Int ecdsa_private_to_fips(const EcdsaFipsCurve *c, const EcdsaPrivateKey 
 }
 
 /* publicKeyFromFIPS. */
-static EcdsaPublicKey *ecdsa_public_from_fips(Alloc *a, EllipticCurve curve, Slice q,
-                                              Error *err) {
+CRYPTO_FIPS_TEXT static EcdsaPublicKey *
+ecdsa_public_from_fips(Alloc *a, EllipticCurve curve, Slice q, Error *err) {
     EcdsaPublicBlock *b = ecdsa_new_public_block(a, curve, err);
     if (b == NULL)
         return NULL;
@@ -952,8 +972,8 @@ static EcdsaPublicKey *ecdsa_public_from_fips(Alloc *a, EllipticCurve curve, Sli
 }
 
 /* privateKeyFromFIPS. */
-static EcdsaPrivateKey *ecdsa_private_from_fips(Alloc *a, EllipticCurve curve, Slice d,
-                                                Slice q, Error *err) {
+CRYPTO_FIPS_TEXT static EcdsaPrivateKey *
+ecdsa_private_from_fips(Alloc *a, EllipticCurve curve, Slice d, Slice q, Error *err) {
     EcdsaPrivateBlock *b = ecdsa_new_private_block(a, curve, err);
     if (b == NULL)
         return NULL;
@@ -971,7 +991,7 @@ typedef struct EcdsaSigParts {
     Slice r, s;
 } EcdsaSigParts;
 
-static void ecdsa_add_int_body(void *env, CryptobyteBuilder *c) {
+CRYPTO_FIPS_TEXT static void ecdsa_add_int_body(void *env, CryptobyteBuilder *c) {
     Slice *bytes = env;
     const uint8_t *p = bytes->p;
     if ((p[0] & 0x80) != 0)
@@ -980,7 +1000,7 @@ static void ecdsa_add_int_body(void *env, CryptobyteBuilder *c) {
 }
 
 /* addASN1IntBytes: an INTEGER from big endian bytes, which are not negative. */
-static void ecdsa_add_int_bytes(CryptobyteBuilder *b, Slice *bytes) {
+CRYPTO_FIPS_TEXT static void ecdsa_add_int_bytes(CryptobyteBuilder *b, Slice *bytes) {
     const uint8_t *p = bytes->p;
     while (bytes->len > 0 && p[0] == 0) {
         p++;
@@ -998,14 +1018,15 @@ static void ecdsa_add_int_bytes(CryptobyteBuilder *b, Slice *bytes) {
         BURROW_FN(CryptobyteBuilderContinuation, ecdsa_add_int_body, bytes));
 }
 
-static void ecdsa_add_sig_body(void *env, CryptobyteBuilder *b) {
+CRYPTO_FIPS_TEXT static void ecdsa_add_sig_body(void *env, CryptobyteBuilder *b) {
     EcdsaSigParts *sig = env;
     ecdsa_add_int_bytes(b, &sig->r);
     ecdsa_add_int_bytes(b, &sig->s);
 }
 
 /* encodeSignature: SEQUENCE { r INTEGER, s INTEGER }, from a. */
-static Slice ecdsa_encode_signature(Alloc *a, Slice r, Slice s, Error *err) {
+CRYPTO_FIPS_TEXT static Slice ecdsa_encode_signature(Alloc *a, Slice r, Slice s,
+                                                     Error *err) {
     EcdsaSigParts sig = {r, s};
     CryptobyteBuilder b =
         cryptobyte_new_builder(heap_allocator(), slice_nil(TYPE_BYTE));
@@ -1024,7 +1045,7 @@ static Slice ecdsa_encode_signature(Alloc *a, Slice r, Slice s, Error *err) {
 }
 
 /* parseSignature: r and s, borrowed from sig. */
-static bool ecdsa_parse_signature(Slice sig, Slice *r, Slice *s) {
+CRYPTO_FIPS_TEXT static bool ecdsa_parse_signature(Slice sig, Slice *r, Slice *s) {
     CryptobyteString inner;
     CryptobyteString input = sig;
     return cryptobyte_string_read_asn1(&input, &inner, CRYPTOBYTE_ASN1_SEQUENCE) &&
@@ -1037,8 +1058,10 @@ static bool ecdsa_parse_signature(Slice sig, Slice *r, Slice *s) {
 /* --------------------------------------------------------------- legacy */
 
 /* randFieldElement: a number in [1, N) from rand, in k. */
-static bool ecdsa_rand_field_element(Alloc *tmp, const EllipticCurveParams *params,
-                                     IoReader rand, BigInt *k, Error *err) {
+CRYPTO_FIPS_TEXT static bool ecdsa_rand_field_element(Alloc *tmp,
+                                                      const EllipticCurveParams *params,
+                                                      IoReader rand, BigInt *k,
+                                                      Error *err) {
     const BigInt *n = params->n;
     Int bits = big_int_bit_len(n);
     Int len = (bits + 7) / 8;
@@ -1064,8 +1087,8 @@ static bool ecdsa_rand_field_element(Alloc *tmp, const EllipticCurveParams *para
 }
 
 /* hashToInt: the leftmost bits of hash, as many as the order has. */
-static void ecdsa_hash_to_int(const EllipticCurveParams *params, Slice hash,
-                              BigInt *ret) {
+CRYPTO_FIPS_TEXT static void ecdsa_hash_to_int(const EllipticCurveParams *params,
+                                               Slice hash, BigInt *ret) {
     Int order_bits = big_int_bit_len(params->n);
     Int order_bytes = (order_bits + 7) / 8;
     if (hash.len > order_bytes)
@@ -1077,13 +1100,13 @@ static void ecdsa_hash_to_int(const EllipticCurveParams *params, Slice hash,
 }
 
 /* What Go does with the nil a failed ModInverse gives it. */
-static void ecdsa_nil_deref(void) {
+CRYPTO_FIPS_TEXT static void ecdsa_nil_deref(void) {
     panic_str(
         BURROW_S("runtime error: invalid memory address or nil pointer dereference"));
 }
 
-static EcdsaPrivateKey *ecdsa_generate_legacy(Alloc *a, EllipticCurve c, IoReader rand,
-                                              Error *err) {
+CRYPTO_FIPS_TEXT static EcdsaPrivateKey *
+ecdsa_generate_legacy(Alloc *a, EllipticCurve c, IoReader rand, Error *err) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *tmp = arena_allocator(&ar);
@@ -1108,8 +1131,9 @@ done:
     return out;
 }
 
-static Slice ecdsa_sign_legacy(Alloc *a, const EcdsaPrivateKey *priv, IoReader csprng,
-                               Slice hash, Error *err) {
+CRYPTO_FIPS_TEXT static Slice ecdsa_sign_legacy(Alloc *a, const EcdsaPrivateKey *priv,
+                                                IoReader csprng, Slice hash,
+                                                Error *err) {
     EllipticCurve c = priv->public_key.curve;
     Slice out = slice_nil(TYPE_BYTE);
     Arena ar;
@@ -1176,7 +1200,8 @@ done:
     return out;
 }
 
-static bool ecdsa_verify_legacy(const EcdsaPublicKey *pub, Slice hash, Slice sig) {
+CRYPTO_FIPS_TEXT static bool ecdsa_verify_legacy(const EcdsaPublicKey *pub, Slice hash,
+                                                 Slice sig) {
     Slice rb, sb;
     if (!ecdsa_parse_signature(sig, &rb, &sb))
         return false;
@@ -1223,8 +1248,8 @@ done:
 
 /* ------------------------------------------------------------ functions */
 
-EcdsaPrivateKey *ecdsa_generate_key(Alloc *a, EllipticCurve c, IoReader rand,
-                                    Error *err) {
+CRYPTO_FIPS_TEXT EcdsaPrivateKey *ecdsa_generate_key(Alloc *a, EllipticCurve c,
+                                                     IoReader rand, Error *err) {
     rand = ecdsa_reader(rand);
     const EcdsaFipsCurve *fc = ecdsa_fips_for_params(c);
     if (fc == NULL)
@@ -1242,8 +1267,9 @@ EcdsaPrivateKey *ecdsa_generate_key(Alloc *a, EllipticCurve c, IoReader rand,
     return priv;
 }
 
-EcdsaPublicKey *ecdsa_parse_uncompressed_public_key(Alloc *a, EllipticCurve curve,
-                                                    Slice data, Error *err) {
+CRYPTO_FIPS_TEXT EcdsaPublicKey *
+ecdsa_parse_uncompressed_public_key(Alloc *a, EllipticCurve curve, Slice data,
+                                    Error *err) {
     const uint8_t *p = data.p;
     if (data.len < 1 || p[0] != 4) {
         ecdsa_set_error(err, "ecdsa: invalid uncompressed public key");
@@ -1260,8 +1286,8 @@ EcdsaPublicKey *ecdsa_parse_uncompressed_public_key(Alloc *a, EllipticCurve curv
     return ecdsa_public_from_fips(a, curve, data, err);
 }
 
-EcdsaPrivateKey *ecdsa_parse_raw_private_key(Alloc *a, EllipticCurve curve, Slice data,
-                                             Error *err) {
+CRYPTO_FIPS_TEXT EcdsaPrivateKey *
+ecdsa_parse_raw_private_key(Alloc *a, EllipticCurve curve, Slice data, Error *err) {
     const EcdsaFipsCurve *fc = ecdsa_fips_for_curve(curve);
     if (fc == NULL) {
         ecdsa_set_error(err, "ecdsa: curve not supported by ParseRawPrivateKey");
@@ -1281,9 +1307,9 @@ EcdsaPrivateKey *ecdsa_parse_raw_private_key(Alloc *a, EllipticCurve curve, Slic
     return ecdsa_private_from_fips(a, curve, data, qs, err);
 }
 
-static Slice ecdsa_sign_fips(Alloc *a, const EcdsaFipsCurve *c,
-                             const EcdsaPrivateKey *priv, IoReader rand, Slice hash,
-                             Error *err) {
+CRYPTO_FIPS_TEXT static Slice ecdsa_sign_fips(Alloc *a, const EcdsaFipsCurve *c,
+                                              const EcdsaPrivateKey *priv,
+                                              IoReader rand, Slice hash, Error *err) {
     uint8_t d[NISTEC_MAX_ELEMENT_BYTES];
     uint8_t q[NISTEC_MAX_POINT_BYTES];
     if (ecdsa_private_to_fips(c, priv, d, q, err) == 0)
@@ -1297,8 +1323,9 @@ static Slice ecdsa_sign_fips(Alloc *a, const EcdsaFipsCurve *c,
                                   err);
 }
 
-Slice ecdsa_sign_asn1(Alloc *a, IoReader rand, const EcdsaPrivateKey *priv, Slice hash,
-                      Error *err) {
+CRYPTO_FIPS_TEXT Slice ecdsa_sign_asn1(Alloc *a, IoReader rand,
+                                       const EcdsaPrivateKey *priv, Slice hash,
+                                       Error *err) {
     if (hash.len == 0) {
         ecdsa_set_error(err, "ecdsa: hash cannot be empty");
         return slice_nil(TYPE_BYTE);
@@ -1310,8 +1337,9 @@ Slice ecdsa_sign_asn1(Alloc *a, IoReader rand, const EcdsaPrivateKey *priv, Slic
     return ecdsa_sign_fips(a, fc, priv, rand, hash, err);
 }
 
-static bool ecdsa_verify_fips(const EcdsaFipsCurve *c, const EcdsaPublicKey *pub,
-                              Slice hash, Slice sig) {
+CRYPTO_FIPS_TEXT static bool ecdsa_verify_fips(const EcdsaFipsCurve *c,
+                                               const EcdsaPublicKey *pub, Slice hash,
+                                               Slice sig) {
     Slice r, s;
     if (!ecdsa_parse_signature(sig, &r, &s))
         return false;
@@ -1322,7 +1350,8 @@ static bool ecdsa_verify_fips(const EcdsaFipsCurve *c, const EcdsaPublicKey *pub
     return ecdsa_fips_verify(c, ecdsa_bytes(q, n), hash, r, s, NULL);
 }
 
-bool ecdsa_verify_asn1(const EcdsaPublicKey *pub, Slice hash, Slice sig) {
+CRYPTO_FIPS_TEXT bool ecdsa_verify_asn1(const EcdsaPublicKey *pub, Slice hash,
+                                        Slice sig) {
     if (hash.len == 0)
         return false;
     const EcdsaFipsCurve *fc = ecdsa_fips_for_params(pub->curve);
@@ -1331,8 +1360,9 @@ bool ecdsa_verify_asn1(const EcdsaPublicKey *pub, Slice hash, Slice sig) {
     return ecdsa_verify_fips(fc, pub, hash, sig);
 }
 
-BigInt *ecdsa_sign(Alloc *a, IoReader rand, const EcdsaPrivateKey *priv, Slice hash,
-                   BigInt **s, Error *err) {
+CRYPTO_FIPS_TEXT BigInt *ecdsa_sign(Alloc *a, IoReader rand,
+                                    const EcdsaPrivateKey *priv, Slice hash, BigInt **s,
+                                    Error *err) {
     BURROW_OUT(s, NULL);
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -1370,8 +1400,8 @@ done:
     return rv;
 }
 
-bool ecdsa_verify(const EcdsaPublicKey *pub, Slice hash, const BigInt *r,
-                  const BigInt *s) {
+CRYPTO_FIPS_TEXT bool ecdsa_verify(const EcdsaPublicKey *pub, Slice hash,
+                                   const BigInt *r, const BigInt *s) {
     if (big_int_sign(r) <= 0 || big_int_sign(s) <= 0)
         return false;
     Arena ar;
@@ -1388,7 +1418,8 @@ bool ecdsa_verify(const EcdsaPublicKey *pub, Slice hash, const BigInt *r,
 
 /* ------------------------------------------------------------- PublicKey */
 
-Slice ecdsa_public_key_bytes(const EcdsaPublicKey *pub, Alloc *a, Error *err) {
+CRYPTO_FIPS_TEXT Slice ecdsa_public_key_bytes(const EcdsaPublicKey *pub, Alloc *a,
+                                              Error *err) {
     const EcdsaFipsCurve *fc = ecdsa_fips_for_curve(pub->curve);
     if (fc == NULL) {
         ecdsa_set_error(err, "ecdsa: curve not supported by PublicKey.Bytes");
@@ -1402,7 +1433,7 @@ Slice ecdsa_public_key_bytes(const EcdsaPublicKey *pub, Alloc *a, Error *err) {
 }
 
 /* curveToECDH. */
-static const EcdhCurve *ecdsa_curve_to_ecdh(EllipticCurve c) {
+CRYPTO_FIPS_TEXT static const EcdhCurve *ecdsa_curve_to_ecdh(EllipticCurve c) {
     if (ecdsa_same_curve(c, elliptic_p256()))
         return ecdh_p256();
     if (ecdsa_same_curve(c, elliptic_p384()))
@@ -1412,7 +1443,8 @@ static const EcdhCurve *ecdsa_curve_to_ecdh(EllipticCurve c) {
     return NULL;
 }
 
-EcdhPublicKey *ecdsa_public_key_ecdh(const EcdsaPublicKey *pub, Alloc *a, Error *err) {
+CRYPTO_FIPS_TEXT EcdhPublicKey *ecdsa_public_key_ecdh(const EcdsaPublicKey *pub,
+                                                      Alloc *a, Error *err) {
     const EcdhCurve *c = ecdsa_curve_to_ecdh(pub->curve);
     if (c == NULL) {
         ecdsa_set_error(err, "ecdsa: unsupported curve by crypto/ecdh");
@@ -1426,7 +1458,7 @@ EcdhPublicKey *ecdsa_public_key_ecdh(const EcdsaPublicKey *pub, Alloc *a, Error 
 }
 
 /* bigIntEqual: a.Bytes() and b.Bytes() compared in constant time. */
-static bool ecdsa_big_int_equal(const BigInt *x, const BigInt *y) {
+CRYPTO_FIPS_TEXT static bool ecdsa_big_int_equal(const BigInt *x, const BigInt *y) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *tmp = arena_allocator(&ar);
@@ -1441,12 +1473,14 @@ static bool ecdsa_big_int_equal(const BigInt *x, const BigInt *y) {
     return eq;
 }
 
-static bool ecdsa_public_equal(const EcdsaPublicKey *pub, const EcdsaPublicKey *xx) {
+CRYPTO_FIPS_TEXT static bool ecdsa_public_equal(const EcdsaPublicKey *pub,
+                                                const EcdsaPublicKey *xx) {
     return ecdsa_big_int_equal(pub->x, xx->x) && ecdsa_big_int_equal(pub->y, xx->y) &&
            ecdsa_same_curve(pub->curve, xx->curve);
 }
 
-bool ecdsa_public_key_equal(const EcdsaPublicKey *pub, CryptoPublicKey x) {
+CRYPTO_FIPS_TEXT bool ecdsa_public_key_equal(const EcdsaPublicKey *pub,
+                                             CryptoPublicKey x) {
     if (x.t != TYPE_ECDSA_PUBLIC_KEY || x.data == NULL)
         return false;
     return ecdsa_public_equal(pub, x.data);
@@ -1454,7 +1488,8 @@ bool ecdsa_public_key_equal(const EcdsaPublicKey *pub, CryptoPublicKey x) {
 
 /* ------------------------------------------------------------ PrivateKey */
 
-Slice ecdsa_private_key_bytes(const EcdsaPrivateKey *priv, Alloc *a, Error *err) {
+CRYPTO_FIPS_TEXT Slice ecdsa_private_key_bytes(const EcdsaPrivateKey *priv, Alloc *a,
+                                               Error *err) {
     const EcdsaFipsCurve *fc = ecdsa_fips_for_curve(priv->public_key.curve);
     if (fc == NULL) {
         ecdsa_set_error(err, "ecdsa: curve not supported by PrivateKey.Bytes");
@@ -1469,8 +1504,8 @@ Slice ecdsa_private_key_bytes(const EcdsaPrivateKey *priv, Alloc *a, Error *err)
     return out;
 }
 
-EcdhPrivateKey *ecdsa_private_key_ecdh(const EcdsaPrivateKey *priv, Alloc *a,
-                                       Error *err) {
+CRYPTO_FIPS_TEXT EcdhPrivateKey *ecdsa_private_key_ecdh(const EcdsaPrivateKey *priv,
+                                                        Alloc *a, Error *err) {
     EllipticCurve curve = priv->public_key.curve;
     const EcdhCurve *c = ecdsa_curve_to_ecdh(curve);
     if (c == NULL) {
@@ -1487,7 +1522,8 @@ EcdhPrivateKey *ecdsa_private_key_ecdh(const EcdsaPrivateKey *priv, Alloc *a,
     return k;
 }
 
-bool ecdsa_private_key_equal(const EcdsaPrivateKey *priv, CryptoPrivateKey x) {
+CRYPTO_FIPS_TEXT bool ecdsa_private_key_equal(const EcdsaPrivateKey *priv,
+                                              CryptoPrivateKey x) {
     if (x.t != TYPE_ECDSA_PRIVATE_KEY || x.data == NULL)
         return false;
     const EcdsaPrivateKey *xx = x.data;
@@ -1495,15 +1531,14 @@ bool ecdsa_private_key_equal(const EcdsaPrivateKey *priv, CryptoPrivateKey x) {
            ecdsa_big_int_equal(priv->d, xx->d);
 }
 
-CryptoPublicKey ecdsa_private_key_public(const EcdsaPrivateKey *priv) {
+CRYPTO_FIPS_TEXT CryptoPublicKey ecdsa_private_key_public(const EcdsaPrivateKey *priv) {
     return BURROW_ANY(TYPE_ECDSA_PUBLIC_KEY, (uintptr_t)&priv->public_key);
 }
 
 /* signFIPSDeterministic. */
-static Slice ecdsa_sign_fips_deterministic(Alloc *a, const EcdsaFipsCurve *c,
-                                           CryptoHash hash_func,
-                                           const EcdsaPrivateKey *priv, Slice hash,
-                                           Error *err) {
+CRYPTO_FIPS_TEXT static Slice
+ecdsa_sign_fips_deterministic(Alloc *a, const EcdsaFipsCurve *c, CryptoHash hash_func,
+                              const EcdsaPrivateKey *priv, Slice hash, Error *err) {
     uint8_t d[NISTEC_MAX_ELEMENT_BYTES];
     uint8_t q[NISTEC_MAX_POINT_BYTES];
     if (ecdsa_private_to_fips(c, priv, d, q, err) == 0)
@@ -1538,8 +1573,9 @@ done:
 }
 
 /* signRFC6979. */
-static Slice ecdsa_sign_rfc6979(Alloc *a, const EcdsaPrivateKey *priv, Slice hash,
-                                CryptoSignerOpts opts, Error *err) {
+CRYPTO_FIPS_TEXT static Slice ecdsa_sign_rfc6979(Alloc *a, const EcdsaPrivateKey *priv,
+                                                 Slice hash, CryptoSignerOpts opts,
+                                                 Error *err) {
     if (opts.vt == NULL) {
         ecdsa_set_error(err, "ecdsa: Sign called with nil random and nil opts");
         return slice_nil(TYPE_BYTE);
@@ -1553,8 +1589,9 @@ static Slice ecdsa_sign_rfc6979(Alloc *a, const EcdsaPrivateKey *priv, Slice has
     return ecdsa_sign_fips_deterministic(a, fc, h, priv, hash, err);
 }
 
-Slice ecdsa_private_key_sign(const EcdsaPrivateKey *priv, Alloc *a, IoReader rand,
-                             Slice digest, CryptoSignerOpts opts, Error *err) {
+CRYPTO_FIPS_TEXT Slice ecdsa_private_key_sign(const EcdsaPrivateKey *priv, Alloc *a,
+                                              IoReader rand, Slice digest,
+                                              CryptoSignerOpts opts, Error *err) {
     if (opts.vt != NULL) {
         CryptoHash h = opts.vt->hash_func(opts.data);
         if (h == 0) {
@@ -1575,18 +1612,19 @@ Slice ecdsa_private_key_sign(const EcdsaPrivateKey *priv, Alloc *a, IoReader ran
 
 /* --------------------------------------------------------------- Signer */
 
-static CryptoPublicKey ecdsa_signer_public(void *self) {
+CRYPTO_FIPS_TEXT static CryptoPublicKey ecdsa_signer_public(void *self) {
     return ecdsa_private_key_public(self);
 }
 
-static Slice ecdsa_signer_sign(void *self, Alloc *a, IoReader rand, Slice digest,
-                               CryptoSignerOpts opts, Error *err) {
+CRYPTO_FIPS_TEXT static Slice ecdsa_signer_sign(void *self, Alloc *a, IoReader rand,
+                                                Slice digest, CryptoSignerOpts opts,
+                                                Error *err) {
     return ecdsa_private_key_sign(self, a, rand, digest, opts, err);
 }
 
 static const CryptoSignerVT ecdsa_signer_vt = {TYPE_ECDSA_PRIVATE_KEY,
                                                ecdsa_signer_public, ecdsa_signer_sign};
 
-CryptoSigner ecdsa_private_key_signer(const EcdsaPrivateKey *priv) {
+CRYPTO_FIPS_TEXT CryptoSigner ecdsa_private_key_signer(const EcdsaPrivateKey *priv) {
     return (CryptoSigner){&ecdsa_signer_vt, (void *)(uintptr_t)priv};
 }

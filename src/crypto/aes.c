@@ -40,6 +40,7 @@
 #include "burrow/type.h"
 
 #include "aes_internal.h"
+#include "fips140_module.h"
 #include "internal.h"
 
 #include <stdint.h>
@@ -79,7 +80,7 @@ static const char aes_key_size_prefix[] = "crypto/aes: invalid key size ";
 
 /* Writes the message for k to p, or only counts it when p is NULL, and returns
  * its length. */
-static Int aes_key_size_message(Byte *p, AesKeySizeError k) {
+CRYPTO_FIPS_TEXT static Int aes_key_size_message(Byte *p, AesKeySizeError k) {
     Byte digits[20];
     Int n = 0;
     uint64_t u = k < 0 ? (uint64_t)0 - (uint64_t)k : (uint64_t)k;
@@ -99,11 +100,11 @@ static Int aes_key_size_message(Byte *p, AesKeySizeError k) {
     return len;
 }
 
-static Str aes_key_size_text(const void *self) {
+CRYPTO_FIPS_TEXT static Str aes_key_size_text(const void *self) {
     return ((const AesKeySizeBox *)self)->message;
 }
 
-static Error aes_key_size_clone(const void *self, Alloc *a) {
+CRYPTO_FIPS_TEXT static Error aes_key_size_clone(const void *self, Alloc *a) {
     return aes_key_size_error_as_error(((const AesKeySizeBox *)self)->k, a);
 }
 
@@ -113,7 +114,7 @@ static const ErrorVT aes_key_size_vt = {
     .clone = aes_key_size_clone,
 };
 
-Error aes_key_size_error_as_error(AesKeySizeError k, Alloc *a) {
+CRYPTO_FIPS_TEXT Error aes_key_size_error_as_error(AesKeySizeError k, Alloc *a) {
     Int mlen = aes_key_size_message(NULL, k);
     AesKeySizeBox *b = (AesKeySizeBox *)mem_alloc_nozero(
         a, sizeof(AesKeySizeBox) + (size_t)mlen, _Alignof(AesKeySizeBox));
@@ -126,7 +127,7 @@ Error aes_key_size_error_as_error(AesKeySizeError k, Alloc *a) {
     return (Error){&aes_key_size_vt, b};
 }
 
-Str aes_key_size_error_error(AesKeySizeError k, Alloc *a) {
+CRYPTO_FIPS_TEXT Str aes_key_size_error_error(AesKeySizeError k, Alloc *a) {
     Int mlen = aes_key_size_message(NULL, k);
     Byte *p = (Byte *)mem_alloc_nozero(a, (size_t)mlen, 1);
     if (p == NULL)
@@ -148,7 +149,7 @@ Str aes_key_size_error_error(AesKeySizeError k, Alloc *a) {
         (a) ^= t_ << (n);                                                              \
     } while (0)
 
-static void aes_ct_ortho(uint64_t q[8]) {
+CRYPTO_FIPS_TEXT static void aes_ct_ortho(uint64_t q[8]) {
     const uint64_t m1 = UINT64_C(0x5555555555555555);
     const uint64_t m2 = UINT64_C(0x3333333333333333);
     const uint64_t m4 = UINT64_C(0x0F0F0F0F0F0F0F0F);
@@ -170,7 +171,7 @@ static void aes_ct_ortho(uint64_t q[8]) {
  * block p & 3, column (p >> 2) & 3 and row p >> 4, which is byte row + 4 *
  * column of the block. After aes_ct_ortho, byte k of word j ends up at bit
  * 8k + j of every plane. */
-static const uint8_t aes_ct_index[64] = {
+CRYPTO_FIPS_RODATA static const uint8_t aes_ct_index[64] = {
     0, 16, 32, 48, 4, 20, 36, 52, 8,  24, 40, 56, 12, 28, 44, 60,
     1, 17, 33, 49, 5, 21, 37, 53, 9,  25, 41, 57, 13, 29, 45, 61,
     2, 18, 34, 50, 6, 22, 38, 54, 10, 26, 42, 58, 14, 30, 46, 62,
@@ -178,7 +179,7 @@ static const uint8_t aes_ct_index[64] = {
 };
 
 /* n blocks of in, at most four, into bit planes. The missing blocks are zero. */
-static void aes_ct_load(uint64_t q[8], const Byte *in, size_t n) {
+CRYPTO_FIPS_TEXT static void aes_ct_load(uint64_t q[8], const Byte *in, size_t n) {
     memset(q, 0, 8 * sizeof q[0]);
     size_t len = n * 16;
     for (unsigned p = 0; p < 64; p++) {
@@ -190,7 +191,7 @@ static void aes_ct_load(uint64_t q[8], const Byte *in, size_t n) {
 }
 
 /* The first n blocks back out of bit planes. q is used up. */
-static void aes_ct_store(Byte *out, uint64_t q[8], size_t n) {
+CRYPTO_FIPS_TEXT static void aes_ct_store(Byte *out, uint64_t q[8], size_t n) {
     aes_ct_ortho(q);
     size_t len = n * 16;
     for (unsigned p = 0; p < 64; p++) {
@@ -203,7 +204,7 @@ static void aes_ct_store(Byte *out, uint64_t q[8], size_t n) {
 /* SubBytes on all 64 bytes: the Boyar-Peralta circuit, with q[0] the low bit.
  * The top linear layer, the shared nonlinear middle and the bottom linear
  * layer, with the S-box's constant 0x63 folded in as the four NOTs. */
-static void aes_ct_sbox(uint64_t q[8]) {
+CRYPTO_FIPS_TEXT static void aes_ct_sbox(uint64_t q[8]) {
     uint64_t x0 = q[7], x1 = q[6], x2 = q[5], x3 = q[4];
     uint64_t x4 = q[3], x5 = q[2], x6 = q[1], x7 = q[0];
 
@@ -340,7 +341,7 @@ static void aes_ct_sbox(uint64_t q[8]) {
 /* The affine map that undoes the S-box's own, which is its own inverse up to
  * the constant: NOT of bits 0, 1, 5 and 6, then bit i is the XOR of bits
  * i + 2, i + 5 and i + 7. */
-static void aes_ct_inv_affine(uint64_t q[8]) {
+CRYPTO_FIPS_TEXT static void aes_ct_inv_affine(uint64_t q[8]) {
     uint64_t q0 = ~q[0], q1 = ~q[1], q2 = q[2], q3 = q[3];
     uint64_t q4 = q[4], q5 = ~q[5], q6 = ~q[6], q7 = q[7];
     q[0] = q2 ^ q5 ^ q7;
@@ -353,7 +354,7 @@ static void aes_ct_inv_affine(uint64_t q[8]) {
     q[7] = q1 ^ q4 ^ q6;
 }
 
-static void aes_ct_inv_sbox(uint64_t q[8]) {
+CRYPTO_FIPS_TEXT static void aes_ct_inv_sbox(uint64_t q[8]) {
     aes_ct_inv_affine(q);
     aes_ct_sbox(q);
     aes_ct_inv_affine(q);
@@ -361,7 +362,7 @@ static void aes_ct_inv_sbox(uint64_t q[8]) {
 
 /* Row r is bits 16r to 16r + 15, and ShiftRows moves column c + r to column c,
  * which is a rotation of the row right by 4r bits. */
-static void aes_ct_shift_rows(uint64_t q[8]) {
+CRYPTO_FIPS_TEXT static void aes_ct_shift_rows(uint64_t q[8]) {
     for (int i = 0; i < 8; i++) {
         uint64_t x = q[i];
         q[i] = (x & UINT64_C(0x000000000000FFFF)) |
@@ -374,7 +375,7 @@ static void aes_ct_shift_rows(uint64_t q[8]) {
     }
 }
 
-static void aes_ct_inv_shift_rows(uint64_t q[8]) {
+CRYPTO_FIPS_TEXT static void aes_ct_inv_shift_rows(uint64_t q[8]) {
     for (int i = 0; i < 8; i++) {
         uint64_t x = q[i];
         q[i] = (x & UINT64_C(0x000000000000FFFF)) |
@@ -387,12 +388,12 @@ static void aes_ct_inv_shift_rows(uint64_t q[8]) {
     }
 }
 
-static inline uint64_t aes_ct_rotr(uint64_t x, unsigned n) {
+CRYPTO_FIPS_TEXT static inline uint64_t aes_ct_rotr(uint64_t x, unsigned n) {
     return (x >> n) | (x << (64 - n));
 }
 
 /* Multiplies every byte by x, modulo x^8 + x^4 + x^3 + x + 1. */
-static void aes_ct_xtime(uint64_t q[8]) {
+CRYPTO_FIPS_TEXT static void aes_ct_xtime(uint64_t q[8]) {
     uint64_t hi = q[7];
     q[7] = q[6];
     q[6] = q[5];
@@ -406,7 +407,7 @@ static void aes_ct_xtime(uint64_t q[8]) {
 
 /* Each byte becomes 2 * (s[r] ^ s[r + 1]) ^ s[r + 1] ^ s[r + 2] ^ s[r + 3] in
  * its column, and row r + k is the word rotated right by 16k. */
-static void aes_ct_mix_columns(uint64_t q[8]) {
+CRYPTO_FIPS_TEXT static void aes_ct_mix_columns(uint64_t q[8]) {
     uint64_t r1[8], rest[8];
     for (int i = 0; i < 8; i++) {
         r1[i] = aes_ct_rotr(q[i], 16);
@@ -420,7 +421,7 @@ static void aes_ct_mix_columns(uint64_t q[8]) {
 
 /* InvMixColumns is MixColumns after each byte has had 4 * (s[r] ^ s[r + 2])
  * added to it, which is how the inverse matrix factors. */
-static void aes_ct_inv_mix_columns(uint64_t q[8]) {
+CRYPTO_FIPS_TEXT static void aes_ct_inv_mix_columns(uint64_t q[8]) {
     uint64_t t[8];
     for (int i = 0; i < 8; i++)
         t[i] = q[i] ^ aes_ct_rotr(q[i], 32);
@@ -431,12 +432,12 @@ static void aes_ct_inv_mix_columns(uint64_t q[8]) {
     aes_ct_mix_columns(q);
 }
 
-static void aes_ct_add_key(uint64_t q[8], const uint64_t *sk) {
+CRYPTO_FIPS_TEXT static void aes_ct_add_key(uint64_t q[8], const uint64_t *sk) {
     for (int i = 0; i < 8; i++)
         q[i] ^= sk[i];
 }
 
-static void aes_ct_encrypt(const AesBlock *b, uint64_t q[8]) {
+CRYPTO_FIPS_TEXT static void aes_ct_encrypt(const AesBlock *b, uint64_t q[8]) {
     const uint64_t *sk = b->sk;
     aes_ct_add_key(q, sk);
     for (int r = 1; r < b->rounds; r++) {
@@ -450,7 +451,7 @@ static void aes_ct_encrypt(const AesBlock *b, uint64_t q[8]) {
     aes_ct_add_key(q, sk + 8 * (size_t)b->rounds);
 }
 
-static void aes_ct_decrypt(const AesBlock *b, uint64_t q[8]) {
+CRYPTO_FIPS_TEXT static void aes_ct_decrypt(const AesBlock *b, uint64_t q[8]) {
     const uint64_t *sk = b->sk;
     aes_ct_add_key(q, sk + 8 * (size_t)b->rounds);
     for (int r = b->rounds - 1; r > 0; r--) {
@@ -466,7 +467,7 @@ static void aes_ct_decrypt(const AesBlock *b, uint64_t q[8]) {
 
 /* SubWord from the key schedule, through the same circuit, so that expanding
  * a key does not look up a table with it either. */
-static void aes_ct_sub_word(Byte w[4]) {
+CRYPTO_FIPS_TEXT static void aes_ct_sub_word(Byte w[4]) {
     uint64_t q[8] = {0};
     for (int j = 0; j < 4; j++)
         for (int i = 0; i < 8; i++)
@@ -481,7 +482,7 @@ static void aes_ct_sub_word(Byte w[4]) {
 }
 
 /* FIPS 197 section 5.2, KeyExpansion, into b->enc. */
-static void aes_expand_key(AesBlock *b, const Byte *key, int nk) {
+CRYPTO_FIPS_TEXT static void aes_expand_key(AesBlock *b, const Byte *key, int nk) {
     int words = 4 * (b->rounds + 1);
     Byte *w = b->enc;
     memcpy(w, key, (size_t)nk * 4);
@@ -507,7 +508,7 @@ static void aes_expand_key(AesBlock *b, const Byte *key, int nk) {
 }
 
 /* The round keys in bit planes, each one copied into all four blocks. */
-static void aes_ct_schedule(AesBlock *b) {
+CRYPTO_FIPS_TEXT static void aes_ct_schedule(AesBlock *b) {
     for (int r = 0; r <= b->rounds; r++) {
         Byte four[64];
         for (int k = 0; k < 4; k++)
@@ -516,8 +517,8 @@ static void aes_ct_schedule(AesBlock *b) {
     }
 }
 
-static void aes_ct_encrypt_blocks(const AesBlock *b, Byte *dst, const Byte *src,
-                                  size_t n) {
+CRYPTO_FIPS_TEXT static void aes_ct_encrypt_blocks(const AesBlock *b, Byte *dst,
+                                                   const Byte *src, size_t n) {
     while (n > 0) {
         size_t k = n < 4 ? n : 4;
         uint64_t q[8];
@@ -530,8 +531,8 @@ static void aes_ct_encrypt_blocks(const AesBlock *b, Byte *dst, const Byte *src,
     }
 }
 
-static void aes_ct_decrypt_blocks(const AesBlock *b, Byte *dst, const Byte *src,
-                                  size_t n) {
+CRYPTO_FIPS_TEXT static void aes_ct_decrypt_blocks(const AesBlock *b, Byte *dst,
+                                                   const Byte *src, size_t n) {
     while (n > 0) {
         size_t k = n < 4 ? n : 4;
         uint64_t q[8];
@@ -548,19 +549,21 @@ static void aes_ct_decrypt_blocks(const AesBlock *b, Byte *dst, const Byte *src,
 
 #if defined(CRYPTO_X86_AES)
 
-CRYPTO_TARGET_X86_AES static inline __m128i aes_x86_load(const void *p) {
+CRYPTO_FIPS_TEXT CRYPTO_TARGET_X86_AES static inline __m128i
+aes_x86_load(const void *p) {
     __m128i v;
     memcpy(&v, p, sizeof v);
     return v;
 }
 
-CRYPTO_TARGET_X86_AES static inline void aes_x86_store(void *p, __m128i v) {
+CRYPTO_FIPS_TEXT CRYPTO_TARGET_X86_AES static inline void aes_x86_store(void *p,
+                                                                        __m128i v) {
     memcpy(p, &v, sizeof v);
 }
 
 /* The equivalent inverse cipher's keys: the encryption keys backwards, with
  * InvMixColumns applied to all but the first and last. */
-CRYPTO_TARGET_X86_AES static void aes_x86_dec_keys(AesBlock *b) {
+CRYPTO_FIPS_TEXT CRYPTO_TARGET_X86_AES static void aes_x86_dec_keys(AesBlock *b) {
     int nr = b->rounds;
     aes_x86_store(b->dec, aes_x86_load(b->enc + 16 * (size_t)nr));
     for (int i = 1; i < nr; i++)
@@ -571,8 +574,8 @@ CRYPTO_TARGET_X86_AES static void aes_x86_dec_keys(AesBlock *b) {
 
 /* Four blocks at a time, so that the four chains of aesenc overlap in the
  * pipeline, then the rest one by one. */
-CRYPTO_TARGET_X86_AES static void aes_x86_encrypt_blocks(const AesBlock *b, Byte *dst,
-                                                         const Byte *src, size_t n) {
+CRYPTO_FIPS_TEXT CRYPTO_TARGET_X86_AES static void
+aes_x86_encrypt_blocks(const AesBlock *b, Byte *dst, const Byte *src, size_t n) {
     int nr = b->rounds;
     __m128i k[15];
     for (int i = 0; i <= nr; i++)
@@ -601,8 +604,8 @@ CRYPTO_TARGET_X86_AES static void aes_x86_encrypt_blocks(const AesBlock *b, Byte
     }
 }
 
-CRYPTO_TARGET_X86_AES static void aes_x86_decrypt_blocks(const AesBlock *b, Byte *dst,
-                                                         const Byte *src, size_t n) {
+CRYPTO_FIPS_TEXT CRYPTO_TARGET_X86_AES static void
+aes_x86_decrypt_blocks(const AesBlock *b, Byte *dst, const Byte *src, size_t n) {
     int nr = b->rounds;
     __m128i k[15];
     for (int i = 0; i <= nr; i++)
@@ -639,7 +642,7 @@ CRYPTO_TARGET_X86_AES static void aes_x86_decrypt_blocks(const AesBlock *b, Byte
 
 /* AESE adds the key before SubBytes and ShiftRows, where AES adds it after, so
  * the keys go in one place earlier and the last one is a plain XOR. */
-CRYPTO_TARGET_ARM64_AES static void aes_arm64_dec_keys(AesBlock *b) {
+CRYPTO_FIPS_TEXT CRYPTO_TARGET_ARM64_AES static void aes_arm64_dec_keys(AesBlock *b) {
     int nr = b->rounds;
     vst1q_u8(b->dec, vld1q_u8(b->enc + 16 * (size_t)nr));
     for (int i = 1; i < nr; i++)
@@ -648,7 +651,7 @@ CRYPTO_TARGET_ARM64_AES static void aes_arm64_dec_keys(AesBlock *b) {
     vst1q_u8(b->dec + 16 * (size_t)nr, vld1q_u8(b->enc));
 }
 
-CRYPTO_TARGET_ARM64_AES static void
+CRYPTO_FIPS_TEXT CRYPTO_TARGET_ARM64_AES static void
 aes_arm64_encrypt_blocks(const AesBlock *b, Byte *dst, const Byte *src, size_t n) {
     int nr = b->rounds;
     uint8x16_t k[15];
@@ -678,7 +681,7 @@ aes_arm64_encrypt_blocks(const AesBlock *b, Byte *dst, const Byte *src, size_t n
     }
 }
 
-CRYPTO_TARGET_ARM64_AES static void
+CRYPTO_FIPS_TEXT CRYPTO_TARGET_ARM64_AES static void
 aes_arm64_decrypt_blocks(const AesBlock *b, Byte *dst, const Byte *src, size_t n) {
     int nr = b->rounds;
     uint8x16_t k[15];
@@ -714,11 +717,11 @@ aes_arm64_decrypt_blocks(const AesBlock *b, Byte *dst, const Byte *src, size_t n
 
 static uint32_t aes_portable_only;
 
-void burrow__aes_set_portable(bool on) {
+CRYPTO_FIPS_TEXT void burrow__aes_set_portable(bool on) {
     burrow__atomic_store_relaxed_u32(&aes_portable_only, on ? 1U : 0U);
 }
 
-const char *burrow__aes_hardware(bool *available) {
+CRYPTO_FIPS_TEXT const char *burrow__aes_hardware(bool *available) {
 #if defined(CRYPTO_X86_AES)
     *available = (pal_cpu_features() & PAL_CPU_X86_AES) != 0;
     return "AES-NI";
@@ -731,7 +734,7 @@ const char *burrow__aes_hardware(bool *available) {
 #endif
 }
 
-static int aes_pick_impl(void) {
+CRYPTO_FIPS_TEXT static int aes_pick_impl(void) {
     if (burrow__atomic_load_relaxed_u32(&aes_portable_only) != 0)
         return AES_IMPL_CT;
 #if defined(CRYPTO_X86_AES)
@@ -745,8 +748,8 @@ static int aes_pick_impl(void) {
     return AES_IMPL_CT;
 }
 
-void burrow__aes_encrypt_blocks(const AesBlock *b, Byte *dst, const Byte *src,
-                                size_t n) {
+CRYPTO_FIPS_TEXT void burrow__aes_encrypt_blocks(const AesBlock *b, Byte *dst,
+                                                 const Byte *src, size_t n) {
 #if defined(CRYPTO_X86_AES)
     if (b->impl == AES_IMPL_X86) {
         aes_x86_encrypt_blocks(b, dst, src, n);
@@ -762,8 +765,8 @@ void burrow__aes_encrypt_blocks(const AesBlock *b, Byte *dst, const Byte *src,
     aes_ct_encrypt_blocks(b, dst, src, n);
 }
 
-void burrow__aes_decrypt_blocks(const AesBlock *b, Byte *dst, const Byte *src,
-                                size_t n) {
+CRYPTO_FIPS_TEXT void burrow__aes_decrypt_blocks(const AesBlock *b, Byte *dst,
+                                                 const Byte *src, size_t n) {
 #if defined(CRYPTO_X86_AES)
     if (b->impl == AES_IMPL_X86) {
         aes_x86_decrypt_blocks(b, dst, src, n);
@@ -782,7 +785,7 @@ void burrow__aes_decrypt_blocks(const AesBlock *b, Byte *dst, const Byte *src,
 /* ------------------------------------------------------------------ Block */
 
 /* Go's alias.InexactOverlap on two runs of n bytes. */
-static bool aes_inexact_overlap(const void *x, const void *y, Int n) {
+CRYPTO_FIPS_TEXT static bool aes_inexact_overlap(const void *x, const void *y, Int n) {
     uintptr_t a = (uintptr_t)x;
     uintptr_t b = (uintptr_t)y;
     if (a == b)
@@ -790,7 +793,7 @@ static bool aes_inexact_overlap(const void *x, const void *y, Int n) {
     return a <= b + (uintptr_t)(n - 1) && b <= a + (uintptr_t)(n - 1);
 }
 
-static void aes_check(Slice dst, Slice src) {
+CRYPTO_FIPS_TEXT static void aes_check(Slice dst, Slice src) {
     if (src.len < AES_BLOCK_SIZE)
         panic_str(BURROW_S("crypto/aes: input not full block"));
     if (dst.len < AES_BLOCK_SIZE)
@@ -799,18 +802,18 @@ static void aes_check(Slice dst, Slice src) {
         panic_str(BURROW_S("crypto/aes: invalid buffer overlap"));
 }
 
-static Int aes_block_size(void *self) {
+CRYPTO_FIPS_TEXT static Int aes_block_size(void *self) {
     (void)self;
     return AES_BLOCK_SIZE;
 }
 
-static void aes_encrypt(void *self, Slice dst, Slice src) {
+CRYPTO_FIPS_TEXT static void aes_encrypt(void *self, Slice dst, Slice src) {
     aes_check(dst, src);
     burrow__aes_encrypt_blocks((const AesBlock *)self, (Byte *)dst.p,
                                (const Byte *)src.p, 1);
 }
 
-static void aes_decrypt(void *self, Slice dst, Slice src) {
+CRYPTO_FIPS_TEXT static void aes_decrypt(void *self, Slice dst, Slice src) {
     aes_check(dst, src);
     burrow__aes_decrypt_blocks((const AesBlock *)self, (Byte *)dst.p,
                                (const Byte *)src.p, 1);
@@ -819,11 +822,11 @@ static void aes_decrypt(void *self, Slice dst, Slice src) {
 static const CipherBlockVT aes_block_vt = {NULL, aes_block_size, aes_encrypt,
                                            aes_decrypt};
 
-AesBlock *burrow__aes_block_of(CipherBlock b) {
+CRYPTO_FIPS_TEXT AesBlock *burrow__aes_block_of(CipherBlock b) {
     return b.vt == &aes_block_vt ? (AesBlock *)b.data : NULL;
 }
 
-CipherBlock aes_new_cipher(Alloc *a, Slice key, Error *err) {
+CRYPTO_FIPS_TEXT CipherBlock aes_new_cipher(Alloc *a, Slice key, Error *err) {
     int nk;
     switch (key.len) {
     case 16:

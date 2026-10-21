@@ -167,7 +167,9 @@ CheckOptions:
   # __start_burrowtype, __stop_burrowtype, __start_burrowimpl and
   # __stop_burrowimpl are not ours to name. The ELF linker makes them up for the
   # sections src/runtime/registry.c and src/runtime/impl.c read, and a
-  # different spelling is a symbol nothing defines.
+  # different spelling is a symbol nothing defines. The four with burrow_fips in
+  # them are the same, for the FIPS module's sections, which
+  # src/crypto/fips140_check.c reads.
   #
   # Naming them here keeps the check on for everything else, which is better
   # than a NOLINT that grows a second instance nobody notices.
@@ -176,11 +178,11 @@ CheckOptions:
   # aliases of it and each alias reads its options under its own name. Set only
   # the first and the finding comes back with the other two in the brackets.
   - key: bugprone-reserved-identifier.AllowedIdentifiers
-    value: '_XOPEN_SOURCE;_FILE_OFFSET_BITS;_POSIX_C_SOURCE;_GNU_SOURCE;_DEFAULT_SOURCE;_DARWIN_C_SOURCE;_COSMO_SOURCE;__start_burrowtype;__stop_burrowtype;__start_burrowimpl;__stop_burrowimpl'
+    value: '_XOPEN_SOURCE;_FILE_OFFSET_BITS;_POSIX_C_SOURCE;_GNU_SOURCE;_DEFAULT_SOURCE;_DARWIN_C_SOURCE;_COSMO_SOURCE;__start_burrowtype;__stop_burrowtype;__start_burrowimpl;__stop_burrowimpl;__start_burrow_fips_text;__stop_burrow_fips_text;__start_burrow_fips_rodata;__stop_burrow_fips_rodata'
   - key: cert-dcl37-c.AllowedIdentifiers
-    value: '_XOPEN_SOURCE;_FILE_OFFSET_BITS;_POSIX_C_SOURCE;_GNU_SOURCE;_DEFAULT_SOURCE;_DARWIN_C_SOURCE;_COSMO_SOURCE;__start_burrowtype;__stop_burrowtype;__start_burrowimpl;__stop_burrowimpl'
+    value: '_XOPEN_SOURCE;_FILE_OFFSET_BITS;_POSIX_C_SOURCE;_GNU_SOURCE;_DEFAULT_SOURCE;_DARWIN_C_SOURCE;_COSMO_SOURCE;__start_burrowtype;__stop_burrowtype;__start_burrowimpl;__stop_burrowimpl;__start_burrow_fips_text;__stop_burrow_fips_text;__start_burrow_fips_rodata;__stop_burrow_fips_rodata'
   - key: cert-dcl51-cpp.AllowedIdentifiers
-    value: '_XOPEN_SOURCE;_FILE_OFFSET_BITS;_POSIX_C_SOURCE;_GNU_SOURCE;_DEFAULT_SOURCE;_DARWIN_C_SOURCE;_COSMO_SOURCE;__start_burrowtype;__stop_burrowtype;__start_burrowimpl;__stop_burrowimpl'
+    value: '_XOPEN_SOURCE;_FILE_OFFSET_BITS;_POSIX_C_SOURCE;_GNU_SOURCE;_DEFAULT_SOURCE;_DARWIN_C_SOURCE;_COSMO_SOURCE;__start_burrowtype;__stop_burrowtype;__start_burrowimpl;__stop_burrowimpl;__start_burrow_fips_text;__stop_burrow_fips_text;__start_burrow_fips_rodata;__stop_burrow_fips_rodata'
 
 # Warnings from headers are on, because the headers are where most of this
 # library lives.

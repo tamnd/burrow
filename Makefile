@@ -165,6 +165,14 @@ ifeq ($(PORTABLE_CONTEXT),1)
   DEFINES += -DBURROW_PORTABLE_CONTEXT=1
 endif
 
+# Leaves the FIPS 140-3 module in the usual sections, for make ctgrind. Valgrind
+# reads line numbers only for code in .text, and without them it cannot see the
+# inlined functions that tools/ctgrind.supp names. FIPS mode is then not
+# supported. See src/crypto/fips140_module.h.
+ifeq ($(FIPS_SECTIONS),0)
+  DEFINES += -DBURROW_NO_FIPS_SECTIONS=1
+endif
+
 CFLAGS  ?= $(STD) $(OPT) $(WARNINGS) $(HARDENING) $(CFRAME) $(INCLUDES) $(DEFINES)
 LDFLAGS ?=
 
@@ -242,7 +250,7 @@ TEST_GEN := $(wildcard tests/gen/*.c)
 DEPFLAGS := -MMD -MP
 DEPS     := $(OBJS:.o=.d) $(TEST_BINS:=.d)
 
-.PHONY: all lib test check collisions clean install fmt tidy amalgamation gofmt-gate sqlite from-go ctgrind dudect ct-asm
+.PHONY: all lib test check collisions clean install fmt tidy amalgamation gofmt-gate sqlite from-go ctgrind dudect ct-asm fips-check
 
 all: lib
 
@@ -340,6 +348,7 @@ check:
 	@tools/check-alloc.sh
 	@tools/check-globals.sh
 	@tools/check-statics.sh
+	@tools/check-fips-module.sh
 	@tools/check-pal.sh
 	@$(MAKE) --no-print-directory from-go
 	@FROM_GO=$(FROM_GO_BIN) tools/check-gen.sh
@@ -441,7 +450,8 @@ from-go: $(FROM_GO_BIN)
 
 # ctgrind: the constant time crypto code under valgrind's memcheck, with the
 # secrets marked undefined so that a branch or an index on one is an error.
-# Needs valgrind and its headers. See tools/ctgrind.c.
+# Needs valgrind and its headers, and a build made with FIPS_SECTIONS=0. See
+# tools/ctgrind.c.
 CTGRIND_BIN := $(BUILD)/tools/ctgrind
 
 $(CTGRIND_BIN): tools/ctgrind.c $(LIB)
@@ -477,6 +487,17 @@ $(CT_ASM): src/crypto/subtle.c
 
 ct-asm: $(CT_ASM)
 	@tools/check-ct-asm.sh '$(CC)' $(CT_ASM)
+
+# fips-check: burrow-gen fips on a copy of the FIPS 140-3 integrity test, and
+# then the test, so that the checksum it checks is the one burrow-gen wrote and
+# not the one the test writes into a copy of itself. Needs Python. See
+# src/crypto/fips140_module.h and tools/check-fips.sh.
+FIPS_BIN := $(BUILD)/tools/fips140_check_test
+
+fips-check: $(BUILD)/tests/fips140_check_test
+	@mkdir -p $(dir $(FIPS_BIN))
+	cp $< $(FIPS_BIN)
+	@tools/check-fips.sh $(FIPS_BIN)
 
 # The SQLite driver in examples/sqlite, the one program here that links a
 # library burrow does not have. pkg-config finds SQLite where it can, and

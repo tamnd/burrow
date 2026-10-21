@@ -17,11 +17,13 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "fips140_module.h"
+
 #include <stdint.h>
 #include <string.h>
 
-Slice pbkdf2_key(Alloc *a, HashNewFunc h, Str password, Slice salt, Int iter,
-                 Int key_length, Error *err) {
+CRYPTO_FIPS_TEXT Slice pbkdf2_key(Alloc *a, HashNewFunc h, Str password, Slice salt,
+                                  Int iter, Int key_length, Error *err) {
     Slice nil = slice_nil(TYPE_BYTE);
     if (key_length <= 0) {
         BURROW_OUT(err,

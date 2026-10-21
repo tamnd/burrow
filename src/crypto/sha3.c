@@ -26,6 +26,7 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "fips140_module.h"
 #include "sha3_internal.h"
 
 #include <string.h>
@@ -66,7 +67,7 @@ static const Error sha3_err_invalid_function = {&burrow_sentinel_error_vt,
 
 /* ------------------------------------------------------------ the permutation */
 
-static const uint64_t sha3_rc[24] = {
+CRYPTO_FIPS_RODATA static const uint64_t sha3_rc[24] = {
     0x0000000000000001U, 0x0000000000008082U, 0x800000000000808AU, 0x8000000080008000U,
     0x000000000000808BU, 0x0000000080000001U, 0x8000000080008081U, 0x8000000000008009U,
     0x000000000000008AU, 0x0000000000000088U, 0x0000000080008009U, 0x000000008000000AU,
@@ -75,13 +76,13 @@ static const uint64_t sha3_rc[24] = {
     0x8000000080008081U, 0x8000000000008080U, 0x0000000080000001U, 0x8000000080008008U,
 };
 
-static inline uint64_t sha3_rotl(uint64_t x, int k) {
+CRYPTO_FIPS_TEXT static inline uint64_t sha3_rotl(uint64_t x, int k) {
     return (x << k) | (x >> (64 - k));
 }
 
 /* Keccak-f[1600], Go's keccakF1600Generic, which is the in place version from
  * the Keccak reference code. */
-static void sha3_keccakf(uint64_t a[25]) {
+CRYPTO_FIPS_TEXT static void sha3_keccakf(uint64_t a[25]) {
     uint64_t t, bc0, bc1, bc2, bc3, bc4, d0, d1, d2, d3, d4;
     const uint64_t *rc = sha3_rc;
 
@@ -455,20 +456,21 @@ static void sha3_keccakf(uint64_t a[25]) {
     }
 }
 
-static inline uint64_t sha3_le64(const Byte *p) {
+CRYPTO_FIPS_TEXT static inline uint64_t sha3_le64(const Byte *p) {
     return (uint64_t)p[0] | (uint64_t)p[1] << 8 | (uint64_t)p[2] << 16 |
            (uint64_t)p[3] << 24 | (uint64_t)p[4] << 32 | (uint64_t)p[5] << 40 |
            (uint64_t)p[6] << 48 | (uint64_t)p[7] << 56;
 }
 
-static inline void sha3_put_le64(Byte *b, uint64_t v) {
+CRYPTO_FIPS_TEXT static inline void sha3_put_le64(Byte *b, uint64_t v) {
     for (int i = 0; i < 8; i++)
         b[i] = (Byte)(v >> (8 * i));
 }
 
 /* -------------------------------------------------------------- the sponge */
 
-static void sha3_setup(Sha3 *d, Int rate, Int output_len, Byte dsbyte) {
+CRYPTO_FIPS_TEXT static void sha3_setup(Sha3 *d, Int rate, Int output_len,
+                                        Byte dsbyte) {
     memset(d, 0, sizeof *d);
     d->rate = rate;
     d->output_len = output_len;
@@ -476,24 +478,24 @@ static void sha3_setup(Sha3 *d, Int rate, Int output_len, Byte dsbyte) {
 }
 
 /* The zero value is SHA3-256. */
-static inline void sha3_init(Sha3 *d) {
+CRYPTO_FIPS_TEXT static inline void sha3_init(Sha3 *d) {
     if (d->output_len == 0)
         sha3_setup(d, SHA3_RATE_K512, 32, SHA3_DS_SHA3);
 }
 
-static void sha3_permute(Sha3 *d) {
+CRYPTO_FIPS_TEXT static void sha3_permute(Sha3 *d) {
     sha3_keccakf(d->a);
     d->n = 0;
 }
 
-static void sha3_pad_and_permute(Sha3 *d) {
+CRYPTO_FIPS_TEXT static void sha3_pad_and_permute(Sha3 *d) {
     d->a[d->n >> 3] ^= (uint64_t)d->dsbyte << (8 * (d->n & 7));
     d->a[(d->rate - 1) >> 3] ^= (uint64_t)0x80 << (8 * ((d->rate - 1) & 7));
     sha3_permute(d);
     d->squeezing = true;
 }
 
-static void sha3_absorb(Sha3 *d, const Byte *p, Int len) {
+CRYPTO_FIPS_TEXT static void sha3_absorb(Sha3 *d, const Byte *p, Int len) {
     if (d->squeezing)
         panic_str(BURROW_S("sha3: Write after Read"));
     Int rate = d->rate;
@@ -522,7 +524,7 @@ static void sha3_absorb(Sha3 *d, const Byte *p, Int len) {
     }
 }
 
-static void sha3_squeeze(Sha3 *d, Byte *out, Int len) {
+CRYPTO_FIPS_TEXT static void sha3_squeeze(Sha3 *d, Byte *out, Int len) {
     if (!d->squeezing)
         sha3_pad_and_permute(d);
     while (len > 0) {
@@ -541,7 +543,7 @@ static void sha3_squeeze(Sha3 *d, Byte *out, Int len) {
     }
 }
 
-static const Byte *sha3_magic(Byte dsbyte) {
+CRYPTO_FIPS_TEXT static const Byte *sha3_magic(Byte dsbyte) {
     switch (dsbyte) {
     case SHA3_DS_SHA3:
         return (const Byte *)"sha\x08";
@@ -556,7 +558,7 @@ static const Byte *sha3_magic(Byte dsbyte) {
     }
 }
 
-static Slice sha3_digest_append_binary(Sha3 *d, Alloc *a, Slice b) {
+CRYPTO_FIPS_TEXT static Slice sha3_digest_append_binary(Sha3 *d, Alloc *a, Slice b) {
     Byte buf[SHA3_MARSHALED_SIZE];
     memcpy(buf, sha3_magic(d->dsbyte), 4);
     buf[4] = (Byte)d->rate;
@@ -569,7 +571,7 @@ static Slice sha3_digest_append_binary(Sha3 *d, Alloc *a, Slice b) {
     return slice_append(a, b, buf, SHA3_MARSHALED_SIZE);
 }
 
-static Error sha3_digest_unmarshal_binary(Sha3 *d, Slice data) {
+CRYPTO_FIPS_TEXT static Error sha3_digest_unmarshal_binary(Sha3 *d, Slice data) {
     if (data.len != SHA3_MARSHALED_SIZE || data.p == NULL)
         return sha3_err_invalid_state;
     const Byte *b = (const Byte *)data.p;
@@ -594,30 +596,30 @@ static Error sha3_digest_unmarshal_binary(Sha3 *d, Slice data) {
 
 /* ------------------------------------------------------------------- SHA-3 */
 
-static Sha3 *sha3_make(Alloc *a, Int rate, Int output_len) {
+CRYPTO_FIPS_TEXT static Sha3 *sha3_make(Alloc *a, Int rate, Int output_len) {
     Sha3 *d = BURROW_NEW(a, Sha3);
     if (d != NULL)
         sha3_setup(d, rate, output_len, SHA3_DS_SHA3);
     return d;
 }
 
-Sha3 *sha3_new224(Alloc *a) {
+CRYPTO_FIPS_TEXT Sha3 *sha3_new224(Alloc *a) {
     return sha3_make(a, SHA3_RATE_K448, 28);
 }
 
-Sha3 *sha3_new256(Alloc *a) {
+CRYPTO_FIPS_TEXT Sha3 *sha3_new256(Alloc *a) {
     return sha3_make(a, SHA3_RATE_K512, 32);
 }
 
-Sha3 *sha3_new384(Alloc *a) {
+CRYPTO_FIPS_TEXT Sha3 *sha3_new384(Alloc *a) {
     return sha3_make(a, SHA3_RATE_K768, 48);
 }
 
-Sha3 *sha3_new512(Alloc *a) {
+CRYPTO_FIPS_TEXT Sha3 *sha3_new512(Alloc *a) {
     return sha3_make(a, SHA3_RATE_K1024, 64);
 }
 
-Int sha3_write(Sha3 *d, Slice p, Error *err) {
+CRYPTO_FIPS_TEXT Int sha3_write(Sha3 *d, Slice p, Error *err) {
     sha3_init(d);
     sha3_absorb(d, (const Byte *)p.p, p.len);
     BURROW_OUT(err, BURROW_NO_ERROR);
@@ -625,14 +627,14 @@ Int sha3_write(Sha3 *d, Slice p, Error *err) {
 }
 
 /* The digest into out, which has room for 64 bytes, from a copy of d. */
-static void sha3_digest_sum(const Sha3 *d, Byte *out) {
+CRYPTO_FIPS_TEXT static void sha3_digest_sum(const Sha3 *d, Byte *out) {
     if (d->squeezing)
         panic_str(BURROW_S("sha3: Sum after Read"));
     Sha3 dup = *d;
     sha3_squeeze(&dup, out, dup.output_len);
 }
 
-Slice sha3_sum(Sha3 *d, Alloc *a, Slice b) {
+CRYPTO_FIPS_TEXT Slice sha3_sum(Sha3 *d, Alloc *a, Slice b) {
     sha3_init(d);
     Byte h[64];
     sha3_digest_sum(d, h);
@@ -641,29 +643,29 @@ Slice sha3_sum(Sha3 *d, Alloc *a, Slice b) {
     return slice_append(a, b, h, d->output_len);
 }
 
-void sha3_reset(Sha3 *d) {
+CRYPTO_FIPS_TEXT void sha3_reset(Sha3 *d) {
     sha3_init(d);
     memset(d->a, 0, sizeof d->a);
     d->squeezing = false;
     d->n = 0;
 }
 
-Int sha3_size(Sha3 *d) {
+CRYPTO_FIPS_TEXT Int sha3_size(Sha3 *d) {
     sha3_init(d);
     return d->output_len;
 }
 
-Int sha3_block_size(Sha3 *d) {
+CRYPTO_FIPS_TEXT Int sha3_block_size(Sha3 *d) {
     sha3_init(d);
     return d->rate;
 }
 
-Slice sha3_marshal_binary(Sha3 *d, Alloc *a, Error *err) {
+CRYPTO_FIPS_TEXT Slice sha3_marshal_binary(Sha3 *d, Alloc *a, Error *err) {
     return sha3_append_binary(d, a, slice_make(a, TYPE_BYTE, 0, SHA3_MARSHALED_SIZE),
                               err);
 }
 
-Slice sha3_append_binary(Sha3 *d, Alloc *a, Slice b, Error *err) {
+CRYPTO_FIPS_TEXT Slice sha3_append_binary(Sha3 *d, Alloc *a, Slice b, Error *err) {
     sha3_init(d);
     Int len = b.len;
     Slice r = sha3_digest_append_binary(d, a, b);
@@ -672,38 +674,38 @@ Slice sha3_append_binary(Sha3 *d, Alloc *a, Slice b, Error *err) {
     return r;
 }
 
-Error sha3_unmarshal_binary(Sha3 *d, Slice b) {
+CRYPTO_FIPS_TEXT Error sha3_unmarshal_binary(Sha3 *d, Slice b) {
     sha3_init(d);
     return sha3_digest_unmarshal_binary(d, b);
 }
 
-static Int sha3_vt_write(void *self, Slice p, Error *err) {
+CRYPTO_FIPS_TEXT static Int sha3_vt_write(void *self, Slice p, Error *err) {
     return sha3_write(self, p, err);
 }
 
-static Slice sha3_vt_sum(void *self, Alloc *a, Slice b) {
+CRYPTO_FIPS_TEXT static Slice sha3_vt_sum(void *self, Alloc *a, Slice b) {
     return sha3_sum(self, a, b);
 }
 
-static void sha3_vt_reset(void *self) {
+CRYPTO_FIPS_TEXT static void sha3_vt_reset(void *self) {
     sha3_reset(self);
 }
 
-static Int sha3_vt_size(void *self) {
+CRYPTO_FIPS_TEXT static Int sha3_vt_size(void *self) {
     return sha3_size(self);
 }
 
-static Int sha3_vt_block_size(void *self) {
+CRYPTO_FIPS_TEXT static Int sha3_vt_block_size(void *self) {
     return sha3_block_size(self);
 }
 
-static HashCloner sha3_vt_clone(void *self, Alloc *a, Error *err) {
+CRYPTO_FIPS_TEXT static HashCloner sha3_vt_clone(void *self, Alloc *a, Error *err) {
     return sha3_clone(self, a, err);
 }
 
 /* sha3_unmarshal_binary with the allocator argument UnmarshalBinary's shape has
  * here, which a SHA-3 state never needs. */
-static Error sha3_m_unmarshal_binary(Sha3 *d, Alloc *a, Slice b) {
+CRYPTO_FIPS_TEXT static Error sha3_m_unmarshal_binary(Sha3 *d, Alloc *a, Slice b) {
     (void)a;
     return sha3_unmarshal_binary(d, b);
 }
@@ -749,7 +751,7 @@ static const HashClonerVT sha3_vt = {
     sha3_vt_clone,
 };
 
-HashCloner sha3_clone(Sha3 *d, Alloc *a, Error *err) {
+CRYPTO_FIPS_TEXT HashCloner sha3_clone(Sha3 *d, Alloc *a, Error *err) {
     Sha3 *r = BURROW_NEW(a, Sha3);
     if (r == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -760,43 +762,44 @@ HashCloner sha3_clone(Sha3 *d, Alloc *a, Error *err) {
     return sha3_as_cloner(r);
 }
 
-HashCloner sha3_as_cloner(Sha3 *d) {
+CRYPTO_FIPS_TEXT HashCloner sha3_as_cloner(Sha3 *d) {
     HashCloner h = {&sha3_vt, d};
     return h;
 }
 
-Hash sha3_as_hash(Sha3 *d) {
+CRYPTO_FIPS_TEXT Hash sha3_as_hash(Sha3 *d) {
     Hash h = {&sha3_vt.hash, d};
     return h;
 }
 
 /* The one shot sums, on a Sha3 on the stack. */
-static void sha3_sum_into(Int rate, Int output_len, Slice data, Byte *out) {
+CRYPTO_FIPS_TEXT static void sha3_sum_into(Int rate, Int output_len, Slice data,
+                                           Byte *out) {
     Sha3 d;
     sha3_setup(&d, rate, output_len, SHA3_DS_SHA3);
     sha3_absorb(&d, (const Byte *)data.p, data.len);
     sha3_squeeze(&d, out, output_len);
 }
 
-Sha3Sum224Ret sha3_sum224(Slice data) {
+CRYPTO_FIPS_TEXT Sha3Sum224Ret sha3_sum224(Slice data) {
     Sha3Sum224Ret r;
     sha3_sum_into(SHA3_RATE_K448, 28, data, r.a);
     return r;
 }
 
-Sha3Sum256Ret sha3_sum256(Slice data) {
+CRYPTO_FIPS_TEXT Sha3Sum256Ret sha3_sum256(Slice data) {
     Sha3Sum256Ret r;
     sha3_sum_into(SHA3_RATE_K512, 32, data, r.a);
     return r;
 }
 
-Sha3Sum384Ret sha3_sum384(Slice data) {
+CRYPTO_FIPS_TEXT Sha3Sum384Ret sha3_sum384(Slice data) {
     Sha3Sum384Ret r;
     sha3_sum_into(SHA3_RATE_K768, 48, data, r.a);
     return r;
 }
 
-Sha3Sum512Ret sha3_sum512(Slice data) {
+CRYPTO_FIPS_TEXT Sha3Sum512Ret sha3_sum512(Slice data) {
     Sha3Sum512Ret r;
     sha3_sum_into(SHA3_RATE_K1024, 64, data, r.a);
     return r;
@@ -804,20 +807,20 @@ Sha3Sum512Ret sha3_sum512(Slice data) {
 
 /* ------------------------------------------------------------ SHAKE, cSHAKE */
 
-static void sha3_shake_setup(Sha3SHAKE *s, Int rate, Int output_len) {
+CRYPTO_FIPS_TEXT static void sha3_shake_setup(Sha3SHAKE *s, Int rate, Int output_len) {
     sha3_setup(&s->d, rate, output_len, SHA3_DS_SHAKE);
     s->init_block = slice_nil(TYPE_BYTE);
 }
 
 /* The zero value is SHAKE256. */
-static inline void sha3_shake_init(Sha3SHAKE *s) {
+CRYPTO_FIPS_TEXT static inline void sha3_shake_init(Sha3SHAKE *s) {
     if (s->d.output_len == 0)
         sha3_shake_setup(s, SHA3_RATE_K512, 64);
 }
 
 /* left_encode from SP 800-185: x in as few big endian bytes as it takes, at
  * least one, after a byte that says how many. */
-static Int sha3_left_encode(uint64_t x, Byte out[9]) {
+CRYPTO_FIPS_TEXT static Int sha3_left_encode(uint64_t x, Byte out[9]) {
     Int n = 1;
     while (n < 8 && (x >> (8 * n)) != 0)
         n++;
@@ -829,7 +832,7 @@ static Int sha3_left_encode(uint64_t x, Byte out[9]) {
 
 /* bytepad(data, rate), absorbed: the encoded rate, the data, and zeros to the
  * end of the block. */
-static void sha3_bytepad_write(Sha3SHAKE *s, Slice data, Int rate) {
+CRYPTO_FIPS_TEXT static void sha3_bytepad_write(Sha3SHAKE *s, Slice data, Int rate) {
     Byte enc[9];
     Int n = sha3_left_encode((uint64_t)rate, enc);
     sha3_absorb(&s->d, enc, n);
@@ -841,23 +844,23 @@ static void sha3_bytepad_write(Sha3SHAKE *s, Slice data, Int rate) {
     }
 }
 
-static Sha3SHAKE *sha3_shake_make(Alloc *a, Int rate, Int output_len) {
+CRYPTO_FIPS_TEXT static Sha3SHAKE *sha3_shake_make(Alloc *a, Int rate, Int output_len) {
     Sha3SHAKE *s = BURROW_NEW(a, Sha3SHAKE);
     if (s != NULL)
         sha3_shake_setup(s, rate, output_len);
     return s;
 }
 
-Sha3SHAKE *sha3_new_shake128(Alloc *a) {
+CRYPTO_FIPS_TEXT Sha3SHAKE *sha3_new_shake128(Alloc *a) {
     return sha3_shake_make(a, SHA3_RATE_K256, 32);
 }
 
-Sha3SHAKE *sha3_new_shake256(Alloc *a) {
+CRYPTO_FIPS_TEXT Sha3SHAKE *sha3_new_shake256(Alloc *a) {
     return sha3_shake_make(a, SHA3_RATE_K512, 64);
 }
 
-static Sha3SHAKE *sha3_new_cshake(Alloc *a, Slice n, Slice s, Int rate,
-                                  Int output_len) {
+CRYPTO_FIPS_TEXT static Sha3SHAKE *sha3_new_cshake(Alloc *a, Slice n, Slice s, Int rate,
+                                                   Int output_len) {
     Sha3SHAKE *c = sha3_shake_make(a, rate, output_len);
     if (c == NULL || (n.len == 0 && s.len == 0))
         return c;
@@ -877,29 +880,29 @@ static Sha3SHAKE *sha3_new_cshake(Alloc *a, Slice n, Slice s, Int rate,
     return c;
 }
 
-Sha3SHAKE *sha3_new_cshake128(Alloc *a, Slice n, Slice s) {
+CRYPTO_FIPS_TEXT Sha3SHAKE *sha3_new_cshake128(Alloc *a, Slice n, Slice s) {
     return sha3_new_cshake(a, n, s, SHA3_RATE_K256, 32);
 }
 
-Sha3SHAKE *sha3_new_cshake256(Alloc *a, Slice n, Slice s) {
+CRYPTO_FIPS_TEXT Sha3SHAKE *sha3_new_cshake256(Alloc *a, Slice n, Slice s) {
     return sha3_new_cshake(a, n, s, SHA3_RATE_K512, 64);
 }
 
-Int sha3_shake_write(Sha3SHAKE *s, Slice p, Error *err) {
+CRYPTO_FIPS_TEXT Int sha3_shake_write(Sha3SHAKE *s, Slice p, Error *err) {
     sha3_shake_init(s);
     sha3_absorb(&s->d, (const Byte *)p.p, p.len);
     BURROW_OUT(err, BURROW_NO_ERROR);
     return p.len;
 }
 
-Int sha3_shake_read(Sha3SHAKE *s, Slice p, Error *err) {
+CRYPTO_FIPS_TEXT Int sha3_shake_read(Sha3SHAKE *s, Slice p, Error *err) {
     sha3_shake_init(s);
     sha3_squeeze(&s->d, (Byte *)p.p, p.len);
     BURROW_OUT(err, BURROW_NO_ERROR);
     return p.len;
 }
 
-void sha3_shake_reset(Sha3SHAKE *s) {
+CRYPTO_FIPS_TEXT void sha3_shake_reset(Sha3SHAKE *s) {
     sha3_shake_init(s);
     memset(s->d.a, 0, sizeof s->d.a);
     s->d.squeezing = false;
@@ -908,18 +911,19 @@ void sha3_shake_reset(Sha3SHAKE *s) {
         sha3_bytepad_write(s, s->init_block, s->d.rate);
 }
 
-Int sha3_shake_block_size(Sha3SHAKE *s) {
+CRYPTO_FIPS_TEXT Int sha3_shake_block_size(Sha3SHAKE *s) {
     sha3_shake_init(s);
     return s->d.rate;
 }
 
-Slice sha3_shake_marshal_binary(Sha3SHAKE *s, Alloc *a, Error *err) {
+CRYPTO_FIPS_TEXT Slice sha3_shake_marshal_binary(Sha3SHAKE *s, Alloc *a, Error *err) {
     sha3_shake_init(s);
     Slice b = slice_make(a, TYPE_BYTE, 0, SHA3_MARSHALED_SIZE + s->init_block.len);
     return sha3_shake_append_binary(s, a, b, err);
 }
 
-Slice sha3_shake_append_binary(Sha3SHAKE *s, Alloc *a, Slice b, Error *err) {
+CRYPTO_FIPS_TEXT Slice sha3_shake_append_binary(Sha3SHAKE *s, Alloc *a, Slice b,
+                                                Error *err) {
     sha3_shake_init(s);
     Int want = b.len + SHA3_MARSHALED_SIZE + s->init_block.len;
     b = sha3_digest_append_binary(&s->d, a, b);
@@ -928,7 +932,7 @@ Slice sha3_shake_append_binary(Sha3SHAKE *s, Alloc *a, Slice b, Error *err) {
     return b;
 }
 
-Error sha3_shake_unmarshal_binary(Sha3SHAKE *s, Alloc *a, Slice b) {
+CRYPTO_FIPS_TEXT Error sha3_shake_unmarshal_binary(Sha3SHAKE *s, Alloc *a, Slice b) {
     sha3_shake_init(s);
     if (b.len < SHA3_MARSHALED_SIZE)
         return sha3_err_invalid_state;
@@ -947,19 +951,19 @@ Error sha3_shake_unmarshal_binary(Sha3SHAKE *s, Alloc *a, Slice b) {
     return BURROW_NO_ERROR;
 }
 
-static Int sha3_shake_vt_write(void *self, Slice p, Error *err) {
+CRYPTO_FIPS_TEXT static Int sha3_shake_vt_write(void *self, Slice p, Error *err) {
     return sha3_shake_write(self, p, err);
 }
 
-static Int sha3_shake_vt_read(void *self, Slice p, Error *err) {
+CRYPTO_FIPS_TEXT static Int sha3_shake_vt_read(void *self, Slice p, Error *err) {
     return sha3_shake_read(self, p, err);
 }
 
-static void sha3_shake_vt_reset(void *self) {
+CRYPTO_FIPS_TEXT static void sha3_shake_vt_reset(void *self) {
     sha3_shake_reset(self);
 }
 
-static Int sha3_shake_vt_block_size(void *self) {
+CRYPTO_FIPS_TEXT static Int sha3_shake_vt_block_size(void *self) {
     return sha3_shake_block_size(self);
 }
 
@@ -999,13 +1003,13 @@ static const HashXOFVT sha3_shake_vt = {
     sha3_shake_vt_block_size,
 };
 
-HashXOF sha3_shake_as_xof(Sha3SHAKE *s) {
+CRYPTO_FIPS_TEXT HashXOF sha3_shake_as_xof(Sha3SHAKE *s) {
     HashXOF h = {&sha3_shake_vt, s};
     return h;
 }
 
-static Slice sha3_sum_shake(Alloc *a, Slice data, Int length, Int rate,
-                            Int output_len) {
+CRYPTO_FIPS_TEXT static Slice sha3_sum_shake(Alloc *a, Slice data, Int length, Int rate,
+                                             Int output_len) {
     Slice out = slice_make(a, TYPE_BYTE, length, length);
     if (out.p == NULL && length > 0)
         return slice_nil(TYPE_BYTE);
@@ -1016,36 +1020,36 @@ static Slice sha3_sum_shake(Alloc *a, Slice data, Int length, Int rate,
     return out;
 }
 
-Slice sha3_sum_shake128(Alloc *a, Slice data, Int length) {
+CRYPTO_FIPS_TEXT Slice sha3_sum_shake128(Alloc *a, Slice data, Int length) {
     return sha3_sum_shake(a, data, length, SHA3_RATE_K256, 32);
 }
 
-Slice sha3_sum_shake256(Alloc *a, Slice data, Int length) {
+CRYPTO_FIPS_TEXT Slice sha3_sum_shake256(Alloc *a, Slice data, Int length) {
     return sha3_sum_shake(a, data, length, SHA3_RATE_K512, 64);
 }
 
 /* ------------------------------------------------- for the rest of burrow */
 
-void burrow__sha3_init256(Sha3 *d) {
+CRYPTO_FIPS_TEXT void burrow__sha3_init256(Sha3 *d) {
     sha3_setup(d, SHA3_RATE_K512, 32, SHA3_DS_SHA3);
 }
 
-void burrow__sha3_init512(Sha3 *d) {
+CRYPTO_FIPS_TEXT void burrow__sha3_init512(Sha3 *d) {
     sha3_setup(d, SHA3_RATE_K1024, 64, SHA3_DS_SHA3);
 }
 
-void burrow__shake128_init(Sha3 *d) {
+CRYPTO_FIPS_TEXT void burrow__shake128_init(Sha3 *d) {
     sha3_setup(d, SHA3_RATE_K256, 32, SHA3_DS_SHAKE);
 }
 
-void burrow__shake256_init(Sha3 *d) {
+CRYPTO_FIPS_TEXT void burrow__shake256_init(Sha3 *d) {
     sha3_setup(d, SHA3_RATE_K512, 64, SHA3_DS_SHAKE);
 }
 
-void burrow__sha3_write(Sha3 *d, const void *p, Int n) {
+CRYPTO_FIPS_TEXT void burrow__sha3_write(Sha3 *d, const void *p, Int n) {
     sha3_absorb(d, (const Byte *)p, n);
 }
 
-void burrow__sha3_read(Sha3 *d, void *out, Int n) {
+CRYPTO_FIPS_TEXT void burrow__sha3_read(Sha3 *d, void *out, Int n) {
     sha3_squeeze(d, (Byte *)out, n);
 }

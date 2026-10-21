@@ -17,6 +17,8 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "fips140_module.h"
+
 #include <string.h>
 
 /* The inner hash has the key xor ipad written into it already and takes the
@@ -30,11 +32,11 @@ typedef struct Hmac {
     Int block_size;
 } Hmac;
 
-static Int hmac_write(void *self, Slice p, Error *err) {
+CRYPTO_FIPS_TEXT static Int hmac_write(void *self, Slice p, Error *err) {
     return hash_write(((Hmac *)self)->inner, p, err);
 }
 
-static Slice hmac_sum(void *self, Alloc *a, Slice in) {
+CRYPTO_FIPS_TEXT static Slice hmac_sum(void *self, Alloc *a, Slice in) {
     Hmac *h = self;
     if (in.elem == NULL)
         in = slice_nil(TYPE_BYTE);
@@ -49,18 +51,18 @@ static Slice hmac_sum(void *self, Alloc *a, Slice in) {
     return hash_sum(a, h->outer, slice_sub(in, 0, orig));
 }
 
-static void hmac_reset(void *self) {
+CRYPTO_FIPS_TEXT static void hmac_reset(void *self) {
     Hmac *h = self;
     hash_reset(h->inner);
     hash_write(h->inner, slice_from(h->ipad, h->block_size, h->block_size, TYPE_BYTE),
                NULL);
 }
 
-static Int hmac_size(void *self) {
+CRYPTO_FIPS_TEXT static Int hmac_size(void *self) {
     return hash_size(((Hmac *)self)->outer);
 }
 
-static Int hmac_block_size(void *self) {
+CRYPTO_FIPS_TEXT static Int hmac_block_size(void *self) {
     return hash_block_size(((Hmac *)self)->inner);
 }
 
@@ -68,7 +70,7 @@ static const HashVT hmac_vt = {
     {NULL, hmac_write}, hmac_sum, hmac_reset, hmac_size, hmac_block_size,
 };
 
-Hash hmac_new(Alloc *a, HashNewFunc h, Slice key) {
+CRYPTO_FIPS_TEXT Hash hmac_new(Alloc *a, HashNewFunc h, Slice key) {
     Hash nil = {NULL, NULL};
     Hmac *hm = BURROW_NEW(a, Hmac);
     if (hm == NULL)
@@ -105,6 +107,6 @@ Hash hmac_new(Alloc *a, HashNewFunc h, Slice key) {
     return r;
 }
 
-bool hmac_equal(Slice mac1, Slice mac2) {
+CRYPTO_FIPS_TEXT bool hmac_equal(Slice mac1, Slice mac2) {
     return subtle_constant_time_compare(mac1, mac2) == 1;
 }

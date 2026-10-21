@@ -21,6 +21,8 @@
 #include "burrow/panic.h"
 #include "burrow/slice.h"
 
+#include "fips140_module.h"
+
 #include <stdint.h>
 #include <string.h>
 
@@ -28,42 +30,47 @@
 
 #include "fiat_25519_scalar_64.h"
 
-static void sc_fiat_mul(uint64_t out[4], const uint64_t x[4], const uint64_t y[4]) {
+CRYPTO_FIPS_TEXT static void sc_fiat_mul(uint64_t out[4], const uint64_t x[4],
+                                         const uint64_t y[4]) {
     fiat_25519_scalar_mul(out, x, y);
 }
 
-static void sc_fiat_add(uint64_t out[4], const uint64_t x[4], const uint64_t y[4]) {
+CRYPTO_FIPS_TEXT static void sc_fiat_add(uint64_t out[4], const uint64_t x[4],
+                                         const uint64_t y[4]) {
     fiat_25519_scalar_add(out, x, y);
 }
 
-static void sc_fiat_sub(uint64_t out[4], const uint64_t x[4], const uint64_t y[4]) {
+CRYPTO_FIPS_TEXT static void sc_fiat_sub(uint64_t out[4], const uint64_t x[4],
+                                         const uint64_t y[4]) {
     fiat_25519_scalar_sub(out, x, y);
 }
 
-static void sc_fiat_opp(uint64_t out[4], const uint64_t x[4]) {
+CRYPTO_FIPS_TEXT static void sc_fiat_opp(uint64_t out[4], const uint64_t x[4]) {
     fiat_25519_scalar_opp(out, x);
 }
 
 /* Nonzero exactly when x is, folded to its low bit by the caller. */
-static uint64_t sc_fiat_nonzero(const uint64_t x[4]) {
+CRYPTO_FIPS_TEXT static uint64_t sc_fiat_nonzero(const uint64_t x[4]) {
     uint64_t out;
     fiat_25519_scalar_nonzero(&out, x);
     return out;
 }
 
-static void sc_fiat_from_montgomery(uint64_t out[4], const uint64_t x[4]) {
+CRYPTO_FIPS_TEXT static void sc_fiat_from_montgomery(uint64_t out[4],
+                                                     const uint64_t x[4]) {
     fiat_25519_scalar_from_montgomery(out, x);
 }
 
-static void sc_fiat_to_montgomery(uint64_t out[4], const uint64_t x[4]) {
+CRYPTO_FIPS_TEXT static void sc_fiat_to_montgomery(uint64_t out[4],
+                                                   const uint64_t x[4]) {
     fiat_25519_scalar_to_montgomery(out, x);
 }
 
-static void sc_fiat_to_bytes(uint8_t out[32], const uint64_t x[4]) {
+CRYPTO_FIPS_TEXT static void sc_fiat_to_bytes(uint8_t out[32], const uint64_t x[4]) {
     fiat_25519_scalar_to_bytes(out, x);
 }
 
-static void sc_fiat_from_bytes(uint64_t out[4], const uint8_t x[32]) {
+CRYPTO_FIPS_TEXT static void sc_fiat_from_bytes(uint64_t out[4], const uint8_t x[32]) {
     fiat_25519_scalar_from_bytes(out, x);
 }
 
@@ -71,19 +78,20 @@ static void sc_fiat_from_bytes(uint64_t out[4], const uint8_t x[32]) {
 
 #include "fiat_25519_scalar_32.h"
 
-static void sc_split(uint32_t out[8], const uint64_t x[4]) {
+CRYPTO_FIPS_TEXT static void sc_split(uint32_t out[8], const uint64_t x[4]) {
     for (int i = 0; i < 4; i++) {
         out[2 * i] = (uint32_t)x[i];
         out[2 * i + 1] = (uint32_t)(x[i] >> 32);
     }
 }
 
-static void sc_join(uint64_t out[4], const uint32_t x[8]) {
+CRYPTO_FIPS_TEXT static void sc_join(uint64_t out[4], const uint32_t x[8]) {
     for (int i = 0; i < 4; i++)
         out[i] = (uint64_t)x[2 * i] | (uint64_t)x[2 * i + 1] << 32;
 }
 
-static void sc_fiat_mul(uint64_t out[4], const uint64_t x[4], const uint64_t y[4]) {
+CRYPTO_FIPS_TEXT static void sc_fiat_mul(uint64_t out[4], const uint64_t x[4],
+                                         const uint64_t y[4]) {
     uint32_t a[8], b[8], r[8];
     sc_split(a, x);
     sc_split(b, y);
@@ -91,7 +99,8 @@ static void sc_fiat_mul(uint64_t out[4], const uint64_t x[4], const uint64_t y[4
     sc_join(out, r);
 }
 
-static void sc_fiat_add(uint64_t out[4], const uint64_t x[4], const uint64_t y[4]) {
+CRYPTO_FIPS_TEXT static void sc_fiat_add(uint64_t out[4], const uint64_t x[4],
+                                         const uint64_t y[4]) {
     uint32_t a[8], b[8], r[8];
     sc_split(a, x);
     sc_split(b, y);
@@ -99,7 +108,8 @@ static void sc_fiat_add(uint64_t out[4], const uint64_t x[4], const uint64_t y[4
     sc_join(out, r);
 }
 
-static void sc_fiat_sub(uint64_t out[4], const uint64_t x[4], const uint64_t y[4]) {
+CRYPTO_FIPS_TEXT static void sc_fiat_sub(uint64_t out[4], const uint64_t x[4],
+                                         const uint64_t y[4]) {
     uint32_t a[8], b[8], r[8];
     sc_split(a, x);
     sc_split(b, y);
@@ -107,41 +117,43 @@ static void sc_fiat_sub(uint64_t out[4], const uint64_t x[4], const uint64_t y[4
     sc_join(out, r);
 }
 
-static void sc_fiat_opp(uint64_t out[4], const uint64_t x[4]) {
+CRYPTO_FIPS_TEXT static void sc_fiat_opp(uint64_t out[4], const uint64_t x[4]) {
     uint32_t a[8], r[8];
     sc_split(a, x);
     fiat_25519_scalar_opp(r, a);
     sc_join(out, r);
 }
 
-static uint64_t sc_fiat_nonzero(const uint64_t x[4]) {
+CRYPTO_FIPS_TEXT static uint64_t sc_fiat_nonzero(const uint64_t x[4]) {
     uint32_t a[8], out;
     sc_split(a, x);
     fiat_25519_scalar_nonzero(&out, a);
     return out;
 }
 
-static void sc_fiat_from_montgomery(uint64_t out[4], const uint64_t x[4]) {
+CRYPTO_FIPS_TEXT static void sc_fiat_from_montgomery(uint64_t out[4],
+                                                     const uint64_t x[4]) {
     uint32_t a[8], r[8];
     sc_split(a, x);
     fiat_25519_scalar_from_montgomery(r, a);
     sc_join(out, r);
 }
 
-static void sc_fiat_to_montgomery(uint64_t out[4], const uint64_t x[4]) {
+CRYPTO_FIPS_TEXT static void sc_fiat_to_montgomery(uint64_t out[4],
+                                                   const uint64_t x[4]) {
     uint32_t a[8], r[8];
     sc_split(a, x);
     fiat_25519_scalar_to_montgomery(r, a);
     sc_join(out, r);
 }
 
-static void sc_fiat_to_bytes(uint8_t out[32], const uint64_t x[4]) {
+CRYPTO_FIPS_TEXT static void sc_fiat_to_bytes(uint8_t out[32], const uint64_t x[4]) {
     uint32_t a[8];
     sc_split(a, x);
     fiat_25519_scalar_to_bytes(out, a);
 }
 
-static void sc_fiat_from_bytes(uint64_t out[4], const uint8_t x[32]) {
+CRYPTO_FIPS_TEXT static void sc_fiat_from_bytes(uint64_t out[4], const uint8_t x[32]) {
     uint32_t r[8];
     fiat_25519_scalar_from_bytes(r, x);
     sc_join(out, r);
@@ -149,62 +161,63 @@ static void sc_fiat_from_bytes(uint64_t out[4], const uint8_t x[32]) {
 
 #endif
 
-static uint64_t sc_le64(const uint8_t *p) {
+CRYPTO_FIPS_TEXT static uint64_t sc_le64(const uint8_t *p) {
     return (uint64_t)p[0] | (uint64_t)p[1] << 8 | (uint64_t)p[2] << 16 |
            (uint64_t)p[3] << 24 | (uint64_t)p[4] << 32 | (uint64_t)p[5] << 40 |
            (uint64_t)p[6] << 48 | (uint64_t)p[7] << 56;
 }
 
 /* 2^168 and 2^336 modulo l, in the Montgomery domain. */
-static const Edwards25519Scalar sc_two168 = {
+CRYPTO_FIPS_RODATA static const Edwards25519Scalar sc_two168 = {
     {0x5b8ab432eac74798, 0x38afddd6de59d5d7, 0xa2c131b399411b7c, 0x6329a7ed9ce5a30}};
-static const Edwards25519Scalar sc_two336 = {
+CRYPTO_FIPS_RODATA static const Edwards25519Scalar sc_two336 = {
     {0xbd3d108e2b35ecc5, 0x5c3a3718bdf9c90b, 0x63aa97a331b4f2ee, 0x3d217f5be65cb5c}};
 
 /* l - 1, little endian. */
-static const uint8_t sc_minus_one_bytes[32] = {
+CRYPTO_FIPS_RODATA static const uint8_t sc_minus_one_bytes[32] = {
     236, 211, 245, 92, 26, 99, 18, 88, 214, 156, 247, 162, 222, 249, 222, 20,
     0,   0,   0,   0,  0,  0,  0,  0,  0,   0,   0,   0,   0,   0,   0,   16};
 
-Edwards25519Scalar *burrow__sc_set(Edwards25519Scalar *s, const Edwards25519Scalar *x) {
+CRYPTO_FIPS_TEXT Edwards25519Scalar *burrow__sc_set(Edwards25519Scalar *s,
+                                                    const Edwards25519Scalar *x) {
     *s = *x;
     return s;
 }
 
-Edwards25519Scalar *burrow__sc_add(Edwards25519Scalar *s, const Edwards25519Scalar *x,
-                                   const Edwards25519Scalar *y) {
+CRYPTO_FIPS_TEXT Edwards25519Scalar *burrow__sc_add(Edwards25519Scalar *s,
+                                                    const Edwards25519Scalar *x,
+                                                    const Edwards25519Scalar *y) {
     /* s = 1 * x + y mod l */
     sc_fiat_add(s->s, x->s, y->s);
     return s;
 }
 
-Edwards25519Scalar *burrow__sc_subtract(Edwards25519Scalar *s,
-                                        const Edwards25519Scalar *x,
-                                        const Edwards25519Scalar *y) {
+CRYPTO_FIPS_TEXT Edwards25519Scalar *burrow__sc_subtract(Edwards25519Scalar *s,
+                                                         const Edwards25519Scalar *x,
+                                                         const Edwards25519Scalar *y) {
     /* s = -1 * y + x mod l */
     sc_fiat_sub(s->s, x->s, y->s);
     return s;
 }
 
-Edwards25519Scalar *burrow__sc_negate(Edwards25519Scalar *s,
-                                      const Edwards25519Scalar *x) {
+CRYPTO_FIPS_TEXT Edwards25519Scalar *burrow__sc_negate(Edwards25519Scalar *s,
+                                                       const Edwards25519Scalar *x) {
     /* s = -1 * x + 0 mod l */
     sc_fiat_opp(s->s, x->s);
     return s;
 }
 
-Edwards25519Scalar *burrow__sc_multiply(Edwards25519Scalar *s,
-                                        const Edwards25519Scalar *x,
-                                        const Edwards25519Scalar *y) {
+CRYPTO_FIPS_TEXT Edwards25519Scalar *burrow__sc_multiply(Edwards25519Scalar *s,
+                                                         const Edwards25519Scalar *x,
+                                                         const Edwards25519Scalar *y) {
     /* s = x * y + 0 mod l */
     sc_fiat_mul(s->s, x->s, y->s);
     return s;
 }
 
-Edwards25519Scalar *burrow__sc_multiply_add(Edwards25519Scalar *s,
-                                            const Edwards25519Scalar *x,
-                                            const Edwards25519Scalar *y,
-                                            const Edwards25519Scalar *z) {
+CRYPTO_FIPS_TEXT Edwards25519Scalar *
+burrow__sc_multiply_add(Edwards25519Scalar *s, const Edwards25519Scalar *x,
+                        const Edwards25519Scalar *y, const Edwards25519Scalar *z) {
     /* A copy of z in case it is s. */
     Edwards25519Scalar z_copy = *z;
     burrow__sc_multiply(s, x, y);
@@ -212,8 +225,8 @@ Edwards25519Scalar *burrow__sc_multiply_add(Edwards25519Scalar *s,
 }
 
 /* x mod l, for a little endian x shorter than 32 bytes. */
-static Edwards25519Scalar *sc_set_short_bytes(Edwards25519Scalar *s, const uint8_t *x,
-                                              Int n) {
+CRYPTO_FIPS_TEXT static Edwards25519Scalar *
+sc_set_short_bytes(Edwards25519Scalar *s, const uint8_t *x, Int n) {
     if (n >= 32)
         panic_str(BURROW_S(
             "edwards25519: internal error: setShortBytes called with a long string"));
@@ -224,8 +237,8 @@ static Edwards25519Scalar *sc_set_short_bytes(Edwards25519Scalar *s, const uint8
     return s;
 }
 
-Edwards25519Scalar *burrow__sc_set_uniform_bytes(Edwards25519Scalar *s, Slice x,
-                                                 Error *err) {
+CRYPTO_FIPS_TEXT Edwards25519Scalar *burrow__sc_set_uniform_bytes(Edwards25519Scalar *s,
+                                                                  Slice x, Error *err) {
     if (x.len != 64) {
         BURROW_OUT(err,
                    errors_new(error_allocator(),
@@ -248,7 +261,7 @@ Edwards25519Scalar *burrow__sc_set_uniform_bytes(Edwards25519Scalar *s, Slice x,
     return s;
 }
 
-bool burrow__sc_is_reduced(Slice s) {
+CRYPTO_FIPS_TEXT bool burrow__sc_is_reduced(Slice s) {
     if (s.len != 32)
         return false;
     const uint8_t *p = s.p;
@@ -268,8 +281,8 @@ bool burrow__sc_is_reduced(Slice s) {
     return b == 0;
 }
 
-Edwards25519Scalar *burrow__sc_set_canonical_bytes(Edwards25519Scalar *s, Slice x,
-                                                   Error *err) {
+CRYPTO_FIPS_TEXT Edwards25519Scalar *
+burrow__sc_set_canonical_bytes(Edwards25519Scalar *s, Slice x, Error *err) {
     if (x.len != 32) {
         BURROW_OUT(err,
                    errors_new(error_allocator(), BURROW_S("invalid scalar length")));
@@ -286,8 +299,8 @@ Edwards25519Scalar *burrow__sc_set_canonical_bytes(Edwards25519Scalar *s, Slice 
     return s;
 }
 
-Edwards25519Scalar *burrow__sc_set_bytes_with_clamping(Edwards25519Scalar *s, Slice x,
-                                                       Error *err) {
+CRYPTO_FIPS_TEXT Edwards25519Scalar *
+burrow__sc_set_bytes_with_clamping(Edwards25519Scalar *s, Slice x, Error *err) {
     /* The top bits of the clamping are lost to the reduction too, and do not
      * matter to edwards25519: they guard against a bug once seen in a generic
      * Montgomery ladder. */
@@ -309,13 +322,14 @@ Edwards25519Scalar *burrow__sc_set_bytes_with_clamping(Edwards25519Scalar *s, Sl
     return burrow__sc_set_uniform_bytes(s, slice_from(wide, 64, 64, TYPE_BYTE), err);
 }
 
-void burrow__sc_bytes(const Edwards25519Scalar *s, uint8_t out[32]) {
+CRYPTO_FIPS_TEXT void burrow__sc_bytes(const Edwards25519Scalar *s, uint8_t out[32]) {
     uint64_t ss[4];
     sc_fiat_from_montgomery(ss, s->s);
     sc_fiat_to_bytes(out, ss);
 }
 
-int burrow__sc_equal(const Edwards25519Scalar *s, const Edwards25519Scalar *t) {
+CRYPTO_FIPS_TEXT int burrow__sc_equal(const Edwards25519Scalar *s,
+                                      const Edwards25519Scalar *t) {
     uint64_t diff[4];
     sc_fiat_sub(diff, s->s, t->s);
     uint64_t nonzero = sc_fiat_nonzero(diff);
@@ -328,8 +342,8 @@ int burrow__sc_equal(const Edwards25519Scalar *s, const Edwards25519Scalar *t) {
     return (int)(~nonzero & 1);
 }
 
-void burrow__sc_non_adjacent_form(const Edwards25519Scalar *s, unsigned w,
-                                  int8_t naf[256]) {
+CRYPTO_FIPS_TEXT void burrow__sc_non_adjacent_form(const Edwards25519Scalar *s,
+                                                   unsigned w, int8_t naf[256]) {
     /* Adapted, as Go's is, from curve25519-dalek, where it is documented:
      * https://github.com/dalek-cryptography/curve25519-dalek/blob/f630041af28e9a405255f98a8a93adca18e4315b/src/scalar.rs#L800-L871 */
     uint8_t b[32];
@@ -386,7 +400,8 @@ void burrow__sc_non_adjacent_form(const Edwards25519Scalar *s, unsigned w,
     }
 }
 
-void burrow__sc_signed_radix16(const Edwards25519Scalar *s, int8_t digits[64]) {
+CRYPTO_FIPS_TEXT void burrow__sc_signed_radix16(const Edwards25519Scalar *s,
+                                                int8_t digits[64]) {
     uint8_t b[32];
     burrow__sc_bytes(s, b);
     if (b[31] > 127)

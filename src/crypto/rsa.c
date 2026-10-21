@@ -29,6 +29,7 @@
 #include "burrow/type.h"
 
 #include "bigmod.h"
+#include "fips140_module.h"
 #include "rand_internal.h"
 #include "rsa_internal.h"
 
@@ -138,7 +139,7 @@ enum {
 static uint32_t rsa_debug_flags;
 
 /* The value of key in GODEBUG, the last one when it is there twice. */
-static bool rsa_godebug(const char *env, const char *key, Str *val) {
+CRYPTO_FIPS_TEXT static bool rsa_godebug(const char *env, const char *key, Str *val) {
     size_t kl = strlen(key);
     bool found = false;
     const char *p = env;
@@ -155,16 +156,16 @@ static bool rsa_godebug(const char *env, const char *key, Str *val) {
     return found;
 }
 
-static uint32_t rsa_debug_parse(const char *v) {
+CRYPTO_FIPS_TEXT static uint32_t rsa_debug_parse(const char *v) {
     uint32_t f = RSA_DEBUG_KNOWN;
-    Str s;
+    Str s = {0};
     if (v != NULL && rsa_godebug(v, "rsa1024min", &s) && s.len == 1 && s.p[0] == '0')
         f |= RSA_DEBUG_1024MIN_OFF;
     burrow__atomic_store_relaxed_u32(&rsa_debug_flags, f);
     return f;
 }
 
-static uint32_t rsa_debug_load(void) {
+CRYPTO_FIPS_TEXT static uint32_t rsa_debug_load(void) {
     uint32_t f = burrow__atomic_load_relaxed_u32(&rsa_debug_flags);
     if ((f & RSA_DEBUG_KNOWN) != 0)
         return f;
@@ -178,7 +179,7 @@ static uint32_t rsa_debug_load(void) {
     return rsa_debug_parse(v);
 }
 
-void burrow__rsa_godebug_set(const char *value) {
+CRYPTO_FIPS_TEXT void burrow__rsa_godebug_set(const char *value) {
     if (value == NULL)
         burrow__atomic_store_relaxed_u32(&rsa_debug_flags, 0);
     else
@@ -187,30 +188,31 @@ void burrow__rsa_godebug_set(const char *value) {
 
 /* ---------------------------------------------------------------- helpers */
 
-static Alloc *rsa_alloc(Alloc *a) {
+CRYPTO_FIPS_TEXT static Alloc *rsa_alloc(Alloc *a) {
     return a != NULL ? a : heap_allocator();
 }
 
-BURROW_NORETURN static void rsa_oom(void) {
+CRYPTO_FIPS_TEXT BURROW_NORETURN static void rsa_oom(void) {
     panic_str(BURROW_S("crypto/rsa: out of memory"));
 }
 
 /* What Go does with a nil *big.Int, a nil options pointer or a nil reader. */
-BURROW_NORETURN static void rsa_nil(void) {
+CRYPTO_FIPS_TEXT BURROW_NORETURN static void rsa_nil(void) {
     panic_str(
         BURROW_S("runtime error: invalid memory address or nil pointer dereference"));
 }
 
-static Error rsa_error(const char *msg) {
+CRYPTO_FIPS_TEXT static Error rsa_error(const char *msg) {
     return errors_new(error_allocator(), str_from_cstr(msg));
 }
 
-static void rsa_set_error(Error *err, const char *msg) {
+CRYPTO_FIPS_TEXT static void rsa_set_error(Error *err, const char *msg) {
     BURROW_OUT(err, rsa_error(msg));
 }
 
 /* prefix and then the name of h, as an error. */
-static void rsa_unavailable(Error *err, const char *prefix, CryptoHash h) {
+CRYPTO_FIPS_TEXT static void rsa_unavailable(Error *err, const char *prefix,
+                                             CryptoHash h) {
     if (err == NULL)
         return;
     Alloc *ea = error_allocator();
@@ -227,16 +229,16 @@ static void rsa_unavailable(Error *err, const char *prefix, CryptoHash h) {
     *err = errors_new(ea, str_from_bytes(p, plen + name.len));
 }
 
-static uint8_t *rsa_p(Slice s) {
+CRYPTO_FIPS_TEXT static uint8_t *rsa_p(Slice s) {
     return (uint8_t *)s.p;
 }
 
-static Slice rsa_sub(Slice s, Int lo, Int hi) {
+CRYPTO_FIPS_TEXT static Slice rsa_sub(Slice s, Int lo, Int hi) {
     return slice_from(rsa_p(s) + lo, hi - lo, hi - lo, TYPE_BYTE);
 }
 
 /* make([]byte, n) from a, which panics when a has no memory. */
-static Slice rsa_make(Alloc *a, Int n) {
+CRYPTO_FIPS_TEXT static Slice rsa_make(Alloc *a, Int n) {
     Slice s = slice_make(rsa_alloc(a), TYPE_BYTE, n, n);
     if (s.p == NULL && n > 0)
         rsa_oom();
@@ -244,7 +246,7 @@ static Slice rsa_make(Alloc *a, Int n) {
 }
 
 /* A copy of s from a, for what a function gives back. */
-static Slice rsa_clone(Alloc *a, Slice s, Error *err) {
+CRYPTO_FIPS_TEXT static Slice rsa_clone(Alloc *a, Slice s, Error *err) {
     Slice c = slice_make(rsa_alloc(a), TYPE_BYTE, s.len, s.len);
     if (c.p == NULL && s.len > 0) {
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -255,7 +257,7 @@ static Slice rsa_clone(Alloc *a, Slice s, Error *err) {
     return c;
 }
 
-static void rsa_slice_free(Alloc *a, Slice s) {
+CRYPTO_FIPS_TEXT static void rsa_slice_free(Alloc *a, Slice s) {
     if (s.cap > 0) {
         memset(s.p, 0, (size_t)s.cap);
         mem_free(rsa_alloc(a), s.p, (size_t)s.cap, 1);
@@ -264,7 +266,7 @@ static void rsa_slice_free(Alloc *a, Slice s) {
 
 /* drbg.ReadWithReader: the system generator for the default reader, which is
  * what drbg.Read is outside FIPS mode, and io.ReadFull for anything else. */
-static bool rsa_read(IoReader r, Slice b, Error *err) {
+CRYPTO_FIPS_TEXT static bool rsa_read(IoReader r, Slice b, Error *err) {
     if (burrow__crypto_rand_is_default_reader(r)) {
         burrow__crypto_rand_system(b);
         return true;
@@ -284,7 +286,7 @@ static bool rsa_read(IoReader r, Slice b, Error *err) {
 
 /* What the functions that take a random do with a nil one, before
  * rand.CustomReader. */
-static IoReader rsa_reader(IoReader r) {
+CRYPTO_FIPS_TEXT static IoReader rsa_reader(IoReader r) {
     if (r.vt == NULL)
         r = burrow__crypto_rand_nil_reader();
     return burrow__crypto_rand_custom_reader(r);
@@ -292,12 +294,13 @@ static IoReader rsa_reader(IoReader r) {
 
 /* Scratch memory for one operation: an arena whose chunks are cleared before
  * they go back to the heap, since most of what goes in it is secret. */
-static void *rsa_wipe_alloc(void *self, size_t size, size_t align) {
+CRYPTO_FIPS_TEXT static void *rsa_wipe_alloc(void *self, size_t size, size_t align) {
     (void)self;
     return mem_alloc_nozero(heap_allocator(), size, align);
 }
 
-static void rsa_wipe_free(void *self, void *p, size_t size, size_t align) {
+CRYPTO_FIPS_TEXT static void rsa_wipe_free(void *self, void *p, size_t size,
+                                           size_t align) {
     (void)self;
     if (p == NULL)
         return;
@@ -305,8 +308,8 @@ static void rsa_wipe_free(void *self, void *p, size_t size, size_t align) {
     mem_free(heap_allocator(), p, size, align);
 }
 
-static void *rsa_wipe_realloc(void *self, void *p, size_t old, size_t nsz,
-                              size_t align) {
+CRYPTO_FIPS_TEXT static void *rsa_wipe_realloc(void *self, void *p, size_t old,
+                                               size_t nsz, size_t align) {
     void *q = rsa_wipe_alloc(self, nsz, align);
     if (q == NULL)
         return NULL;
@@ -327,29 +330,29 @@ typedef struct RsaScratch {
     Alloc *a;
 } RsaScratch;
 
-static void rsa_scratch_init(RsaScratch *s) {
+CRYPTO_FIPS_TEXT static void rsa_scratch_init(RsaScratch *s) {
     s->wipe = (Alloc){&rsa_wipe_vt, NULL, NULL, NULL};
     arena_init(&s->ar, &s->wipe, 0);
     s->a = arena_allocator(&s->ar);
 }
 
-static void rsa_scratch_free(RsaScratch *s) {
+CRYPTO_FIPS_TEXT static void rsa_scratch_free(RsaScratch *s) {
     arena_free(&s->ar);
 }
 
 /* ------------------------------------------------------------ big.Int use */
 
-static BigInt *rsa_big_new(Alloc *a) {
+CRYPTO_FIPS_TEXT static BigInt *rsa_big_new(Alloc *a) {
     return big_new_int(a, 0);
 }
 
 /* new(big.Int).SetBytes(b), from a. */
-static BigInt *rsa_big_from_bytes(Alloc *a, Slice b) {
+CRYPTO_FIPS_TEXT static BigInt *rsa_big_from_bytes(Alloc *a, Slice b) {
     return big_int_set_bytes(rsa_big_new(a), b);
 }
 
 /* An integer from rsa_big_new back to a, cleared first. */
-static void rsa_big_free(BigInt *x, Alloc *a) {
+CRYPTO_FIPS_TEXT static void rsa_big_free(BigInt *x, Alloc *a) {
     if (x == NULL)
         return;
     if (x->abs.p != NULL && x->abs.cap > 0)
@@ -359,14 +362,14 @@ static void rsa_big_free(BigInt *x, Alloc *a) {
 }
 
 /* x.Bytes(), from a. A nil x panics, as it does in Go. */
-static Slice rsa_big_bytes(const BigInt *x, Alloc *a) {
+CRYPTO_FIPS_TEXT static Slice rsa_big_bytes(const BigInt *x, Alloc *a) {
     if (x == NULL)
         rsa_nil();
     return big_int_bytes(x, a);
 }
 
 /* bigIntEqual: a.Bytes() and b.Bytes() compared in constant time. */
-static bool rsa_big_equal(const BigInt *x, const BigInt *y) {
+CRYPTO_FIPS_TEXT static bool rsa_big_equal(const BigInt *x, const BigInt *y) {
     RsaScratch s;
     rsa_scratch_init(&s);
     Slice xb = rsa_big_bytes(x, s.a);
@@ -377,7 +380,8 @@ static bool rsa_big_equal(const BigInt *x, const BigInt *y) {
 }
 
 /* bigIntEqualToBytes. */
-static bool rsa_big_equal_to_bytes(const BigInt *x, Slice b, Alloc *tmp) {
+CRYPTO_FIPS_TEXT static bool rsa_big_equal_to_bytes(const BigInt *x, Slice b,
+                                                    Alloc *tmp) {
     if (x == NULL || big_int_bit_len(x) > b.len * 8)
         return false;
     Slice buf = big_int_fill_bytes(x, rsa_make(tmp, b.len));
@@ -429,7 +433,7 @@ static const RsaHashPrefix rsa_hash_prefixes[] = {
     {"MD5+SHA1", "", 0},
     {"RIPEMD-160", "\x30\x20\x30\x08\x06\x06\x28\xcf\x06\x03\x00\x31\x04\x14", 14},
 };
-static const uint16_t rsa_primes[255] = {
+CRYPTO_FIPS_RODATA static const uint16_t rsa_primes[255] = {
     3,    5,    7,    11,   13,   17,   19,   23,   29,   31,   37,   41,   43,   47,
     53,   59,   61,   67,   71,   73,   79,   83,   89,   97,   101,  103,  107,  109,
     113,  127,  131,  137,  139,  149,  151,  157,  163,  167,  173,  179,  181,  191,
@@ -451,7 +455,7 @@ static const uint16_t rsa_primes[255] = {
     1609, 1613, 1619,
 };
 
-static const RsaHashPrefix *rsa_find_prefix(Str name) {
+CRYPTO_FIPS_TEXT static const RsaHashPrefix *rsa_find_prefix(Str name) {
     for (size_t i = 0; i < sizeof rsa_hash_prefixes / sizeof rsa_hash_prefixes[0];
          i++) {
         const RsaHashPrefix *hp = &rsa_hash_prefixes[i];
@@ -461,7 +465,7 @@ static const RsaHashPrefix *rsa_find_prefix(Str name) {
     return NULL;
 }
 
-bool burrow__rsa_hash_prefix(Str name, Slice *prefix) {
+CRYPTO_FIPS_TEXT bool burrow__rsa_hash_prefix(Str name, Slice *prefix) {
     const RsaHashPrefix *hp = rsa_find_prefix(name);
     if (hp == NULL)
         return false;
@@ -470,7 +474,7 @@ bool burrow__rsa_hash_prefix(Str name, Slice *prefix) {
 }
 
 /* hashSize. */
-static Int rsa_hash_size(Str name) {
+CRYPTO_FIPS_TEXT static Int rsa_hash_size(Str name) {
     static const struct {
         const char *name;
         Int size;
@@ -509,7 +513,7 @@ typedef struct RsaFipsExport {
     bool crt;
 } RsaFipsExport;
 
-static RsaFipsKey *rsa_fips_key_new(Alloc *a) {
+CRYPTO_FIPS_TEXT static RsaFipsKey *rsa_fips_key_new(Alloc *a) {
     a = rsa_alloc(a);
     RsaFipsKey *k = mem_alloc(a, sizeof *k, _Alignof(RsaFipsKey));
     if (k == NULL)
@@ -522,12 +526,12 @@ static RsaFipsKey *rsa_fips_key_new(Alloc *a) {
     return k;
 }
 
-static void rsa_nat_wipe(BigmodNat *x) {
+CRYPTO_FIPS_TEXT static void rsa_nat_wipe(BigmodNat *x) {
     if (x->limbs != NULL && x->cap > 0 && !x->borrowed)
         memset(x->limbs, 0, (size_t)x->cap * sizeof(Uint));
 }
 
-static void rsa_modulus_free(BigmodModulus *m) {
+CRYPTO_FIPS_TEXT static void rsa_modulus_free(BigmodModulus *m) {
     if (m == NULL)
         return;
     rsa_nat_wipe(&m->nat);
@@ -535,7 +539,7 @@ static void rsa_modulus_free(BigmodModulus *m) {
     bigmod_modulus_free(m);
 }
 
-static void rsa_fips_key_free(RsaFipsKey *k) {
+CRYPTO_FIPS_TEXT static void rsa_fips_key_free(RsaFipsKey *k) {
     if (k == NULL)
         return;
     Alloc *a = k->a;
@@ -553,18 +557,19 @@ static void rsa_fips_key_free(RsaFipsKey *k) {
 }
 
 /* m.Nat().Bytes(m), from tmp. */
-static Slice rsa_modulus_bytes(const BigmodModulus *m, Alloc *tmp) {
+CRYPTO_FIPS_TEXT static Slice rsa_modulus_bytes(const BigmodModulus *m, Alloc *tmp) {
     return bigmod_nat_bytes(&m->nat, tmp, m);
 }
 
 /* NewModulus(m.Nat().SubOne(m).Bytes(m)), from tmp. */
-static BigmodModulus *rsa_minus_one(const BigmodModulus *m, Alloc *tmp, Error *err) {
+CRYPTO_FIPS_TEXT static BigmodModulus *rsa_minus_one(const BigmodModulus *m, Alloc *tmp,
+                                                     Error *err) {
     BigmodNat *x = bigmod_nat_sub_one(bigmod_modulus_nat(m, tmp), m);
     return bigmod_new_modulus(tmp, bigmod_nat_bytes(x, tmp, m), err);
 }
 
 /* checkPublicKey. */
-static Error rsa_check_public(const BigmodModulus *n, Int e) {
+CRYPTO_FIPS_TEXT static Error rsa_check_public(const BigmodModulus *n, Int e) {
     if (n == NULL)
         return rsa_error("crypto/rsa: missing public modulus");
     if (bigmod_nat_is_odd(&n->nat) == 0)
@@ -579,7 +584,7 @@ static Error rsa_check_public(const BigmodModulus *n, Int e) {
 }
 
 /* checkPrivateKey. */
-static Error rsa_check_private(const RsaFipsKey *k, Alloc *tmp) {
+CRYPTO_FIPS_TEXT static Error rsa_check_private(const RsaFipsKey *k, Alloc *tmp) {
     Error e = rsa_check_public(k->n, k->e);
     if (BURROW_FAILED(e))
         return e;
@@ -660,7 +665,7 @@ static Error rsa_check_private(const RsaFipsKey *k, Alloc *tmp) {
 
 /* newPrivateKey, for k with n, e, d, p and q set: works out dP, dQ and qInv
  * and checks the key. */
-static Error rsa_fips_complete(RsaFipsKey *k, Alloc *tmp) {
+CRYPTO_FIPS_TEXT static Error rsa_fips_complete(RsaFipsKey *k, Alloc *tmp) {
     const BigmodModulus *p = k->p, *q = k->q;
     Error e = BURROW_NO_ERROR;
 
@@ -691,8 +696,10 @@ static Error rsa_fips_complete(RsaFipsKey *k, Alloc *tmp) {
 }
 
 /* NewPrivateKey. */
-static RsaFipsKey *rsa_fips_new_private_key(Alloc *a, Alloc *tmp, Slice N, Int e,
-                                            Slice d, Slice P, Slice Q, Error *err) {
+CRYPTO_FIPS_TEXT static RsaFipsKey *rsa_fips_new_private_key(Alloc *a, Alloc *tmp,
+                                                             Slice N, Int e, Slice d,
+                                                             Slice P, Slice Q,
+                                                             Error *err) {
     RsaFipsKey *k = rsa_fips_key_new(a);
     k->e = e;
     k->n = bigmod_new_modulus(k->a, N, err);
@@ -719,7 +726,7 @@ fail:
 }
 
 /* NewPrivateKeyWithPrecomputation. */
-static RsaFipsKey *
+CRYPTO_FIPS_TEXT static RsaFipsKey *
 rsa_fips_new_private_key_with_precomputation(Alloc *a, Alloc *tmp, Slice N, Int e,
                                              Slice d, Slice P, Slice Q, Slice dP,
                                              Slice dQ, Slice qInv, Error *err) {
@@ -756,8 +763,9 @@ fail:
 }
 
 /* NewPrivateKeyWithoutCRT. */
-static RsaFipsKey *rsa_fips_new_private_key_without_crt(Alloc *a, Alloc *tmp, Slice N,
-                                                        Int e, Slice d, Error *err) {
+CRYPTO_FIPS_TEXT static RsaFipsKey *
+rsa_fips_new_private_key_without_crt(Alloc *a, Alloc *tmp, Slice N, Int e, Slice d,
+                                     Error *err) {
     RsaFipsKey *k = rsa_fips_key_new(a);
     k->e = e;
     k->n = bigmod_new_modulus(k->a, N, err);
@@ -778,7 +786,7 @@ fail:
 }
 
 /* PrivateKey.Export, from tmp. */
-static RsaFipsExport rsa_fips_export(const RsaFipsKey *k, Alloc *tmp) {
+CRYPTO_FIPS_TEXT static RsaFipsExport rsa_fips_export(const RsaFipsKey *k, Alloc *tmp) {
     RsaFipsExport x;
     memset(&x, 0, sizeof x);
     x.n = rsa_modulus_bytes(k->n, tmp);
@@ -799,8 +807,9 @@ static RsaFipsExport rsa_fips_export(const RsaFipsKey *k, Alloc *tmp) {
 /* --------------------------------------------------- encrypt and decrypt */
 
 /* encrypt: plaintext^e mod N, from tmp. */
-static bool rsa_fips_encrypt(const BigmodModulus *N, Int e, Slice plaintext, Alloc *tmp,
-                             Slice *out, Error *err) {
+CRYPTO_FIPS_TEXT static bool rsa_fips_encrypt(const BigmodModulus *N, Int e,
+                                              Slice plaintext, Alloc *tmp, Slice *out,
+                                              Error *err) {
     BigmodNat *m = bigmod_nat_set_bytes(bigmod_new_nat(tmp), plaintext, N, err);
     if (m == NULL)
         return false;
@@ -812,8 +821,8 @@ static bool rsa_fips_encrypt(const BigmodModulus *N, Int e, Slice plaintext, All
 /* decrypt: ciphertext^d mod N, from tmp, and false for ErrDecryption. With
  * check, the result is encrypted again and compared, which stops a fault in
  * the CRT from leaking the key. */
-static bool rsa_fips_decrypt(const RsaFipsKey *k, Slice ciphertext, bool check,
-                             Alloc *tmp, Slice *out) {
+CRYPTO_FIPS_TEXT static bool rsa_fips_decrypt(const RsaFipsKey *k, Slice ciphertext,
+                                              bool check, Alloc *tmp, Slice *out) {
     const BigmodModulus *N = k->n;
     BigmodNat *c = bigmod_nat_set_bytes(bigmod_new_nat(tmp), ciphertext, N, NULL);
     if (c == NULL)
@@ -854,8 +863,9 @@ static bool rsa_fips_decrypt(const RsaFipsKey *k, Slice ciphertext, bool check,
 
 /* pkcs1v15ConstructEM, from tmp. An empty hash means hashed is signed as it
  * is. */
-static bool rsa_pkcs1_v15_construct_em(Int k, Str hash, Slice hashed, Alloc *tmp,
-                                       Slice *out, Error *err) {
+CRYPTO_FIPS_TEXT static bool rsa_pkcs1_v15_construct_em(Int k, Str hash, Slice hashed,
+                                                        Alloc *tmp, Slice *out,
+                                                        Error *err) {
     /* Special case: crypto.Hash(0) is used to indicate that the data is
      * signed directly. */
     Slice prefix = slice_nil(TYPE_BYTE);
@@ -890,8 +900,9 @@ static bool rsa_pkcs1_v15_construct_em(Int k, Str hash, Slice hashed, Alloc *tmp
 }
 
 /* signPKCS1v15. */
-static bool rsa_fips_sign_pkcs1_v15(const RsaFipsKey *k, Str hash, Slice hashed,
-                                    Alloc *tmp, Slice *out, Error *err) {
+CRYPTO_FIPS_TEXT static bool rsa_fips_sign_pkcs1_v15(const RsaFipsKey *k, Str hash,
+                                                     Slice hashed, Alloc *tmp,
+                                                     Slice *out, Error *err) {
     Slice em;
     if (!rsa_pkcs1_v15_construct_em(bigmod_modulus_size(k->n), hash, hashed, tmp, &em,
                                     err))
@@ -904,8 +915,9 @@ static bool rsa_fips_sign_pkcs1_v15(const RsaFipsKey *k, Str hash, Slice hashed,
 }
 
 /* verifyPKCS1v15. */
-static Error rsa_fips_verify_pkcs1_v15(const BigmodModulus *N, Int e, Str hash,
-                                       Slice hashed, Slice sig, Alloc *tmp) {
+CRYPTO_FIPS_TEXT static Error rsa_fips_verify_pkcs1_v15(const BigmodModulus *N, Int e,
+                                                        Str hash, Slice hashed,
+                                                        Slice sig, Alloc *tmp) {
     Error ce = rsa_check_public(N, e);
     if (BURROW_FAILED(ce))
         return ce;
@@ -929,7 +941,7 @@ static Error rsa_fips_verify_pkcs1_v15(const BigmodModulus *N, Int e, Str hash,
 
 /* ------------------------------------------------------- PSS and OAEP (FIPS) */
 
-static void rsa_inc_counter(uint8_t c[4]) {
+CRYPTO_FIPS_TEXT static void rsa_inc_counter(uint8_t c[4]) {
     if (++c[3] != 0)
         return;
     if (++c[2] != 0)
@@ -941,7 +953,8 @@ static void rsa_inc_counter(uint8_t c[4]) {
 
 /* mgf1XOR XORs the bytes in out with a mask generated using the MGF1 function
  * specified in PKCS #1 v2.1. */
-static void rsa_mgf1_xor(Slice out, Hash hash, Slice seed, Alloc *tmp) {
+CRYPTO_FIPS_TEXT static void rsa_mgf1_xor(Slice out, Hash hash, Slice seed,
+                                          Alloc *tmp) {
     uint8_t counter[4] = {0, 0, 0, 0};
     uint8_t *o = rsa_p(out);
     Int done = 0;
@@ -958,7 +971,8 @@ static void rsa_mgf1_xor(Slice out, Hash hash, Slice seed, Alloc *tmp) {
 }
 
 /* H = Hash(0x00 * 8 || mHash || salt), from tmp. */
-static Slice rsa_pss_hash(Hash hash, Slice m_hash, Slice salt, Alloc *tmp) {
+CRYPTO_FIPS_TEXT static Slice rsa_pss_hash(Hash hash, Slice m_hash, Slice salt,
+                                           Alloc *tmp) {
     uint8_t prefix[8] = {0};
     hash_reset(hash);
     (void)hash_write(hash, slice_from(prefix, 8, 8, TYPE_BYTE), NULL);
@@ -968,8 +982,9 @@ static Slice rsa_pss_hash(Hash hash, Slice m_hash, Slice salt, Alloc *tmp) {
 }
 
 /* emsaPSSEncode, from tmp. See RFC 8017, Section 9.1.1. */
-static bool rsa_emsa_pss_encode(Slice m_hash, Int em_bits, Slice salt, Hash hash,
-                                Alloc *tmp, Slice *out, Error *err) {
+CRYPTO_FIPS_TEXT static bool rsa_emsa_pss_encode(Slice m_hash, Int em_bits, Slice salt,
+                                                 Hash hash, Alloc *tmp, Slice *out,
+                                                 Error *err) {
     Int h_len = hash_size(hash);
     Int s_len = salt.len;
     Int em_len = (em_bits + 7) / 8;
@@ -1018,8 +1033,8 @@ static bool rsa_emsa_pss_encode(Slice m_hash, Int em_bits, Slice salt, Hash hash
     return true;
 }
 
-Slice burrow__rsa_emsa_pss_encode(Alloc *a, Slice m_hash, Int em_bits, Slice salt,
-                                  Hash hash, Error *err) {
+CRYPTO_FIPS_TEXT Slice burrow__rsa_emsa_pss_encode(Alloc *a, Slice m_hash, Int em_bits,
+                                                   Slice salt, Hash hash, Error *err) {
     RsaScratch s;
     rsa_scratch_init(&s);
     Slice em, out = slice_nil(TYPE_BYTE);
@@ -1032,8 +1047,8 @@ Slice burrow__rsa_emsa_pss_encode(Alloc *a, Slice m_hash, Int em_bits, Slice sal
 #define RSA_PSS_SALT_LENGTH_AUTODETECT (-1)
 
 /* emsaPSSVerify. See RFC 8017, Section 9.1.2. em is changed. */
-static Error rsa_emsa_pss_verify(Slice m_hash, Slice em, Int em_bits, Int s_len,
-                                 Hash hash, Alloc *tmp) {
+CRYPTO_FIPS_TEXT static Error rsa_emsa_pss_verify(Slice m_hash, Slice em, Int em_bits,
+                                                  Int s_len, Hash hash, Alloc *tmp) {
     /* 1. If the length of M is greater than the input limitation for the
      * hash function, output "inconsistent" and stop.
      * 2. Let mHash = Hash(M), an octet string of length hLen. */
@@ -1106,8 +1121,8 @@ static Error rsa_emsa_pss_verify(Slice m_hash, Slice em, Int em_bits, Int s_len,
     return BURROW_NO_ERROR;
 }
 
-Error burrow__rsa_emsa_pss_verify(Slice m_hash, Slice em, Int em_bits, Int s_len,
-                                  Hash hash) {
+CRYPTO_FIPS_TEXT Error burrow__rsa_emsa_pss_verify(Slice m_hash, Slice em, Int em_bits,
+                                                   Int s_len, Hash hash) {
     RsaScratch s;
     rsa_scratch_init(&s);
     Error err = BURROW_NO_ERROR;
@@ -1119,7 +1134,8 @@ Error burrow__rsa_emsa_pss_verify(Slice m_hash, Slice em, Int em_bits, Int s_len
 }
 
 /* PSSMaxSaltLength. */
-static bool rsa_pss_max_salt_length(const BigmodModulus *N, Hash hash, Int *out) {
+CRYPTO_FIPS_TEXT static bool rsa_pss_max_salt_length(const BigmodModulus *N, Hash hash,
+                                                     Int *out) {
     Int salt_length = (bigmod_modulus_bit_len(N) - 1 + 7) / 8 - 2 - hash_size(hash);
     if (salt_length < 0)
         return false;
@@ -1128,9 +1144,9 @@ static bool rsa_pss_max_salt_length(const BigmodModulus *N, Hash hash, Int *out)
 }
 
 /* SignPSS calculates the signature of hashed using RSASSA-PSS. */
-static bool rsa_fips_sign_pss(IoReader rand, const RsaFipsKey *k, Hash hash,
-                              Slice hashed, Int salt_length, Alloc *tmp, Slice *out,
-                              Error *err) {
+CRYPTO_FIPS_TEXT static bool rsa_fips_sign_pss(IoReader rand, const RsaFipsKey *k,
+                                               Hash hash, Slice hashed, Int salt_length,
+                                               Alloc *tmp, Slice *out, Error *err) {
     if (salt_length < 0) {
         rsa_set_error(err, "crypto/rsa: salt length cannot be negative");
         return false;
@@ -1166,8 +1182,9 @@ static bool rsa_fips_sign_pss(IoReader rand, const RsaFipsKey *k, Hash hash,
 }
 
 /* verifyPSS. */
-static Error rsa_fips_verify_pss(const BigmodModulus *N, Int e, Hash hash, Slice digest,
-                                 Slice sig, Int salt_length, Alloc *tmp) {
+CRYPTO_FIPS_TEXT static Error rsa_fips_verify_pss(const BigmodModulus *N, Int e,
+                                                  Hash hash, Slice digest, Slice sig,
+                                                  Int salt_length, Alloc *tmp) {
     Error ce = rsa_check_public(N, e);
     if (BURROW_FAILED(ce))
         return ce;
@@ -1195,18 +1212,21 @@ static Error rsa_fips_verify_pss(const BigmodModulus *N, Int e, Hash hash, Slice
 }
 
 /* VerifyPSSWithSaltLength. */
-static Error rsa_fips_verify_pss_with_salt_length(const BigmodModulus *N, Int e,
-                                                  Hash hash, Slice digest, Slice sig,
-                                                  Int salt_length, Alloc *tmp) {
+CRYPTO_FIPS_TEXT static Error
+rsa_fips_verify_pss_with_salt_length(const BigmodModulus *N, Int e, Hash hash,
+                                     Slice digest, Slice sig, Int salt_length,
+                                     Alloc *tmp) {
     if (salt_length < 0)
         return rsa_error("crypto/rsa: salt length cannot be negative");
     return rsa_fips_verify_pss(N, e, hash, digest, sig, salt_length, tmp);
 }
 
 /* EncryptOAEP encrypts the given message with RSAES-OAEP. */
-static bool rsa_fips_encrypt_oaep(Hash hash, Hash mgf_hash, IoReader random,
-                                  const BigmodModulus *N, Int e, Slice msg, Slice label,
-                                  Alloc *tmp, Slice *out, Error *err) {
+CRYPTO_FIPS_TEXT static bool rsa_fips_encrypt_oaep(Hash hash, Hash mgf_hash,
+                                                   IoReader random,
+                                                   const BigmodModulus *N, Int e,
+                                                   Slice msg, Slice label, Alloc *tmp,
+                                                   Slice *out, Error *err) {
     Error ce = rsa_check_public(N, e);
     if (BURROW_FAILED(ce)) {
         BURROW_OUT(err, ce);
@@ -1244,9 +1264,10 @@ static bool rsa_fips_encrypt_oaep(Hash hash, Hash mgf_hash, IoReader random,
 
 /* DecryptOAEP decrypts ciphertext using RSAES-OAEP, giving the message in
  * *out, which points into memory from tmp. */
-static bool rsa_fips_decrypt_oaep(Hash hash, Hash mgf_hash, const RsaFipsKey *priv,
-                                  Slice ciphertext, Slice label, Alloc *tmp, Slice *out,
-                                  Error *err) {
+CRYPTO_FIPS_TEXT static bool rsa_fips_decrypt_oaep(Hash hash, Hash mgf_hash,
+                                                   const RsaFipsKey *priv,
+                                                   Slice ciphertext, Slice label,
+                                                   Alloc *tmp, Slice *out, Error *err) {
     Int k = bigmod_modulus_size(priv->n);
     Int h_len = hash_size(hash);
     if (ciphertext.len > k || k < h_len * 2 + 2) {
@@ -1314,7 +1335,8 @@ struct RsaMillerRabin {
 
 /* millerRabinSetup prepares state that's reused across multiple iterations of
  * the Miller-Rabin test. */
-static RsaMillerRabin *rsa_miller_rabin_setup(Alloc *a, Slice w, Error *err) {
+CRYPTO_FIPS_TEXT static RsaMillerRabin *rsa_miller_rabin_setup(Alloc *a, Slice w,
+                                                               Error *err) {
     /* Check that w is odd, and precompute Montgomery parameters. */
     const uint8_t *wp = rsa_p(w);
     if (w.len == 0 || (wp[w.len - 1] & 3) != 3) {
@@ -1342,15 +1364,17 @@ static RsaMillerRabin *rsa_miller_rabin_setup(Alloc *a, Slice w, Error *err) {
     return mr;
 }
 
-RsaMillerRabin *burrow__rsa_miller_rabin_setup(Alloc *a, Slice w, Error *err) {
+CRYPTO_FIPS_TEXT RsaMillerRabin *burrow__rsa_miller_rabin_setup(Alloc *a, Slice w,
+                                                                Error *err) {
     return rsa_miller_rabin_setup(a, w, err);
 }
 
 /* millerRabinIteration: 1 for possibly prime, 0 for composite and -1 for an
  * error, whose message goes to *msg when the error is ours and to *err when
  * it is bigmod's. */
-static int rsa_miller_rabin_iteration(const RsaMillerRabin *mr, Slice bb, Alloc *tmp,
-                                      const char **msg, Error *err) {
+CRYPTO_FIPS_TEXT static int rsa_miller_rabin_iteration(const RsaMillerRabin *mr,
+                                                       Slice bb, Alloc *tmp,
+                                                       const char **msg, Error *err) {
     /* Reject b ≤ 1 or b ≥ w − 1. */
     if (bb.len != (bigmod_modulus_bit_len(mr->w) + 7) / 8) {
         *msg = "incorrect length";
@@ -1375,8 +1399,9 @@ static int rsa_miller_rabin_iteration(const RsaMillerRabin *mr, Slice bb, Alloc 
     return 0;
 }
 
-Error burrow__rsa_miller_rabin_iteration(const RsaMillerRabin *mr, Slice b,
-                                         bool *possibly_prime) {
+CRYPTO_FIPS_TEXT Error burrow__rsa_miller_rabin_iteration(const RsaMillerRabin *mr,
+                                                          Slice b,
+                                                          bool *possibly_prime) {
     RsaScratch s;
     rsa_scratch_init(&s);
     const char *msg = NULL;
@@ -1391,7 +1416,7 @@ Error burrow__rsa_miller_rabin_iteration(const RsaMillerRabin *mr, Slice b,
 
 /* isPrime runs the Miller-Rabin Probabilistic Primality Test from FIPS 186-5,
  * Appendix B.3.1, after trial division by the first odd primes. */
-static bool rsa_is_prime(RsaScratch *s, Slice w) {
+CRYPTO_FIPS_TEXT static bool rsa_is_prime(RsaScratch *s, Slice w) {
     ArenaMark mark = arena_mark(&s->ar);
     Alloc *tmp = s->a;
     bool prime = false;
@@ -1460,8 +1485,8 @@ done:
 
 /* randomPrime returns a random prime number of the given bit size following
  * the process in FIPS 186-5, Appendix A.1.3, in memory from s. */
-static bool rsa_random_prime(RsaScratch *s, IoReader rand, Int bits, Slice *out,
-                             Error *err) {
+CRYPTO_FIPS_TEXT static bool rsa_random_prime(RsaScratch *s, IoReader rand, Int bits,
+                                              Slice *out, Error *err) {
     if (bits < 16) {
         rsa_set_error(err, "rsa: prime size must be at least 16 bits");
         return false;
@@ -1502,8 +1527,9 @@ static bool rsa_random_prime(RsaScratch *s, IoReader rand, Int bits, Slice *out,
 
 /* totient computes the Carmichael totient function λ(N) = lcm(p-1, q-1), from
  * tmp. errDivisorTooLarge is the sentinel. */
-static BigmodModulus *rsa_totient_mod(const BigmodModulus *p, const BigmodModulus *q,
-                                      Alloc *tmp, Error *err) {
+CRYPTO_FIPS_TEXT static BigmodModulus *rsa_totient_mod(const BigmodModulus *p,
+                                                       const BigmodModulus *q,
+                                                       Alloc *tmp, Error *err) {
     BigmodNat *a = bigmod_nat_sub_one(bigmod_modulus_nat(p, tmp), p);
     BigmodNat *b = bigmod_nat_sub_one(bigmod_modulus_nat(q, tmp), q);
 
@@ -1554,7 +1580,7 @@ static BigmodModulus *rsa_totient_mod(const BigmodModulus *p, const BigmodModulu
                                       bigmod_nat_bytes(b, tmp, q), err);
 }
 
-Slice burrow__rsa_totient(Alloc *a, Slice p, Slice q, Error *err) {
+CRYPTO_FIPS_TEXT Slice burrow__rsa_totient(Alloc *a, Slice p, Slice q, Error *err) {
     RsaScratch s;
     rsa_scratch_init(&s);
     Slice out = slice_nil(TYPE_BYTE);
@@ -1569,8 +1595,8 @@ Slice burrow__rsa_totient(Alloc *a, Slice p, Slice q, Error *err) {
 
 /* GenerateKey generates a new RSA key pair of the given bit size. bits must
  * be at least 32. */
-static RsaFipsKey *rsa_fips_generate_key(Alloc *a, IoReader rand, Int bits,
-                                         Error *err) {
+CRYPTO_FIPS_TEXT static RsaFipsKey *rsa_fips_generate_key(Alloc *a, IoReader rand,
+                                                          Int bits, Error *err) {
     if (bits < 32) {
         rsa_set_error(err, "rsa: key too small");
         return NULL;
@@ -1678,7 +1704,7 @@ fail:
 
 /* ----------------------------------------------------- nonZeroRandomBytes */
 
-Error burrow__rsa_non_zero_random_bytes(Slice s, IoReader random) {
+CRYPTO_FIPS_TEXT Error burrow__rsa_non_zero_random_bytes(Slice s, IoReader random) {
     Error err = BURROW_NO_ERROR;
     if (s.len > 0 && random.vt == NULL)
         rsa_nil();
@@ -1702,7 +1728,7 @@ Error burrow__rsa_non_zero_random_bytes(Slice s, IoReader random) {
 /* ------------------------------------------------------------ key checks */
 
 /* Writes "crypto/rsa: %d-bit keys are insecure (see ...)" as an error. */
-static Error rsa_insecure_size(Int size) {
+CRYPTO_FIPS_TEXT static Error rsa_insecure_size(Int size) {
     static const char pre[] = "crypto/rsa: ";
     static const char post[] = "-bit keys are insecure (see "
                                "https://go.dev/pkg/crypto/rsa#hdr-Minimum_key_size)";
@@ -1727,7 +1753,7 @@ static Error rsa_insecure_size(Int size) {
 }
 
 /* checkKeySize. */
-static Error rsa_check_key_size(Int size) {
+CRYPTO_FIPS_TEXT static Error rsa_check_key_size(Int size) {
     if (size >= 1024)
         return BURROW_NO_ERROR;
     if ((rsa_debug_load() & RSA_DEBUG_1024MIN_OFF) != 0)
@@ -1736,13 +1762,13 @@ static Error rsa_check_key_size(Int size) {
 }
 
 /* checkPublicKeySize. */
-static Error rsa_check_public_key_size(const RsaPublicKey *k) {
+CRYPTO_FIPS_TEXT static Error rsa_check_public_key_size(const RsaPublicKey *k) {
     if (k->n == NULL)
         return rsa_error("crypto/rsa: missing public modulus");
     return rsa_check_key_size(big_int_bit_len(k->n));
 }
 
-static bool rsa_fail(Error *err, Error e) {
+CRYPTO_FIPS_TEXT static bool rsa_fail(Error *err, Error e) {
     if (BURROW_FAILED(e)) {
         BURROW_OUT(err, e);
         return true;
@@ -1752,7 +1778,7 @@ static bool rsa_fail(Error *err, Error e) {
 
 /* ------------------------------------------------------- precomputation */
 
-static void rsa_precomputed_free(RsaPrecomputedValues *pv, Alloc *a) {
+CRYPTO_FIPS_TEXT static void rsa_precomputed_free(RsaPrecomputedValues *pv, Alloc *a) {
     rsa_big_free(pv->dp, a);
     rsa_big_free(pv->dq, a);
     rsa_big_free(pv->qinv, a);
@@ -1771,8 +1797,10 @@ static void rsa_precomputed_free(RsaPrecomputedValues *pv, Alloc *a) {
 }
 
 /* precomputeLegacy. */
-static bool rsa_precompute_legacy(const RsaPrivateKey *priv, Alloc *a, Alloc *tmp,
-                                  RsaPrecomputedValues *out, Error *err) {
+CRYPTO_FIPS_TEXT static bool rsa_precompute_legacy(const RsaPrivateKey *priv, Alloc *a,
+                                                   Alloc *tmp,
+                                                   RsaPrecomputedValues *out,
+                                                   Error *err) {
     RsaFipsKey *k = rsa_fips_new_private_key_without_crt(
         a, tmp, big_int_bytes(priv->public_key.n, tmp), priv->public_key.e,
         big_int_bytes(priv->d, tmp), err);
@@ -1839,8 +1867,9 @@ fail:
 }
 
 /* precompute: the values for priv, from a, in *out. */
-static bool rsa_precompute(const RsaPrivateKey *priv, Alloc *a, Alloc *tmp,
-                           RsaPrecomputedValues *out, Error *err) {
+CRYPTO_FIPS_TEXT static bool rsa_precompute(const RsaPrivateKey *priv, Alloc *a,
+                                            Alloc *tmp, RsaPrecomputedValues *out,
+                                            Error *err) {
     memset(out, 0, sizeof *out);
 
     /* Check that the struct is not missing the values needed for the FIPS
@@ -1897,7 +1926,8 @@ static bool rsa_precompute(const RsaPrivateKey *priv, Alloc *a, Alloc *tmp,
 }
 
 /* precomputedIsConsistent. */
-static bool rsa_precomputed_is_consistent(const RsaPrivateKey *priv, Alloc *tmp) {
+CRYPTO_FIPS_TEXT static bool rsa_precomputed_is_consistent(const RsaPrivateKey *priv,
+                                                           Alloc *tmp) {
     if (priv->precomputed.fips == NULL)
         return false;
     RsaFipsExport x = rsa_fips_export(priv->precomputed.fips, tmp);
@@ -1914,8 +1944,8 @@ static bool rsa_precomputed_is_consistent(const RsaPrivateKey *priv, Alloc *tmp)
 }
 
 /* fipsPrivateKey: the cached key, or one worked out into tmp. */
-static const RsaFipsKey *rsa_fips_private_key(const RsaPrivateKey *priv, Alloc *tmp,
-                                              Error *err) {
+CRYPTO_FIPS_TEXT static const RsaFipsKey *
+rsa_fips_private_key(const RsaPrivateKey *priv, Alloc *tmp, Error *err) {
     if (priv->precomputed.fips != NULL)
         return priv->precomputed.fips;
     RsaPrecomputedValues pv;
@@ -1924,18 +1954,20 @@ static const RsaFipsKey *rsa_fips_private_key(const RsaPrivateKey *priv, Alloc *
     return pv.fips;
 }
 
-static void rsa_mark_nat(const BigmodNat *x, void (*mark)(void *p, size_t n)) {
+CRYPTO_FIPS_TEXT static void rsa_mark_nat(const BigmodNat *x,
+                                          void (*mark)(void *p, size_t n)) {
     mark(x->limbs, (size_t)x->len * sizeof(Uint));
 }
 
-static void rsa_mark_modulus(BigmodModulus *m, void (*mark)(void *p, size_t n)) {
+CRYPTO_FIPS_TEXT static void rsa_mark_modulus(BigmodModulus *m,
+                                              void (*mark)(void *p, size_t n)) {
     rsa_mark_nat(&m->nat, mark);
     mark(&m->m0inv, sizeof m->m0inv);
     rsa_mark_nat(&m->rr, mark);
 }
 
-bool burrow__rsa_mark_secrets(const RsaPrivateKey *priv,
-                              void (*mark)(void *p, size_t n)) {
+CRYPTO_FIPS_TEXT bool burrow__rsa_mark_secrets(const RsaPrivateKey *priv,
+                                               void (*mark)(void *p, size_t n)) {
     const RsaFipsKey *k = priv->precomputed.fips;
     if (k == NULL)
         return false;
@@ -1951,12 +1983,12 @@ bool burrow__rsa_mark_secrets(const RsaPrivateKey *priv,
 }
 
 /* fipsPublicKey: the modulus of pub, from tmp. */
-static BigmodModulus *rsa_fips_public_key(const RsaPublicKey *pub, Alloc *tmp,
-                                          Error *err) {
+CRYPTO_FIPS_TEXT static BigmodModulus *rsa_fips_public_key(const RsaPublicKey *pub,
+                                                           Alloc *tmp, Error *err) {
     return bigmod_new_modulus(tmp, big_int_bytes(pub->n, tmp), err);
 }
 
-void rsa_private_key_precompute(RsaPrivateKey *priv, Alloc *a) {
+CRYPTO_FIPS_TEXT void rsa_private_key_precompute(RsaPrivateKey *priv, Alloc *a) {
     RsaScratch s;
     rsa_scratch_init(&s);
     if (!rsa_precomputed_is_consistent(priv, s.a)) {
@@ -1969,7 +2001,7 @@ void rsa_private_key_precompute(RsaPrivateKey *priv, Alloc *a) {
     rsa_scratch_free(&s);
 }
 
-Error rsa_private_key_validate(const RsaPrivateKey *priv) {
+CRYPTO_FIPS_TEXT Error rsa_private_key_validate(const RsaPrivateKey *priv) {
     /* We can operate on keys based on d alone, but they can't be encoded with
      * crypto/x509.MarshalPKCS1PrivateKey, which unfortunately doesn't return
      * an error. */
@@ -1995,17 +2027,18 @@ Error rsa_private_key_validate(const RsaPrivateKey *priv) {
 
 /* ------------------------------------------------------------ public keys */
 
-Int rsa_public_key_size(const RsaPublicKey *pub) {
+CRYPTO_FIPS_TEXT Int rsa_public_key_size(const RsaPublicKey *pub) {
     if (pub->n == NULL)
         rsa_nil();
     return (big_int_bit_len(pub->n) + 7) / 8;
 }
 
-static bool rsa_public_equal(const RsaPublicKey *pub, const RsaPublicKey *xx) {
+CRYPTO_FIPS_TEXT static bool rsa_public_equal(const RsaPublicKey *pub,
+                                              const RsaPublicKey *xx) {
     return rsa_big_equal(pub->n, xx->n) && pub->e == xx->e;
 }
 
-bool rsa_public_key_equal(const RsaPublicKey *pub, CryptoPublicKey x) {
+CRYPTO_FIPS_TEXT bool rsa_public_key_equal(const RsaPublicKey *pub, CryptoPublicKey x) {
     if (x.t != TYPE_RSA_PUBLIC_KEY || x.data == NULL)
         return false;
     return rsa_public_equal(pub, x.data);
@@ -2013,15 +2046,16 @@ bool rsa_public_key_equal(const RsaPublicKey *pub, CryptoPublicKey x) {
 
 /* ----------------------------------------------------------- private keys */
 
-Int rsa_private_key_size(const RsaPrivateKey *priv) {
+CRYPTO_FIPS_TEXT Int rsa_private_key_size(const RsaPrivateKey *priv) {
     return rsa_public_key_size(&priv->public_key);
 }
 
-CryptoPublicKey rsa_private_key_public(const RsaPrivateKey *priv) {
+CRYPTO_FIPS_TEXT CryptoPublicKey rsa_private_key_public(const RsaPrivateKey *priv) {
     return BURROW_ANY(TYPE_RSA_PUBLIC_KEY, (uintptr_t)&priv->public_key);
 }
 
-bool rsa_private_key_equal(const RsaPrivateKey *priv, CryptoPrivateKey x) {
+CRYPTO_FIPS_TEXT bool rsa_private_key_equal(const RsaPrivateKey *priv,
+                                            CryptoPrivateKey x) {
     if (x.t != TYPE_RSA_PRIVATE_KEY || x.data == NULL)
         return false;
     const RsaPrivateKey *xx = x.data;
@@ -2036,7 +2070,7 @@ bool rsa_private_key_equal(const RsaPrivateKey *priv, CryptoPrivateKey x) {
     return true;
 }
 
-void rsa_private_key_free(RsaPrivateKey *priv, Alloc *a) {
+CRYPTO_FIPS_TEXT void rsa_private_key_free(RsaPrivateKey *priv, Alloc *a) {
     if (priv == NULL)
         return;
     rsa_big_free(priv->public_key.n, a);
@@ -2052,7 +2086,7 @@ void rsa_private_key_free(RsaPrivateKey *priv, Alloc *a) {
     mem_free(rsa_alloc(a), priv, sizeof *priv, _Alignof(RsaPrivateKey));
 }
 
-static RsaPrivateKey *rsa_private_key_new(Alloc *a, Int nprimes) {
+CRYPTO_FIPS_TEXT static RsaPrivateKey *rsa_private_key_new(Alloc *a, Int nprimes) {
     RsaPrivateKey *priv =
         mem_alloc(rsa_alloc(a), sizeof *priv, _Alignof(RsaPrivateKey));
     if (priv == NULL)
@@ -2065,7 +2099,8 @@ static RsaPrivateKey *rsa_private_key_new(Alloc *a, Int nprimes) {
     return priv;
 }
 
-RsaPrivateKey *rsa_generate_key(Alloc *a, IoReader random, Int bits, Error *err) {
+CRYPTO_FIPS_TEXT RsaPrivateKey *rsa_generate_key(Alloc *a, IoReader random, Int bits,
+                                                 Error *err) {
     if (rsa_fail(err, rsa_check_key_size(bits)))
         return NULL;
 
@@ -2110,8 +2145,9 @@ RsaPrivateKey *rsa_generate_key(Alloc *a, IoReader random, Int bits, Error *err)
     return priv;
 }
 
-RsaPrivateKey *rsa_generate_multi_prime_key(Alloc *a, IoReader random, Int nprimes,
-                                            Int bits, Error *err) {
+CRYPTO_FIPS_TEXT RsaPrivateKey *rsa_generate_multi_prime_key(Alloc *a, IoReader random,
+                                                             Int nprimes, Int bits,
+                                                             Error *err) {
     if (nprimes == 2)
         return rsa_generate_key(a, random, bits, err);
 
@@ -2227,36 +2263,39 @@ RsaPrivateKey *rsa_generate_multi_prime_key(Alloc *a, IoReader random, Int nprim
 
 /* ---------------------------------------------------------- PSS (public) */
 
-CryptoHash rsa_pss_options_hash_func(const RsaPSSOptions *opts) {
+CRYPTO_FIPS_TEXT CryptoHash rsa_pss_options_hash_func(const RsaPSSOptions *opts) {
     return opts->hash;
 }
 
-static CryptoHash rsa_pss_opts_hash_func(void *self) {
+CRYPTO_FIPS_TEXT static CryptoHash rsa_pss_opts_hash_func(void *self) {
     return rsa_pss_options_hash_func(self);
 }
 
 static const CryptoSignerOptsVT rsa_pss_opts_vt = {TYPE_RSA_PSS_OPTIONS,
                                                    rsa_pss_opts_hash_func};
 
-CryptoSignerOpts rsa_pss_options_as_signer_opts(const RsaPSSOptions *opts) {
+CRYPTO_FIPS_TEXT CryptoSignerOpts
+rsa_pss_options_as_signer_opts(const RsaPSSOptions *opts) {
     return (CryptoSignerOpts){&rsa_pss_opts_vt, (void *)(uintptr_t)opts};
 }
 
-CryptoDecrypterOpts rsa_oaep_options_as_decrypter_opts(const RsaOAEPOptions *opts) {
+CRYPTO_FIPS_TEXT CryptoDecrypterOpts
+rsa_oaep_options_as_decrypter_opts(const RsaOAEPOptions *opts) {
     return BURROW_ANY(TYPE_RSA_OAEP_OPTIONS, (uintptr_t)opts);
 }
 
-CryptoDecrypterOpts
+CRYPTO_FIPS_TEXT CryptoDecrypterOpts
 rsa_pkcs1_v15_decrypt_options_as_decrypter_opts(const RsaPKCS1v15DecryptOptions *opts) {
     return BURROW_ANY(TYPE_RSA_PKCS1V15_DECRYPT_OPTIONS, (uintptr_t)opts);
 }
 
-static Int rsa_pss_salt_length(const RsaPSSOptions *opts) {
+CRYPTO_FIPS_TEXT static Int rsa_pss_salt_length(const RsaPSSOptions *opts) {
     return opts == NULL ? RSA_PSS_SALT_LENGTH_AUTO : opts->salt_length;
 }
 
-Slice rsa_sign_pss(Alloc *a, IoReader rand, const RsaPrivateKey *priv, CryptoHash hash,
-                   Slice digest, const RsaPSSOptions *opts, Error *err) {
+CRYPTO_FIPS_TEXT Slice rsa_sign_pss(Alloc *a, IoReader rand, const RsaPrivateKey *priv,
+                                    CryptoHash hash, Slice digest,
+                                    const RsaPSSOptions *opts, Error *err) {
     if (rsa_fail(err, rsa_check_public_key_size(&priv->public_key)))
         return slice_nil(TYPE_BYTE);
     if (opts != NULL && opts->hash != 0)
@@ -2303,8 +2342,9 @@ done:
     return out;
 }
 
-Error rsa_verify_pss(const RsaPublicKey *pub, CryptoHash hash, Slice digest, Slice sig,
-                     const RsaPSSOptions *opts) {
+CRYPTO_FIPS_TEXT Error rsa_verify_pss(const RsaPublicKey *pub, CryptoHash hash,
+                                      Slice digest, Slice sig,
+                                      const RsaPSSOptions *opts) {
     Error err = rsa_check_public_key_size(pub);
     if (BURROW_FAILED(err))
         return err;
@@ -2344,9 +2384,9 @@ done:
 /* --------------------------------------------------------- OAEP (public) */
 
 /* encryptOAEP. */
-static Slice rsa_encrypt_oaep_hashes(Alloc *a, Hash hash, Hash mgf_hash,
-                                     IoReader random, const RsaPublicKey *pub,
-                                     Slice msg, Slice label, Error *err) {
+CRYPTO_FIPS_TEXT static Slice
+rsa_encrypt_oaep_hashes(Alloc *a, Hash hash, Hash mgf_hash, IoReader random,
+                        const RsaPublicKey *pub, Slice msg, Slice label, Error *err) {
     Slice out = slice_nil(TYPE_BYTE);
     if (rsa_fail(err, rsa_check_public_key_size(pub)))
         goto reset;
@@ -2366,13 +2406,16 @@ reset:
     return out;
 }
 
-Slice rsa_encrypt_oaep(Alloc *a, Hash hash, IoReader random, const RsaPublicKey *pub,
-                       Slice msg, Slice label, Error *err) {
+CRYPTO_FIPS_TEXT Slice rsa_encrypt_oaep(Alloc *a, Hash hash, IoReader random,
+                                        const RsaPublicKey *pub, Slice msg, Slice label,
+                                        Error *err) {
     return rsa_encrypt_oaep_hashes(a, hash, hash, random, pub, msg, label, err);
 }
 
-Slice rsa_encrypt_oaep_with_options(Alloc *a, IoReader random, const RsaPublicKey *pub,
-                                    Slice msg, const RsaOAEPOptions *opts, Error *err) {
+CRYPTO_FIPS_TEXT Slice rsa_encrypt_oaep_with_options(Alloc *a, IoReader random,
+                                                     const RsaPublicKey *pub, Slice msg,
+                                                     const RsaOAEPOptions *opts,
+                                                     Error *err) {
     if (!crypto_hash_available(opts->hash)) {
         rsa_unavailable(
             err, "crypto/rsa: requested hash function unavailable: ", opts->hash);
@@ -2393,9 +2436,9 @@ Slice rsa_encrypt_oaep_with_options(Alloc *a, IoReader random, const RsaPublicKe
 }
 
 /* decryptOAEP. */
-static Slice rsa_decrypt_oaep_hashes(Alloc *a, Hash hash, Hash mgf_hash,
-                                     const RsaPrivateKey *priv, Slice ciphertext,
-                                     Slice label, Error *err) {
+CRYPTO_FIPS_TEXT static Slice
+rsa_decrypt_oaep_hashes(Alloc *a, Hash hash, Hash mgf_hash, const RsaPrivateKey *priv,
+                        Slice ciphertext, Slice label, Error *err) {
     if (rsa_fail(err, rsa_check_public_key_size(&priv->public_key)))
         return slice_nil(TYPE_BYTE);
 
@@ -2411,8 +2454,9 @@ static Slice rsa_decrypt_oaep_hashes(Alloc *a, Hash hash, Hash mgf_hash,
     return out;
 }
 
-Slice rsa_decrypt_oaep(Alloc *a, Hash hash, IoReader random, const RsaPrivateKey *priv,
-                       Slice ciphertext, Slice label, Error *err) {
+CRYPTO_FIPS_TEXT Slice rsa_decrypt_oaep(Alloc *a, Hash hash, IoReader random,
+                                        const RsaPrivateKey *priv, Slice ciphertext,
+                                        Slice label, Error *err) {
     (void)random;
     Slice out = rsa_decrypt_oaep_hashes(a, hash, hash, priv, ciphertext, label, err);
     hash_reset(hash);
@@ -2421,8 +2465,9 @@ Slice rsa_decrypt_oaep(Alloc *a, Hash hash, IoReader random, const RsaPrivateKey
 
 /* ------------------------------------------------- PKCS #1 v1.5 (public) */
 
-Slice rsa_sign_pkcs1_v15(Alloc *a, IoReader random, const RsaPrivateKey *priv,
-                         CryptoHash hash, Slice hashed, Error *err) {
+CRYPTO_FIPS_TEXT Slice rsa_sign_pkcs1_v15(Alloc *a, IoReader random,
+                                          const RsaPrivateKey *priv, CryptoHash hash,
+                                          Slice hashed, Error *err) {
     (void)random;
     RsaScratch s;
     rsa_scratch_init(&s);
@@ -2448,8 +2493,8 @@ done:
     return out;
 }
 
-Error rsa_verify_pkcs1_v15(const RsaPublicKey *pub, CryptoHash hash, Slice hashed,
-                           Slice sig) {
+CRYPTO_FIPS_TEXT Error rsa_verify_pkcs1_v15(const RsaPublicKey *pub, CryptoHash hash,
+                                            Slice hashed, Slice sig) {
     RsaScratch s;
     rsa_scratch_init(&s);
     Error err = BURROW_NO_ERROR;
@@ -2474,8 +2519,9 @@ done:
     return err;
 }
 
-Slice rsa_encrypt_pkcs1_v15(Alloc *a, IoReader random, const RsaPublicKey *pub,
-                            Slice msg, Error *err) {
+CRYPTO_FIPS_TEXT Slice rsa_encrypt_pkcs1_v15(Alloc *a, IoReader random,
+                                             const RsaPublicKey *pub, Slice msg,
+                                             Error *err) {
     if (rsa_fail(err, rsa_check_public_key_size(pub)))
         return slice_nil(TYPE_BYTE);
     Int k = rsa_public_key_size(pub);
@@ -2521,9 +2567,10 @@ done:
  * independently of whether it was valid in order to maintain constant memory
  * access patterns. If the plaintext was valid then *index contains the index
  * of the original message in em, to allow constant time padding removal. */
-static bool rsa_decrypt_pkcs1_v15_em(const RsaPrivateKey *priv, Slice ciphertext,
-                                     Alloc *tmp, Int *valid, Slice *em, Int *index,
-                                     Error *err) {
+CRYPTO_FIPS_TEXT static bool rsa_decrypt_pkcs1_v15_em(const RsaPrivateKey *priv,
+                                                      Slice ciphertext, Alloc *tmp,
+                                                      Int *valid, Slice *em, Int *index,
+                                                      Error *err) {
     Int k = rsa_public_key_size(&priv->public_key);
     if (k < 11) {
         BURROW_OUT(err, rsa_err_decryption);
@@ -2564,8 +2611,9 @@ static bool rsa_decrypt_pkcs1_v15_em(const RsaPrivateKey *priv, Slice ciphertext
     return true;
 }
 
-Slice rsa_decrypt_pkcs1_v15(Alloc *a, IoReader random, const RsaPrivateKey *priv,
-                            Slice ciphertext, Error *err) {
+CRYPTO_FIPS_TEXT Slice rsa_decrypt_pkcs1_v15(Alloc *a, IoReader random,
+                                             const RsaPrivateKey *priv,
+                                             Slice ciphertext, Error *err) {
     (void)random;
     if (rsa_fail(err, rsa_check_public_key_size(&priv->public_key)))
         return slice_nil(TYPE_BYTE);
@@ -2585,8 +2633,9 @@ Slice rsa_decrypt_pkcs1_v15(Alloc *a, IoReader random, const RsaPrivateKey *priv
     return out;
 }
 
-Error rsa_decrypt_pkcs1_v15_session_key(IoReader random, const RsaPrivateKey *priv,
-                                        Slice ciphertext, Slice key) {
+CRYPTO_FIPS_TEXT Error rsa_decrypt_pkcs1_v15_session_key(IoReader random,
+                                                         const RsaPrivateKey *priv,
+                                                         Slice ciphertext, Slice key) {
     (void)random;
     Error err = rsa_check_public_key_size(&priv->public_key);
     if (BURROW_FAILED(err))
@@ -2617,8 +2666,9 @@ Error rsa_decrypt_pkcs1_v15_session_key(IoReader random, const RsaPrivateKey *pr
 
 /* ------------------------------------------------- Sign and Decrypt */
 
-Slice rsa_private_key_sign(const RsaPrivateKey *priv, Alloc *a, IoReader rand,
-                           Slice digest, CryptoSignerOpts opts, Error *err) {
+CRYPTO_FIPS_TEXT Slice rsa_private_key_sign(const RsaPrivateKey *priv, Alloc *a,
+                                            IoReader rand, Slice digest,
+                                            CryptoSignerOpts opts, Error *err) {
     if (opts.vt == NULL)
         rsa_nil();
     if (opts.vt->self_type == TYPE_RSA_PSS_OPTIONS) {
@@ -2631,8 +2681,9 @@ Slice rsa_private_key_sign(const RsaPrivateKey *priv, Alloc *a, IoReader rand,
                               err);
 }
 
-Slice rsa_private_key_decrypt(const RsaPrivateKey *priv, Alloc *a, IoReader rand,
-                              Slice ciphertext, CryptoDecrypterOpts opts, Error *err) {
+CRYPTO_FIPS_TEXT Slice rsa_private_key_decrypt(const RsaPrivateKey *priv, Alloc *a,
+                                               IoReader rand, Slice ciphertext,
+                                               CryptoDecrypterOpts opts, Error *err) {
     if (opts.t == NULL)
         return rsa_decrypt_pkcs1_v15(a, rand, priv, ciphertext, err);
 
@@ -2686,30 +2737,32 @@ Slice rsa_private_key_decrypt(const RsaPrivateKey *priv, Alloc *a, IoReader rand
 
 /* ---------------------------------------------------- Signer and Decrypter */
 
-static CryptoPublicKey rsa_signer_public(void *self) {
+CRYPTO_FIPS_TEXT static CryptoPublicKey rsa_signer_public(void *self) {
     return rsa_private_key_public(self);
 }
 
-static Slice rsa_signer_sign(void *self, Alloc *a, IoReader rand, Slice digest,
-                             CryptoSignerOpts opts, Error *err) {
+CRYPTO_FIPS_TEXT static Slice rsa_signer_sign(void *self, Alloc *a, IoReader rand,
+                                              Slice digest, CryptoSignerOpts opts,
+                                              Error *err) {
     return rsa_private_key_sign(self, a, rand, digest, opts, err);
 }
 
 static const CryptoSignerVT rsa_signer_vt = {TYPE_RSA_PRIVATE_KEY, rsa_signer_public,
                                              rsa_signer_sign};
 
-CryptoSigner rsa_private_key_signer(const RsaPrivateKey *priv) {
+CRYPTO_FIPS_TEXT CryptoSigner rsa_private_key_signer(const RsaPrivateKey *priv) {
     return (CryptoSigner){&rsa_signer_vt, (void *)(uintptr_t)priv};
 }
 
-static Slice rsa_decrypter_decrypt(void *self, Alloc *a, IoReader rand, Slice msg,
-                                   CryptoDecrypterOpts opts, Error *err) {
+CRYPTO_FIPS_TEXT static Slice rsa_decrypter_decrypt(void *self, Alloc *a, IoReader rand,
+                                                    Slice msg, CryptoDecrypterOpts opts,
+                                                    Error *err) {
     return rsa_private_key_decrypt(self, a, rand, msg, opts, err);
 }
 
 static const CryptoDecrypterVT rsa_decrypter_vt = {
     TYPE_RSA_PRIVATE_KEY, rsa_signer_public, rsa_decrypter_decrypt};
 
-CryptoDecrypter rsa_private_key_decrypter(const RsaPrivateKey *priv) {
+CRYPTO_FIPS_TEXT CryptoDecrypter rsa_private_key_decrypter(const RsaPrivateKey *priv) {
     return (CryptoDecrypter){&rsa_decrypter_vt, (void *)(uintptr_t)priv};
 }

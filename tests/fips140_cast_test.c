@@ -4,12 +4,10 @@
  * Go source: go1.27.1.
  *
  * TestCASTPasses and TestCASTFailures run TestConditionals again with
- * GODEBUG=fips140=debug or fips140=on, and in Go FIPS 140-3 mode is on in that
- * program from its start. burrow does not read fips140 from GODEBUG yet, so
- * TestConditionals turns the mode on itself, with burrow__fips140_force_on,
- * when GODEBUG asks for it. That runs the integrity check too, so the program
- * needs the module's checksum, and when this one has none, the tests run a
- * copy of it with the checksum written in, as fips140_check_test.c does.
+ * GODEBUG=fips140=debug or fips140=on. That runs the integrity check too, so
+ * the program needs the module's checksum, and when this one has none, the
+ * tests run a copy of it with the checksum written in, as
+ * fips140_check_test.c does.
  *
  * Go leaves the ML-DSA self-tests out of allCASTs when the module is v1.0.0,
  * which burrow's never is, so that is left out here.
@@ -70,23 +68,6 @@ static const char *const all_casts[] = {
 };
 
 #define NUM_CASTS (sizeof all_casts / sizeof all_casts[0])
-
-/* moduleStatus. Not in Go: burrow's module has no name and no PAA/PAI setting,
- * so those lines are left out, and the integrity check has passed exactly when
- * the mode is on, since burrow__fips140_force_on stops the program otherwise. */
-static void module_status(TestingT *t) {
-    if (burrow__fips140_enabled())
-        testing_t_logf_v(t, "FIPS 140-3 mode enabled");
-    else
-        testing_t_logf_v(t, "FIPS 140-3 mode not enabled");
-
-    testing_t_logf_v(t, "Module version: %s", fips140_version());
-
-    if (burrow__fips140_enabled())
-        testing_t_logf_v(t, "FIPS 140-3 integrity self-check succeeded");
-    else
-        testing_t_logf_v(t, "FIPS 140-3 integrity self-check not succeeded");
-}
 
 static void TestAllCASTs(TestingT *t) {
     Arena ar;
@@ -150,26 +131,6 @@ static void TestAllCASTs(TestingT *t) {
     arena_free(&ar);
 }
 
-/* Not in Go: what Go does before the tests start when GODEBUG has fips140=on
- * or fips140=debug in it. The last fips140 in GODEBUG is the one that counts. */
-static void fips_mode_from_godebug(void) {
-    Arena ar;
-    arena_init(&ar, NULL, 0);
-    Alloc *a = arena_allocator(&ar);
-    Slice settings = strings_split(a, os_getenv(a, S("GODEBUG")), S(","));
-    Str mode = BURROW_STR_EMPTY;
-    for (Int i = 0; i < settings.len; i++) {
-        Str kv = BURROW_AT(Str, settings, i);
-        if (strings_has_prefix(kv, S("fips140=")))
-            mode = str_from_bytes(kv.p + 8, kv.len - 8);
-    }
-    if (str_eq(mode, S("on")))
-        burrow__fips140_force_on(false);
-    else if (str_eq(mode, S("debug")))
-        burrow__fips140_force_on(true);
-    arena_free(&ar);
-}
-
 static void fips140v126_conditionals(Alloc *a, Slice zeros) {
     Error err = BURROW_NO_ERROR;
     /* ML-DSA sign and verify PCT */
@@ -182,8 +143,6 @@ static void fips140v126_conditionals(Alloc *a, Slice zeros) {
 
 /* TestConditionals causes the conditional CASTs and PCTs to be invoked. */
 static void TestConditionals(TestingT *t) {
-    fips_mode_from_godebug();
-
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
@@ -245,34 +204,6 @@ static void TestConditionals(TestingT *t) {
     testing_t_logf_v(t, "completed successfully");
 }
 
-/* Not in Go: a program like this one with the module's checksum in it. That is
- * this one when burrow-gen fips has been run on it, and otherwise a copy with
- * the checksum written in, in *dir for the caller to remove. Empty after
- * failing the test when there is neither. */
-static Str fips_program(TestingT *t, Alloc *a, Str *dir) {
-    *dir = BURROW_STR_EMPTY;
-    const char *why = burrow__fips140_verify();
-    if (why == NULL) {
-        Error err = BURROW_NO_ERROR;
-        Str exe = os_executable(a, &err);
-        if (BURROW_FAILED(err)) {
-            testing_t_errorf_v(t, "Executable: %s", error_text(err));
-            return BURROW_STR_EMPTY;
-        }
-        return exe;
-    }
-    if (strcmp(why, "no verification checksum found") != 0) {
-        testing_t_errorf_v(t, "fips140: %s", why);
-        return BURROW_STR_EMPTY;
-    }
-    Byte sum[32];
-    if (!burrow__fips140_module_sum(sum)) {
-        testing_t_errorf_v(t, "computing the checksum failed");
-        return BURROW_STR_EMPTY;
-    }
-    return fipstest_copy(t, a, sum, dir);
-}
-
 /* Runs TestConditionals in exe with setting added to its environment, and
  * returns what it printed. */
 static Str run_conditionals(Alloc *a, Str exe, Str setting, Error *err) {
@@ -312,7 +243,7 @@ static void TestCASTPasses(TestingT *t) {
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
     Str dir;
-    Str exe = fips_program(t, a, &dir);
+    Str exe = fipstest_program(t, a, &dir);
     if (exe.len > 0) {
         Error err = BURROW_NO_ERROR;
         Str out = run_conditionals(a, exe, S("GODEBUG=fips140=debug"), &err);
@@ -390,7 +321,7 @@ static void TestCASTFailures(TestingT *t) {
     arena_init(&f->ar, NULL, 0);
     f->dir = BURROW_STR_EMPTY;
     testing_t_cleanup(t, BURROW_FN(Func, cast_failures_free, f));
-    Str exe = fips_program(t, arena_allocator(&f->ar), &f->dir);
+    Str exe = fipstest_program(t, arena_allocator(&f->ar), &f->dir);
     if (exe.len == 0)
         return;
 

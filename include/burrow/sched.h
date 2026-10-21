@@ -268,6 +268,11 @@ struct burrow__G {
      * atomic, and it is not copied to the goroutines this one starts. */
     uint8_t fips_indicator;
 
+    /* Whether crypto/fips140's WithoutEnforcement is running on this goroutine,
+     * which turns GODEBUG=fips140=only's checks off. Go's g.fipsOnlyBypass.
+     * Copied to every goroutine it starts. */
+    bool fips_only_bypass;
+
     /* The profiling labels runtime/pprof has set on this goroutine, or NULL.
      * Go's g.labels. Copied to every goroutine it starts, so work started under
      * a label is still labelled. The runtime never looks inside it; it is
@@ -660,6 +665,13 @@ BURROW_BORROWS(ret) void *burrow__get_prof_label(void);
  * keeps it in a thread local instead. */
 uint8_t burrow__fips_get_indicator(void);
 void burrow__fips_set_indicator(uint8_t indicator);
+
+/* Go's fips140_setBypass, fips140_unsetBypass and fips140_isBypassed, for
+ * crypto/fips140's WithoutEnforcement, on the calling goroutine or in a thread
+ * local on a thread that is not running one. */
+void burrow__fips140_set_bypass(void);
+void burrow__fips140_unset_bypass(void);
+bool burrow__fips140_is_bypassed(void);
 
 /* The P at index i, or NULL if i is not in range. Every P exists for as long as
  * the scheduler is running, whether or not an M is holding it. */

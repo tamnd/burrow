@@ -149,7 +149,7 @@ Both take a reader. Int reads from the one you give it, which is how a test make
 
 ## crypto/fips140
 
-`burrow/crypto/fips140.h` answers whether the program is running in FIPS 140-3 mode. In burrow the answer is always no:
+`burrow/crypto/fips140.h` answers whether the program is running in FIPS 140-3 mode:
 
 <!-- example: ../examples/crypto/fips140.c#enabled -->
 ```c
@@ -159,11 +159,22 @@ else
     printf("not in FIPS 140-3 mode\n");
 ```
 
-Go ships a FIPS 140-3 module, a fixed set of its crypto packages that has been through validation, and `GODEBUG=fips140=on` makes a Go program use only that module, check its own code against a checksum when it starts and run the self tests the standard asks for. burrow's code follows the same module, but it has not been validated, and it does not claim to be.
+Go ships a FIPS 140-3 module, a fixed set of its crypto packages that has been through validation, and `GODEBUG=fips140=on` makes a Go program use only that module, check its own code against a checksum when it starts and run the self tests the standard asks for. burrow has the same module, in the files that port Go's, and `fips140=on`, `only` and `debug` turn the mode on as they do in Go. An unknown value panics as it does in Go, and `off` or no setting at all leaves the mode off.
 
-So when `GODEBUG` asks for the mode with `fips140=on`, `only` or `debug`, `fips140_enabled` and `fips140_enforced` panic with `fips140: FIPS 140-3 mode is not supported by burrow`. That is what a Go program does at startup on a platform where the mode is not supported, and it is better than letting a program that asked for FIPS mode carry on without it. An unknown value panics as it does in Go, and `off` or no setting at all gives false. The setting is read the first time either function is called and never again.
+burrow is not FIPS 140-3 validated. Its module follows Go's, but it has not been through validation, and it does not claim to be. The mode is there for what it does: the self tests, the integrity check and the service indicator.
 
-`fips140_version` gives `"latest"`, which is what Go gives for a program that was not built against a frozen module. `fips140_without_enforcement` runs a function with strict enforcement off, and since enforcement is never on here, it just runs it:
+The integrity check needs the module's checksum in the program. Go's linker writes it, and here `burrow-gen fips` writes it after linking:
+
+```sh
+tools/burrow-gen fips ./server
+GODEBUG=fips140=on ./server
+```
+
+With the mode on, a program that has no checksum panics with `fips140: no verification checksum found`, and one whose module has changed since panics with `fips140: verification mismatch`. Under `fips140=debug` the program also prints each self test as it passes.
+
+Go reads the setting when the program starts. burrow has nothing that runs then, so it reads it the first time the program uses the module or calls one of these functions, and changing `GODEBUG` after that changes nothing, as in Go.
+
+`fips140_version` gives `"latest"`, which is what Go gives for a program that was not built against a frozen module. `fips140_enforced` is true under `fips140=only`, but the packages outside the module do not check it yet. `fips140_without_enforcement` runs a function with strict enforcement off, for it and for the goroutines it starts:
 
 <!-- example: ../examples/crypto/fips140.c#without -->
 ```c

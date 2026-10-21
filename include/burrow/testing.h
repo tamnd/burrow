@@ -255,6 +255,9 @@ bool testing_t_skipped(TestingT *t);
 void testing_t_helper(TestingT *t);
 void testing_t_cleanup(TestingT *t, Func f);
 void testing_t_parallel(TestingT *t);
+/* testing.checkParallel, which testing/cryptotest calls: it panics when t or a
+ * test above it is parallel, and makes a later testing_t_parallel(t) panic. */
+void burrow__testing_t_check_parallel(TestingT *t);
 bool testing_t_run(TestingT *t, Str name, TestingTFunc f);
 BURROW_BORROWS(ret, t) Context testing_t_context(TestingT *t);
 bool testing_t_deadline(TestingT *t, int64_t *when);

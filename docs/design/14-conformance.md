@@ -79,7 +79,7 @@ Rules:
   `t.TempDir`, `t.Helper`, `t.Fatal` (which requires the `panic`/`recover`
   machinery from [06](06-runtime.md) §6 to unwind correctly), `testing.TB`,
   `testing/quick`, `testing/iotest`, `testing/fstest`, `testing/slogtest`,
-  `testing/synctest`. Ported early — nothing else can be tested without it.
+  `testing/cryptotest`, `testing/synctest`. Ported early — nothing else can be tested without it.
 - **`Example*` functions compile and their output is compared**, which makes
   them doctests and keeps the generated documentation honest.
   → [08](08-naming-abi.md) §9

@@ -753,6 +753,40 @@ Five of the cases look for the time. The zero-time case checks the opposite, tha
 
 `slogtest_run` is `slogtest.Run`, the same cases with one subtest each. It asks for a new handler at the start of each subtest and for the one record as a map at the end, so a failure names the case it came from.
 
+## Deterministic randomness for crypto tests
+
+`cryptotest_set_global_random` is `cryptotest.SetGlobalRandom`. For the rest of the test it replaces crypto/rand, and every place in the crypto packages that reads randomness on its own, with a ChaCha8 stream from the seed you give. Key generation, nonces and the randoms a TLS handshake sends all come out the same on every run. Calling it again starts the stream over, and when the test ends crypto/rand goes back to the system's randomness:
+
+<!-- example: ../examples/testing/cryptotest.c#seed -->
+```c
+static void TestSameKeys(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+
+    cryptotest_set_global_random(t, 1);
+    Byte b[8];
+    crypto_rand_read(slice_from(b, 8, 8, TYPE_BYTE), NULL);
+    Slice first = slice_from(b, 8, 8, TYPE_BYTE);
+    fmt_printf_v("first bytes: %x\n", first);
+
+    Error err = BURROW_NO_ERROR;
+    cryptotest_set_global_random(t, 7);
+    EcdsaPrivateKey *k1 = ecdsa_generate_key(a, elliptic_p256(), (IoReader){0}, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    cryptotest_set_global_random(t, 7);
+    EcdsaPrivateKey *k2 = ecdsa_generate_key(a, elliptic_p256(), (IoReader){0}, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    Any v = BURROW_ANY(TYPE_ECDSA_PRIVATE_KEY, k2);
+    fmt_printf_v("same key both times: %t\n", ecdsa_private_key_equal(k1, v));
+    arena_free(&ar);
+}
+```
+
+It changes the whole process, so a test that calls it cannot be parallel and cannot have a parallel test above it. It panics if one is, and `testing_t_parallel` panics if it is called after it. Go makes no promise that a given seed keeps giving the same key from one release to the next, and neither does burrow, so check what the test cares about rather than one exact output where you can.
+
 ## Profiles
 
 The profile flags work as they do under `go test`. `-test.cpuprofile=cpu.prof` profiles the whole run, `-test.memprofile=mem.prof` writes the allocs profile when it ends, and `-test.blockprofile` and `-test.mutexprofile` turn those profiles on before the first test and write them at the end. `-test.trace=trace.out` writes an execution trace of the whole run for `go tool trace`. `-test.memprofilerate`, `-test.blockprofilerate` and `-test.mutexprofilefraction` set the rates, with Go's defaults. A relative file name goes into `-test.outputdir` when that is given. The files are the gzipped protocol buffers `go tool pprof` reads, and a run that times out still writes them before it reports the tests that were running. The [pprof guide](pprof.md) covers what each profile holds.

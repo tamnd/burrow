@@ -339,11 +339,21 @@ static Error tls_alert_error_clone(const void *self, Alloc *a) {
     return tls_alert_error_as_error(((const TlsAlertBox *)self)->e, a);
 }
 
+static bool tls_alert_error_is(const void *self, Error target);
+
 static const ErrorVT tls_alert_error_vt = {
     .self_type = &tls_alert_error_desc,
     .message = tls_alert_error_text,
+    .is = tls_alert_error_is,
     .clone = tls_alert_error_clone,
 };
+
+/* Go compares AlertErrors by value, and two made for the same alert are
+ * different memory. */
+static bool tls_alert_error_is(const void *self, Error target) {
+    return target.vt == &tls_alert_error_vt &&
+           ((const TlsAlertBox *)target.data)->e == ((const TlsAlertBox *)self)->e;
+}
 
 Error tls_alert_error_as_error(TlsAlertError e, Alloc *a) {
     Int mlen = tls_alert_message(NULL, e);
@@ -379,7 +389,27 @@ static bool tls_alert_is(const void *self, Error target);
 
 static Error tls_alert_clone(const void *self, Alloc *a);
 
+/* Not in Go: what errors_as finds an alert by, which is errors.AsType[alert]
+ * in Go. */
+static const Type tls_alert_desc = {
+    {(const Byte *)"alert", 5},
+    {(const Byte *)"crypto/tls", 10},
+    KIND_UINT8,
+    (uint32_t)sizeof(uint8_t),
+    (uint16_t)_Alignof(uint8_t),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0x746c616cU, /* "tlal" */
+    NULL,
+};
+
 static const ErrorVT tls_alert_vt = {
+    .self_type = &tls_alert_desc,
     .message = tls_alert_text_of,
     .is = tls_alert_is,
     .clone = tls_alert_clone,
@@ -410,6 +440,15 @@ Error burrow__tls_alert(Alloc *a, uint8_t e) {
     b->e = e;
     b->message = str_from_bytes(p, mlen);
     return (Error){&tls_alert_vt, b};
+}
+
+bool burrow__tls_as_alert(Error err, uint8_t *e) {
+    const TlsAlertEntry *t = (const TlsAlertEntry *)errors_as(err, &tls_alert_desc);
+    if (t == NULL)
+        return false;
+    if (e != NULL)
+        *e = t->e;
+    return true;
 }
 
 bool burrow__tls_is_alert(Error err, uint8_t *e) {

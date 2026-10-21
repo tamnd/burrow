@@ -42,15 +42,19 @@ static BigmodChoice not_(BigmodChoice c) {
 
 /* ctMask: all ones if on is 1, and all zeros if it is 0.
  *
- * Not in Go: the empty asm statement, the same barrier as ct_hide in
- * subtle.c. Without it clang knows the mask is all ones or all zeros and turns
- * the masked copy in assign into a load from one address or the other, so
- * that the table lookup in Exp reads memory at an address chosen by the
- * exponent. make ctgrind found that. */
+ * Not in Go: the barrier, the same one as ct_hide in subtle.c. Without it
+ * clang knows the mask is all ones or all zeros and turns the masked copy in
+ * assign into a load from one address or the other, so that the table lookup
+ * in Exp reads memory at an address chosen by the exponent. make ctgrind found
+ * that. MSVC has no empty asm statement, so there the mask is read back
+ * through a volatile, which the compiler has to load and cannot see into. */
 static Uint ct_mask(BigmodChoice on) {
     Uint mask = 0 - (Uint)on;
 #if defined(__GNUC__) || defined(__clang__)
     __asm__("" : "+r"(mask));
+#else
+    volatile Uint hidden = mask;
+    mask = hidden;
 #endif
     return mask;
 }

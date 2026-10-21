@@ -13,6 +13,8 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#include "burrow/crypto/fips140.h"
+
 #include "fips140_module.h"
 
 #include "burrow/core.h"

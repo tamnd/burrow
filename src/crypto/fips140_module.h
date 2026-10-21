@@ -44,6 +44,11 @@
 #ifndef BURROW_SRC_CRYPTO_FIPS140_MODULE_H
 #define BURROW_SRC_CRYPTO_FIPS140_MODULE_H
 
+/* First, for the amalgamation, which puts a header in the package of the first
+ * burrow header it includes. crypto/subtle needs nothing outside the core, so
+ * every file of the module can depend on it. */
+#include "burrow/crypto/subtle.h"
+
 #include "burrow/core.h"
 
 #include <stdbool.h>

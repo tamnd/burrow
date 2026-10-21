@@ -1,9 +1,8 @@
 /* Derived from Go's src/crypto/tls/conn_test.go.
  * Go source: go1.27.1.
  *
- * TestRoundUp, TestRemovePadding, TestCertificateSelection and
- * TestHairpinInClose for now. The rest of the file needs a handshake, which
- * comes in later. The hex certificates are in tls_test_gen.h.
+ * The hex certificates are in tls_test_gen.h, and the configurations, localPipe
+ * and testHandshake are in tls_handshake_test.h.
  *
  * Copyright 2010 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -16,6 +15,7 @@
 #include "burrow/burrow.h"
 #include "burrow/crypto/tls.h"
 #include "burrow/encoding/hex.h"
+#include "tls_handshake_test.h"
 #include "tls_test_gen.h"
 
 #include <stdint.h>
@@ -87,10 +87,10 @@ static void TestRemovePadding(TestingT *t) {
     }
 }
 
-/* Not in Go: Go tests the record layer through whole handshakes, which are not
- * here yet. This sends three records through a halfConn with every suite and
- * reads them back through another one with the same keys, then checks that a
- * record with one byte changed is refused. */
+/* Not in Go: Go tests the record layer only through whole handshakes. This
+ * sends three records through a halfConn with every suite and reads them back
+ * through another one with the same keys, then checks that a record with one
+ * byte changed is refused. */
 
 /* Not in Go. Key material of n bytes that differs for each seed. */
 static Slice key_bytes(Alloc *a, Int n, Byte seed) {
@@ -300,6 +300,305 @@ static void TestCertificateSelection(TestingT *t) {
     arena_free(&ar);
 }
 
+/* Not in Go: one case of TestBrokenCertificateSkipped. */
+typedef struct BrokenCertificateCase {
+    const char *name;
+    bool build_index;
+} BrokenCertificateCase;
+
+static const BrokenCertificateCase broken_certificate_cases[] = {
+    {"BuildNameToCertificate", true},
+    {"SupportsCertificate", false},
+};
+
+static void broken_certificate_skipped(void *env, TestingT *t) {
+    const BrokenCertificateCase *test = (const BrokenCertificateCase *)env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    static const char broken[] = "not a valid X.509 certificate";
+    Int n = (Int)sizeof broken - 1;
+    TlsCertificate broken_cert;
+    memset(&broken_cert, 0, sizeof broken_cert);
+    broken_cert.certificate = slice_make(a, TYPE_BYTES, 1, 1);
+    BURROW_AT(Slice, broken_cert.certificate, 0) =
+        slice_from((Byte *)(uintptr_t)broken, n, n, TYPE_BYTE);
+
+    TlsConfig server_config = test_config_server(a);
+    Slice certs = slice_make(a, TYPE_TLS_CERTIFICATE, 2, 2);
+    TlsCertificate *c = certs.p;
+    c[0] = broken_cert;
+    c[1] = parse_test_cert(a, test_ecdsap256_cert_pem, test_ecdsap256_key_pem);
+    server_config.certificates = certs;
+    if (test->build_index) {
+        Error err = tls_config_build_name_to_certificate(&server_config, a);
+        if (BURROW_FAILED(err))
+            testing_t_fatal_v(t, err);
+    }
+    TlsConfig client_config = test_config_client(a);
+    Handshake h;
+    test_handshake(t, &client_config, &server_config, &h);
+    if (BURROW_FAILED(h.err))
+        testing_t_fatalf_v(t, "handshake failed: %v", h.err);
+    /* Not in Go: Go would panic on an empty PeerCertificates. */
+    if (h.client_state.peer_certificates.len == 0)
+        testing_t_fatalf_v(t, "handshake succeeded but no certificate was sent");
+    const X509Certificate *peer =
+        *(X509Certificate *const *)h.client_state.peer_certificates.p;
+    if (!x509_certificate_equal(peer, c[1].leaf))
+        testing_t_fatalf_v(t, "handshake succeeded but wrong certificate was used");
+    handshake_free(&h);
+    tls_config_release(&client_config);
+    tls_config_release(&server_config);
+    arena_free(&ar);
+}
+
+/* TestBrokenCertificateSkipped checks that a Certificate in Config.Certificates
+ * whose leaf doesn't parse as X.509 doesn't prevent the next, valid certificate
+ * from being selected. It exercises both the legacy BuildNameToCertificate path
+ * and the SupportsCertificate-based selection. */
+static void TestBrokenCertificateSkipped(TestingT *t) {
+    Int n = (Int)(sizeof broken_certificate_cases / sizeof broken_certificate_cases[0]);
+    for (Int i = 0; i < n; i++) {
+        const BrokenCertificateCase *test = &broken_certificate_cases[i];
+        testing_t_run(t, str_from_cstr(test->name),
+                      BURROW_FN(TestingTFunc, broken_certificate_skipped,
+                                (void *)(uintptr_t)test));
+    }
+}
+
+/* Not in Go: the goroutine of runDynamicRecordSizingTest. It performs a TLS
+ * handshake over c and then reads TLS records until EOF, and keeps the size of
+ * each one in record_sizes, and done says it got to the end, which Go says
+ * with a nil slice. The sizes are made in ar. */
+typedef struct RecordSizingClient {
+    TestingT *t;
+    NetConn c;
+    TlsConfig *config;
+    TlsConn *tls_conn;
+    Chan *handshake_done;
+    Slice record_sizes;
+    bool done;
+    Arena ar;
+} RecordSizingClient;
+
+static void record_sizing_client(void *env) {
+    RecordSizingClient *j = (RecordSizingClient *)env;
+    Alloc *a = arena_allocator(&j->ar);
+    j->tls_conn = tls_client(heap_allocator(), j->c, j->config);
+    if (j->tls_conn == NULL) {
+        testing_t_errorf_v(j->t, "Error from client handshake: %v",
+                           burrow_err_out_of_memory);
+        (void)j->c.vt->closer.close(j->c.data);
+        return;
+    }
+    Error err = tls_conn_handshake(j->tls_conn);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(j->t, "Error from client handshake: %v", err);
+        (void)j->c.vt->closer.close(j->c.data);
+        return;
+    }
+    chan_close(j->handshake_done);
+
+    Byte record_header[TLS_RECORD_HEADER_LEN];
+    Slice record = {0};
+    Slice record_sizes = slice_make(a, TYPE_INT, 0, 0);
+    IoReader r = net_conn_as_io_reader(j->c);
+
+    for (;;) {
+        Int n = io_read_full(r,
+                             slice_from(record_header, TLS_RECORD_HEADER_LEN,
+                                        TLS_RECORD_HEADER_LEN, TYPE_BYTE),
+                             &err);
+        if (err.vt == io_eof.vt && err.data == io_eof.data)
+            break;
+        if (BURROW_FAILED(err) || n != TLS_RECORD_HEADER_LEN) {
+            testing_t_errorf_v(j->t, "io.ReadFull = %d, %v", n, err);
+            (void)j->c.vt->closer.close(j->c.data);
+            return;
+        }
+
+        Int length = (Int)record_header[3] << 8 | (Int)record_header[4];
+        if (record.len < length)
+            record = slice_make(a, TYPE_BYTE, length, length);
+
+        n = io_read_full(r, slice_sub(record, 0, length), &err);
+        if (BURROW_FAILED(err) || n != length) {
+            testing_t_errorf_v(j->t, "io.ReadFull = %d, %v", n, err);
+            (void)j->c.vt->closer.close(j->c.data);
+            return;
+        }
+
+        Int size = TLS_RECORD_HEADER_LEN + length;
+        record_sizes = slice_append(a, record_sizes, &size, 1);
+    }
+
+    j->record_sizes = record_sizes;
+    j->done = true;
+    (void)j->c.vt->closer.close(j->c.data);
+}
+
+/* Run with multiple crypto configs to test the logic for computing TLS record
+ * overheads.
+ *
+ * Not in Go: the config is the server's, and it is changed in place where Go
+ * changes a clone of it. */
+static void run_dynamic_record_sizing_test(TestingT *t, TlsConfig *server_config,
+                                           Alloc *a) {
+    NetConn client_conn, server_conn;
+    local_pipe(a, &client_conn, &server_conn);
+
+    server_config->dynamic_record_sizing_disabled = false;
+    TlsConn *tls_conn = tls_server(heap_allocator(), server_conn, server_config);
+    if (tls_conn == NULL)
+        testing_t_fatal_v(t, "out of memory");
+
+    TlsConfig client_config = test_config_client(a);
+    client_config.min_version = server_config->min_version;
+    client_config.max_version = server_config->max_version;
+    client_config.cipher_suites = server_config->cipher_suites;
+
+    RecordSizingClient j;
+    memset(&j, 0, sizeof j);
+    j.t = t;
+    j.c = client_conn;
+    j.config = &client_config;
+    j.handshake_done = chan_make(heap_allocator(), TYPE_BOOL, 0);
+    if (j.handshake_done == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    arena_init(&j.ar, NULL, 0);
+    SyncWaitGroup wg = {0};
+    sync_wait_group_go(&wg, BURROW_FN(Func, record_sizing_client, &j));
+
+    bool failed = false;
+    Error err = tls_conn_handshake(tls_conn);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "Error from server handshake: %s", err);
+        failed = true;
+        (void)server_conn.vt->closer.close(server_conn.data);
+    } else {
+        (void)chan_recv(j.handshake_done, NULL);
+
+        /* The server writes these plaintexts in order. */
+        Int n =
+            TLS_RECORD_SIZE_BOOST_THRESHOLD + TLS_MAX_PLAINTEXT * 2 + TLS_MAX_PLAINTEXT;
+        Slice plaintext = slice_make(a, TYPE_BYTE, n, n);
+        Byte *p = plaintext.p;
+        memset(p, 'x', (size_t)TLS_RECORD_SIZE_BOOST_THRESHOLD);
+        memset(p + TLS_RECORD_SIZE_BOOST_THRESHOLD, 'y', (size_t)TLS_MAX_PLAINTEXT * 2);
+        memset(p + TLS_RECORD_SIZE_BOOST_THRESHOLD + TLS_MAX_PLAINTEXT * 2, 'z',
+               (size_t)TLS_MAX_PLAINTEXT);
+
+        (void)tls_conn_write(tls_conn, plaintext, &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "Error from server write: %s", err);
+            failed = true;
+            (void)server_conn.vt->closer.close(server_conn.data);
+        } else if (BURROW_FAILED(err = tls_conn_close(tls_conn))) {
+            testing_t_errorf_v(t, "Error from server close: %s", err);
+            failed = true;
+        }
+    }
+
+    /* Not in Go: wait for the goroutine here, which Go defers. */
+    sync_wait_group_wait(&wg);
+    Slice record_sizes = j.record_sizes;
+    if (!failed && !j.done) {
+        testing_t_errorf_v(t, "Client encountered an error");
+        failed = true;
+    }
+
+    if (!failed) {
+        /* Drop the size of the second to last record, which is likely to be
+         * truncated, and the last record, which is a close_notify alert. */
+        record_sizes = slice_sub(record_sizes, 0, record_sizes.len - 2);
+
+        /* recordSizes should contain a series of records smaller than
+         * tcpMSSEstimate followed by some larger than maxPlaintext. */
+        bool seen_large_record = false;
+        const Int *sizes = record_sizes.p;
+        for (Int i = 0; i < record_sizes.len && !failed; i++) {
+            Int size = sizes[i];
+            if (!seen_large_record) {
+                if (size > (i + 1) * TLS_TCP_MSS_ESTIMATE) {
+                    testing_t_errorf_v(t,
+                                       "Record #%d has size %d, which is too large "
+                                       "too soon",
+                                       i, size);
+                    failed = true;
+                }
+                if (size >= TLS_MAX_PLAINTEXT)
+                    seen_large_record = true;
+            } else if (size <= TLS_MAX_PLAINTEXT) {
+                testing_t_errorf_v(t, "Record #%d has size %d but should be full sized",
+                                   i, size);
+                failed = true;
+            }
+        }
+
+        if (!failed && !seen_large_record)
+            testing_t_errorf_v(t, "No large records observed");
+    }
+
+    tls_conn_free(j.tls_conn);
+    tls_conn_free(tls_conn);
+    chan_free(j.handshake_done);
+    arena_free(&j.ar);
+    local_pipe_free(client_conn);
+    tls_config_release(&client_config);
+    if (failed)
+        testing_t_fail_now(t);
+}
+
+static void TestDynamicRecordSizingWithStreamCipher(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    static uint16_t suites[] = {TLS_TLS_RSA_WITH_RC4_128_SHA};
+    TlsConfig config = test_config_server(a);
+    config.max_version = TLS_VERSION_TLS12;
+    config.cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    run_dynamic_record_sizing_test(t, &config, a);
+    tls_config_release(&config);
+    arena_free(&ar);
+}
+
+static void TestDynamicRecordSizingWithCBC(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    static uint16_t suites[] = {TLS_TLS_RSA_WITH_AES_256_CBC_SHA};
+    TlsConfig config = test_config_server(a);
+    config.max_version = TLS_VERSION_TLS12;
+    config.cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    run_dynamic_record_sizing_test(t, &config, a);
+    tls_config_release(&config);
+    arena_free(&ar);
+}
+
+static void TestDynamicRecordSizingWithAEAD(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    static uint16_t suites[] = {TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256};
+    TlsConfig config = test_config_server(a);
+    config.max_version = TLS_VERSION_TLS12;
+    config.cipher_suites = slice_from(suites, 1, 1, TYPE_UINT16);
+    run_dynamic_record_sizing_test(t, &config, a);
+    tls_config_release(&config);
+    arena_free(&ar);
+}
+
+static void TestDynamicRecordSizingWithTLSv13(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsConfig config = test_config_server(a);
+    run_dynamic_record_sizing_test(t, &config, a);
+    tls_config_release(&config);
+    arena_free(&ar);
+}
+
 /* ------------------------------------------------------------------- Conn */
 
 /* hairpinConn is a net.Conn that makes a “hairpin” call when closed, back into
@@ -336,15 +635,15 @@ static const NetConnVT hairpin_vt = {
     NULL,
 };
 
-static Error unreachable_handshake(TlsConn *c, Context ctx) {
-    (void)c;
-    (void)ctx;
+static TlsCertificate *unreachable_get_certificate(void *env, TlsClientHelloInfo *chi,
+                                                   Error *err) {
+    (void)env;
+    (void)chi;
+    (void)err;
     panic_str(BURROW_S("unreachable"));
 }
 
-/* Server is not here yet, so the Conn comes from burrow__tls_conn_new with a
- * handshake that must not run, which is what the GetCertificate that panics
- * stands for in Go. localPipe is a net.Pipe. */
+/* Not in Go: localPipe is a net.Pipe here. */
 static void TestHairpinInClose(TestingT *t) {
     /* This tests that the underlying net.Conn can call back into the
      * tls.Conn when being closed without deadlocking. */
@@ -357,8 +656,8 @@ static void TestHairpinInClose(TestingT *t) {
     TlsConfig config;
     memset(&config, 0, sizeof config);
     HairpinConn conn = {client, NULL};
-    TlsConn *tls_conn = burrow__tls_conn_new(a, (NetConn){&hairpin_vt, &conn}, &config,
-                                             false, unreachable_handshake);
+    config.get_certificate = (TlsGetCertificateFunc){unreachable_get_certificate, NULL};
+    TlsConn *tls_conn = tls_server(a, (NetConn){&hairpin_vt, &conn}, &config);
     if (tls_conn == NULL)
         testing_t_fatal_v(t, "out of memory");
     conn.tls_conn = tls_conn;
@@ -373,11 +672,171 @@ static void TestHairpinInClose(TestingT *t) {
     arena_free(&ar);
 }
 
-/* Not in Go. Go tests the Conn through real handshakes, which are not here yet.
- * These run the Conn over a net.Pipe with a handshake that only sets the keys:
- * up to TLS 1.2 it prepares both halves and swaps ChangeCipherSpec records, and
- * in TLS 1.3 it sets the traffic secrets. The suite and version are set on the
- * Conn before the handshake. */
+/* Not in Go: the goroutine of TestRecordBadVersionTLS13. */
+typedef struct BadVersionClient {
+    TestingT *t;
+    NetConn c;
+    TlsConfig *config;
+    TlsConn *tls_conn;
+} BadVersionClient;
+
+static void bad_version_client(void *env) {
+    BadVersionClient *j = (BadVersionClient *)env;
+    j->tls_conn = tls_client(heap_allocator(), j->c, j->config);
+    if (j->tls_conn == NULL) {
+        testing_t_errorf_v(j->t, "Error from client handshake: %v",
+                           burrow_err_out_of_memory);
+        return;
+    }
+    Error err = tls_conn_handshake(j->tls_conn);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(j->t, "Error from client handshake: %v", err);
+        return;
+    }
+    j->tls_conn->vers = 0x1111;
+    Byte one[1] = {1};
+    (void)tls_conn_write(j->tls_conn, slice_from(one, 1, 1, TYPE_BYTE), &err);
+}
+
+static void TestRecordBadVersionTLS13(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    NetConn client, server;
+    local_pipe(a, &client, &server);
+
+    TlsConfig client_config = test_config_client(a);
+    client_config.min_version = TLS_VERSION_TLS13;
+    client_config.max_version = TLS_VERSION_TLS13;
+    TlsConfig server_config = test_config_server(a);
+    server_config.min_version = TLS_VERSION_TLS13;
+    server_config.max_version = TLS_VERSION_TLS13;
+
+    BadVersionClient j = {t, client, &client_config, NULL};
+    SyncWaitGroup wg = {0};
+    sync_wait_group_go(&wg, BURROW_FN(Func, bad_version_client, &j));
+
+    TlsConn *tls_conn = tls_server(heap_allocator(), server, &server_config);
+    if (tls_conn == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    Error err = tls_conn_handshake(tls_conn);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "Error from client handshake: %v", err);
+    } else {
+        Str expected_err = BURROW_S(
+            "tls: received record with version 1111 when expecting version 303");
+
+        Byte buf[10];
+        (void)tls_conn_read(tls_conn, slice_from(buf, 10, 10, TYPE_BYTE), &err);
+        /* Not in Go: Go would panic on a nil error. */
+        if (!BURROW_FAILED(err) || !str_eq(error_text(err), expected_err))
+            testing_t_errorf_v(t, "unexpected error: got %q, want %q", err,
+                               expected_err);
+    }
+
+    (void)server.vt->closer.close(server.data);
+    (void)client.vt->closer.close(client.data);
+    sync_wait_group_wait(&wg);
+    tls_conn_free(tls_conn);
+    tls_conn_free(j.tls_conn);
+    local_pipe_free(client);
+    tls_config_release(&client_config);
+    tls_config_release(&server_config);
+    arena_free(&ar);
+}
+
+/* Not in Go: the goroutine of TestKeyUpdateSpamPostHandshakeTLS13. The traffic
+ * secrets are made in ar. */
+typedef struct KeyUpdateSpamClient {
+    TestingT *t;
+    NetConn c;
+    TlsConfig *config;
+    TlsConn *tls_conn;
+    Arena ar;
+} KeyUpdateSpamClient;
+
+static void key_update_spam_client(void *env) {
+    KeyUpdateSpamClient *j = (KeyUpdateSpamClient *)env;
+    Alloc *a = arena_allocator(&j->ar);
+    TlsConn *c = tls_client(heap_allocator(), j->c, j->config);
+    j->tls_conn = c;
+    if (c == NULL) {
+        testing_t_errorf_v(j->t, "%v", burrow_err_out_of_memory);
+        return;
+    }
+    Error err = tls_conn_handshake(c);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(j->t, "%v", err);
+        return;
+    }
+    TlsKeyUpdateMsg msg = {false};
+    Slice ku = burrow__tls_key_update_msg_marshal(&msg, a, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(j->t, "%v", err);
+        return;
+    }
+    const TlsSuiteTLS13 *cs = burrow__tls_cipher_suite_tls13_by_id(c->cipher_suite);
+    for (Int i = 0; i <= TLS_MAX_USELESS_RECORDS; i++) {
+        (void)burrow__tls_conn_write_record_locked(c, TLS_RECORD_TYPE_HANDSHAKE, ku,
+                                                   &err);
+        (void)burrow__tls_conn_set_write_traffic_secret(
+            c, cs, TLS_QUIC_ENCRYPTION_LEVEL_INITIAL,
+            burrow__tls13_next_traffic_secret(cs, a, c->out.traffic_secret));
+    }
+}
+
+/* TestKeyUpdateSpamPostHandshakeTLS13 tests that TLS 1.3 KeyUpdate messages do
+ * not count as a state-advancing message after a handshake has been completed. */
+static void TestKeyUpdateSpamPostHandshakeTLS13(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    NetConn client, server;
+    local_pipe(a, &client, &server);
+
+    TlsConfig client_config = test_config_client(a);
+    KeyUpdateSpamClient j;
+    memset(&j, 0, sizeof j);
+    j.t = t;
+    j.c = client;
+    j.config = &client_config;
+    arena_init(&j.ar, NULL, 0);
+    SyncWaitGroup wg = {0};
+    sync_wait_group_go(&wg, BURROW_FN(Func, key_update_spam_client, &j));
+
+    TlsConfig server_config = test_config_server(a);
+    TlsConn *s = tls_server(heap_allocator(), server, &server_config);
+    if (s == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    Error err = tls_conn_handshake(s);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%v", err);
+    } else {
+        Str expected_err = BURROW_S("tls: too many non-advancing records");
+        Byte buf[1];
+        (void)tls_conn_read(s, slice_from(buf, 1, 1, TYPE_BYTE), &err);
+        if (!BURROW_FAILED(err) || !str_eq(error_text(err), expected_err))
+            testing_t_errorf_v(t, "unexpected error: got %v, want %q", err,
+                               expected_err);
+    }
+
+    (void)server.vt->closer.close(server.data);
+    (void)client.vt->closer.close(client.data);
+    sync_wait_group_wait(&wg);
+    tls_conn_free(s);
+    tls_conn_free(j.tls_conn);
+    arena_free(&j.ar);
+    local_pipe_free(client);
+    tls_config_release(&client_config);
+    tls_config_release(&server_config);
+    arena_free(&ar);
+}
+
+/* Not in Go. Go tests the Conn only through real handshakes. These run the Conn
+ * over a net.Pipe with a handshake that only sets the keys: up to TLS 1.2 it
+ * prepares both halves and swaps ChangeCipherSpec records, and in TLS 1.3 it
+ * sets the traffic secrets. The suite and version are set on the Conn before
+ * the handshake. */
 static Error fake_prepare(TlsHalfConn *hc, const TlsSuite *suite, uint16_t version,
                           bool is_read, Byte seed) {
     Alloc *a = burrow__tls_half_conn_next_alloc(hc);
@@ -745,7 +1204,14 @@ static void TestConnRecordHeaderError(TestingT *t) {
     X(TestRemovePadding)                                                               \
     X(TestHalfConnRoundTrip)                                                           \
     X(TestCertificateSelection)                                                        \
+    X(TestBrokenCertificateSkipped)                                                    \
+    X(TestDynamicRecordSizingWithStreamCipher)                                         \
+    X(TestDynamicRecordSizingWithCBC)                                                  \
+    X(TestDynamicRecordSizingWithAEAD)                                                 \
+    X(TestDynamicRecordSizingWithTLSv13)                                               \
     X(TestHairpinInClose)                                                              \
+    X(TestRecordBadVersionTLS13)                                                       \
+    X(TestKeyUpdateSpamPostHandshakeTLS13)                                             \
     X(TestConnRoundTrip)                                                               \
     X(TestConnKeyUpdate)                                                               \
     X(TestConnAlert)                                                                   \

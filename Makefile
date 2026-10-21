@@ -340,6 +340,7 @@ check:
 	@tools/check-alloc.sh
 	@tools/check-globals.sh
 	@tools/check-statics.sh
+	@tools/check-fips-module.sh
 	@tools/check-pal.sh
 	@$(MAKE) --no-print-directory from-go
 	@FROM_GO=$(FROM_GO_BIN) tools/check-gen.sh

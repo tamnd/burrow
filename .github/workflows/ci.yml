@@ -48,6 +48,9 @@ jobs:
       - name: Every file scope name is unique across files
         run: tools/check-statics.sh
 
+      - name: Every function of the FIPS 140-3 module is in its section
+        run: tools/check-fips-module.sh
+
       # The version is pinned because clang-format changes its mind between
       # releases. Whatever ubuntu-latest happened to ship disagreed with what
       # contributors had installed about where the space goes in
@@ -150,6 +153,13 @@ jobs:
         run: make -j4 CC=${{ matrix.cc }} test
         env:
           CC: ${{ matrix.cc }}
+
+      # The FIPS 140-3 integrity check, with the checksum written in by
+      # burrow-gen fips rather than by the test itself. See
+      # src/crypto/fips140_module.h.
+      - if: ${{ !matrix.cmake && matrix.shell != 'msys2' }}
+        name: fips-check
+        run: make CC=${{ matrix.cc }} fips-check
 
       - if: matrix.shell == 'msys2'
         name: build and test

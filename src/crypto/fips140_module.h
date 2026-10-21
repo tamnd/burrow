@@ -26,10 +26,11 @@
  *
  * What the compiler makes on its own, such as string literals and constant
  * pools, stays in the usual sections. So do the small constants declared inside
- * functions, and a function from a header the module includes that the compiler
- * chose not to inline, such as fiat-crypto's field arithmetic at -O0. A pass of
- * the HMAC means the module's own functions and tables are unchanged, not every
- * byte they use.
+ * functions, the thunks BURROW_METHODS_DEFINE writes for calling methods
+ * through reflection, and any function from a header that the compiler chose
+ * not to inline. That is fiat-crypto's larger field functions with gcc at -O2,
+ * and burrow's own inline functions as well at -O0. A pass of the HMAC means
+ * the module's own functions and tables are unchanged, not every byte they use.
  *
  * Where the compiler or the format has no way to name a section, both macros
  * are empty, and burrow__fips140_supported says FIPS mode is not supported.

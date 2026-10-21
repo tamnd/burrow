@@ -61,8 +61,7 @@ __declspec(allocate(".bfipt$a")) const Byte burrow__fips_text_first = 0;
 __declspec(allocate(".bfipt$z")) const Byte burrow__fips_text_last = 0;
 __declspec(allocate(".bfipr$a")) const Byte burrow__fips_rodata_first = 0;
 __declspec(allocate(".bfipr$z")) const Byte burrow__fips_rodata_last = 0;
-__declspec(allocate(".bfipi")) const volatile FipsInfo burrow__fips_info =
-    FIPS_INFO_INIT;
+#define FIPS_INFO_STORAGE __declspec(allocate(".bfipi"))
 #define FIPS_TEXT_START (&burrow__fips_text_first)
 #define FIPS_TEXT_END (&burrow__fips_text_last + 1)
 #define FIPS_RODATA_START (&burrow__fips_rodata_first)
@@ -74,9 +73,7 @@ __attribute__((used, section(".bfipt$a"))) static const Byte fips_text_first = 0
 __attribute__((used, section(".bfipt$z"))) static const Byte fips_text_last = 0;
 __attribute__((used, section(".bfipr$a"))) static const Byte fips_rodata_first = 0;
 __attribute__((used, section(".bfipr$z"))) static const Byte fips_rodata_last = 0;
-__attribute__((used, section(".bfipi"))) static const volatile FipsInfo fips_info =
-    FIPS_INFO_INIT;
-#define burrow__fips_info fips_info
+#define FIPS_INFO_STORAGE __attribute__((used, section(".bfipi"))) static
 #define FIPS_TEXT_START (&fips_text_first)
 #define FIPS_TEXT_END (&fips_text_last + 1)
 #define FIPS_RODATA_START (&fips_rodata_first)
@@ -92,10 +89,7 @@ __extension__ extern const Byte
     fips_rodata_start[] __asm("section$start$__TEXT$__bfips_rodata");
 __extension__ extern const Byte
     fips_rodata_end[] __asm("section$end$__TEXT$__bfips_rodata");
-__attribute__((
-    used, section("__TEXT,__bfips_info"))) static const volatile FipsInfo fips_info =
-    FIPS_INFO_INIT;
-#define burrow__fips_info fips_info
+#define FIPS_INFO_STORAGE __attribute__((used, section("__TEXT,__bfips_info"))) static
 #define FIPS_TEXT_START fips_text_start
 #define FIPS_TEXT_END fips_text_end
 #define FIPS_RODATA_START fips_rodata_start
@@ -107,15 +101,16 @@ extern const Byte __start_burrow_fips_text[];
 extern const Byte __stop_burrow_fips_text[];
 extern const Byte __start_burrow_fips_rodata[];
 extern const Byte __stop_burrow_fips_rodata[];
-__attribute__((used,
-               section("burrow_fips_info"))) static const volatile FipsInfo fips_info =
-    FIPS_INFO_INIT;
-#define burrow__fips_info fips_info
+#define FIPS_INFO_STORAGE __attribute__((used, section("burrow_fips_info"))) static
 #define FIPS_TEXT_START __start_burrow_fips_text
 #define FIPS_TEXT_END __stop_burrow_fips_text
 #define FIPS_RODATA_START __start_burrow_fips_rodata
 #define FIPS_RODATA_END __stop_burrow_fips_rodata
 
+#endif
+
+#if defined(CRYPTO_FIPS_SECTIONS)
+FIPS_INFO_STORAGE const volatile FipsInfo burrow__fips_info = FIPS_INFO_INIT;
 #endif
 
 /* One byte of data so the rodata section is there even when nothing else is
@@ -239,17 +234,17 @@ CRYPTO_FIPS_TEXT const char *burrow__fips140_verify(void) {
 
 #else
 
-void burrow__fips140_sections(const Byte *bounds[4]) {
+CRYPTO_FIPS_TEXT void burrow__fips140_sections(const Byte *bounds[4]) {
     for (int i = 0; i < 4; i++)
         bounds[i] = NULL;
 }
 
-bool burrow__fips140_module_sum(Byte sum[32]) {
+CRYPTO_FIPS_TEXT bool burrow__fips140_module_sum(Byte sum[32]) {
     memset(sum, 0, 32);
     return false;
 }
 
-const char *burrow__fips140_verify(void) {
+CRYPTO_FIPS_TEXT const char *burrow__fips140_verify(void) {
     return "no verification checksum found";
 }
 

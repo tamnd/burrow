@@ -1,9 +1,11 @@
-/* Derived from Go's src/crypto/internal/fips140/drbg/ctrdrbg.go and cast.go.
+/* Derived from Go's src/crypto/internal/fips140/drbg/ctrdrbg.go, cast.go,
+ * rand.go and entropy_fips140.go.
  * Go source: go1.27.1.
  *
- * Only the CTR_DRBG itself and its self-test are here so far. Nothing reads
- * from it yet: Go's drbg.Read, which uses it in FIPS 140-3 mode, comes with
- * that mode.
+ * Package drbg provides cryptographically secure random bytes
+ * usable by FIPS code. In FIPS mode it uses an SP 800-90A Rev. 1
+ * Deterministic Random Bit Generator (DRBG). Otherwise,
+ * it uses the operating system's random number generator.
  *
  * Copyright 2024 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -14,15 +16,22 @@
  * burrow header it includes. The DRBG is built on AES, as in Go. */
 #include "burrow/crypto/aes.h"
 
+#include "burrow/atomic.h"
 #include "burrow/core.h"
 #include "burrow/error.h"
+#include "burrow/io.h"
+#include "burrow/mem.h"
+#include "burrow/mem/heap.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
+#include "burrow/sync.h"
 #include "burrow/type.h"
 
 #include "aes_internal.h"
 #include "drbg_internal.h"
+#include "entropy_internal.h"
 #include "fips140_module.h"
+#include "rand_internal.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -202,4 +211,169 @@ CRYPTO_FIPS_TEXT Error burrow__drbg_cast(void *arg) {
     if (memcmp(got, drbg_cast_want, sizeof got) != 0)
         return errors_new(error_allocator(), BURROW_S("unexpected result"));
     return BURROW_NO_ERROR;
+}
+
+/* ------------------------------------------------------------------- Read */
+
+#if !defined(BURROW_ARCH_WASM)
+/* Entropy generation in FIPS 140-3 mode uses a scratch buffer in the BSS
+ * section (see below), which usually doesn't cost much, except on Wasm, due to
+ * the way the linear memory works. FIPS 140-3 mode is not supported on Wasm, so
+ * we just use a build tag to exclude it. (Could also exclude other platforms
+ * that does not support FIPS 140-3 mode, but as the BSS variable doesn't cost
+ * much, don't bother.)
+ *
+ * memory is a scratch buffer that is accessed between samples by the entropy
+ * source to expose it to memory access timings.
+ *
+ * We reuse it and share it between Seed calls to avoid the significant (~500µs)
+ * cost of zeroing a new allocation every time. The entropy source accesses it
+ * using atomics (and doesn't care about its contents).
+ *
+ * It should end up in the .noptrbss section, and become backed by physical
+ * pages at first use. This ensures that programs that do not use the FIPS 140-3
+ * module do not incur any memory use or initialization penalties. */
+static EntropyScratchBuffer drbg_memory;
+#endif
+
+CRYPTO_FIPS_TEXT static void drbg_get_entropy(Byte seed[DRBG_SEED_SIZE]) {
+#if defined(BURROW_ARCH_WASM)
+    (void)seed;
+    panic_str(BURROW_S("FIPS 140-3 entropy generation is not supported on Wasm"));
+#else
+    int retries = 0;
+    Error err = burrow__entropy_seed(seed, &drbg_memory);
+    while (BURROW_FAILED(err)) {
+        /* The CPU jitter-based SP 800-90B entropy source has a non-negligible
+         * chance of failing the startup health tests.
+         *
+         * Each time it does, it enters a permanent failure state, and we
+         * restart it anew. This is not expected to happen more than a few
+         * times in a row. */
+        if (++retries > 100)
+            panic_str(BURROW_S("fips140/drbg: failed to obtain initial entropy"));
+        err = burrow__entropy_seed(seed, &drbg_memory);
+    }
+#endif
+}
+
+/* Not in Go: what the pool needs to hold a Counter. */
+static const Type drbg_counter_desc = {
+    {(const Byte *)"Counter", 7},
+    {(const Byte *)"crypto/internal/fips140/drbg", 28},
+    KIND_STRUCT,
+    (uint32_t)sizeof(DrbgCounter),
+    (uint16_t)_Alignof(DrbgCounter),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0x64726267U, /* "drbg" */
+    NULL,
+};
+
+CRYPTO_FIPS_TEXT static Any drbg_pool_new(void *env) {
+    (void)env;
+    DrbgCounter *c = BURROW_NEW(heap_allocator(), DrbgCounter);
+    if (c == NULL)
+        return (Any){NULL, NULL};
+    Byte seed[DRBG_SEED_SIZE];
+    drbg_get_entropy(seed);
+    burrow__drbg_new_counter(c, seed);
+    memset(seed, 0, sizeof seed);
+    return BURROW_ANY(&drbg_counter_desc, c);
+}
+
+/* Not in Go: the collector frees what a sync.Pool drops. Here the pool calls
+ * this, which clears the Counter's state before it gives it back. */
+CRYPTO_FIPS_TEXT static void drbg_pool_free(void *env, Any v) {
+    (void)env;
+    DrbgCounter *c = v.data;
+    volatile Byte *p = (volatile Byte *)c;
+    for (size_t i = 0; i < sizeof *c; i++)
+        p[i] = 0;
+    mem_free(heap_allocator(), c, sizeof *c, _Alignof(DrbgCounter));
+}
+
+/* getEntropy is very slow (~500µs), so we don't want it on the hot path.
+ * We keep both a persistent DRBG instance and a pool of additional instances.
+ * Occasional uses will use drbgInstance, even if the pool was emptied since the
+ * last use. Frequent concurrent uses will fill the pool and use it. */
+static DrbgCounter *drbg_instance;
+static SyncPool drbg_pool;
+static SyncOnce drbg_pool_once;
+
+/* Not in Go: a sync.Pool in a static has to be set up at run time here, since
+ * heap_allocator is a call. */
+CRYPTO_FIPS_TEXT static void drbg_pool_init(void *env) {
+    (void)env;
+    drbg_pool =
+        SYNC_POOL(heap_allocator(), BURROW_FN(SyncPoolNewFunc, drbg_pool_new, NULL),
+                  BURROW_FN(SyncPoolFreeFunc, drbg_pool_free, NULL));
+}
+
+static IoReader drbg_testing_reader;
+
+CRYPTO_FIPS_TEXT void burrow__drbg_read(Slice b) {
+    if (drbg_testing_reader.vt != NULL) {
+        burrow__fips140_record_non_approved();
+        (void)drbg_testing_reader.vt->read(drbg_testing_reader.data, b, NULL);
+        return;
+    }
+
+    if (!burrow__fips140_enabled()) {
+        burrow__sysrand_read(b);
+        return;
+    }
+
+    /* At every read, 128 random bits from the operating system are mixed as
+     * additional input, to make the output as strong as non-FIPS randomness.
+     * This is not credited as entropy for FIPS purposes, as allowed by Section
+     * 8.7.2: "Note that a DRBG does not rely on additional input to provide
+     * entropy, even though entropy could be provided in the additional input". */
+    Byte additional_input_buf[DRBG_SEED_SIZE] = {0};
+    burrow__sysrand_read(slice_from(additional_input_buf, 16, 16, TYPE_BYTE));
+    const Byte *additional_input = additional_input_buf;
+
+    DrbgCounter *drbg = burrow__atomic_swap_ptr((void **)&drbg_instance, NULL);
+    if (drbg == NULL) {
+        sync_once_do(&drbg_pool_once, BURROW_FN(Func, drbg_pool_init, NULL));
+        drbg = sync_pool_get(&drbg_pool).data;
+        /* Not in Go, where making a Counter cannot fail. */
+        if (drbg == NULL)
+            panic_str(BURROW_S("fips140/drbg: out of memory"));
+    }
+
+    Byte *p = b.p;
+    Int n = b.len;
+    while (n > 0) {
+        Int size = n < DRBG_MAX_REQUEST_SIZE ? n : DRBG_MAX_REQUEST_SIZE;
+        if (burrow__drbg_counter_generate(drbg, slice_from(p, size, size, TYPE_BYTE),
+                                          additional_input)) {
+            /* See SP 800-90A Rev. 1, Section 9.3.1, Steps 6-8, as explained in
+             * Section 9.3.2: if Generate reports a reseed is required, the
+             * additional input is passed to Reseed along with the entropy and
+             * then nulled before the next Generate call. */
+            Byte seed[DRBG_SEED_SIZE];
+            drbg_get_entropy(seed);
+            burrow__drbg_counter_reseed(drbg, seed, additional_input);
+            memset(seed, 0, sizeof seed);
+            additional_input = NULL;
+            continue;
+        }
+        p += size;
+        n -= size;
+    }
+    memset(additional_input_buf, 0, sizeof additional_input_buf);
+
+    void *expected = NULL;
+    if (!burrow__atomic_cas_ptr((void **)&drbg_instance, &expected, drbg))
+        sync_pool_put(&drbg_pool, BURROW_ANY(&drbg_counter_desc, drbg));
+}
+
+CRYPTO_FIPS_TEXT void burrow__drbg_set_testing_reader(IoReader r) {
+    drbg_testing_reader = r;
 }

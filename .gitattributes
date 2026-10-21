@@ -1,3 +1,5 @@
 # The embed test compares the bytes it embedded with the files on disk, so a
 # checkout must not turn their line endings into CRLF on Windows.
 tests/embedtest/testdata/** -text
+src/crypto/entropy.c -text
+src/crypto/entropy_internal.h -text

@@ -3,11 +3,16 @@
  *     Byte key[32];
  *     crypto_rand_read(slice_from(key, 32, 32, TYPE_BYTE), NULL);
  *
- * The bytes come straight from the operating system: getrandom on Linux,
- * arc4random_buf or getentropy on macOS and the BSDs, RtlGenRandom on Windows
- * and random_get on WASI. burrow keeps no generator of its own in the
- * process, so there is no state for fork to copy into two processes and
- * nothing to fall back on when the system one fails.
+ * Outside FIPS 140-3 mode the bytes come straight from the operating system:
+ * getrandom on Linux, arc4random_buf or getentropy on macOS and the BSDs,
+ * RtlGenRandom on Windows and random_get on WASI. burrow keeps no generator of
+ * its own in the process then, so there is no state for fork to copy into two
+ * processes and nothing to fall back on when the system one fails.
+ *
+ * In FIPS 140-3 mode, the output passes through an SP 800-90A Rev. 1
+ * Deterministric Random Bit Generator (DRBG). Not in Go: the DRBG's state is
+ * copied by fork, but every read mixes in 16 bytes from the operating system,
+ * so a child process does not repeat what its parent reads after the fork.
  *
  * It does not fail. Go decided that a program asking for random bytes and not
  * getting them should stop rather than carry on with a key that is not random,
@@ -18,8 +23,7 @@
  * The package is called crypto_rand and not rand because math/rand is also a
  * rand, and math/rand is never what you want for a secret.
  *
- * Go's FIPS 140 mode and BoringCrypto are not here, so the bytes never go
- * through a DRBG of burrow's own.
+ * Go's BoringCrypto is not here.
  *
  * Copyright 2010 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.

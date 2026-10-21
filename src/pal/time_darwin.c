@@ -67,6 +67,10 @@ int64_t pal_clock_monotonic(void) {
     return (int64_t)(whole + rest);
 }
 
+int64_t pal_clock_high_precision(void) {
+    return pal_clock_monotonic();
+}
+
 int64_t pal_clock_realtime(void) {
     struct timespec ts;
 

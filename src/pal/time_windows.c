@@ -72,6 +72,15 @@ int64_t pal_clock_monotonic(void) {
     return secs * 1000000000 + (rest * 1000000000) / hz;
 }
 
+/* The counter itself, without the scaling, which the entropy source does not
+ * need and which would cost it resolution. */
+int64_t pal_clock_high_precision(void) {
+    LARGE_INTEGER now;
+    if (!QueryPerformanceCounter(&now))
+        return 0;
+    return (int64_t)now.QuadPart;
+}
+
 /* The number of 100 nanosecond intervals between 1601-01-01, which is where a
  * FILETIME counts from, and 1970-01-01, which is where the world counts from.
  * It is a constant because both dates are. */

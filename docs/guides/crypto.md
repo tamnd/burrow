@@ -109,7 +109,7 @@ Where the processor has no such mode, which is everywhere but arm64 today, the f
 
 ## crypto/rand
 
-`burrow/crypto/rand.h` is where keys, nonces and tokens come from. The bytes come from the operating system every time, through getrandom on Linux, arc4random_buf or getentropy on macOS and the BSDs, RtlGenRandom on Windows and random_get on WASI, and burrow keeps no generator of its own that a fork could copy.
+`burrow/crypto/rand.h` is where keys, nonces and tokens come from. Outside FIPS 140-3 mode the bytes come from the operating system every time, through getrandom on Linux, arc4random_buf or getentropy on macOS and the BSDs, RtlGenRandom on Windows and random_get on WASI, and burrow keeps no generator of its own that a fork could copy. In FIPS 140-3 mode they come out of the module's SP 800-90A CTR_DRBG, as in Go, seeded from a CPU jitter entropy source, and every read still mixes in 16 bytes from the operating system, so a child process does not repeat what its parent reads after the fork.
 
 <!-- example: ../examples/crypto/rand.c#read -->
 ```c
@@ -161,7 +161,7 @@ else
 
 Go ships a FIPS 140-3 module, a fixed set of its crypto packages that has been through validation, and `GODEBUG=fips140=on` makes a Go program use only that module, check its own code against a checksum when it starts and run the self tests the standard asks for. burrow has the same module, in the files that port Go's, and `fips140=on`, `only` and `debug` turn the mode on as they do in Go. An unknown value panics as it does in Go, and `off` or no setting at all leaves the mode off.
 
-burrow is not FIPS 140-3 validated. Its module follows Go's, but it has not been through validation, and it does not claim to be. The mode is there for what it does: the self tests, the integrity check and the service indicator.
+burrow is not FIPS 140-3 validated. Its module follows Go's, but it has not been through validation, and it does not claim to be. The mode is there for what it does: the self tests, the integrity check, the DRBG behind `crypto/rand` and the service indicator.
 
 The integrity check needs the module's checksum in the program. Go's linker writes it, and here `burrow-gen fips` writes it after linking:
 

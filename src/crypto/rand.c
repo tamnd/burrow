@@ -22,7 +22,7 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
-#include "fips140_module.h"
+#include "drbg_internal.h"
 #include "rand_internal.h"
 
 #include <stdint.h>
@@ -108,17 +108,14 @@ static IoReader crand_testing_reader;
 
 void burrow__crypto_rand_set_testing_reader(IoReader r) {
     crand_testing_reader = r;
+    burrow__drbg_set_testing_reader(r);
 }
 
-/* The system generator, which never comes back short: it fills p or the
- * process ends. While a test has set the testing reader, it is one read from
- * that instead. */
 void burrow__crypto_rand_system(Slice p) {
-    if (crand_testing_reader.vt != NULL) {
-        burrow__fips140_record_non_approved();
-        (void)crand_testing_reader.vt->read(crand_testing_reader.data, p, NULL);
-        return;
-    }
+    burrow__drbg_read(p);
+}
+
+void burrow__sysrand_read(Slice p) {
     PalErrno e = PAL_OK;
     if (!pal_random_bytes(p.p, p.len, &e)) {
         const char *why = pal_errno_string(e);

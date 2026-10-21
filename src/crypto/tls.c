@@ -830,16 +830,25 @@ bool burrow__tls_is_disabled_signature_algorithm(uint16_t version, TlsSignatureS
 
 /* The default signature algorithms with the ones that are disabled at every
  * version from min_vers to max_vers taken out, from a. */
+Slice burrow__tls_testing_only_supported_signature_algorithms;
+
 static Slice tls_signature_algorithms_for(Alloc *a, uint16_t min_vers,
                                           uint16_t max_vers, bool is_cert) {
+    const TlsSignatureScheme *sig_algs =
+        burrow__tls_default_supported_signature_algorithms;
     Int n = (Int)(sizeof(burrow__tls_default_supported_signature_algorithms) /
                   sizeof(burrow__tls_default_supported_signature_algorithms[0]));
+    if (!is_cert &&
+        !slice_is_nil(burrow__tls_testing_only_supported_signature_algorithms)) {
+        sig_algs = burrow__tls_testing_only_supported_signature_algorithms.p;
+        n = burrow__tls_testing_only_supported_signature_algorithms.len;
+    }
     Slice out = slice_make(a, TYPE_UINT16, 0, n);
     if (out.p == NULL)
         return out;
     TlsSignatureScheme *p = (TlsSignatureScheme *)out.p;
     for (Int i = 0; i < n; i++) {
-        TlsSignatureScheme s = burrow__tls_default_supported_signature_algorithms[i];
+        TlsSignatureScheme s = sig_algs[i];
         for (uint32_t v = min_vers; v <= max_vers; v++) {
             if (!burrow__tls_is_disabled_signature_algorithm((uint16_t)v, s, is_cert)) {
                 p[out.len++] = s;

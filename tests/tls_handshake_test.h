@@ -1,6 +1,7 @@
-/* crypto/tls: the test configurations and localPipe of handshake_test.go, and
- * testHandshake of handshake_server_test.go, which the tests of more than one
- * file run on.
+/* crypto/tls: the test configurations and localPipe of handshake_test.go,
+ * testHandshake of handshake_server_test.go, and runWithFIPSEnabled,
+ * runWithFIPSDisabled and skipFIPS of tls_test.go, which the tests of more
+ * than one file run on.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -10,7 +11,9 @@
 #ifndef BURROW_TESTS_TLS_HANDSHAKE_TEST_H
 #define BURROW_TESTS_TLS_HANDSHAKE_TEST_H
 
+#include "../src/crypto/tls_internal.h"
 #include "burrow/burrow.h"
+#include "burrow/crypto/fips140.h"
 #include "burrow/crypto/tls.h"
 #include "burrow/crypto/x509.h"
 #include "tls_test_gen.h"
@@ -324,6 +327,59 @@ static inline void handshake_free(Handshake *h) {
     local_pipe_free(h->c);
     arena_free(&h->client.ar);
     arena_free(&h->ar);
+}
+
+/* runWithFIPSEnabled. Not in Go: test_func is called with env. */
+static inline void run_with_fips_enabled(TestingT *t,
+                                         void (*test_func)(void *env, TestingT *t),
+                                         void *env) {
+    bool original_fips = burrow__tls_fips140_required();
+
+    burrow__tls_fips140_force();
+    testing_t_run(t, BURROW_S("fips140tls"), BURROW_FN(TestingTFunc, test_func, env));
+
+    if (original_fips)
+        burrow__tls_fips140_force();
+    else
+        burrow__tls_fips140_testing_only_abandon();
+}
+
+static inline void run_with_fips_disabled_skip(void *env, TestingT *t) {
+    (void)env;
+    testing_t_skip_v(t, "can't run no-fips140tls tests in fips140=only mode");
+}
+
+/* runWithFIPSDisabled. Not in Go: test_func is called with env. */
+static inline void run_with_fips_disabled(TestingT *t,
+                                          void (*test_func)(void *env, TestingT *t),
+                                          void *env) {
+    if (fips140_enforced()) {
+        testing_t_run(t, BURROW_S("no-fips140tls"),
+                      BURROW_FN(TestingTFunc, run_with_fips_disabled_skip, NULL));
+        return;
+    }
+
+    bool original_fips = burrow__tls_fips140_required();
+
+    burrow__tls_fips140_testing_only_abandon();
+    testing_t_run(t, BURROW_S("no-fips140tls"),
+                  BURROW_FN(TestingTFunc, test_func, env));
+
+    if (original_fips)
+        burrow__tls_fips140_force();
+    else
+        burrow__tls_fips140_testing_only_abandon();
+}
+
+/* isFIPSVersion, from fips140_test.go. */
+static inline bool is_fips_version(uint16_t v) {
+    return v == TLS_VERSION_TLS12 || v == TLS_VERSION_TLS13;
+}
+
+/* skipFIPS */
+static inline void skip_fips(TestingT *t) {
+    if (burrow__tls_fips140_required())
+        testing_t_skip_v(t, "skipping test in FIPS mode");
 }
 
 #endif /* BURROW_TESTS_TLS_HANDSHAKE_TEST_H */

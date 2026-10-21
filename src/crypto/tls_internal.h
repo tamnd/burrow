@@ -375,6 +375,11 @@ bool burrow__tls_type_and_hash_from_signature_scheme(TlsSignatureScheme s,
 bool burrow__tls_is_disabled_signature_algorithm(uint16_t version, TlsSignatureScheme s,
                                                  bool is_cert);
 
+/* testingOnlySupportedSignatureAlgorithms, a []SignatureScheme that
+ * supportedSignatureAlgorithms starts from instead of the defaults when it is
+ * not nil. Not in Go: only tests set it, while nothing else is running. */
+extern Slice burrow__tls_testing_only_supported_signature_algorithms;
+
 /* supportedSignatureAlgorithms returns the supported signature algorithms for
  * the given range of TLS versions, to advertise in ClientHello and
  * CertificateRequest messages. An algorithm is included if it is enabled at any

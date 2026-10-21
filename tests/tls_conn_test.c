@@ -551,6 +551,8 @@ static void run_dynamic_record_sizing_test(TestingT *t, TlsConfig *server_config
 }
 
 static void TestDynamicRecordSizingWithStreamCipher(TestingT *t) {
+    skip_fips(t); /* No RC4 in FIPS mode. */
+
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
@@ -564,6 +566,8 @@ static void TestDynamicRecordSizingWithStreamCipher(TestingT *t) {
 }
 
 static void TestDynamicRecordSizingWithCBC(TestingT *t) {
+    skip_fips(t); /* No CBC cipher suites in defaultCipherSuitesFIPS. */
+
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);

@@ -85,6 +85,7 @@ CRYPTO_FIPS_TEXT static void drbg_update(DrbgCounter *c,
 CRYPTO_FIPS_TEXT void burrow__drbg_new_counter(DrbgCounter *c,
                                                const Byte entropy[DRBG_SEED_SIZE]) {
     /* CTR_DRBG_Instantiate_algorithm, per Section 10.2.1.3.1. */
+    burrow__fips140_record_approved();
 
     Byte k[DRBG_KEY_SIZE] = {0};
     Byte v[AES_BLOCK_SIZE] = {0};
@@ -103,6 +104,7 @@ CRYPTO_FIPS_TEXT void
 burrow__drbg_counter_reseed(DrbgCounter *c, const Byte entropy[DRBG_SEED_SIZE],
                             const Byte additional_input[DRBG_SEED_SIZE]) {
     /* CTR_DRBG_Reseed_algorithm, per Section 10.2.1.4.1. */
+    burrow__fips140_record_approved();
 
     Byte seed[DRBG_SEED_SIZE];
     for (size_t i = 0; i < DRBG_SEED_SIZE; i++)
@@ -115,6 +117,7 @@ burrow__drbg_counter_reseed(DrbgCounter *c, const Byte entropy[DRBG_SEED_SIZE],
 CRYPTO_FIPS_TEXT bool burrow__drbg_counter_generate(DrbgCounter *c, Slice out,
                                                     const Byte *additional_input) {
     /* CTR_DRBG_Generate_algorithm, per Section 10.2.1.5.1. */
+    burrow__fips140_record_approved();
 
     if (out.len > DRBG_MAX_REQUEST_SIZE)
         panic_str(

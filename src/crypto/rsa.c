@@ -272,6 +272,7 @@ CRYPTO_FIPS_TEXT static bool rsa_read(IoReader r, Slice b, Error *err) {
         burrow__crypto_rand_system(b);
         return true;
     }
+    burrow__fips140_record_non_approved();
     if (b.len == 0)
         return true;
     if (r.vt == NULL)

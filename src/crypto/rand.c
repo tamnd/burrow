@@ -22,6 +22,7 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "fips140_module.h"
 #include "rand_internal.h"
 
 #include <stdint.h>
@@ -114,6 +115,7 @@ void burrow__crypto_rand_set_testing_reader(IoReader r) {
  * that instead. */
 void burrow__crypto_rand_system(Slice p) {
     if (crand_testing_reader.vt != NULL) {
+        burrow__fips140_record_non_approved();
         (void)crand_testing_reader.vt->read(crand_testing_reader.data, p, NULL);
         return;
     }

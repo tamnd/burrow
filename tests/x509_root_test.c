@@ -10,8 +10,7 @@
  * Some of Go's crypto/x509 tests are not anywhere in burrow's tests.
  * TestSetFallbackRoots re-runs the test binary in a new user and mount
  * namespace with an empty /etc. TestFallback here goes through the same
- * SetFallbackRoots paths without one. TestHybridPool, which tests the macOS
- * and Windows platform verifiers, is not ported yet.
+ * SetFallbackRoots paths without one.
  * TestNISTPKITSPolicy and TestX509Limbo read large test suites from outside
  * the package. The fips140v1.0 tests check a GODEBUG that pins an older FIPS
  * module, TestGob is about encoding/gob, and TestImports checks Go's import
@@ -26,6 +25,7 @@
 
 #include "burrow/bytes.h"
 #include "burrow/crypto/ecdsa.h"
+#include "burrow/crypto/tls.h"
 #include "burrow/encoding/pem.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
@@ -810,6 +810,185 @@ static void TestPlatformVerifier(TestingT *t) {
     }
 }
 
+/* Go's hybrid_pool_test.go. */
+
+/* Not in Go: what TestHybridPool holds, which a fatal error must not leak. */
+typedef struct {
+    Arena ar;
+    TlsConn *c;
+} HybridPool;
+
+static void hybrid_pool_free(void *env) {
+    HybridPool *h = env;
+    if (h->c != NULL) {
+        (void)tls_conn_close(h->c);
+        tls_conn_free(h->c);
+    }
+    arena_free(&h->ar);
+    mem_free(heap_allocator(), h, sizeof *h, _Alignof(HybridPool));
+}
+
+static void TestHybridPool(TestingT *t) {
+    testing_t_parallel(t);
+    if (!(strcmp(burrow_os_name(), "windows") == 0 ||
+          strcmp(burrow_os_name(), "darwin") == 0 ||
+          strcmp(burrow_os_name(), "ios") == 0)) {
+        testing_t_skipf_v(t, "platform verifier not available on %s",
+                          str_from_cstr(burrow_os_name()));
+        return;
+    }
+    /* Not in Go: what testenv.HasExternalNetwork asks here. */
+    if (testing_short()) {
+        testing_t_skip_now(t);
+        return;
+    }
+
+    HybridPool *h = BURROW_NEW(heap_allocator(), HybridPool);
+    if (h == NULL) {
+        testing_t_fatal_v(t, "out of memory");
+        return;
+    }
+    arena_init(&h->ar, NULL, 0);
+    testing_t_cleanup(t, BURROW_FN(Func, hybrid_pool_free, h));
+    Alloc *a = arena_allocator(&h->ar);
+    Error err = BURROW_NO_ERROR;
+
+    if (strcmp(burrow_os_name(), "windows") == 0) {
+        /* NOTE(#51599): on the Windows builders we sometimes see that the state
+         * of the root pool is not fully initialized, causing an expected
+         * platform verification to fail. In part this is because Windows
+         * dynamically populates roots into its local trust store at time of
+         * use. We can attempt to prime the pool by attempting TLS connections
+         * to google.com until it works, suggesting the pool has been properly
+         * updated. If after we hit the deadline, the pool has _still_ not been
+         * populated with the expected root, it's unlikely we are ever going to
+         * get into a good state, and so we just fail the test. #52108 suggests
+         * a better possible long term solution. */
+
+        Time deadline = time_add(time_now(), TIME_SECOND * 10);
+        Duration next_sleep = 10 * TIME_MILLISECOND;
+        for (Duration i = 0;; i++) {
+            err = BURROW_NO_ERROR;
+            TlsConn *c = tls_dial(heap_allocator(), BURROW_S("tcp"),
+                                  BURROW_S("google.com:443"), NULL, &err);
+            if (!BURROW_FAILED(err)) {
+                (void)tls_conn_close(c);
+                tls_conn_free(c);
+                break;
+            }
+            next_sleep = next_sleep * i;
+            if (time_until(deadline) < next_sleep) {
+                testing_t_fatal_v(t, "windows root pool appears to be in an "
+                                     "uninitialized state (missing root that "
+                                     "chains to google.com)");
+                return;
+            }
+            time_sleep(next_sleep);
+        }
+    }
+
+    /* Get the google.com chain, which should be valid on all platforms we
+     * are testing */
+    TlsConfig config;
+    memset(&config, 0, sizeof config);
+    config.insecure_skip_verify = true;
+    err = BURROW_NO_ERROR;
+    h->c = tls_dial(heap_allocator(), BURROW_S("tcp"), BURROW_S("google.com:443"),
+                    &config, &err);
+    tls_config_release(&config);
+    if (BURROW_FAILED(err)) {
+        h->c = NULL;
+        testing_t_fatalf_v(t, "tls connection failed: %s", err);
+        return;
+    }
+    Slice goog_chain = tls_conn_connection_state(h->c).peer_certificates;
+    if (goog_chain.len == 0) {
+        /* Not in Go: Go would panic on googChain[0]. */
+        testing_t_fatal_v(t, "no peer certificates from google.com");
+        return;
+    }
+    const X509Certificate *goog_leaf = *(X509Certificate *const *)goog_chain.p;
+
+    Time now = time_now();
+    X509Certificate root_tmpl;
+    memset(&root_tmpl, 0, sizeof root_tmpl);
+    root_tmpl.serial_number = big_new_int(a, 1);
+    root_tmpl.subject.common_name = BURROW_S("Go test root");
+    root_tmpl.is_ca = true;
+    root_tmpl.basic_constraints_valid = true;
+    root_tmpl.not_before = time_add(now, -TIME_HOUR);
+    root_tmpl.not_after = time_add(now, TIME_HOUR * 10);
+    EcdsaPrivateKey *k = ecdsa_generate_key(a, elliptic_p256(), (IoReader){0}, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "failed to generate test key: %s", err);
+        return;
+    }
+    Slice root_der = x509_create_certificate(a, (IoReader){0}, &root_tmpl, &root_tmpl,
+                                             ecdsa_private_key_public(k),
+                                             ecdsa_private_key_signer(k), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "failed to create test cert: %s", err);
+        return;
+    }
+    X509Certificate *root = x509_parse_certificate(a, root_der, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "failed to parse test cert: %s", err);
+        return;
+    }
+
+    X509CertPool *pool = x509_system_cert_pool(a, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "SystemCertPool failed: %s", err);
+        return;
+    }
+    X509VerifyOptions opts;
+    memset(&opts, 0, sizeof opts);
+    opts.roots = pool;
+
+    (void)x509_certificate_verify(goog_leaf, a, opts, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(
+            t, "verification failed for google.com chain (system only pool): %s", err);
+        return;
+    }
+
+    x509_cert_pool_add_cert(pool, root);
+
+    (void)x509_certificate_verify(goog_leaf, a, opts, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(
+            t, "verification failed for google.com chain (hybrid pool): %s", err);
+        return;
+    }
+
+    static const Str example = BURROW_S_INIT("example.com");
+    X509Certificate cert_tmpl;
+    memset(&cert_tmpl, 0, sizeof cert_tmpl);
+    cert_tmpl.serial_number = big_new_int(a, 1);
+    cert_tmpl.not_before = time_add(now, -TIME_HOUR);
+    cert_tmpl.not_after = time_add(now, TIME_HOUR * 10);
+    cert_tmpl.dns_names = slice_append(a, slice_nil(TYPE_STRING), &example, 1);
+    Slice cert_der = x509_create_certificate(a, (IoReader){0}, &cert_tmpl, &root_tmpl,
+                                             ecdsa_private_key_public(k),
+                                             ecdsa_private_key_signer(k), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "failed to create test cert: %s", err);
+        return;
+    }
+    X509Certificate *cert = x509_parse_certificate(a, cert_der, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "failed to parse test cert: %s", err);
+        return;
+    }
+
+    (void)x509_certificate_verify(cert, a, opts, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "verification failed for custom chain (hybrid pool): %s",
+                           err);
+        return;
+    }
+}
+
 #define TESTS(X)                                                                       \
     X(TestFallbackPanic)                                                               \
     X(TestFallback)                                                                    \
@@ -818,6 +997,7 @@ static void TestPlatformVerifier(TestingT *t) {
     X(TestReadUniqueDirectoryEntries)                                                  \
     X(TestSSLCertEnvOverride)                                                          \
     X(TestCertPoolEqual)                                                               \
-    X(TestPlatformVerifier)
+    X(TestPlatformVerifier)                                                            \
+    X(TestHybridPool)
 
 TESTING_MAIN(TESTS)

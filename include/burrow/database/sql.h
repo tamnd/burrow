@@ -397,7 +397,9 @@ BURROW_OWNS(ret) SqlDB *sql_open_db(DriverConnector c);
  * connection in use closes when it is returned. Calling it twice is fine. */
 BURROW_OWNS(ret) Error sql_db_close(SqlDB *db);
 
-/* Closes db if it is open and lets go of it. */
+/* Closes db if it is open and lets go of it. It first waits for the goroutines
+ * that open new connections and close old ones, which the close has stopped by
+ * then. */
 void sql_db_free(SqlDB *db);
 
 /* DB.PingContext and DB.Ping. Gets a connection, opening one if none is idle,
@@ -513,7 +515,9 @@ void sql_conn_free(SqlConn *c);
 BURROW_OWNS(ret) Error sql_tx_commit(SqlTx *tx);
 BURROW_OWNS(ret) Error sql_tx_rollback(SqlTx *tx);
 
-/* Rolls tx back if it has not ended and lets go of it. */
+/* Rolls tx back if it has not ended and lets go of it. It first waits for the
+ * goroutine that rolls tx back when its context ends, which the commit or
+ * rollback has woken by then. */
 void sql_tx_free(SqlTx *tx);
 
 /* The DB's calls, inside the transaction. */
@@ -602,7 +606,8 @@ BURROW_OWNS(ret) BURROW_OWNS(dest) Error sql_rows_scan(SqlRows *rs, Alloc *a,
  * fine. */
 BURROW_OWNS(ret) Error sql_rows_close(SqlRows *rs);
 
-/* Closes rs if it is open and lets go of it. */
+/* Closes rs if it is open and lets go of it. It first waits for the goroutine
+ * that closes rs when its context ends, which the close has woken by then. */
 void sql_rows_free(SqlRows *rs);
 
 /* A pointer to a Rows, as a scan destination for a driver that returns a

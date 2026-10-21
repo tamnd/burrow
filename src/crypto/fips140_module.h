@@ -56,9 +56,10 @@
 #include <stdbool.h>
 #include <stdint.h>
 
-#if defined(__COSMOPOLITAN__) || defined(__wasm__)
+#if defined(__COSMOPOLITAN__) || defined(__wasm__) || defined(BURROW_NO_FIPS_SECTIONS)
 /* No sections: an APE program is rewritten after linking, and wasm has none of
- * the kind this needs. */
+ * the kind this needs. BURROW_NO_FIPS_SECTIONS is for make FIPS_SECTIONS=0,
+ * which make ctgrind needs. */
 #elif defined(_MSC_VER) && !defined(__clang__)
 #define CRYPTO_FIPS_TEXT __declspec(code_seg(".bfipt"))
 #define CRYPTO_FIPS_RODATA                                                             \

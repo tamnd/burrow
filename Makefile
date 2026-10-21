@@ -165,6 +165,14 @@ ifeq ($(PORTABLE_CONTEXT),1)
   DEFINES += -DBURROW_PORTABLE_CONTEXT=1
 endif
 
+# Leaves the FIPS 140-3 module in the usual sections, for make ctgrind. Valgrind
+# reads line numbers only for code in .text, and without them it cannot see the
+# inlined functions that tools/ctgrind.supp names. FIPS mode is then not
+# supported. See src/crypto/fips140_module.h.
+ifeq ($(FIPS_SECTIONS),0)
+  DEFINES += -DBURROW_NO_FIPS_SECTIONS=1
+endif
+
 CFLAGS  ?= $(STD) $(OPT) $(WARNINGS) $(HARDENING) $(CFRAME) $(INCLUDES) $(DEFINES)
 LDFLAGS ?=
 
@@ -442,7 +450,8 @@ from-go: $(FROM_GO_BIN)
 
 # ctgrind: the constant time crypto code under valgrind's memcheck, with the
 # secrets marked undefined so that a branch or an index on one is an error.
-# Needs valgrind and its headers. See tools/ctgrind.c.
+# Needs valgrind and its headers, and a build made with FIPS_SECTIONS=0. See
+# tools/ctgrind.c.
 CTGRIND_BIN := $(BUILD)/tools/ctgrind
 
 $(CTGRIND_BIN): tools/ctgrind.c $(LIB)

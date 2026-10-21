@@ -121,13 +121,15 @@ HashCloner hash_clone(Alloc *a, Hash h, Error *err) {
     if (m == NULL) {
         /* A vtable with no self_type declines to be asserted to, and has no
          * name to give either. */
-        if (t == NULL)
+        if (t == NULL) {
             BURROW_OUT(err, fmt_errorf_v("interface conversion: hash.Hash is not "
                                          "hash.Cloner: missing method Clone"));
-        else
+        } else {
+            Any v = BURROW_ANY(t, h.data);
             BURROW_OUT(err, fmt_errorf_v("interface conversion: %T is not hash.Cloner: "
                                          "missing method Clone",
-                                         BURROW_ANY(t, h.data)));
+                                         v));
+        }
         return out;
     }
     Error e = BURROW_NO_ERROR;

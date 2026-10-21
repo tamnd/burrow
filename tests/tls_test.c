@@ -1907,8 +1907,28 @@ static void must_have_external_network(TestingT *t) {
     need_tcp(t);
 }
 
+/* Not in Go. On macOS, iOS and Windows Go hands a chain with no roots to the
+ * platform to verify, which burrow does not do yet, so there a server's
+ * certificate can only be checked against SSL_CERT_FILE or SSL_CERT_DIR. */
+static void need_system_roots(TestingT *t) {
+#if defined(BURROW_OS_WINDOWS) || defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    bool none = os_getenv(a, BURROW_S("SSL_CERT_FILE")).len == 0 &&
+                os_getenv(a, BURROW_S("SSL_CERT_DIR")).len == 0;
+    arena_free(&ar);
+    if (none)
+        testing_t_skip_v(t, "skipping test: no platform verifier and no "
+                            "SSL_CERT_FILE or SSL_CERT_DIR");
+#else
+    (void)t;
+#endif
+}
+
 static void TestVerifyHostname(TestingT *t) {
     must_have_external_network(t);
+    need_system_roots(t);
 
     Error err = BURROW_NO_ERROR;
     TlsConn *c = tls_dial(heap_allocator(), BURROW_S("tcp"),
@@ -1953,6 +1973,7 @@ static void TestVerifyHostname(TestingT *t) {
 
 static void TestRealResumption(TestingT *t) {
     must_have_external_network(t);
+    need_system_roots(t);
 
     TlsConfig config;
     memset(&config, 0, sizeof config);

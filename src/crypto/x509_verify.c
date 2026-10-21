@@ -289,7 +289,10 @@ bool burrow__x509_cert_pool_is_system(const X509CertPool *s) {
 
 /* ---------------------------------------------------------- system roots */
 
-#if defined(BURROW_OS_LINUX)
+/* Not in Go: a Cosmopolitan binary looks where Linux does, since Linux is
+ * where it mostly runs. Elsewhere none of these is there, apart from
+ * /etc/ssl/cert.pem, which macOS has too. */
+#if defined(BURROW_OS_LINUX) || defined(BURROW_OS_COSMO)
 static const char *const x509_cert_files[] = {
     "/etc/ssl/certs/ca-certificates.crt",                /* Debian/Ubuntu/Gentoo etc. */
     "/etc/pki/tls/certs/ca-bundle.crt",                  /* Fedora/RHEL 6 */

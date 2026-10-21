@@ -338,7 +338,7 @@ void burrow__entropy_sha384(Byte digest[48], const Byte p[1024]) {
 
     Byte padlen[128] = {0};
     padlen[0] = 0x80;
-    entropy_be_put_uint64(padlen + 112 + 8, 1024 * 8);
+    entropy_be_put_uint64(padlen + 112 + 8, (uint64_t)1024 * 8);
     entropy_sha384_block(h, padlen);
 
     entropy_digest_bytes(digest, h);

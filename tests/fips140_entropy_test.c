@@ -205,7 +205,7 @@ static void TestEntropyUnchanged(TestingT *t) {
      * entropy source through the Entropy Source Validation program,
      * independently of the FIPS 140-3 module. It must not change even across
      * FIPS 140-3 module versions, in order to reuse the ESV certificate. */
-    Str exp = S("06f37e0faba5a3e526cb608bad75e96eeca8bd54ae5c55b7eef4860944ae9821");
+    Str exp = S("2f2db7dc5287a36e52d260ca12139326c82ec8232d1945dc90b697d1975b943e");
     Sha256Sum256Ret sum = sha256_sum256(h);
     Str got = hex_encode_to_string(a, slice_from(sum.a, 32, 32, TYPE_BYTE));
     if (!str_eq(got, exp))

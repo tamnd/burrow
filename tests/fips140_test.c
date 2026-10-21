@@ -4,11 +4,10 @@
  *
  * Go's TestWithoutEnforcement runs itself again under GODEBUG=fips140=only
  * and checks that crypto/des is refused outside WithoutEnforcement and allowed
- * inside it. burrow has no FIPS mode, so that setting panics, and what is left
- * to check is that f runs, once, nested or not, and that enforcement is off
- * before, inside and after. The goroutine inheritance subtest checks the same
- * from a goroutine started inside f. TestGODEBUG is burrow's own: it goes
- * through the settings that are accepted and the ones that panic.
+ * inside it. burrow's crypto/des does not look at fips140=only yet, so here the
+ * test asks fips140_enforced, which is what crypto/des asks in Go. TestGODEBUG
+ * is burrow's own: it goes through the settings that are accepted and the ones
+ * that panic.
  *
  * Copyright 2025 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -16,11 +15,10 @@
  * in the LICENSE file. */
 
 #include "check.h"
+#include "fipstest.h"
 
 #include "burrow/burrow.h"
 #include "burrow/crypto/fips140.h"
-
-#include "../src/crypto/fips140_internal.h"
 
 #include <string.h>
 
@@ -44,11 +42,11 @@ static void TestImmutableGODEBUG(TestingT *t) {
         (void)os_unsetenv(BURROW_S("GODEBUG"));
 }
 
-static Str panic_message(const char *godebug) {
+static Str panic_message(const char *godebug, volatile Fips140Setting *got) {
     static char msg[128];
     volatile Int n = -1;
     BURROW_TRY {
-        burrow__fips140_check(godebug);
+        *got = burrow__fips140_setting(godebug);
     }
     BURROW_CATCH(r) {
         Str s = panic_text(r);
@@ -64,31 +62,35 @@ static Str panic_message(const char *godebug) {
 static void TestGODEBUG(TestingT *t) {
     static const struct {
         const char *godebug;
-        const char *want;
+        Fips140Setting setting;
+        const char *panic;
     } tests[] = {
-        {NULL, "no panic"},
-        {"", "no panic"},
-        {"fips140=", "no panic"},
-        {"fips140=off", "no panic"},
-        {"x509sha1=1,fips140=off", "no panic"},
-        {"fips140=on,fips140=off", "no panic"},
-        {"xfips140=on", "no panic"},
-        {"fips140=on", "fips140: FIPS 140-3 mode is not supported by burrow"},
-        {"fips140=only", "fips140: FIPS 140-3 mode is not supported by burrow"},
-        {"fips140=debug", "fips140: FIPS 140-3 mode is not supported by burrow"},
-        {"fips140=off,fips140=on",
-         "fips140: FIPS 140-3 mode is not supported by burrow"},
-        {"fips140=On", "fips140: unknown GODEBUG setting fips140=On"},
-        {"fips140=1,x=2", "fips140: unknown GODEBUG setting fips140=1"},
+        {NULL, FIPS140_OFF, "no panic"},
+        {"", FIPS140_OFF, "no panic"},
+        {"fips140=", FIPS140_OFF, "no panic"},
+        {"fips140=off", FIPS140_OFF, "no panic"},
+        {"x509sha1=1,fips140=off", FIPS140_OFF, "no panic"},
+        {"fips140=on,fips140=off", FIPS140_OFF, "no panic"},
+        {"xfips140=on", FIPS140_OFF, "no panic"},
+        {"fips140=on", FIPS140_ON, "no panic"},
+        {"fips140=only", FIPS140_ONLY, "no panic"},
+        {"fips140=debug", FIPS140_DEBUG, "no panic"},
+        {"fips140=off,fips140=on", FIPS140_ON, "no panic"},
+        {"x509sha1=1,fips140=only,y=2", FIPS140_ONLY, "no panic"},
+        {"fips140=On", FIPS140_OFF, "fips140: unknown GODEBUG setting fips140=On"},
+        {"fips140=1,x=2", FIPS140_OFF, "fips140: unknown GODEBUG setting fips140=1"},
     };
     for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
-        Str got = panic_message(tests[i].godebug);
-        Str want = str_from_cstr(tests[i].want);
-        if (!str_eq(got, want))
-            testing_t_errorf_v(
-                t, "GODEBUG=%s: got %q, want %q",
-                str_from_cstr(tests[i].godebug == NULL ? "(unset)" : tests[i].godebug),
-                got, want);
+        Str godebug =
+            str_from_cstr(tests[i].godebug == NULL ? "(unset)" : tests[i].godebug);
+        volatile Fips140Setting got = FIPS140_OFF;
+        Str msg = panic_message(tests[i].godebug, &got);
+        Str want = str_from_cstr(tests[i].panic);
+        if (!str_eq(msg, want))
+            testing_t_errorf_v(t, "GODEBUG=%s: got %q, want %q", godebug, msg, want);
+        else if (got != tests[i].setting)
+            testing_t_errorf_v(t, "GODEBUG=%s: got setting %d, want %d", godebug,
+                               (int)got, (int)tests[i].setting);
     }
 }
 
@@ -98,59 +100,47 @@ static void TestVersion(TestingT *t) {
         testing_t_errorf_v(t, "Version() = %q, want %q", v, BURROW_S("latest"));
 }
 
-typedef struct {
-    TestingT *t;
-    Int calls;
-} Bypass;
-
-static void expect_not_enforced(TestingT *t, const char *why) {
-    if (fips140_enforced())
-        testing_t_fatalf_v(t, "%s: enforcement is on", str_from_cstr(why));
+/* Not in Go: isAllowed is the line that sets result, and asks fips140_enforced
+ * instead of crypto/des. */
+static void expect_allowed(TestingT *t, const char *why, bool expected) {
+    bool result = !fips140_enforced();
+    if (result != expected)
+        testing_t_fatalf_v(t, "%s: expected: %t, got: %t", str_from_cstr(why), expected,
+                           result);
 }
 
-static void bypass_inner(void *env) {
-    Bypass *b = env;
-    b->calls++;
-    expect_not_enforced(b->t, "inside nested WithoutEnforcement");
-}
-
-static void bypass_outer(void *env) {
-    Bypass *b = env;
-    b->calls++;
-    fips140_without_enforcement(BURROW_FN(Func, bypass_inner, b));
-    expect_not_enforced(b->t, "inside nested WithoutEnforcement");
-}
-
-static void bypass_once(void *env) {
-    Bypass *b = env;
-    b->calls++;
-    expect_not_enforced(b->t, "inside WithoutEnforcement");
+static void disabled_inside(void *env) {
+    expect_allowed(env, "inside WithoutEnforcement", true);
 }
 
 static void without_disabled(void *env, TestingT *t) {
     (void)env;
-    Bypass b = {t, 0};
-    expect_not_enforced(t, "before enforcement disabled");
-    fips140_without_enforcement(BURROW_FN(Func, bypass_once, &b));
-    expect_not_enforced(t, "after WithoutEnforcement");
-    if (b.calls != 1)
-        testing_t_errorf_v(t, "f ran %d times, want 1", b.calls);
+    expect_allowed(t, "before enforcement disabled", false);
+    fips140_without_enforcement(BURROW_FN(Func, disabled_inside, t));
+    /* make sure that bypass doesn't live on after returning */
+    expect_allowed(t, "after WithoutEnforcement", false);
+}
+
+static void nested_inner(void *env) {
+    expect_allowed(env, "inside nested WithoutEnforcement", true);
+}
+
+static void nested_outer(void *env) {
+    fips140_without_enforcement(BURROW_FN(Func, nested_inner, env));
+    expect_allowed(env, "inside nested WithoutEnforcement", true);
 }
 
 static void without_nested(void *env, TestingT *t) {
     (void)env;
-    Bypass b = {t, 0};
-    expect_not_enforced(t, "before enforcement bypass");
-    fips140_without_enforcement(BURROW_FN(Func, bypass_outer, &b));
-    expect_not_enforced(t, "after enforcement bypass");
-    if (b.calls != 2)
-        testing_t_errorf_v(t, "f ran %d times, want 2", b.calls);
+    expect_allowed(t, "before enforcement bypass", false);
+    fips140_without_enforcement(BURROW_FN(Func, nested_outer, t));
+    expect_allowed(t, "after enforcement bypass", false);
 }
 
 static void inherit_send(void *env) {
     Chan *ch = env;
-    bool enforced = fips140_enforced();
-    chan_send(ch, &enforced);
+    bool allowed = !fips140_enforced();
+    chan_send(ch, &allowed);
 }
 
 static void inherit_start(void *env) {
@@ -160,22 +150,32 @@ static void inherit_start(void *env) {
 static void without_goroutine(void *env, TestingT *t) {
     (void)env;
     Chan *ch = chan_make(heap_allocator(), TYPE_BOOL, 2);
-    expect_not_enforced(t, "before enforcement bypass");
+    expect_allowed(t, "before enforcement bypass", false);
     fips140_without_enforcement(BURROW_FN(Func, inherit_start, ch));
-    bool enforced = true;
-    chan_recv(ch, &enforced);
-    if (enforced)
-        testing_t_fatalf_v(t,
-                           "goroutine started inside WithoutEnforcement is enforced");
+    bool allowed = false;
+    chan_recv(ch, &allowed);
+    if (!allowed) {
+        chan_free(ch);
+        testing_t_fatalf_v(t, "goroutine didn't inherit enforcement bypass");
+    }
     go(BURROW_FN(Func, inherit_send, ch));
-    enforced = true;
-    chan_recv(ch, &enforced);
+    allowed = true;
+    chan_recv(ch, &allowed);
     chan_free(ch);
-    if (enforced)
-        testing_t_fatalf_v(t, "goroutine started after WithoutEnforcement is enforced");
+    if (allowed)
+        testing_t_fatalf_v(
+            t, "goroutine inherited bypass after WithoutEnforcement return");
 }
 
 static void TestWithoutEnforcement(TestingT *t) {
+    if (!fips140_enforced()) {
+        Arena ar;
+        arena_init(&ar, NULL, 0);
+        fipstest_rerun(t, arena_allocator(&ar), "only", NULL);
+        arena_free(&ar);
+        return;
+    }
+
     testing_t_run(t, BURROW_S("Disabled"),
                   BURROW_FN(TestingTFunc, without_disabled, NULL));
     testing_t_run(t, BURROW_S("Nested"), BURROW_FN(TestingTFunc, without_nested, NULL));

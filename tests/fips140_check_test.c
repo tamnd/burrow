@@ -1,18 +1,13 @@
 /* Derived from Go's src/crypto/internal/fips140test/check_test.go.
  * Go source: go1.27.1.
  *
- * Go's tests run the program again with GODEBUG=fips140=on, which runs the
- * check when the program starts. burrow cannot turn FIPS mode on yet, so the
- * program here runs again with BURROW_FIPS140_CHECK=1 in its environment
- * instead, and TestIntegrityCheck runs the check and panics when it fails, the
- * way Go's init does.
- *
  * Go's linker writes the checksum into every program. Here that is burrow-gen
  * fips, which needs Python, and building the tests does not. So when the
  * program has no checksum, TestIntegrityCheck writes the right one into a copy
- * of itself and runs that, the way TestIntegrityCheckFailure writes a wrong one.
- * make fips-check runs burrow-gen fips on this program first, so that there
- * TestIntegrityCheck checks the checksum burrow-gen wrote.
+ * of itself and runs that with GODEBUG=fips140=on, the way
+ * TestIntegrityCheckFailure writes a wrong one. make fips-check runs burrow-gen
+ * fips on this program first, so that there TestIntegrityCheck checks the
+ * checksum burrow-gen wrote.
  *
  * Copyright 2024 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -32,71 +27,28 @@
 #include <stdint.h>
 #include <string.h>
 
-/* Writes a copy of this program with sum in place of its checksum, runs
- * TestIntegrityCheck in it with BURROW_FIPS140_CHECK=1, and returns what it
- * printed. False when that could not be done, after failing the test. */
-static bool run_with_sum(TestingT *t, Alloc *a, const Byte sum[32], Slice *out,
-                         Error *runerr) {
-    Str dir;
-    Str bin_path = fipstest_copy(t, a, sum, &dir);
-    if (bin_path.len == 0) {
-        if (dir.len > 0)
-            os_remove_all(dir);
-        return false;
-    }
-
-    testing_t_logf_v(t, "running modified binary...");
-    ExecCmd *cmd = exec_command_v(a, bin_path, 2, BURROW_S("-test.v"),
-                                  BURROW_S("-test.run=^TestIntegrityCheck$"));
-    Slice env = os_environ(a);
-    cmd->env = BURROW_APPEND(Str, a, env, BURROW_S("BURROW_FIPS140_CHECK=1"));
-    *out = exec_cmd_combined_output(cmd, a, runerr);
-    Str printed = {(const Byte *)out->p, out->len};
-    testing_t_logf_v(t, "running with BURROW_FIPS140_CHECK=1:\n%s", printed);
-    os_remove_all(dir);
-    return true;
-}
-
 static void TestIntegrityCheck(TestingT *t) {
-    MUST_SUPPORT_FIPS140(t);
-    const char *why = burrow__fips140_verify();
-    if (why == NULL) {
+    if (burrow__fips140_verified()) {
         testing_t_logf_v(t, "verified");
         return;
     }
 
+    if (fipstest_setting() == FIPS140_ON)
+        testing_t_fatalf_v(t, "GODEBUG=fips140=on but verification did not run");
+
     Arena ar;
     arena_init(&ar, NULL, 0);
-    Alloc *a = arena_allocator(&ar);
-    bool found = false;
-    os_lookup_env(a, BURROW_S("BURROW_FIPS140_CHECK"), &found);
-    if (found)
-        panic_str(fmt_sprintf_v(a, "fips140: %s", why));
-    if (strcmp(why, "no verification checksum found") != 0) {
-        arena_free(&ar);
-        testing_t_fatalf_v(t, "fips140: %s", why);
-    }
-
-    /* Not in Go: no checksum, so run a copy of this program with the right one
-     * written in, which is what Go's linker would have done. */
-    Byte sum[32];
-    if (!burrow__fips140_module_sum(sum)) {
-        arena_free(&ar);
-        testing_t_fatalf_v(t, "computing the checksum failed");
-    }
     Slice out = {0};
-    Error err = BURROW_NO_ERROR;
-    if (run_with_sum(t, a, sum, &out, &err)) {
-        if (BURROW_FAILED(err))
-            testing_t_errorf_v(t, "binary with the checksum written in failed: %s",
-                               error_text(err));
-        if (!fipstest_contains(out, "verified"))
-            testing_t_errorf_v(t, "binary with the checksum written in did not verify");
-    }
+    fipstest_rerun(t, arena_allocator(&ar), "on", &out);
+    /* Not in Go: check that the program that ran again got as far as the
+     * check. */
+    if (out.len > 0 && !fipstest_contains(out, "verified"))
+        testing_t_errorf_v(t, "fips140=on subprocess did not verify");
     arena_free(&ar);
 }
 
 static void TestIntegrityCheckFailure(TestingT *t) {
+    module_status(t);
     MUST_SUPPORT_FIPS140(t);
 
     Arena ar;
@@ -106,9 +58,17 @@ static void TestIntegrityCheckFailure(TestingT *t) {
     /* Replace the expected module checksum with a different value. */
     Byte sum[32];
     memset(sum, 'X', sizeof sum);
-    Slice out = {0};
-    Error err = BURROW_NO_ERROR;
-    if (run_with_sum(t, a, sum, &out, &err)) {
+    Str dir;
+    Str bin_path = fipstest_copy(t, a, sum, &dir);
+    if (bin_path.len > 0) {
+        testing_t_logf_v(t, "running modified binary...");
+        ExecCmd *cmd = exec_command_v(a, bin_path, 2, BURROW_S("-test.v"),
+                                      BURROW_S("-test.run=^TestIntegrityCheck$"));
+        cmd->env = BURROW_APPEND(Str, a, os_environ(a), BURROW_S("GODEBUG=fips140=on"));
+        Error err = BURROW_NO_ERROR;
+        Slice out = exec_cmd_combined_output(cmd, a, &err);
+        Str printed = {(const Byte *)out.p, out.len};
+        testing_t_logf_v(t, "running with GODEBUG=fips140=on:\n%s", printed);
         if (!BURROW_FAILED(err))
             testing_t_errorf_v(t, "modified binary did not fail as expected");
         if (!fipstest_contains(out, "fips140: verification mismatch"))
@@ -116,6 +76,8 @@ static void TestIntegrityCheckFailure(TestingT *t) {
         if (fipstest_contains(out, "verified"))
             testing_t_errorf_v(t, "modified binary did not exit");
     }
+    if (dir.len > 0)
+        os_remove_all(dir);
     arena_free(&ar);
 }
 

@@ -109,9 +109,43 @@ bool burrow__fips140_module_sum(Byte sum[32]);
  * when there are none. For tests/fips140_check_test.c. */
 void burrow__fips140_sections(const Byte *bounds[4]);
 
-/* Whether FIPS 140-3 mode is on, Go's fips140.Enabled. Nothing turns it on yet
- * but burrow__fips140_force_on, which is for tests. */
+/* Whether FIPS 140-3 mode is on, Go's fips140.Enabled. */
 bool burrow__fips140_enabled(void);
+
+/* Not in Go: what the init functions of Go's module do, once. Go runs them
+ * before main. burrow has no init functions, so this runs the first time the
+ * module is used: when something records to the service indicator, runs a
+ * self-test or asks whether the mode is on. It reads fips140 from GODEBUG,
+ * panics for a value Go does not accept, and for on, only and debug turns the
+ * mode on. Then, like Go's init functions, it checks that the mode is
+ * supported, runs the integrity check, and runs the self-tests Go runs at init,
+ * panicking or ending the program when one fails. A panic here is also what
+ * every later use of the module panics with. Other goroutines that use the
+ * module meanwhile wait for it, and the module's own uses of itself during it
+ * go ahead. */
+void burrow__fips140_init(void);
+
+/* What GODEBUG's fips140 asks for. */
+typedef enum {
+    FIPS140_OFF,
+    FIPS140_ON,
+    FIPS140_ONLY,
+    FIPS140_DEBUG,
+} Fips140Setting;
+
+/* Not in Go: the fips140 setting in godebug, a GODEBUG value such as
+ * "fips140=on,x=1" or NULL for none, the last one when it is there twice. Off
+ * for none and for empty. Panics with Go's message for a value Go does not
+ * accept. The switch in the init function of Go's crypto/internal/fips140, for
+ * tests, which cannot change the environment of a process that has read it. */
+Fips140Setting burrow__fips140_setting(const char *godebug);
+
+/* Not in Go: the setting the module started with, which crypto/fips140 reads
+ * from GODEBUG itself in Go. */
+Fips140Setting burrow__fips140_mode(void);
+
+/* Whether the integrity check has run and passed, Go's check.Verified. */
+bool burrow__fips140_verified(void);
 
 /* A self-test, Go's func() error, with arg, what was passed along with it. */
 typedef Error (*FipsSelfTest)(void *arg);
@@ -174,16 +208,8 @@ bool burrow__fips140_approved_hash(Hash h);
  * Does nothing to a hash that is not an HMAC. */
 void burrow__hmac_mark_as_used_in_kdf(Hash h);
 
-/* Not in Go: turns FIPS 140-3 mode on, as GODEBUG=fips140=on does in Go, or
- * fips140=debug with debug true. Like Go's init functions it then checks that
- * the mode is supported, runs the integrity check, and runs the self-tests Go
- * runs at init, panicking or ending the program when one fails. Once only, and
- * before anything else uses the module: it is for tests, which run a copy of
- * themselves for it. */
-void burrow__fips140_force_on(bool debug);
-
 /* The self-tests Go runs from the init functions of its packages, each in the
- * file of its package, as in Go, for burrow__fips140_force_on. */
+ * file of its package, as in Go, for burrow__fips140_init. */
 Error burrow__sha256_cast(void *arg);
 Error burrow__sha512_cast(void *arg);
 Error burrow__sha3_cast(void *arg);

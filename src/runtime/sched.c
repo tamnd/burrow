@@ -294,6 +294,31 @@ void burrow__fips_set_indicator(uint8_t indicator) {
         thread_fips_indicator = indicator;
 }
 
+static BURROW_THREAD_LOCAL bool thread_fips_only_bypass;
+
+static void set_fips_only_bypass(bool v) {
+    burrow__M *m = getm();
+    if (m != NULL && m->curg != NULL)
+        m->curg->fips_only_bypass = v;
+    else
+        thread_fips_only_bypass = v;
+}
+
+void burrow__fips140_set_bypass(void) {
+    set_fips_only_bypass(true);
+}
+
+void burrow__fips140_unset_bypass(void) {
+    set_fips_only_bypass(false);
+}
+
+bool burrow__fips140_is_bypassed(void) {
+    burrow__M *m = getm();
+    if (m != NULL && m->curg != NULL)
+        return m->curg->fips_only_bypass;
+    return thread_fips_only_bypass;
+}
+
 /* Go's dit_setEnabled and dit_setDisabled. A thread that is not running a
  * goroutine has nothing to remember the mode on but the bit itself. */
 bool burrow__dit_set_enabled(void) {
@@ -1176,6 +1201,7 @@ static burrow__G *goexit0(burrow__M *m, burrow__G *gp) {
         burrow__trace_go_destroy(&tl, gp);
     gp->entry = NULL;
     gp->arg = NULL;
+    gp->fips_only_bypass = false;
     count_goroutine(m->p, -1);
 
     /* A coroutine that has finished gives its thread to whoever is waiting in
@@ -2430,6 +2456,7 @@ static bool go_start(Func fn, size_t stack_bytes, burrow__Bubble *bubble, bool b
     /* Go leaves a reused G with the indicator its last goroutine had, which
      * is allowed, since the indicator means nothing until it is reset. */
     newg->fips_indicator = 0;
+    newg->fips_only_bypass = burrow__fips140_is_bypassed();
     burrow__atomic_store_release_ptr(&newg->startpc, (void *)(uintptr_t)fn.f);
     burrow__atomic_store_release_ptr(
         &newg->labels, m != NULL && m->curg != NULL ? m->curg->labels : NULL);
@@ -2539,6 +2566,7 @@ bool burrow__newcoro(burrow__Coro *c, void (*f)(burrow__Coro *c, void *env),
     newg->bubble = m->curg->bubble;
     newg->dit_wanted = m->curg->dit_wanted;
     newg->fips_indicator = 0;
+    newg->fips_only_bypass = m->curg->fips_only_bypass;
     burrow__atomic_store_release_ptr(&newg->startpc, (void *)(uintptr_t)f);
     burrow__atomic_store_release_ptr(&newg->labels, m->curg->labels);
     burrow__atomic_store_release_u32(&newg->bubbleblocked, 0);
@@ -2945,6 +2973,7 @@ void runtime_main(Func fn) {
     mg->arg = fn.env;
     mg->dit_wanted = false;
     mg->fips_indicator = 0;
+    mg->fips_only_bypass = false;
     mg->labels = NULL;
 
     if (!make_context(mg, BURROW_GOROUTINE_STACK))

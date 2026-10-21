@@ -21,9 +21,8 @@
  * because a CryptoSigner has one, and is ignored.
  *
  * Go keeps the key it unpacked from the last private key it saw, so that signing
- * many messages with one key does not hash the seed every time, and it runs the
- * self tests FIPS 140 asks for. Neither is here: every call hashes the seed,
- * which costs one SHA-512 of 32 bytes, and there is no FIPS mode to test for.
+ * many messages with one key does not hash the seed every time. That is not
+ * here: every call hashes the seed, which costs one SHA-512 of 32 bytes.
  *
  * Copyright 2016 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.

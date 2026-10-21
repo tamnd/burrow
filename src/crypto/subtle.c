@@ -6,8 +6,10 @@
  * can prove the two do the same thing. So the comparisons are arithmetic on
  * the bits, and every mask goes through ct_hide, an empty asm statement that
  * says the value could have become anything, so that the optimiser cannot
- * reason past it. MSVC has no such statement and gets its optimiser turned
- * off for this file instead, which is slower and is what it takes.
+ * reason past it. MSVC has no such statement. There ct_hide reads the value
+ * back through a volatile, which the compiler has to load and cannot see
+ * into, and the functions that use it are compiled with the optimiser off,
+ * which is slower and is what it takes.
  *
  * Derived from Go's src/crypto/subtle, src/crypto/internal/constanttime,
  * src/crypto/internal/fips140/subtle and src/crypto/internal/fips140/alias.
@@ -33,6 +35,9 @@
 static uint64_t ct_hide(uint64_t x) {
 #if defined(__GNUC__) || defined(__clang__)
     __asm__("" : "+r"(x));
+#else
+    volatile uint64_t hidden = x;
+    x = hidden;
 #endif
     return x;
 }

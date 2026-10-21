@@ -35,6 +35,7 @@
 #include "burrow/crypto/subtle.h"
 #include "burrow/math.h"
 #include "burrow/mem/arena.h"
+#include "burrow/mem/heap.h"
 
 #include "../src/crypto/aes_internal.h"
 #include "../src/crypto/bigmod.h"
@@ -250,7 +251,7 @@ static void setup_aes(Byte *fixed) {
     Error err = {0};
     random_bytes(key, sizeof key);
     burrow__aes_set_portable(true);
-    aes_block = aes_new_cipher(NULL, bytes(key, 16), &err);
+    aes_block = aes_new_cipher(heap_allocator(), bytes(key, 16), &err);
     must("crypto/aes", err);
     setup_16(fixed);
 }
@@ -278,8 +279,8 @@ static const EcdhPublicKey *x25519_peer, *p256_peer;
 
 static void setup_x25519(Byte *fixed) {
     Error err = {0};
-    EcdhPrivateKey *k =
-        ecdh_curve_generate_key(ecdh_x25519(), NULL, crypto_rand_reader, &err);
+    EcdhPrivateKey *k = ecdh_curve_generate_key(ecdh_x25519(), heap_allocator(),
+                                                crypto_rand_reader, &err);
     must("crypto/ecdh X25519", err);
     x25519_peer = ecdh_private_key_public_key(k);
     setup_32(fixed);
@@ -299,8 +300,8 @@ static void run_x25519(Byte *in) {
 
 static void setup_p256(Byte *fixed) {
     Error err = {0};
-    EcdhPrivateKey *k =
-        ecdh_curve_generate_key(ecdh_p256(), NULL, crypto_rand_reader, &err);
+    EcdhPrivateKey *k = ecdh_curve_generate_key(ecdh_p256(), heap_allocator(),
+                                                crypto_rand_reader, &err);
     must("crypto/ecdh P-256", err);
     p256_peer = ecdh_private_key_public_key(k);
     setup_32(fixed);
@@ -327,7 +328,8 @@ static void setup_mlkem(Byte *fixed) {
     Byte seed[MLKEM_SEED_SIZE];
     Error err = {0};
     random_bytes(seed, sizeof seed);
-    mlkem_dk = mlkem_new_decapsulation_key768(NULL, bytes(seed, sizeof seed), &err);
+    mlkem_dk = mlkem_new_decapsulation_key768(heap_allocator(),
+                                              bytes(seed, sizeof seed), &err);
     must("crypto/mlkem", err);
     const MlkemEncapsulationKey768 *ek =
         mlkem_decapsulation_key768_encapsulation_key(mlkem_dk);
@@ -354,11 +356,11 @@ static void setup_exp(Byte *fixed) {
     random_bytes(mb, sizeof mb);
     mb[0] |= 0x80;
     mb[255] |= 1;
-    exp_m = bigmod_new_modulus(NULL, bytes(mb, 256), &err);
+    exp_m = bigmod_new_modulus(heap_allocator(), bytes(mb, 256), &err);
     must("crypto/internal/fips140/bigmod", err);
     random_bytes(xb, sizeof xb);
     xb[0] &= 0x7f;
-    bigmod_nat_init(&exp_x, NULL);
+    bigmod_nat_init(&exp_x, heap_allocator());
     bigmod_nat_set_bytes(&exp_x, bytes(xb, 256), exp_m, &err);
     must("crypto/internal/fips140/bigmod", err);
     setup_fixed(fixed, 256);

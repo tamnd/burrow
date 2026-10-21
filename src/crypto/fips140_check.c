@@ -185,6 +185,14 @@ CRYPTO_FIPS_TEXT void burrow__fips140_sections(const Byte *bounds[4]) {
 
 #endif
 
+/* Zeroes the n bytes at p through a volatile pointer, so that the compiler
+ * cannot leave it out for being the last store to a local, as it can a memset. */
+CRYPTO_FIPS_TEXT static void fips_clear(Byte *p, size_t n) {
+    volatile Byte *v = p;
+    for (size_t i = 0; i < n; i++)
+        v[i] = 0;
+}
+
 /* Writes the length of the n bytes at p, as eight big endian bytes, and then
  * the bytes. */
 CRYPTO_FIPS_TEXT static void fips_write_section(Hash h, const Byte *p, const Byte *end,
@@ -220,7 +228,7 @@ CRYPTO_FIPS_TEXT bool burrow__fips140_module_sum(Byte sum[32]) {
     fips_write_section(h, b[2], b[3], nbuf);
     Slice got = hash_sum(arena_allocator(&ar), h, slice_from(sum, 0, 32, TYPE_BYTE));
     bool ok = got.len == 32 && got.p == sum;
-    memset(nbuf, 0, sizeof nbuf);
+    fips_clear(nbuf, sizeof nbuf);
     hash_reset(h);
     arena_free(&ar);
     return ok;
@@ -249,8 +257,8 @@ CRYPTO_FIPS_TEXT const char *burrow__fips140_verify(void) {
     /* "The temporary value(s) generated during the integrity test of the
      * module's software or firmware shall [05.10] be zeroised from the module
      * upon completion of the integrity test" */
-    memset(sum, 0, sizeof sum);
-    memset(want, 0, sizeof want);
+    fips_clear(sum, sizeof sum);
+    fips_clear(want, sizeof want);
     return match ? NULL : "verification mismatch";
 }
 

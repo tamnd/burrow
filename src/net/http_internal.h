@@ -543,6 +543,10 @@ void burrow__http_server_handler_serve(HttpServer *srv, HttpResponseWriter w,
 bool burrow__http_server_do_keep_alives(HttpServer *srv);
 Int burrow__http_server_max_header_value_count(HttpServer *srv);
 
+/* export_test.go's SetTestHookServerServe, which sets testHookServerServe. */
+BURROW_FUNC(burrow__HttpTestHookServerServe, void, HttpServer *s, NetListener l);
+void burrow__http_set_test_hook_server_serve(burrow__HttpTestHookServerServe fn);
+
 /* net/http/internal/testcert's LocalhostCert and LocalhostKey, in
  * http_testcert.c. */
 extern const Str burrow__http_testcert_localhost_cert;

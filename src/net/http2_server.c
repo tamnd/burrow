@@ -22,6 +22,7 @@
  * in the LICENSE file. */
 
 #include "http2.h"
+#include "http2_ciphers.h"
 #include "http_internal.h"
 
 #include "../xnet/hpack.h"
@@ -32,6 +33,7 @@
 #include "burrow/chan.h"
 #include "burrow/context.h"
 #include "burrow/crypto/rand.h"
+#include "burrow/crypto/tls.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
 #include "burrow/io.h"
@@ -95,6 +97,11 @@ BURROW_SENTINEL_ERROR(burrow__http2_err_preface_timeout,
 BURROW_SENTINEL_ERROR(burrow__http2_err_handler_panicked, "http2: handler panicked");
 BURROW_SENTINEL_ERROR(burrow__http2_err_handler_wrote_too_much,
                       "http2: handler wrote more than declared Content-Length");
+BURROW_SENTINEL_ERROR(
+    burrow__http2_err_missing_required_cipher,
+    "http2: TLSConfig.CipherSuites is missing an HTTP/2-required AES_128_GCM_SHA256 "
+    "cipher (need at least one of TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 or "
+    "TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256)");
 
 /* ---------------------------------------------------------------- config */
 
@@ -109,6 +116,7 @@ typedef struct h2s_Config {
     Duration send_ping_timeout;
     Duration ping_timeout;
     Duration write_byte_timeout;
+    bool permit_prohibited_cipher_suites;
     HttpCountErrorFunc count_error;
 } h2s_Config;
 
@@ -135,6 +143,8 @@ static h2s_Config h2s_config_from_server(const HttpServer *s) {
         conf.send_ping_timeout = h2->send_ping_timeout;
         conf.ping_timeout = h2->ping_timeout;
         conf.write_byte_timeout = h2->write_byte_timeout;
+        if (h2->permit_prohibited_cipher_suites)
+            conf.permit_prohibited_cipher_suites = true;
         conf.count_error = h2->count_error;
     }
     h2s_set_default(&conf.max_concurrent_streams, 1, INT32_MAX,
@@ -332,6 +342,8 @@ struct burrow__Http2ServeConn {
     Alloc *a;
     NetConn conn;
     Str remote_addr;
+    TlsConnectionState tls_state; /* shared by all handlers, like net/http */
+    bool has_tls_state;
     Context base_ctx;
     ContextCancelFunc cancel_ctx;
     h2s_Config conf;
@@ -2176,6 +2188,8 @@ static HttpRequest *h2s_new_writer_and_request(h2s_Conn *sc, h2s_Stream *st,
     req->method = method;
     req->url = u;
     req->remote_addr = str_clone(ra, sc->remote_addr);
+    if (sc->has_tls_state && str_eq(scheme, BURROW_S("https")))
+        req->tls = &sc->tls_state; /* nil if not scheme https */
     req->header = header;
     req->request_uri = request_uri;
     req->proto = BURROW_S("HTTP/2.0");
@@ -3722,6 +3736,20 @@ static void h2s_conn_free(h2s_Conn *sc) {
     mem_free(a, sc, sizeof *sc, _Alignof(h2s_Conn));
 }
 
+/* rejectConn. Not in Go: it also gives sc back, as serveConn returns next. */
+static void h2s_reject_conn(h2s_Conn *sc, Http2ErrCode err, Str debug) {
+    Byte buf[HTTP2_STRING_MAX];
+    h2s_vlogf(sc, "http2: server rejecting conn: %s, %s",
+              burrow__http2_err_code_string(err, buf), debug);
+    /* ignoring errors. hanging up anyway. */
+    (void)burrow__http2_framer_write_go_away(
+        sc->framer, 0, err,
+        slice_from((void *)(uintptr_t)debug.p, debug.len, debug.len, TYPE_BYTE));
+    (void)h2s_bw_flush(&sc->bw);
+    (void)sc->conn.vt->closer.close(sc->conn.data);
+    h2s_conn_free(sc);
+}
+
 /* The setup in serveConn after the struct, false when memory ran out. */
 static bool h2s_setup(h2s_Conn *sc) {
     Alloc *a = sc->a;
@@ -3837,6 +3865,60 @@ void burrow__http2_serve_conn(HttpServer *srv, Alloc *a, NetConn c, Context ctx,
         return;
     }
 
+    TlsConn *tc = tls_conn_from_net_conn(c);
+    if (tc != NULL) {
+        sc->tls_state = tls_conn_connection_state(tc);
+        sc->has_tls_state = true;
+
+        /* 9.2 Use of TLS Features
+         * An implementation of HTTP/2 over TLS MUST use TLS
+         * 1.2 or higher with the restrictions on feature set
+         * and cipher suite described in this section. Due to
+         * implementation limitations, it might not be
+         * possible to fail TLS negotiation. An endpoint MUST
+         * immediately terminate an HTTP/2 connection that
+         * does not meet the TLS requirements described in
+         * this section with a connection error (Section
+         * 5.4.1) of type INADEQUATE_SECURITY. */
+        if (sc->tls_state.version < TLS_VERSION_TLS12) {
+            h2s_reject_conn(sc, HTTP2_ERR_CODE_INADEQUATE_SECURITY,
+                            BURROW_S("TLS version too low"));
+            return;
+        }
+
+        if (sc->tls_state.server_name.len == 0) {
+            /* Client must use SNI, but we don't enforce that anymore,
+             * since it was causing problems when connecting to bare IP
+             * addresses during development.
+             *
+             * TODO: optionally enforce? Or enforce at the time we receive
+             * a new request, and verify the ServerName matches the :authority?
+             * But that precludes proxy situations, perhaps.
+             *
+             * So for now, do nothing here again. */
+        }
+
+        if (!sc->conf.permit_prohibited_cipher_suites &&
+            burrow__http2_is_bad_cipher(sc->tls_state.cipher_suite)) {
+            /* "Endpoints MAY choose to generate a connection error
+             * (Section 5.4.1) of type INADEQUATE_SECURITY if one of
+             * the prohibited cipher suites are negotiated."
+             *
+             * We choose that. In my opinion, the spec is weak
+             * here. It also says both parties must support at least
+             * TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 so there's no
+             * excuses here. If we really must, we could allow an
+             * "AllowInsecureWeakCiphers" option on the server later.
+             * Let's see how it plays out first. */
+            char debug[48];
+            int n = snprintf(debug, sizeof debug, "Prohibited TLS 1.2 Cipher Suite: %x",
+                             (unsigned)sc->tls_state.cipher_suite);
+            h2s_reject_conn(sc, HTTP2_ERR_CODE_INADEQUATE_SECURITY,
+                            (Str){(const Byte *)debug, (Int)n});
+            return;
+        }
+    }
+
     h2s_register(sc);
     h2s_serve(sc);
 
@@ -3867,9 +3949,37 @@ static void h2s_graceful_shutdown(void *env) {
     sync_mutex_unlock(&s->h2_mu);
 }
 
-/* configureHTTP2, without the TLS parts. False when the shutdown hook could
- * not be added. */
-bool burrow__http2_configure_server(HttpServer *s) {
+/* configureHTTP2's h2srv.Configure and RegisterOnShutdown. */
+Error burrow__http2_configure_server(HttpServer *s, const TlsConfig *tcfg) {
+    if (tcfg->cipher_suites.p != NULL && tcfg->min_version < TLS_VERSION_TLS13) {
+        /* If they already provided a TLS 1.0–1.2 CipherSuite list, return an
+         * error if it is missing ECDHE_RSA_WITH_AES_128_GCM_SHA256 or
+         * ECDHE_ECDSA_WITH_AES_128_GCM_SHA256. */
+        bool have_required = false;
+        const uint16_t *cs = (const uint16_t *)tcfg->cipher_suites.p;
+        for (Int i = 0; i < tcfg->cipher_suites.len; i++) {
+            switch (cs[i]) {
+            case TLS_TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256:
+            /* Alternative MTI cipher to not discourage ECDSA-only servers.
+             * See http://golang.org/cl/30721 for further information. */
+            case TLS_TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256:
+                have_required = true;
+                break;
+            default:
+                break;
+            }
+        }
+        if (!have_required)
+            return burrow__http2_err_missing_required_cipher;
+    }
+
+    /* Note: not setting MinVersion to tls.VersionTLS12,
+     * as we don't want to interfere with HTTP/1.1 traffic
+     * on the user's server. We enforce TLS 1.2 later once
+     * we accept a connection. Ideally this should be done
+     * during next-proto selection, but using TLS <1.2 with
+     * HTTP/2 is still the client's bug. */
+
     sync_mutex_lock(&s->h2_mu);
     bool ok = true;
     if (!s->h2_hooked) {
@@ -3880,7 +3990,7 @@ bool burrow__http2_configure_server(HttpServer *s) {
         s->h2_hooked = ok;
     }
     sync_mutex_unlock(&s->h2_mu);
-    return ok;
+    return ok ? BURROW_NO_ERROR : burrow_err_out_of_memory;
 }
 
 bool burrow__http2_server_configured(HttpServer *s) {

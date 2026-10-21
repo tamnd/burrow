@@ -17,6 +17,7 @@
 #include "burrow/chan.h"
 #include "burrow/context.h"
 #include "burrow/core.h"
+#include "burrow/crypto/tls.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
 #include "burrow/func.h"
@@ -81,6 +82,25 @@ static const Type sv_server_desc = {
 };
 
 const Type *const TYPE_HTTP_SERVER = &sv_server_desc;
+
+static const Type sv_tls_next_proto_func_desc = {
+    {(const Byte *)"func(*Server, *tls.Conn, Handler)", 33},
+    {(const Byte *)"net/http", 8},
+    KIND_FUNC,
+    (uint32_t)sizeof(HttpTLSNextProtoFunc),
+    (uint16_t)_Alignof(HttpTLSNextProtoFunc),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0x68746e70U, /* "htnp" */
+    NULL,
+};
+
+const Type *const TYPE_HTTP_TLS_NEXT_PROTO_FUNC = &sv_tls_next_proto_func_desc;
 
 static const Type sv_max_bytes_error_desc = {
     {(const Byte *)"MaxBytesError", 13},
@@ -212,6 +232,8 @@ struct burrow__HttpServeConn {
     ContextCancelFunc cancel_ctx;
     NetConn rwc;
     Str remote_addr;
+    TlsConnectionState tls_state; /* when has_tls_state */
+    bool has_tls_state;
     Error werr; /* the first write error */
     sv_ConnReader r;
     BufioReader *bufr;
@@ -238,6 +260,16 @@ struct burrow__HttpServeListener {
 };
 
 typedef struct burrow__HttpServeListener sv_Listener;
+
+/* What ServeTLS made: the clone of TLSConfig, with its NextProtos and the
+ * certificate, which the connections use until the server is freed. */
+struct burrow__HttpServeTLS {
+    Arena arena;
+    TlsConfig *config;
+    struct burrow__HttpServeTLS *next;
+};
+
+typedef struct burrow__HttpServeTLS sv_ServeTLS;
 
 /* chunkWriter, between the response's bufio.Writer and the connection's. It
  * writes the header the first time it is written to, and then the body, in
@@ -404,15 +436,58 @@ static Duration sv_read_header_timeout(const HttpServer *s) {
     return s->read_header_timeout != 0 ? s->read_header_timeout : s->read_timeout;
 }
 
+/* Whether s->tls_next_proto has proto. */
+static bool sv_has_next_proto(const HttpServer *s, Str proto) {
+    return map_get(s->tls_next_proto, &proto) != NULL;
+}
+
 static HttpProtocols sv_protocols(const HttpServer *s) {
-    if (s->protocols != NULL && !burrow__http_protocols_empty(*s->protocols))
-        return *s->protocols;
     HttpProtocols p = {0};
-    http_protocols_set_http1(&p, true);
-    /* GODEBUG http2server=0 is the historic way to turn HTTP/2 off. */
-    if (!burrow__http_godebug_http2server_disabled())
+    if (s->protocols != NULL) {
+        /* Historically, even when Protocols for a Server was set to be empty,
+         * the Server can still run normally with just HTTP/1.
+         * To keep backward-compatibility, the zero value of Protocols is
+         * defined as having only HTTP/1 enabled. */
+        if (burrow__http_protocols_empty(*s->protocols)) {
+            http_protocols_set_http1(&p, true);
+            return p;
+        }
+        return *s->protocols; /* user-configured set */
+    }
+
+    /* The historic way of disabling HTTP/2 is to set TLSNextProto to
+     * a non-nil map with no "h2" entry. */
+    bool has_h2 = sv_has_next_proto(s, BURROW_S("h2"));
+    bool http2_disabled = s->tls_next_proto != NULL && !has_h2;
+
+    /* If GODEBUG=http2server=0, then HTTP/2 is disabled unless
+     * the user has manually added an "h2" entry to TLSNextProto
+     * (probably by using x/net/http2 directly). */
+    if (burrow__http_godebug_http2server_disabled() && !has_h2)
+        http2_disabled = true;
+
+    http_protocols_set_http1(&p, true); /* default always includes HTTP/1 */
+    if (!http2_disabled)
         http_protocols_set_http2(&p, true);
     return p;
+}
+
+/* tlsHandshakeTimeout returns the time limit permitted for the TLS
+ * handshake, or zero for unlimited.
+ *
+ * It returns the minimum of any positive ReadHeaderTimeout,
+ * ReadTimeout, or WriteTimeout. */
+static Duration sv_tls_handshake_timeout(const HttpServer *s) {
+    Duration ret = 0;
+    const Duration vs[] = {s->read_header_timeout, s->read_timeout, s->write_timeout};
+    for (size_t i = 0; i < sizeof vs / sizeof vs[0]; i++) {
+        Duration v = vs[i];
+        if (v <= 0)
+            continue;
+        if (ret == 0 || v < ret)
+            ret = v;
+    }
+    return ret;
 }
 
 /* trackConn. */
@@ -1525,6 +1600,7 @@ static sv_Response *sv_read_request(sv_Conn *c, Context ctx, sv_ReadError *e) {
     }
     req->ctx = w->ctx;
     req->remote_addr = c->remote_addr;
+    req->tls = c->has_tls_state ? &c->tls_state : NULL;
     if (req->body.vt != http_no_body.vt && req->wire != NULL) {
         w->req_body = req->wire;
         burrow__http_body_set_do_early_close(w->req_body, true);
@@ -1725,8 +1801,11 @@ static void sv_conn_close(sv_Conn *c) {
  * the client reads the response before a reset can get to it. */
 static void sv_close_write_and_wait(sv_Conn *c) {
     sv_final_flush(c);
+    TlsConn *tc = tls_conn_from_net_conn(c->rwc);
     NetTCPConn *tcp = net_conn_as_tcp_conn(c->rwc);
-    if (tcp != NULL)
+    if (tc != NULL)
+        (void)tls_conn_close_write(tc);
+    else if (tcp != NULL)
         (void)net_tcp_conn_close_write(tcp);
     time_sleep(SV_RST_AVOIDANCE_DELAY);
 }
@@ -1786,6 +1865,11 @@ static void sv_serve_ctx_unref(sv_ServeCtx *sc) {
 
 /* Frees the NetConn, when its kind is one that is the server's to free. */
 static void sv_free_rwc(NetConn rwc) {
+    TlsConn *tc = tls_conn_from_net_conn(rwc);
+    if (tc != NULL) {
+        tls_conn_free(tc); /* and the connection under it */
+        return;
+    }
     NetTCPConn *tcp = net_conn_as_tcp_conn(rwc);
     if (tcp != NULL) {
         net_tcp_conn_free(tcp);
@@ -1809,8 +1893,19 @@ static bool sv_has_preface(sv_Conn *c, Int n) {
            memcmp(got.p, preface, (size_t)n) == 0;
 }
 
-/* maybeServeUnencryptedHTTP2 and serveHTTP2Conn: true when the connection
- * was an HTTP/2 one and is now done. */
+static Error sv_setup_http2_serve_tls(HttpServer *s);
+
+/* serveHTTP2Conn, with no upgrade request. */
+static void sv_serve_http2_conn(sv_Conn *c, Context ctx, bool saw_client_preface) {
+    HttpServer *s = c->server;
+    (void)sv_setup_http2_serve_tls(s);
+    (void)sv_set_read_deadline(c->rwc, sv_zero_time());
+    (void)sv_set_write_deadline(c->rwc, sv_zero_time());
+    burrow__http2_serve_conn(s, sv_alloc(s), c->rwc, ctx, saw_client_preface);
+}
+
+/* maybeServeUnencryptedHTTP2: true when the connection was an HTTP/2 one and
+ * is now done. */
 static bool sv_maybe_serve_unencrypted_http2(sv_Conn *c) {
     HttpServer *s = c->server;
     if (!burrow__http2_server_configured(s))
@@ -1820,10 +1915,125 @@ static bool sv_maybe_serve_unencrypted_http2(sv_Conn *c) {
     if (!sv_has_preface(c, 24))
         return false;
     sv_set_state(c, HTTP_STATE_ACTIVE, false);
-    (void)sv_set_read_deadline(c->rwc, sv_zero_time());
-    (void)sv_set_write_deadline(c->rwc, sv_zero_time());
-    burrow__http2_serve_conn(s, sv_alloc(s), c->rwc, c->cctx, true);
+    sv_serve_http2_conn(c, c->cctx, true);
     return true;
+}
+
+/* validNextProto reports whether the proto is a valid ALPN protocol name.
+ * Everything is valid except the empty string and built-in protocol types,
+ * so that those can't be overridden with alternate implementations. */
+static bool sv_valid_next_proto(Str proto) {
+    return proto.len != 0 && !str_eq(proto, BURROW_S("http/1.1")) &&
+           !str_eq(proto, BURROW_S("http/1.0"));
+}
+
+/* tlsRecordHeaderLooksLikeHTTP reports whether a TLS record header
+ * looks like it might've been a misdirected plaintext HTTP request. */
+static bool sv_tls_record_header_looks_like_http(const Byte hdr[5]) {
+    static const char *const prefixes[] = {"GET /", "HEAD ", "POST ", "PUT /", "OPTIO"};
+    for (size_t i = 0; i < sizeof prefixes / sizeof prefixes[0]; i++) {
+        if (memcmp(hdr, prefixes[i], 5) == 0)
+            return true;
+    }
+    return false;
+}
+
+/* The failed handshake of conn.serve. */
+static void sv_tls_handshake_failed(sv_Conn *c, Error err) {
+    /* If the handshake failed due to the client not speaking
+     * TLS, assume they're speaking plaintext HTTP and write a
+     * 400 response on the TLS conn's underlying net.Conn. */
+    if (err.vt != NULL && err.vt->self_type == TYPE_TLS_RECORD_HEADER_ERROR) {
+        const TlsRecordHeaderError *re = (const TlsRecordHeaderError *)err.data;
+        if (re->conn.vt != NULL &&
+            sv_tls_record_header_looks_like_http(re->record_header)) {
+            Error werr;
+            (void)io_write_string(
+                net_conn_as_io_writer(re->conn),
+                BURROW_S("HTTP/1.0 400 Bad Request\r\n\r\nClient sent an HTTP request "
+                         "to an HTTPS server.\n"),
+                &werr);
+            (void)re->conn.vt->closer.close(re->conn.data);
+            sv_logf(c->server, "http: TLS handshake error from %s: %v", c->remote_addr,
+                    BURROW_S("client sent an HTTP request to an HTTPS server"));
+            return;
+        }
+    }
+    sv_logf(c->server, "http: TLS handshake error from %s: %v", c->remote_addr, err);
+}
+
+/* initALPNRequest is an HTTP handler that initializes certain
+ * uninitialized fields in its *Request. Such partially-initialized
+ * Requests come from ALPN protocol handlers.
+ *
+ * Not in Go: there is no BaseContext method, since nothing can look for one,
+ * and the connection's state and remote address are the ones conn.serve
+ * already has. */
+typedef struct sv_InitALPNRequest {
+    sv_Conn *c;
+} sv_InitALPNRequest;
+
+static void sv_init_alpn_request_serve(void *self, HttpResponseWriter rw,
+                                       HttpRequest *req) {
+    sv_InitALPNRequest *h = (sv_InitALPNRequest *)self;
+    if (req->tls == NULL)
+        req->tls = &h->c->tls_state;
+    if (req->body.vt == NULL)
+        req->body = http_no_body;
+    if (req->remote_addr.len == 0)
+        req->remote_addr = h->c->remote_addr;
+    sv_server_handler_serve(h->c->server, rw, req);
+}
+
+static const HttpHandlerVT sv_init_alpn_request_vt = {NULL, sv_init_alpn_request_serve};
+
+/* The TLS part of conn.serve: the handshake, and then the connection for
+ * HTTP/2 or the TLSNextProto function its ALPN protocol names. True when the
+ * connection is done with, and false when it goes on to HTTP/1. */
+static bool sv_serve_tls(sv_Conn *c, TlsConn *tc) {
+    HttpServer *s = c->server;
+    Duration tls_to = sv_tls_handshake_timeout(s);
+    if (tls_to > 0) {
+        Time dl = time_add(time_now(), tls_to);
+        (void)sv_set_read_deadline(c->rwc, dl);
+        (void)sv_set_write_deadline(c->rwc, dl);
+    }
+    Error err = tls_conn_handshake_context(tc, c->ctx);
+    if (BURROW_FAILED(err)) {
+        sv_tls_handshake_failed(c, err);
+        return true;
+    }
+    /* Restore Conn-level deadlines. */
+    if (tls_to > 0) {
+        (void)sv_set_read_deadline(c->rwc, sv_zero_time());
+        (void)sv_set_write_deadline(c->rwc, sv_zero_time());
+    }
+    c->tls_state = tls_conn_connection_state(tc);
+    c->has_tls_state = true;
+    Str proto = c->tls_state.negotiated_protocol;
+    if (str_eq(proto, BURROW_S("h2")) && burrow__http2_server_configured(s)) {
+        /* net/http/internal/http2 path.
+         *
+         * Mark freshly created HTTP/2 as active and prevent any server state hooks
+         * from being run on these connections. This prevents closeIdleConns from
+         * closing such connections. See issue https://golang.org/issue/39776. */
+        sv_set_state(c, HTTP_STATE_ACTIVE, false);
+        sv_serve_http2_conn(c, c->ctx, false);
+        return true;
+    }
+    if (sv_valid_next_proto(proto)) {
+        /* Legacy TLSNextProto path. */
+        HttpTLSNextProtoFunc *fn =
+            (HttpTLSNextProtoFunc *)map_get(s->tls_next_proto, &proto);
+        if (fn != NULL && !BURROW_FUNC_IS_NIL(*fn)) {
+            sv_InitALPNRequest h = {c};
+            /* Mark freshly created HTTP/2 as active (see above). */
+            sv_set_state(c, HTTP_STATE_ACTIVE, false);
+            BURROW_CALLF(*fn, s, tc, (HttpHandler){&sv_init_alpn_request_vt, &h});
+        }
+        return true;
+    }
+    return false;
 }
 
 /* conn.serve, on a goroutine of its own. */
@@ -1846,6 +2056,15 @@ static void sv_conn_serve(void *env) {
     if (c->ctx.vt == NULL)
         goto done;
 
+    TlsConn *tc = tls_conn_from_net_conn(c->rwc);
+    if (tc != NULL && sv_serve_tls(c, tc))
+        goto done;
+
+    /* HTTP/1.x or unencrypted HTTP/2.
+     *
+     * Not in Go: a connection can only have a TLS state by being a TlsConn, so
+     * there is no other kind of connection to take one from here. */
+
     c->cctx = context_with_cancel(ca, c->ctx, &c->cancel_ctx);
     if (c->cctx.vt == NULL)
         goto done;
@@ -1863,12 +2082,14 @@ static void sv_conn_serve(void *env) {
     if (d > 0)
         (void)sv_set_read_deadline(c->rwc, time_add(time_now(), d));
 
-    if (http_protocols_unencrypted_http2(sv_protocols(s)) &&
+    HttpProtocols protos = sv_protocols(s);
+    if (!c->has_tls_state && http_protocols_unencrypted_http2(protos) &&
         sv_maybe_serve_unencrypted_http2(c))
         goto done;
-
-    if (!http_protocols_http1(sv_protocols(s)))
+    if (!http_protocols_http1(protos))
         goto done;
+
+    /* HTTP/1.x from here on. */
 
     for (;;) {
         sv_ReadError rerr;
@@ -2112,18 +2333,140 @@ static Error sv_accept_loop(HttpServer *s, sv_Listener *ln, NetListener orig,
     }
 }
 
-/* onceSetNextProtoDefaults, without the TLS parts. It runs on every Serve,
- * which is fine since configuring is done once. */
-static bool sv_setup_http2(HttpServer *s) {
+/* testHookServerServe: used if non-nil */
+static burrow__HttpTestHookServerServe sv_test_hook_server_serve;
+
+void burrow__http_set_test_hook_server_serve(burrow__HttpTestHookServerServe fn) {
+    sv_test_hook_server_serve = fn;
+}
+
+/* The function configureHTTP2 puts in TLSNextProto["h2"]. */
+static void sv_h2_next_proto_placeholder(void *env, HttpServer *hs, TlsConn *c,
+                                         HttpHandler h) {
+    (void)env;
+    (void)hs;
+    (void)h;
+    (void)tls_conn_close(c);
+}
+
+/* configureHTTP2. The idle timeout is not set here, since the HTTP/2 server
+ * reads it from s when a connection starts. */
+static void sv_configure_http2(HttpServer *s) {
+    Alloc *sa = sv_alloc(s);
+    if (s->tls_config == NULL) {
+        TlsConfig *cfg = (TlsConfig *)mem_alloc(sa, sizeof *cfg, _Alignof(TlsConfig));
+        if (cfg == NULL) {
+            s->next_proto_err = burrow_err_out_of_memory;
+            return;
+        }
+        memset(cfg, 0, sizeof *cfg);
+        s->own_tls_config = cfg;
+        s->tls_config = cfg;
+    }
+    s->next_proto_err = burrow__http2_configure_server(s, s->tls_config);
+    if (BURROW_FAILED(s->next_proto_err))
+        return;
+
+    if (s->tls_next_proto == NULL) {
+        Map *m = map_make(sa, TYPE_STRING, TYPE_HTTP_TLS_NEXT_PROTO_FUNC, 0);
+        if (m == NULL) {
+            s->next_proto_err = burrow_err_out_of_memory;
+            return;
+        }
+        s->own_tls_next_proto = m;
+        s->tls_next_proto = m;
+    }
+    /* Historically, the presence of a TLSNextProto["h2"] key has been the signal to
+     * enable/disable HTTP/2 support. Set a value in the map, but we'll never use it. */
+    Str key = BURROW_S("h2");
+    HttpTLSNextProtoFunc fn =
+        BURROW_FN(HttpTLSNextProtoFunc, sv_h2_next_proto_placeholder, NULL);
+    if (!map_set(s->tls_next_proto, &key, &fn))
+        s->next_proto_err = burrow_err_out_of_memory;
+}
+
+/* onceSetNextProtoDefaults configures HTTP/2, if the user hasn't
+ * configured otherwise. (by setting s.TLSNextProto non-nil)
+ * It must only be called via s.nextProtoOnce (use s.setupHTTP2_*). */
+static void sv_once_set_next_proto_defaults(void *env) {
+    HttpServer *s = (HttpServer *)env;
     HttpProtocols p = sv_protocols(s);
     if (!http_protocols_http2(p) && !http_protocols_unencrypted_http2(p))
-        return true;
+        return;
     if (burrow__http_godebug_http2server_disabled())
+        return;
+    if (sv_has_next_proto(s, BURROW_S("h2"))) {
+        /* TLSNextProto already contains an HTTP/2 implementation.
+         * The user probably called golang.org/x/net/http2.ConfigureServer
+         * to add it. */
+        return;
+    }
+    sv_configure_http2(s);
+}
+
+/* shouldConfigureHTTP2ForServe reports whether Server.Serve should configure
+ * automatic HTTP/2. (which sets up the s.TLSNextProto map) */
+static bool sv_should_configure_http2_for_serve(const HttpServer *s) {
+    if (s->tls_config == NULL) {
+        /* Compatibility with Go 1.6:
+         * If there's no TLSConfig, it's possible that the user just
+         * didn't set it on the http.Server, but did pass it to
+         * tls.NewListener and passed that listener to Serve.
+         * So we should configure HTTP/2 (to set up s.TLSNextProto)
+         * in case the listener returns an "h2" *tls.Conn. */
         return true;
-    return burrow__http2_configure_server(s);
+    }
+    if (http_protocols_unencrypted_http2(sv_protocols(s)))
+        return true;
+    /* The user specified a TLSConfig on their http.Server.
+     * In this, case, only configure HTTP/2 if their tls.Config
+     * explicitly mentions "h2". Otherwise http2.ConfigureServer
+     * would modify the tls.Config to add it, but they probably already
+     * passed this tls.Config to tls.NewListener. And if they did,
+     * it's too late anyway to fix it. It would only be potentially racy.
+     * See Issue 15908. */
+    const Str *ps = (const Str *)s->tls_config->next_protos.p;
+    for (Int i = 0; i < s->tls_config->next_protos.len; i++) {
+        if (str_eq(ps[i], BURROW_S("h2")))
+            return true;
+    }
+    return false;
+}
+
+static void sv_once_set_next_proto_defaults_serve(void *env) {
+    HttpServer *s = (HttpServer *)env;
+    if (sv_should_configure_http2_for_serve(s))
+        sv_once_set_next_proto_defaults(s);
+}
+
+/* setupHTTP2_ServeTLS conditionally configures HTTP/2 on
+ * s and reports whether there was an error setting it up. If it is
+ * not configured for policy reasons, nil is returned. */
+static Error sv_setup_http2_serve_tls(HttpServer *s) {
+    sync_once_do(&s->next_proto_once,
+                 BURROW_FN(Func, sv_once_set_next_proto_defaults, s));
+    return s->next_proto_err;
+}
+
+/* setupHTTP2_Serve is called from (*Server).Serve and conditionally
+ * configures HTTP/2 on s using a more conservative policy than
+ * setupHTTP2_ServeTLS because Serve is called after tls.Listen,
+ * and may be called concurrently. See shouldConfigureHTTP2ForServe.
+ *
+ * The tests named TestTransportAutomaticHTTP2* and
+ * TestConcurrentServerServe in server_test.go demonstrate some
+ * of the supported use cases and motivations. */
+static Error sv_setup_http2_serve(HttpServer *s) {
+    sync_once_do(&s->next_proto_once,
+                 BURROW_FN(Func, sv_once_set_next_proto_defaults_serve, s));
+    return s->next_proto_err;
 }
 
 Error http_server_serve(HttpServer *s, NetListener l) {
+    burrow__HttpTestHookServerServe hook = sv_test_hook_server_serve;
+    if (!BURROW_FUNC_IS_NIL(hook))
+        BURROW_CALLF(hook, s, l); /* call hook with unwrapped listener */
+
     Alloc *sa = sv_alloc(s);
     sv_Listener *ln = (sv_Listener *)mem_alloc(sa, sizeof *ln, _Alignof(sv_Listener));
     if (ln == NULL) {
@@ -2133,11 +2476,9 @@ Error http_server_serve(HttpServer *s, NetListener l) {
     memset(ln, 0, sizeof *ln);
     ln->l = l;
 
-    Error err;
-    if (!sv_setup_http2(s)) {
-        err = burrow_err_out_of_memory;
+    Error err = sv_setup_http2_serve(s);
+    if (BURROW_FAILED(err))
         goto close;
-    }
     if (!sv_track_listener(s, ln, true)) {
         err = http_err_server_closed;
         goto close;
@@ -2236,27 +2577,181 @@ static Error sv_resolve_listen_addr(Alloc *a, Str addr, NetTCPAddr *out) {
     return fmt_errorf_v("lookup %s: no such host", host);
 }
 
+/* net.Listen("tcp", addr), for ListenAndServe and ListenAndServeTLS. */
+static NetTCPListener *sv_listen_tcp(HttpServer *s, Str addr, Error *err) {
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    NetTCPAddr la;
+    *err = sv_resolve_listen_addr(arena_allocator(&ar), addr, &la);
+    if (BURROW_FAILED(*err)) {
+        *err = fmt_errorf_v("listen tcp: %w", *err);
+        arena_free(&ar);
+        return NULL;
+    }
+    NetTCPListener *ln = net_listen_tcp(sv_alloc(s), BURROW_S("tcp"), &la, err);
+    arena_free(&ar);
+    return ln;
+}
+
 Error http_server_listen_and_serve(HttpServer *s) {
     if (sv_shutting_down(s))
         return http_err_server_closed;
     Str addr = s->addr;
     if (addr.len == 0)
         addr = BURROW_S(":http");
-    Alloc *sa = sv_alloc(s);
-    Arena ar;
-    arena_init(&ar, heap_allocator(), 0);
-    NetTCPAddr la;
-    Error err = sv_resolve_listen_addr(arena_allocator(&ar), addr, &la);
-    if (BURROW_FAILED(err)) {
-        err = fmt_errorf_v("listen tcp: %w", err);
-        arena_free(&ar);
-        return err;
-    }
-    NetTCPListener *ln = net_listen_tcp(sa, BURROW_S("tcp"), &la, &err);
-    arena_free(&ar);
+    Error err;
+    NetTCPListener *ln = sv_listen_tcp(s, addr, &err);
     if (ln == NULL)
         return err;
     err = http_server_serve(s, net_tcp_listener_as_listener(ln));
+    net_tcp_listener_free(ln);
+    return err;
+}
+
+/* ------------------------------------------------------------- ServeTLS */
+
+/* adjustNextProtos adds or removes "http/1.1" and "h2" entries from
+ * a tls.Config.NextProtos list, according to the set of protocols in protos.
+ * Not in Go: the list is made in a, and is nil when a is out of memory. */
+static Slice sv_adjust_next_protos(Alloc *a, Slice next_protos, HttpProtocols protos) {
+    /* Make a copy of NextProtos since it might be shared with some other tls.Config.
+     * (tls.Config.Clone doesn't do a deep copy.)
+     *
+     * We could avoid an allocation in the common case by checking to see if the slice
+     * is already in order, but this is just one small allocation per connection. */
+    Int cap = next_protos.len + 2;
+    Str *out = (Str *)mem_alloc(a, (size_t)cap * sizeof(Str), _Alignof(Str));
+    if (out == NULL)
+        return (Slice){0};
+    const Str *in = (const Str *)next_protos.p;
+    Int n = 0;
+    HttpProtocols have = {0};
+    for (Int i = 0; i < next_protos.len; i++) {
+        if (str_eq(in[i], BURROW_S("http/1.1"))) {
+            if (!http_protocols_http1(protos))
+                continue;
+            http_protocols_set_http1(&have, true);
+        } else if (str_eq(in[i], BURROW_S("h2"))) {
+            if (!http_protocols_http2(protos))
+                continue;
+            http_protocols_set_http2(&have, true);
+        }
+        out[n++] = in[i];
+    }
+    if (http_protocols_http2(protos) && !http_protocols_http2(have))
+        out[n++] = BURROW_S("h2");
+    if (http_protocols_http1(protos) && !http_protocols_http1(have))
+        out[n++] = BURROW_S("http/1.1");
+    return slice_from(out, n, cap, TYPE_STRING);
+}
+
+/* setupTLSConfig. The config is made in a, and is NULL with *err set when
+ * that or loading the files fails. */
+static TlsConfig *sv_setup_tls_config(HttpServer *s, Alloc *a, Str cert_file,
+                                      Str key_file, Slice next_protos, Error *err) {
+    *err = BURROW_NO_ERROR;
+    TlsConfig *config;
+    if (s->tls_config != NULL) {
+        config = tls_config_clone(s->tls_config, a);
+    } else {
+        config = (TlsConfig *)mem_alloc(a, sizeof *config, _Alignof(TlsConfig));
+        if (config != NULL)
+            memset(config, 0, sizeof *config);
+    }
+    if (config == NULL || next_protos.p == NULL) {
+        if (config != NULL)
+            tls_config_release(config);
+        *err = burrow_err_out_of_memory;
+        return NULL;
+    }
+    config->next_protos = next_protos;
+
+    bool config_has_cert = config->certificates.len > 0 ||
+                           !BURROW_FUNC_IS_NIL(config->get_certificate) ||
+                           !BURROW_FUNC_IS_NIL(config->get_config_for_client);
+    if (!config_has_cert || cert_file.len != 0 || key_file.len != 0) {
+        TlsCertificate *certs =
+            (TlsCertificate *)mem_alloc(a, sizeof *certs, _Alignof(TlsCertificate));
+        if (certs == NULL) {
+            tls_config_release(config);
+            *err = burrow_err_out_of_memory;
+            return NULL;
+        }
+        *certs = tls_load_x509_key_pair(a, cert_file, key_file, err);
+        if (BURROW_FAILED(*err)) {
+            tls_config_release(config);
+            return NULL;
+        }
+        config->certificates = slice_from(certs, 1, 1, TYPE_TLS_CERTIFICATE);
+    }
+    return config;
+}
+
+Error http_server_serve_tls(HttpServer *s, NetListener l, Str cert_file, Str key_file) {
+    /* Setup HTTP/2 before s.Serve, to initialize s.TLSConfig
+     * before we clone it and create the TLS Listener. */
+    Error err = sv_setup_http2_serve_tls(s);
+    if (BURROW_FAILED(err))
+        return err;
+
+    Slice next_protos = {0};
+    if (s->tls_config != NULL)
+        next_protos = s->tls_config->next_protos;
+    Alloc *sa = sv_alloc(s);
+    sv_ServeTLS *st = (sv_ServeTLS *)mem_alloc(sa, sizeof *st, _Alignof(sv_ServeTLS));
+    if (st == NULL)
+        return burrow_err_out_of_memory;
+    memset(st, 0, sizeof *st);
+    arena_init(&st->arena, sa, 0);
+    Alloc *ta = arena_allocator(&st->arena);
+    st->config = sv_setup_tls_config(
+        s, ta, cert_file, key_file,
+        sv_adjust_next_protos(ta, next_protos, sv_protocols(s)), &err);
+    NetListener tls_listener = {NULL, NULL};
+    if (st->config != NULL) {
+        tls_listener = tls_new_listener(sa, l, st->config);
+        if (tls_listener.vt == NULL) {
+            tls_config_release(st->config);
+            err = burrow_err_out_of_memory;
+        }
+    }
+    if (tls_listener.vt == NULL) {
+        arena_free(&st->arena);
+        mem_free(sa, st, sizeof *st, _Alignof(sv_ServeTLS));
+        return err;
+    }
+    /* The connections use the config after Serve returns, so it stays until
+     * the server is freed. */
+    sync_mutex_lock(&s->mu);
+    st->next = s->serve_tls;
+    s->serve_tls = st;
+    sync_mutex_unlock(&s->mu);
+
+    err = http_server_serve(s, tls_listener);
+    tls_listener_free(tls_listener);
+    return err;
+}
+
+Error http_server_listen_and_serve_tls(HttpServer *s, Str cert_file, Str key_file) {
+    if (sv_shutting_down(s))
+        return http_err_server_closed;
+    Str addr = s->addr;
+    if (addr.len == 0)
+        addr = BURROW_S(":https");
+
+    /* Not in Go: there is no HTTP/3 here, so nothing to start for it. */
+    HttpProtocols p = sv_protocols(s);
+
+    /* Only start a TCP listener if HTTP/1 or HTTP/2 is used. */
+    if (!http_protocols_http1(p) && !http_protocols_http2(p) &&
+        !http_protocols_unencrypted_http2(p))
+        return BURROW_NO_ERROR;
+    Error err;
+    NetTCPListener *ln = sv_listen_tcp(s, addr, &err);
+    if (ln == NULL)
+        return err;
+    err =
+        http_server_serve_tls(s, net_tcp_listener_as_listener(ln), cert_file, key_file);
     net_tcp_listener_free(ln);
     return err;
 }
@@ -2442,11 +2937,32 @@ void http_server_free(HttpServer *s) {
     if (s == NULL)
         return;
     sync_wait_group_wait(&s->conn_group);
+    Alloc *sa = sv_alloc(s);
     Slice *fs = &s->on_shutdown;
     if (fs->p != NULL)
-        mem_free(sv_alloc(s), fs->p, (size_t)fs->cap * sizeof(Func), _Alignof(Func));
+        mem_free(sa, fs->p, (size_t)fs->cap * sizeof(Func), _Alignof(Func));
     fs->p = NULL;
     fs->len = fs->cap = 0;
+    while (s->serve_tls != NULL) {
+        sv_ServeTLS *st = s->serve_tls;
+        s->serve_tls = st->next;
+        tls_config_release(st->config);
+        arena_free(&st->arena);
+        mem_free(sa, st, sizeof *st, _Alignof(sv_ServeTLS));
+    }
+    if (s->own_tls_config != NULL) {
+        if (s->tls_config == s->own_tls_config)
+            s->tls_config = NULL;
+        tls_config_release(s->own_tls_config);
+        mem_free(sa, s->own_tls_config, sizeof(TlsConfig), _Alignof(TlsConfig));
+        s->own_tls_config = NULL;
+    }
+    if (s->own_tls_next_proto != NULL) {
+        if (s->tls_next_proto == s->own_tls_next_proto)
+            s->tls_next_proto = NULL;
+        map_free(s->own_tls_next_proto);
+        s->own_tls_next_proto = NULL;
+    }
 }
 
 Error http_serve(NetListener l, HttpHandler handler) {
@@ -2459,6 +2975,21 @@ Error http_serve(NetListener l, HttpHandler handler) {
 Error http_listen_and_serve(Str addr, HttpHandler handler) {
     HttpServer srv = {.addr = addr, .handler = handler};
     Error err = http_server_listen_and_serve(&srv);
+    http_server_free(&srv);
+    return err;
+}
+
+Error http_serve_tls(NetListener l, HttpHandler handler, Str cert_file, Str key_file) {
+    HttpServer srv = {.handler = handler};
+    Error err = http_server_serve_tls(&srv, l, cert_file, key_file);
+    http_server_free(&srv);
+    return err;
+}
+
+Error http_listen_and_serve_tls(Str addr, Str cert_file, Str key_file,
+                                HttpHandler handler) {
+    HttpServer srv = {.addr = addr, .handler = handler};
+    Error err = http_server_listen_and_serve_tls(&srv, cert_file, key_file);
     http_server_free(&srv);
     return err;
 }

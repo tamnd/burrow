@@ -34,6 +34,7 @@
 #include "burrow/bufio.h"
 #include "burrow/context.h"
 #include "burrow/core.h"
+#include "burrow/crypto/tls.h"
 #include "burrow/error.h"
 #include "burrow/func.h"
 #include "burrow/io.h"
@@ -378,6 +379,11 @@ BURROW_FUNC(HttpGetBodyFunc, IoReadCloser, Error *err);
  * context_background. response is the redirect response that made an
  * HttpClient send this request, and NULL for the first request it sends.
  *
+ * tls is the TLS connection state of a request a server read over TLS, which
+ * the server sets before it calls the handler, and NULL otherwise. It belongs
+ * to the connection. http_read_request leaves it NULL, and a client does not
+ * look at it.
+ *
  * Everything a request read from the wire has, the strings and the header and
  * the URL, lives in the request's own arena until http_request_free. */
 typedef struct HttpRequest {
@@ -397,6 +403,7 @@ typedef struct HttpRequest {
     MultipartForm *multipart_form;
     Str remote_addr;
     Str request_uri;
+    const TlsConnectionState *tls;
     Str pattern;
     HttpGetBodyFunc get_body;
     Context ctx;
@@ -1221,6 +1228,19 @@ BURROW_FUNC(HttpBaseContextFunc, Context, NetListener l);
  * not give the nil Context, and what it gives has to outlive c. */
 BURROW_FUNC(HttpConnContextFunc, Context, Context ctx, NetConn c);
 
+struct HttpServer;
+
+/* The functions of Server.TLSNextProto, each of which takes over a TLS
+ * connection whose ALPN protocol is its key. h answers the requests it reads,
+ * and sets their tls, body and remote_addr when they are not set. The server
+ * closes c when the function returns, and frees it after. */
+BURROW_FUNC(HttpTLSNextProtoFunc, void, struct HttpServer *s, TlsConn *c,
+            HttpHandler h);
+
+/* The type of an HttpTLSNextProtoFunc, for the values of a tls_next_proto
+ * map. */
+extern const Type *const TYPE_HTTP_TLS_NEXT_PROTO_FUNC;
+
 /* The CountError hook of HttpHTTP2Config. err_type has only lower case
  * letters, digits and underscores, and is only good during the call. */
 BURROW_FUNC(HttpCountErrorFunc, void, Str err_type);
@@ -1266,10 +1286,20 @@ typedef struct HttpHTTP2Config {
  *     Error err = http_server_listen_and_serve(&srv);
  *     http_server_free(&srv);
  *
- * addr is where http_server_listen_and_serve listens, ":http" when it is "".
- * handler answers every request, and with no vt it is
- * http_default_serve_mux. An OPTIONS request for "*" gets a 200 with no body
- * instead, unless disable_general_options_handler is set.
+ * addr is where http_server_listen_and_serve listens, ":http" when it is "",
+ * and http_server_listen_and_serve_tls, ":https" when it is "". handler
+ * answers every request, and with no vt it is http_default_serve_mux. An
+ * OPTIONS request for "*" gets a 200 with no body instead, unless
+ * disable_general_options_handler is set.
+ *
+ * tls_config is the TLS configuration of http_server_serve_tls and
+ * http_server_listen_and_serve_tls, which clone it, so a change made to it
+ * after they start, such as with tls_config_set_session_ticket_keys, does not
+ * reach the connections. To make one, give http_server_serve a listener from
+ * tls_new_listener instead. tls_next_proto is a Map of Str to
+ * HttpTLSNextProtoFunc, for the ALPN protocols the server leaves to others. A
+ * tls_next_proto that is not NULL and has no "h2" turns HTTP/2 off, which is
+ * the old way to do it.
  *
  * read_timeout is how long reading a request may take, body and all, and
  * read_header_timeout the time for the first line and the header, which is
@@ -1286,10 +1316,13 @@ typedef struct HttpHTTP2Config {
  * conn_state, base_context and conn_context are the hooks of those names, and
  * error_log is where the server logs what goes wrong with a connection, and
  * log's standard logger when it is NULL. protocols is the protocols the
- * server speaks. NULL, or the empty set, is HTTP/1. With unencrypted HTTP/2 in
- * it the server takes a connection that starts with the HTTP/2 preface as an
- * HTTP/2 connection, which is prior knowledge h2c, and HTTP/2 over TLS is not
- * here yet. http2 is the HTTP/2 settings, and NULL is the defaults.
+ * server speaks. The empty set is HTTP/1, and NULL is HTTP/1 and HTTP/2, less
+ * HTTP/2 when tls_next_proto turns it off, or when GODEBUG has
+ * http2server=0 and tls_next_proto has no "h2". HTTP/2 is spoken over a TLS
+ * connection that chose "h2" by ALPN, and with unencrypted HTTP/2 in the set
+ * the server also takes a connection that starts with the HTTP/2 preface as an
+ * HTTP/2 connection, which is prior knowledge h2c. http2 is the HTTP/2
+ * settings, and NULL is the defaults.
  * disable_client_priority serves an HTTP/2 connection's streams in turn and
  * leaves out the priorities of RFC 9218 that the client asks for.
  *
@@ -1297,20 +1330,24 @@ typedef struct HttpHTTP2Config {
  * it is NULL. It has to be one that any goroutine can use at once.
  *
  * A connection is served on a goroutine of its own and freed when it is done,
- * and so is a connection a NetTCPListener or a NetUnixListener accepted. One
- * from another kind of listener is closed but stays the listener's to free.
- * The rest of the struct is the server's own, and the server is not to be
- * copied once it has started. */
+ * and so is a connection a NetTCPListener, a NetUnixListener or a listener
+ * from tls_new_listener accepted. One from another kind of listener is closed
+ * but stays the listener's to free. When HTTP/2 is on and tls_config or
+ * tls_next_proto is NULL, the server makes one and sets it, as Go does, and
+ * http_server_free gives it back. The rest of the struct is the server's own,
+ * and the server is not to be copied once it has started. */
 typedef struct HttpServer {
     Str addr;
     HttpHandler handler;
     bool disable_general_options_handler;
+    TlsConfig *tls_config;
     Duration read_timeout;
     Duration read_header_timeout;
     Duration write_timeout;
     Duration idle_timeout;
     Int max_header_bytes;
     Int max_header_value_count;
+    Map *tls_next_proto;
     HttpConnStateFunc conn_state;
     LogLogger *error_log;
     HttpBaseContextFunc base_context;
@@ -1332,6 +1369,11 @@ typedef struct HttpServer {
     SyncMutex h2_mu; /* guards h2_conns and h2_hooked */
     struct burrow__Http2ServeConn *h2_conns;
     bool h2_hooked;
+    SyncOnce next_proto_once;
+    Error next_proto_err;
+    TlsConfig *own_tls_config;              /* the tls_config configureHTTP2 made */
+    Map *own_tls_next_proto;                /* the tls_next_proto it made */
+    struct burrow__HttpServeTLS *serve_tls; /* what ServeTLS made, under mu */
 } HttpServer;
 
 /* Server.Serve. Accepts connections on l and serves each on a goroutine of
@@ -1347,6 +1389,28 @@ BURROW_BORROWS(ret) Error http_server_serve(HttpServer *s, NetListener l);
  * Its result is never BURROW_NO_ERROR, and is http_err_server_closed after
  * http_server_close or http_server_shutdown. */
 BURROW_OWNS(ret) Error http_server_listen_and_serve(HttpServer *s);
+
+/* Server.ServeTLS. http_server_serve with TLS: each connection l accepts has
+ * its TLS handshake first, with a clone of tls_config. The certificate and
+ * key come from the PEM files cert_file and key_file, and they can be "" when
+ * tls_config has certificates, get_certificate or get_config_for_client set.
+ * When the certificate is signed by a certificate authority, cert_file has the
+ * server's certificate, then any intermediates, then the CA's. The clone's
+ * next_protos gets "h2" and "http/1.1" added, or taken out, to match the
+ * protocols the server speaks. When setting up HTTP/2 or loading the files
+ * fails, the result is that error and l is left open. Otherwise it is
+ * http_server_serve's, which closes l. */
+BURROW_BORROWS(ret) Error http_server_serve_tls(HttpServer *s, NetListener l,
+                                                Str cert_file, Str key_file);
+
+/* Server.ListenAndServeTLS. http_server_listen_and_serve with
+ * http_server_serve_tls, and cert_file and key_file as there, at ":https"
+ * when addr is "". When protocols has none of HTTP/1, HTTP/2 and
+ * unencrypted HTTP/2 it does not listen, and the result is BURROW_NO_ERROR.
+ * Otherwise it is never BURROW_NO_ERROR, and is http_err_server_closed after
+ * http_server_close or http_server_shutdown. */
+BURROW_OWNS(ret) Error http_server_listen_and_serve_tls(HttpServer *s, Str cert_file,
+                                                        Str key_file);
 
 /* Server.Close. Closes every listener and every connection now, including
  * those with a request being handled, but not the ones hijacked. Waits for
@@ -1388,6 +1452,13 @@ void http_server_free(HttpServer *s);
 BURROW_BORROWS(ret) Error http_serve(NetListener l, HttpHandler handler);
 BURROW_OWNS(ret) Error http_listen_and_serve(Str addr, HttpHandler handler);
 
+/* http.ServeTLS and http.ListenAndServeTLS, the same with
+ * http_server_serve_tls and http_server_listen_and_serve_tls. */
+BURROW_BORROWS(ret) Error http_serve_tls(NetListener l, HttpHandler handler,
+                                         Str cert_file, Str key_file);
+BURROW_OWNS(ret) Error http_listen_and_serve_tls(Str addr, Str cert_file, Str key_file,
+                                                 HttpHandler handler);
+
 /* http.ServerContextKey and LocalAddrContextKey, the keys of the request
  * context's values for the HttpServer, as TYPE_HTTP_SERVER and a pointer to
  * it, and for the local address of the connection the request came on, as the
@@ -1417,7 +1488,8 @@ BURROW_BORROWS(ret) Error http_response_controller_flush(HttpResponseController 
  * writer. They are the caller's to close and free: buf->reader with
  * bufio_reader_free, buf->writer with bufio_writer_free, and the connection the
  * way its listener's connections are, such as net_tcp_conn_free on
- * net_conn_as_tcp_conn. The request is the server's still, and is gone once
+ * net_conn_as_tcp_conn, or tls_conn_free on tls_conn_from_net_conn for one
+ * http_server_serve_tls accepted. The request is the server's still, and is gone once
  * the handler returns. */
 BURROW_OWNS(ret) NetConn http_response_controller_hijack(HttpResponseController *c,
                                                          BufioReadWriter *buf,

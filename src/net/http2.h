@@ -50,6 +50,7 @@
 #include "burrow/bytes.h"
 #include "burrow/chan.h"
 #include "burrow/core.h"
+#include "burrow/crypto/tls.h"
 #include "burrow/error.h"
 #include "burrow/func.h"
 #include "burrow/io.h"
@@ -1100,6 +1101,7 @@ extern const Error burrow__http2_err_stream_closed;
 extern const Error burrow__http2_err_preface_timeout;
 extern const Error burrow__http2_err_handler_panicked;
 extern const Error burrow__http2_err_handler_wrote_too_much;
+extern const Error burrow__http2_err_missing_required_cipher;
 
 /* Server.ServeConn as net/http calls it: serves HTTP/2 on c until the
  * connection is done, closes c, and returns. ctx is the base context of the
@@ -1107,10 +1109,12 @@ extern const Error burrow__http2_err_handler_wrote_too_much;
 void burrow__http2_serve_conn(HttpServer *srv, Alloc *a, NetConn c, Context ctx,
                               bool saw_client_preface);
 
-/* configureHTTP2 without the TLS parts: hooks graceful shutdown of the HTTP/2
- * connections into srv's Shutdown, once. False when that ran out of memory.
- * burrow__http2_server_configured says whether it ran. */
-bool burrow__http2_configure_server(HttpServer *srv);
+/* configureHTTP2's h2srv.Configure, which checks that tcfg's cipher suites
+ * have one HTTP/2 needs, and its RegisterOnShutdown, which hooks graceful
+ * shutdown of the HTTP/2 connections into srv's Shutdown, once. The error is
+ * the cipher one, or burrow_err_out_of_memory. burrow__http2_server_configured
+ * says whether it got as far as the hook, which is Go's s.h2 != nil. */
+Error burrow__http2_configure_server(HttpServer *srv, const TlsConfig *tcfg);
 bool burrow__http2_server_configured(HttpServer *srv);
 
 /* ------------------------------------------------------------- transport */

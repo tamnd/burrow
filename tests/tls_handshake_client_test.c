@@ -3616,9 +3616,21 @@ static void test_tls13_only_client_hello_cipher_suite_run(void *env, TestingT *t
     test_tls13_only_client_hello_cipher_suite(t, ciphers);
 }
 
+/* Not in Go: the cleanup below. */
+static void aes_gcm_hardware_from_cpu(void *env) {
+    (void)env;
+    burrow__tls_aes_gcm_hardware_override = -1;
+}
+
 /* TestTLS13OnlyClientHelloCipherSuite tests that when a client states that
  * it only supports TLS 1.3, it correctly advertises only TLS 1.3 ciphers. */
 static void TestTLS13OnlyClientHelloCipherSuite(TestingT *t) {
+    /* Not in Go: Go's TestMain turns off hasAESGCMHardwareSupport for the
+     * whole binary, and the order checked below is the one without it. This
+     * binary has no TestMain, so the test does it, as the replays do. The
+     * cleanup puts it back once the parallel subtests are done. */
+    burrow__tls_aes_gcm_hardware_override = 0;
+    testing_t_cleanup(t, BURROW_FN(Func, aes_gcm_hardware_from_cpu, NULL));
     for (size_t i = 0; i < sizeof tls13_only_tests / sizeof tls13_only_tests[0]; i++) {
         const TLS13OnlyTest *tt = &tls13_only_tests[i];
         testing_t_run(t, str_from_cstr(tt->name),

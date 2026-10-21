@@ -276,6 +276,25 @@ static inline ConnectionStateCheck check_curve_id(Alloc *a, TlsCurveID want) {
     return BURROW_FN(ConnectionStateCheck, check_curve_id_fn, w);
 }
 
+static inline Error check_negotiated_protocol_fn(void *env,
+                                                 const TlsConnectionState *state) {
+    Str want = *(const Str *)env;
+    if (!str_eq(state->negotiated_protocol, want))
+        return fmt_errorf_v("got protocol %q, want %q", state->negotiated_protocol,
+                            want);
+    return BURROW_NO_ERROR;
+}
+
+/* checkNegotiatedProtocol of handshake_server_test.go. Not in Go: want is kept
+ * in a, and the bytes it points to have to outlive the check. */
+static inline ConnectionStateCheck check_negotiated_protocol(Alloc *a, Str want) {
+    Str *w = mem_alloc(a, sizeof *w, _Alignof(Str));
+    if (w == NULL)
+        panic_str(BURROW_S("out of memory"));
+    *w = want;
+    return BURROW_FN(ConnectionStateCheck, check_negotiated_protocol_fn, w);
+}
+
 /* Not in Go: what a test runs, the run method of a clientTest or serverTest
  * with update false, since there is no -update. */
 BURROW_FUNC(ReplayRunFunc, void, TestingT *t);

@@ -33,6 +33,7 @@
 #include "burrow/math/big.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
+#include "burrow/netpoll.h"
 #include "burrow/os.h"
 #include "burrow/panic.h"
 #include "burrow/path/filepath.h"
@@ -828,6 +829,15 @@ static void hybrid_pool_free(void *env) {
     mem_free(heap_allocator(), h, sizeof *h, _Alignof(HybridPool));
 }
 
+/* Not in Go: the dials need the readiness poll FD. */
+static void need_tcp(TestingT *t) {
+#if !defined(BURROW_NETPOLL_READINESS)
+    testing_t_skip_v(t, "TCP here needs the readiness poll FD");
+#else
+    (void)t;
+#endif
+}
+
 static void TestHybridPool(TestingT *t) {
     testing_t_parallel(t);
     if (!(strcmp(burrow_os_name(), "windows") == 0 ||
@@ -842,6 +852,7 @@ static void TestHybridPool(TestingT *t) {
         testing_t_skip_now(t);
         return;
     }
+    need_tcp(t);
 
     HybridPool *h = BURROW_NEW(heap_allocator(), HybridPool);
     if (h == NULL) {

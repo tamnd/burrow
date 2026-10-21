@@ -1,0 +1,204 @@
+#!/bin/sh
+# Regenerates tests/hkdf_test_gen.h: the Wycheproof vectors Go's crypto/hkdf
+# tests fetch as a module when they run. Go's own Key has to give what each
+# test expects or this stops, so a vector Go would fail never gets in.
+#
+# Needs the network for the module, and the Go on PATH should be the release
+# the port follows.
+#
+# Copyright 2026 The burrow Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style licence that can be found
+# in the LICENSE file.
+set -eu
+
+root=$(cd "$(dirname "$0")/.." && pwd)
+out="$root/tests/hkdf_test_gen.h"
+goroot=$(go env GOROOT)
+tmp=$(mktemp -d)
+trap 'rm -rf "$tmp"' EXIT
+
+# The version Go's tests pin, from cryptotest/wycheproof/schemaversion.go.
+wycheproof_version=$(sed -n 's/^const wycheproofVersion = "\(.*\)"$/\1/p' \
+	"$goroot/src/crypto/internal/cryptotest/wycheproof/schemaversion.go")
+wycheproof_dir=$( (cd "$tmp" && go mod download -json "github.com/c2sp/wycheproof@$wycheproof_version") |
+	sed -n 's/^[[:space:]]*"Dir": "\(.*\)",$/\1/p')
+
+mkdir "$tmp/gen"
+cat >"$tmp/gen/main.go" <<'GO'
+package main
+
+import (
+	"bytes"
+	"crypto/hkdf"
+	"crypto/sha1"
+	"crypto/sha256"
+	"crypto/sha512"
+	"encoding/hex"
+	"encoding/json"
+	"fmt"
+	"hash"
+	"log"
+	"os"
+	"path/filepath"
+	"strings"
+)
+
+// C string literal of s, with octal escapes so nothing runs into the next
+// character. A C99 compiler only has to take 4095 characters in one.
+func lit(s string) string {
+	var b strings.Builder
+	b.WriteByte('"')
+	for i := 0; i < len(s); i++ {
+		c := s[i]
+		switch {
+		case c == '"' || c == '\\':
+			b.WriteByte('\\')
+			b.WriteByte(c)
+		case c == '?':
+			b.WriteString(`\077`)
+		case c >= ' ' && c <= '~':
+			b.WriteByte(c)
+		default:
+			fmt.Fprintf(&b, "\\%03o", c)
+		}
+	}
+	b.WriteByte('"')
+	if b.Len() > 4095+2 {
+		log.Fatalf("literal of %d characters is too long", b.Len()-2)
+	}
+	return b.String()
+}
+
+// hex as up to nine C string literals in braces, since the longest output keys
+// are longer than one literal can be.
+func parts(s string) string {
+	n := len(s)
+	var p []string
+	for len(s) > 4000 {
+		p = append(p, lit(s[:4000]))
+		s = s[4000:]
+	}
+	p = append(p, lit(s))
+	if len(p) > 9 {
+		log.Fatalf("hex of %d characters does not fit", n)
+	}
+	return "{" + strings.Join(p, ", ") + "}"
+}
+
+func unhex(s string) []byte {
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		log.Fatalf("invalid hex %q: %v", s, err)
+	}
+	return b
+}
+
+// The files TestHKDFWycheproof reads, in the order of its map.
+var files = []struct {
+	name string
+	h    func() hash.Hash
+}{
+	{"hkdf_sha1_test.json", sha1.New},
+	{"hkdf_sha256_test.json", sha256.New},
+	{"hkdf_sha384_test.json", sha512.New384},
+	{"hkdf_sha512_test.json", sha512.New},
+}
+
+func main() {
+	wycheproofDir := os.Args[1]
+
+	var tests strings.Builder
+	for _, file := range files {
+		data, err := os.ReadFile(filepath.Join(wycheproofDir, file.name))
+		if err != nil {
+			log.Fatal(err)
+		}
+		var wp struct {
+			TestGroups []struct {
+				Tests []struct {
+					TcId    int      `json:"tcId"`
+					Comment string   `json:"comment"`
+					Ikm     string   `json:"ikm"`
+					Salt    string   `json:"salt"`
+					Info    string   `json:"info"`
+					Size    int      `json:"size"`
+					Okm     string   `json:"okm"`
+					Result  string   `json:"result"`
+					Flags   []string `json:"flags"`
+				} `json:"tests"`
+			} `json:"testGroups"`
+		}
+		if err := json.Unmarshal(data, &wp); err != nil {
+			log.Fatal(err)
+		}
+		for _, tg := range wp.TestGroups {
+			for _, tv := range tg.Tests {
+				// wycheproof.ShouldPass with no flags that pass.
+				var wantPass bool
+				switch tv.Result {
+				case "valid":
+					wantPass = true
+				case "invalid":
+					wantPass = false
+				case "acceptable":
+					wantPass = true
+					for _, f := range tv.Flags {
+						log.Fatalf("%s #%d: unspecified flag: %q", file.name, tv.TcId, f)
+					}
+				default:
+					log.Fatalf("%s #%d: unexpected result %q", file.name, tv.TcId, tv.Result)
+				}
+				okm, err := hkdf.Key(file.h, unhex(tv.Ikm), unhex(tv.Salt), string(unhex(tv.Info)), tv.Size)
+				switch {
+				case !wantPass && err == nil:
+					log.Fatalf("%s #%d: Go's Key succeeded for invalid vector", file.name, tv.TcId)
+				case wantPass && err != nil:
+					log.Fatalf("%s #%d: Go's Key: %v", file.name, tv.TcId, err)
+				case wantPass && !bytes.Equal(okm, unhex(tv.Okm)):
+					log.Fatalf("%s #%d: Go's Key gives %x, want %s", file.name, tv.TcId, okm, tv.Okm)
+				}
+				fmt.Fprintf(&tests, "    {%s, %d, %s, %s, %s, %s, %d, %s, %v},\n", lit(file.name),
+					tv.TcId, lit(tv.Comment), lit(tv.Ikm), lit(tv.Salt), lit(tv.Info), tv.Size,
+					parts(tv.Okm), wantPass)
+			}
+		}
+	}
+	fmt.Println("/* The Wycheproof tests: the file, the tcId, the comment, the input key")
+	fmt.Println(" * material, the salt and the info in hex, the size, the output key in hex in")
+	fmt.Println(" * up to nine pieces, and whether the test is valid. */")
+	fmt.Println("static const GenWycheproof gen_wycheproof[] = {")
+	fmt.Print(tests.String())
+	fmt.Println("};")
+}
+GO
+
+{
+	cat <<EOF
+/* Generated by tools/gen-hkdf-tests.sh; do not edit.
+ *
+ * The Wycheproof vectors Go's crypto/hkdf tests read, from $(go env GOVERSION)
+ * and github.com/c2sp/wycheproof at $wycheproof_version. */
+
+#ifndef BURROW_TESTS_HKDF_TEST_GEN_H
+#define BURROW_TESTS_HKDF_TEST_GEN_H
+
+#include <stdbool.h>
+
+typedef struct {
+    const char *file;
+    int tc_id;
+    const char *comment;
+    const char *ikm, *salt, *info;
+    int size;
+    const char *okm[9];
+    bool want_pass;
+} GenWycheproof;
+
+EOF
+	(cd "$tmp/gen" && GO111MODULE=off go run main.go "$wycheproof_dir/testvectors_v1")
+	cat <<'EOF'
+
+#endif /* BURROW_TESTS_HKDF_TEST_GEN_H */
+EOF
+} >"$tmp/out.h"
+mv "$tmp/out.h" "$out"

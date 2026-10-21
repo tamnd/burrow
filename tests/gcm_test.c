@@ -1,11 +1,11 @@
-/* Derived from Go's src/crypto/cipher/gcm_test.go and
- * gcm_wycheproof_test.go.
+/* Derived from Go's src/crypto/cipher/gcm_test.go, gcm_fips140v1.26_test.go
+ * and gcm_wycheproof_test.go.
  * Go source: go1.27.1.
  *
+ * TestGCMNoncesFIPSV126 is from gcm_fips140v1.26_test.go.
+ *
  * TestGCMExtraMethods is left out for the reason aes_test.c gives for
- * TestExtraMethods, and TestGCMNoncesFIPSV1 because it is about the FIPS 140
- * module's internal constructors and service indicator, which burrow does not
- * have.
+ * TestExtraMethods.
  *
  * TestGCMWycheproof's vectors are in gcm_test_gen.h, which
  * tools/gen-gcm-tests.sh writes from the Wycheproof module version Go's tests
@@ -22,6 +22,7 @@
  * in the LICENSE file. */
 
 #include "check.h"
+#include "fipstest.h"
 #include "testcipher.h"
 
 #include "burrow/burrow.h"
@@ -33,6 +34,8 @@
 #include "burrow/slices.h"
 
 #include "gcm_test_gen.h"
+
+#include "../src/crypto/aes_internal.h"
 
 #include <stdint.h>
 #include <stdio.h>
@@ -937,6 +940,267 @@ static void TestGCMWithRandomNonce(TestingT *t) {
     arena_free(&ar);
 }
 
+/* ------------------------------------------- TestGCMNoncesFIPSV1 and V126 */
+
+typedef CipherAEAD (*NewNonceGcm)(Alloc *a, CipherBlock b, Error *err);
+
+static bool try_nonce(Alloc *a, CipherAEAD aead, Slice nonce) {
+    burrow__fips140_reset_service_indicator();
+    (void)cipher_aead_seal(aead, a, slice_nil(TYPE_BYTE), nonce,
+                           slice_from_str(a, BURROW_S("x")), slice_nil(TYPE_BYTE));
+    return burrow__fips140_service_indicator();
+}
+
+static void expect_ok(TestingT *t, Alloc *a, CipherAEAD aead, Slice nonce) {
+    testing_t_helper(t);
+    if (!try_nonce(a, aead, nonce))
+        testing_t_errorf_v(t, "expected service indicator true for %x", nonce);
+}
+
+/* Not in Go: the part of expectPanic after the recover, apart from the
+ * function with the setjmp. */
+static void expect_panic_recovered(TestingT *t, bool panicked, Slice nonce) {
+    testing_t_helper(t);
+    if (!panicked)
+        testing_t_errorf_v(t, "expected panic for %x", nonce);
+}
+
+static void expect_panic(TestingT *t, Alloc *a, CipherAEAD aead, Slice nonce) {
+    testing_t_helper(t);
+    volatile bool panicked = false;
+    BURROW_TRY {
+        try_nonce(a, aead, nonce);
+    }
+    BURROW_CATCH(r) {
+        (void)r;
+        panicked = true;
+    }
+    BURROW_TRY_END;
+    expect_panic_recovered(t, panicked, nonce);
+}
+
+static CipherAEAD new_nonce_gcm(TestingT *t, Alloc *a, NewNonceGcm f) {
+    Byte key[16] = {0};
+    Error err = BURROW_NO_ERROR;
+    CipherBlock block = aes_new_cipher(a, slice_from(key, 16, 16, TYPE_BYTE), &err);
+    /* Not in Go, which ignores both errors: the AEAD is not there to seal with
+     * when either fails. */
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "%v", err);
+    CipherAEAD aead = f(a, block, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "%v", err);
+    return aead;
+}
+
+static Slice decode_hex(TestingT *t, Alloc *a, const char *s) {
+    testing_t_helper(t);
+    Error err = BURROW_NO_ERROR;
+    Slice b = hex_decode_string(a, str_from_cstr(s), &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, error_text(err));
+    return b;
+}
+
+#define NONCE(...) slice_from((Byte[]){__VA_ARGS__}, 12, 12, TYPE_BYTE)
+
+static void nonces_with_counter_nonce(void *env, TestingT *t) {
+    Alloc *a = env;
+    CipherAEAD g = new_nonce_gcm(t, a, burrow__gcm_new_with_counter_nonce);
+    expect_ok(t, a, g, NONCE(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
+    expect_ok(t, a, g, NONCE(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1));
+    expect_ok(t, a, g, NONCE(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 100));
+    expect_ok(t, a, g, NONCE(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0));
+    expect_ok(t, a, g, NONCE(0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0));
+    expect_ok(t, a, g, NONCE(0, 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0));
+    expect_ok(t, a, g, NONCE(0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0));
+    expect_ok(t, a, g, NONCE(0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0));
+    expect_ok(t, a, g, NONCE(0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0));
+    expect_ok(t, a, g, NONCE(0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0));
+    /* Changed name. */
+    expect_panic(t, a, g, NONCE(0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, 0));
+
+    g = new_nonce_gcm(t, a, burrow__gcm_new_with_counter_nonce);
+    expect_ok(t, a, g, NONCE(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1));
+    /* Went down. */
+    expect_panic(t, a, g, NONCE(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0));
+
+    g = new_nonce_gcm(t, a, burrow__gcm_new_with_counter_nonce);
+    expect_ok(t, a, g, NONCE(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12));
+    expect_ok(t, a, g, NONCE(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13));
+    /* Did not increment. */
+    expect_panic(t, a, g, NONCE(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 13));
+
+    g = new_nonce_gcm(t, a, burrow__gcm_new_with_counter_nonce);
+    expect_ok(t, a, g,
+              NONCE(1, 2, 3, 4, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x00));
+    expect_ok(t, a, g,
+              NONCE(1, 2, 3, 4, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff));
+    /* Wrap is ok as long as we don't run out of values. */
+    expect_ok(t, a, g, NONCE(1, 2, 3, 4, 0, 0, 0, 0, 0, 0, 0, 0));
+    expect_ok(t, a, g,
+              NONCE(1, 2, 3, 4, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe, 0xfe));
+    /* Run out of counters. */
+    expect_panic(t, a, g,
+                 NONCE(1, 2, 3, 4, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xfe, 0xff));
+
+    g = new_nonce_gcm(t, a, burrow__gcm_new_with_counter_nonce);
+    expect_ok(t, a, g,
+              NONCE(1, 2, 3, 4, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff));
+    /* Wrap with overflow. */
+    expect_panic(t, a, g, NONCE(1, 2, 3, 5, 0, 0, 0, 0, 0, 0, 0, 0));
+}
+
+/* incIV from x/crypto/ssh/cipher.go. */
+static void inc_iv(Slice iv) {
+    Byte *p = iv.p;
+    for (int i = 4 + 7; i >= 4; i--) {
+        p[i]++;
+        if (p[i] != 0)
+            break;
+    }
+}
+
+static void nonces_for_ssh(void *env, TestingT *t) {
+    Alloc *a = env;
+    CipherAEAD aead = new_nonce_gcm(t, a, burrow__gcm_new_for_ssh);
+    Slice iv = decode_hex(t, a,
+                          "11223344"
+                          "0000000000000000");
+    expect_ok(t, a, aead, iv);
+    inc_iv(iv);
+    expect_ok(t, a, aead, iv);
+    iv = decode_hex(t, a,
+                    "11223344"
+                    "fffffffffffffffe");
+    expect_ok(t, a, aead, iv);
+    inc_iv(iv);
+    expect_panic(t, a, aead, iv);
+
+    /* Wrapping is ok as long as we don't run out of values. */
+    aead = new_nonce_gcm(t, a, burrow__gcm_new_for_ssh);
+    iv = decode_hex(t, a,
+                    "11223344"
+                    "fffffffffffffffe");
+    expect_ok(t, a, aead, iv);
+    inc_iv(iv);
+    expect_ok(t, a, aead, iv);
+    inc_iv(iv);
+    expect_ok(t, a, aead, iv);
+    inc_iv(iv);
+    expect_ok(t, a, aead, iv);
+
+    aead = new_nonce_gcm(t, a, burrow__gcm_new_for_ssh);
+    iv = decode_hex(t, a,
+                    "11223344"
+                    "aaaaaaaaaaaaaaaa");
+    expect_ok(t, a, aead, iv);
+    iv = decode_hex(t, a,
+                    "11223344"
+                    "ffffffffffffffff");
+    expect_ok(t, a, aead, iv);
+    inc_iv(iv);
+    expect_ok(t, a, aead, iv);
+    iv = decode_hex(t, a,
+                    "11223344"
+                    "aaaaaaaaaaaaaaa8");
+    expect_ok(t, a, aead, iv);
+    inc_iv(iv);
+    expect_panic(t, a, aead, iv);
+    iv = decode_hex(t, a,
+                    "11223344"
+                    "bbbbbbbbbbbbbbbb");
+    expect_panic(t, a, aead, iv);
+}
+
+/* Not in Go: the fips140.Enabled check and cryptotest.RerunWithFIPS140Enabled
+ * that both tests start with. True when the test ran again in a subprocess. */
+static bool rerun_with_fips140_enabled(TestingT *t) {
+    if (fips140_enabled())
+        return false;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    fipstest_rerun(t, arena_allocator(&ar), "on", NULL);
+    arena_free(&ar);
+    return true;
+}
+
+static void TestGCMNoncesFIPSV1(TestingT *t) {
+    if (rerun_with_fips140_enabled(t))
+        return;
+
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    testing_t_run(t, BURROW_S("NewGCMWithCounterNonce"),
+                  BURROW_FN(TestingTFunc, nonces_with_counter_nonce, a));
+    testing_t_run(t, BURROW_S("NewGCMForSSH"),
+                  BURROW_FN(TestingTFunc, nonces_for_ssh, a));
+    arena_free(&ar);
+}
+
+static Slice xor_nonce(Alloc *a, Slice mask, uint64_t counter) {
+    Slice nonce = slice_make(a, TYPE_BYTE, 12, 12);
+    Byte *p = nonce.p;
+    memcpy(p, mask.p, 12);
+    for (int i = 0; i < 8; i++)
+        p[4 + i] ^= (Byte)(counter >> (56 - 8 * i));
+    return nonce;
+}
+
+static void set_nonce_prefix_and_mask(CipherAEAD g, Slice mask) {
+    (void)burrow__gcm_set_nonce_prefix_and_mask(g, mask);
+}
+
+static void nonces_with_xor_counter_nonce(void *env, TestingT *t) {
+    Alloc *a = env;
+    static const char *const masks[] = {
+        "ffffffffffffffffffffffff",
+        "aabbccddeeff001122334455",
+        "000000000000000000000000",
+    };
+    for (size_t i = 0; i < sizeof masks / sizeof masks[0]; i++) {
+        Slice mask = decode_hex(t, a, masks[i]);
+        CipherAEAD g = new_nonce_gcm(t, a, burrow__gcm_new_with_xor_counter_nonce);
+        /* Mask is derived from first invocation with zero nonce. */
+        expect_ok(t, a, g, xor_nonce(a, mask, 0));
+        expect_ok(t, a, g, xor_nonce(a, mask, 1));
+        expect_ok(t, a, g, xor_nonce(a, mask, 100));
+        expect_panic(t, a, g, xor_nonce(a, mask, 100));
+        expect_panic(t, a, g, xor_nonce(a, mask, 99));
+        expect_ok(t, a, g, xor_nonce(a, mask, UINT64_MAX - 2));
+        expect_ok(t, a, g, xor_nonce(a, mask, UINT64_MAX - 1));
+        expect_panic(t, a, g, xor_nonce(a, mask, UINT64_MAX));
+        expect_panic(t, a, g, xor_nonce(a, mask, 0));
+
+        g = new_nonce_gcm(t, a, burrow__gcm_new_with_xor_counter_nonce);
+        set_nonce_prefix_and_mask(g, mask);
+        expect_ok(t, a, g, xor_nonce(a, mask, 0xFFFFFFFF));
+        expect_ok(t, a, g, xor_nonce(a, mask, UINT64_MAX - 2));
+        expect_ok(t, a, g, xor_nonce(a, mask, UINT64_MAX - 1));
+        expect_panic(t, a, g, xor_nonce(a, mask, UINT64_MAX));
+        expect_panic(t, a, g, xor_nonce(a, mask, 0));
+
+        g = new_nonce_gcm(t, a, burrow__gcm_new_with_xor_counter_nonce);
+        set_nonce_prefix_and_mask(g, mask);
+        expect_ok(t, a, g, xor_nonce(a, mask, UINT64_MAX - 1));
+        expect_panic(t, a, g, xor_nonce(a, mask, UINT64_MAX));
+        expect_panic(t, a, g, xor_nonce(a, mask, 0));
+    }
+}
+
+static void TestGCMNoncesFIPSV126(TestingT *t) {
+    if (rerun_with_fips140_enabled(t))
+        return;
+
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    testing_t_run(t, BURROW_S("NewGCMWithXORCounterNonce"),
+                  BURROW_FN(TestingTFunc, nonces_with_xor_counter_nonce, a));
+    arena_free(&ar);
+}
+
 static void gcm_wycheproof(void *env, TestingT *t) {
     const GenWycheproof *tv = env;
     Arena ar;
@@ -1108,6 +1372,8 @@ static void BenchmarkAESGCM(TestingB *b) {
     X(TestGCMAsm)                                                                      \
     X(TestGCMAEAD)                                                                     \
     X(TestGCMWithRandomNonce)                                                          \
+    X(TestGCMNoncesFIPSV1)                                                             \
+    X(TestGCMNoncesFIPSV126)                                                           \
     X(TestGCMWycheproof)                                                               \
     X(BenchmarkAESGCM)
 

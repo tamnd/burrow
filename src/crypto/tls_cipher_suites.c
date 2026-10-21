@@ -327,14 +327,17 @@ static TlsCipher tls_wrap_aead(Alloc *a, CipherAEAD aead, const CipherAEADVT *vt
     return c;
 }
 
-/* aes.NewCipher and then GCM over it. */
-static CipherAEAD tls_new_aes_gcm(Alloc *a, Slice key) {
+/* aes.NewCipher and then GCM over it, from gcm.NewGCMForTLS12 or
+ * NewGCMForTLS13. */
+static CipherAEAD tls_new_aes_gcm(Alloc *a, Slice key,
+                                  CipherAEAD (*new_gcm)(Alloc *, CipherBlock,
+                                                        Error *)) {
     Error err = BURROW_NO_ERROR;
     CipherBlock block = aes_new_cipher(a, key, &err);
     tls_check_error(err);
     if (block.vt == NULL)
         return (CipherAEAD){NULL, NULL};
-    CipherAEAD aead = burrow__gcm_new(a, block, &err);
+    CipherAEAD aead = new_gcm(a, block, &err);
     tls_check_error(err);
     return aead;
 }
@@ -342,14 +345,15 @@ static CipherAEAD tls_new_aes_gcm(Alloc *a, Slice key) {
 static TlsCipher tls_aead_aes_gcm(Alloc *a, Slice key, Slice nonce_prefix) {
     if (nonce_prefix.len != TLS_NONCE_PREFIX_LENGTH)
         panic_str(BURROW_S("tls: internal error: wrong nonce length"));
-    return tls_wrap_aead(a, tls_new_aes_gcm(a, key), &tls_prefix_nonce_vt,
-                         nonce_prefix);
+    return tls_wrap_aead(a, tls_new_aes_gcm(a, key, burrow__gcm_new_for_tls12),
+                         &tls_prefix_nonce_vt, nonce_prefix);
 }
 
 static TlsCipher tls_aead_aes_gcm_tls13(Alloc *a, Slice key, Slice nonce_mask) {
     if (nonce_mask.len != TLS_AEAD_NONCE_LENGTH)
         panic_str(BURROW_S("tls: internal error: wrong nonce length"));
-    return tls_wrap_aead(a, tls_new_aes_gcm(a, key), &tls_xor_nonce_vt, nonce_mask);
+    return tls_wrap_aead(a, tls_new_aes_gcm(a, key, burrow__gcm_new_for_tls13),
+                         &tls_xor_nonce_vt, nonce_mask);
 }
 
 static TlsCipher tls_aead_chacha20_poly1305(Alloc *a, Slice key, Slice nonce_mask) {

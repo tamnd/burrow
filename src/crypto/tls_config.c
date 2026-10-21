@@ -566,6 +566,8 @@ TlsCertificate *burrow__tls_config_get_certificate(TlsConfig *c,
     return &certs[0];
 }
 
+bool burrow__tls_testing_only_force_downgrade_canary = false;
+
 /* emptyConfig, for a ClientHelloInfo with no Config and for a Conn with none. */
 static TlsConfig tcfg_empty_config = {0};
 
@@ -1122,6 +1124,22 @@ void tls_lru_client_session_cache_free(TlsClientSessionCache cache) {
     mem_free(c->a, c->entries, (size_t)c->capacity * sizeof(TcfgLruEntry),
              _Alignof(TcfgLruEntry));
     mem_free(c->a, c, sizeof(*c), _Alignof(TcfgLruSessionCache));
+}
+
+TlsClientSessionState *burrow__tls_lru_session_cache_front(TlsClientSessionCache cache,
+                                                           Str *key) {
+    *key = BURROW_STR_EMPTY;
+    if (cache.vt != &tcfg_lru_session_cache_vt)
+        return NULL;
+    TcfgLruSessionCache *c = cache.data;
+    TlsClientSessionState *state = NULL;
+    sync_mutex_lock(&c->mu);
+    if (c->front >= 0) {
+        *key = c->entries[c->front].key;
+        state = c->entries[c->front].state;
+    }
+    sync_mutex_unlock(&c->mu);
+    return state;
 }
 
 /* CertificateVerificationError as an Error. The error first, so the data

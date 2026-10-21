@@ -18,6 +18,7 @@
 #ifndef BURROW_CRYPTO_NISTEC_P256_TABLE_H
 #define BURROW_CRYPTO_NISTEC_P256_TABLE_H
 
+#include "fips140_module.h"
 #include "nistec.h"
 
 #include <stdint.h>

@@ -717,7 +717,7 @@ static SyncOnce p384_generator_table_once;
 
 CRYPTO_FIPS_TEXT static void p384_generator_table_init(void *env) {
     (void)env;
-    NistecP384Point base;
+    NistecP384Point base = {0};
     p384_point_set_generator(&base);
     for (int i = 0; i < p384_element_length * 2; i++) {
         p384_generator_table[i].p[0] = base;

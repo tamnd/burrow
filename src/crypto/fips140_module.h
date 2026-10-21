@@ -25,10 +25,11 @@
  * read-only data, which is what does not change while the program runs.
  *
  * What the compiler makes on its own, such as string literals and constant
- * pools, stays in the usual sections, and so does a function from a header the
- * module includes that the compiler chose not to inline, such as fiat-crypto's
- * field arithmetic at -O0. A pass of the HMAC means the module's own functions
- * and tables are unchanged, not every byte they use.
+ * pools, stays in the usual sections. So do the small constants declared inside
+ * functions, and a function from a header the module includes that the compiler
+ * chose not to inline, such as fiat-crypto's field arithmetic at -O0. A pass of
+ * the HMAC means the module's own functions and tables are unchanged, not every
+ * byte they use.
  *
  * Where the compiler or the format has no way to name a section, both macros
  * are empty, and burrow__fips140_supported says FIPS mode is not supported.

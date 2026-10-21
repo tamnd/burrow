@@ -242,7 +242,7 @@ TEST_GEN := $(wildcard tests/gen/*.c)
 DEPFLAGS := -MMD -MP
 DEPS     := $(OBJS:.o=.d) $(TEST_BINS:=.d)
 
-.PHONY: all lib test check collisions clean install fmt tidy amalgamation gofmt-gate sqlite from-go ctgrind dudect ct-asm
+.PHONY: all lib test check collisions clean install fmt tidy amalgamation gofmt-gate sqlite from-go ctgrind dudect ct-asm fips-check
 
 all: lib
 
@@ -477,6 +477,17 @@ $(CT_ASM): src/crypto/subtle.c
 
 ct-asm: $(CT_ASM)
 	@tools/check-ct-asm.sh '$(CC)' $(CT_ASM)
+
+# fips-check: burrow-gen fips on a copy of the FIPS 140-3 integrity test, and
+# then the test, so that the checksum it checks is the one burrow-gen wrote and
+# not the one the test writes into a copy of itself. Needs Python. See
+# src/crypto/fips140_module.h and tools/check-fips.sh.
+FIPS_BIN := $(BUILD)/tools/fips140_check_test
+
+fips-check: $(BUILD)/tests/fips140_check_test
+	@mkdir -p $(dir $(FIPS_BIN))
+	cp $< $(FIPS_BIN)
+	@tools/check-fips.sh $(FIPS_BIN)
 
 # The SQLite driver in examples/sqlite, the one program here that links a
 # library burrow does not have. pkg-config finds SQLite where it can, and

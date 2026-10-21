@@ -742,7 +742,7 @@ static SyncOnce p224_generator_table_once;
 
 CRYPTO_FIPS_TEXT static void p224_generator_table_init(void *env) {
     (void)env;
-    NistecP224Point base;
+    NistecP224Point base = {0};
     p224_point_set_generator(&base);
     for (int i = 0; i < p224_element_length * 2; i++) {
         p224_generator_table[i].p[0] = base;

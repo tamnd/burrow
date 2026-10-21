@@ -205,9 +205,12 @@ INCLUDES = """\
 #include "burrow/slice.h"
 #include "burrow/sync.h"
 
+#include "fips140_module.h"
+
 #include <stdint.h>
 #include <string.h>
 
+/* NOLINTNEXTLINE(misc-redundant-expression) */
 _Static_assert(FIAT_P{n}_LIMBS == NISTEC_P{n}_LIMBS,
                "nistec.h has the wrong number of words for a P-{n} element");
 _Static_assert(sizeof(fiat_p{n}_limb) == sizeof(NistecLimb),
@@ -215,7 +218,7 @@ _Static_assert(sizeof(fiat_p{n}_limb) == sizeof(NistecLimb),
 
 enum {{ p{n}_element_length = {elen} }};
 
-static void p{n}_reverse(uint8_t *v) {{
+CRYPTO_FIPS_TEXT static void p{n}_reverse(uint8_t *v) {{
     for (int i = 0; i < p{n}_element_length / 2; i++) {{
         uint8_t t = v[i];
         v[i] = v[p{n}_element_length - 1 - i];
@@ -228,43 +231,43 @@ static void p{n}_reverse(uint8_t *v) {{
 ELEMENT_MONTGOMERY = """
 /* ------------------------------------------------------------- element */
 
-static NistecP{n}Element *p{n}_one(NistecP{n}Element *e) {{
+CRYPTO_FIPS_TEXT static NistecP{n}Element *p{n}_one(NistecP{n}Element *e) {{
     fiat_p{n}_set_one(e->l);
     return e;
 }}
 
-static NistecP{n}Element *p{n}_add(NistecP{n}Element *e, const NistecP{n}Element *t1,
+CRYPTO_FIPS_TEXT static NistecP{n}Element *p{n}_add(NistecP{n}Element *e, const NistecP{n}Element *t1,
                                  const NistecP{n}Element *t2) {{
     fiat_p{n}_add(e->l, t1->l, t2->l);
     return e;
 }}
 
-static NistecP{n}Element *p{n}_sub(NistecP{n}Element *e, const NistecP{n}Element *t1,
+CRYPTO_FIPS_TEXT static NistecP{n}Element *p{n}_sub(NistecP{n}Element *e, const NistecP{n}Element *t1,
                                  const NistecP{n}Element *t2) {{
     fiat_p{n}_sub(e->l, t1->l, t2->l);
     return e;
 }}
 
-static NistecP{n}Element *p{n}_mul(NistecP{n}Element *e, const NistecP{n}Element *t1,
+CRYPTO_FIPS_TEXT static NistecP{n}Element *p{n}_mul(NistecP{n}Element *e, const NistecP{n}Element *t1,
                                  const NistecP{n}Element *t2) {{
     fiat_p{n}_mul(e->l, t1->l, t2->l);
     return e;
 }}
 
-static NistecP{n}Element *p{n}_square(NistecP{n}Element *e, const NistecP{n}Element *t) {{
+CRYPTO_FIPS_TEXT static NistecP{n}Element *p{n}_square(NistecP{n}Element *e, const NistecP{n}Element *t) {{
     fiat_p{n}_square(e->l, t->l);
     return e;
 }}
 
 /* Writes the {elen} byte big endian encoding of e to out. */
-static void p{n}_bytes(const NistecP{n}Element *e, uint8_t *out) {{
+CRYPTO_FIPS_TEXT static void p{n}_bytes(const NistecP{n}Element *e, uint8_t *out) {{
     fiat_p{n}_non_montgomery_domain_field_element tmp;
     fiat_p{n}_from_montgomery(tmp, e->l);
     fiat_p{n}_to_bytes(out, tmp);
     p{n}_reverse(out);
 }}
 
-static void p{n}_from_canonical_bytes(NistecP{n}Element *e, const uint8_t *in) {{
+CRYPTO_FIPS_TEXT static void p{n}_from_canonical_bytes(NistecP{n}Element *e, const uint8_t *in) {{
     fiat_p{n}_non_montgomery_domain_field_element tmp;
     fiat_p{n}_from_bytes(tmp, in);
     fiat_p{n}_to_montgomery(e->l, tmp);
@@ -278,13 +281,13 @@ static void p{n}_from_canonical_bytes(NistecP{n}Element *e, const uint8_t *in) {
 ELEMENT_SOLINAS = """
 /* ------------------------------------------------------------- element */
 
-static NistecP{n}Element *p{n}_one(NistecP{n}Element *e) {{
+CRYPTO_FIPS_TEXT static NistecP{n}Element *p{n}_one(NistecP{n}Element *e) {{
     memset(e, 0, sizeof *e);
     e->l[0] = 1;
     return e;
 }}
 
-static NistecP{n}Element *p{n}_add(NistecP{n}Element *e, const NistecP{n}Element *t1,
+CRYPTO_FIPS_TEXT static NistecP{n}Element *p{n}_add(NistecP{n}Element *e, const NistecP{n}Element *t1,
                                  const NistecP{n}Element *t2) {{
     fiat_p{n}_loose_field_element loose;
     fiat_p{n}_add(loose, t1->l, t2->l);
@@ -292,7 +295,7 @@ static NistecP{n}Element *p{n}_add(NistecP{n}Element *e, const NistecP{n}Element
     return e;
 }}
 
-static NistecP{n}Element *p{n}_sub(NistecP{n}Element *e, const NistecP{n}Element *t1,
+CRYPTO_FIPS_TEXT static NistecP{n}Element *p{n}_sub(NistecP{n}Element *e, const NistecP{n}Element *t1,
                                  const NistecP{n}Element *t2) {{
     fiat_p{n}_loose_field_element loose;
     fiat_p{n}_sub(loose, t1->l, t2->l);
@@ -300,37 +303,37 @@ static NistecP{n}Element *p{n}_sub(NistecP{n}Element *e, const NistecP{n}Element
     return e;
 }}
 
-static NistecP{n}Element *p{n}_mul(NistecP{n}Element *e, const NistecP{n}Element *t1,
+CRYPTO_FIPS_TEXT static NistecP{n}Element *p{n}_mul(NistecP{n}Element *e, const NistecP{n}Element *t1,
                                  const NistecP{n}Element *t2) {{
     fiat_p{n}_carry_mul(e->l, t1->l, t2->l);
     return e;
 }}
 
-static NistecP{n}Element *p{n}_square(NistecP{n}Element *e, const NistecP{n}Element *t) {{
+CRYPTO_FIPS_TEXT static NistecP{n}Element *p{n}_square(NistecP{n}Element *e, const NistecP{n}Element *t) {{
     fiat_p{n}_carry_square(e->l, t->l);
     return e;
 }}
 
 /* Writes the {elen} byte big endian encoding of e to out. */
-static void p{n}_bytes(const NistecP{n}Element *e, uint8_t *out) {{
+CRYPTO_FIPS_TEXT static void p{n}_bytes(const NistecP{n}Element *e, uint8_t *out) {{
     fiat_p{n}_to_bytes(out, e->l);
     p{n}_reverse(out);
 }}
 
-static void p{n}_from_canonical_bytes(NistecP{n}Element *e, const uint8_t *in) {{
+CRYPTO_FIPS_TEXT static void p{n}_from_canonical_bytes(NistecP{n}Element *e, const uint8_t *in) {{
     fiat_p{n}_from_bytes(e->l, in);
 }}
 """
 
 ELEMENT_COMMON = """
-static int p{n}_equal(const NistecP{n}Element *e, const NistecP{n}Element *t) {{
+CRYPTO_FIPS_TEXT static int p{n}_equal(const NistecP{n}Element *e, const NistecP{n}Element *t) {{
     uint8_t eb[p{n}_element_length], tb[p{n}_element_length];
     p{n}_bytes(e, eb);
     p{n}_bytes(t, tb);
     return burrow__nistec_equal_bytes(eb, tb, p{n}_element_length);
 }}
 
-static int p{n}_is_zero(const NistecP{n}Element *e) {{
+CRYPTO_FIPS_TEXT static int p{n}_is_zero(const NistecP{n}Element *e) {{
     uint8_t eb[p{n}_element_length], zero[p{n}_element_length];
     memset(zero, 0, sizeof zero);
     p{n}_bytes(e, eb);
@@ -339,7 +342,7 @@ static int p{n}_is_zero(const NistecP{n}Element *e) {{
 
 /* Sets e to the value of the {elen} big endian bytes at v. Go's SetBytes also
  * takes a slice of the wrong length, which nothing here passes it. */
-static NistecP{n}Element *p{n}_set_bytes(NistecP{n}Element *e, const uint8_t *v,
+CRYPTO_FIPS_TEXT static NistecP{n}Element *p{n}_set_bytes(NistecP{n}Element *e, const uint8_t *v,
                                        Error *err) {{
     /* Check for non-canonical encodings (p + k, 2p + k, etc.) by comparing to
      * the encoding of -1 mod p, so p - 1, the highest canonical encoding. */
@@ -361,7 +364,7 @@ static NistecP{n}Element *p{n}_set_bytes(NistecP{n}Element *e, const uint8_t *v,
 }}
 
 /* Sets v to a if cond is 1 and to b if cond is 0. */
-static NistecP{n}Element *p{n}_select(NistecP{n}Element *v, const NistecP{n}Element *a,
+CRYPTO_FIPS_TEXT static NistecP{n}Element *p{n}_select(NistecP{n}Element *v, const NistecP{n}Element *a,
                                     const NistecP{n}Element *b, int cond) {{
     fiat_p{n}_selectznz(v->l, (fiat_p{n}_uint1)cond, b->l, a->l);
     return v;
@@ -369,7 +372,7 @@ static NistecP{n}Element *p{n}_select(NistecP{n}Element *v, const NistecP{n}Elem
 
 /* Sets e to 1/x and returns e. If x is 0, the result is 0. Inversion is
  * exponentiation by p - 2. */
-static NistecP{n}Element *p{n}_invert(NistecP{n}Element *e, const NistecP{n}Element *x) {{
+CRYPTO_FIPS_TEXT static NistecP{n}Element *p{n}_invert(NistecP{n}Element *e, const NistecP{n}Element *x) {{
 {invert}
 
     *e = *z;
@@ -379,13 +382,13 @@ static NistecP{n}Element *p{n}_invert(NistecP{n}Element *e, const NistecP{n}Elem
 
 SQRT_CANDIDATE = """
 /* Sets z to a square root candidate for x. z and x must not overlap. */
-static void p{n}_sqrt_candidate(NistecP{n}Element *z, const NistecP{n}Element *x) {{
+CRYPTO_FIPS_TEXT static void p{n}_sqrt_candidate(NistecP{n}Element *z, const NistecP{n}Element *x) {{
 {sqrt}
 }}
 
 /* Sets e to a square root of x. If x is not a square, returns 0 and leaves e
  * unchanged. e and x can overlap. */
-static int p{n}_sqrt(NistecP{n}Element *e, const NistecP{n}Element *x) {{
+CRYPTO_FIPS_TEXT static int p{n}_sqrt(NistecP{n}Element *e, const NistecP{n}Element *x) {{
     NistecP{n}Element candidate, square;
     p{n}_sqrt_candidate(&candidate, x);
     p{n}_square(&square, &candidate);
@@ -403,7 +406,7 @@ SQRT_224 = """
 static NistecP224Element p224_gg[96];
 static SyncOnce p224_gg_once;
 
-static void p224_gg_init(void *env) {{
+CRYPTO_FIPS_TEXT static void p224_gg_init(void *env) {{
     (void)env;
     static const uint8_t g[p224_element_length] = {{
 {gg}
@@ -414,7 +417,7 @@ static void p224_gg_init(void *env) {{
 }}
 
 /* Sets r to a square root candidate for x. r and x must not overlap. */
-static void p224_sqrt_candidate(NistecP224Element *r, const NistecP224Element *x) {{
+CRYPTO_FIPS_TEXT static void p224_sqrt_candidate(NistecP224Element *r, const NistecP224Element *x) {{
     /* Since p = 1 mod 4, we can't use the exponentiation by (p + 1) / 4 like
      * for the other primes. Instead, implement a variation of Tonelli-Shanks.
      * The constant-time implementation is adapted from Thomas Pornin's ecGFp5.
@@ -461,7 +464,7 @@ static void p224_sqrt_candidate(NistecP224Element *r, const NistecP224Element *x
 
 /* Sets e to a square root of x. If x is not a square, returns 0 and leaves e
  * unchanged. e and x can overlap. */
-static int p224_sqrt(NistecP224Element *e, const NistecP224Element *x) {{
+CRYPTO_FIPS_TEXT static int p224_sqrt(NistecP224Element *e, const NistecP224Element *x) {{
     NistecP224Element candidate, square;
     p224_sqrt_candidate(&candidate, x);
     p224_square(&square, &candidate);
@@ -475,7 +478,7 @@ static int p224_sqrt(NistecP224Element *e, const NistecP224Element *x) {{
 # p256.go's p256Sqrt, which is written out rather than generated.
 SQRT_256 = """
 /* Sets e to the square of x, n times over, for n of at least 1. */
-static void p256_square_n(NistecP256Element *e, const NistecP256Element *x, int n) {{
+CRYPTO_FIPS_TEXT static void p256_square_n(NistecP256Element *e, const NistecP256Element *x, int n) {{
     p256_square(e, x);
     for (int i = 1; i < n; i++)
         p256_square(e, e);
@@ -483,7 +486,7 @@ static void p256_square_n(NistecP256Element *e, const NistecP256Element *x, int 
 
 /* Sets e to a square root of x. If x is not a square, returns 0 and leaves e
  * unchanged. e and x can overlap. */
-static int p256_sqrt(NistecP256Element *e, const NistecP256Element *x) {{
+CRYPTO_FIPS_TEXT static int p256_sqrt(NistecP256Element *e, const NistecP256Element *x) {{
 {sqrt}
 
     /* Check if the candidate t0 is indeed a square root of x. */
@@ -502,7 +505,7 @@ POINT = """
 static NistecP{n}Element p{n}_b_value;
 static SyncOnce p{n}_b_once;
 
-static void p{n}_b_init(void *env) {{
+CRYPTO_FIPS_TEXT static void p{n}_b_init(void *env) {{
     (void)env;
     static const uint8_t b[p{n}_element_length] = {{
 {b}
@@ -510,20 +513,20 @@ static void p{n}_b_init(void *env) {{
     p{n}_set_bytes(&p{n}_b_value, b, NULL);
 }}
 
-static const NistecP{n}Element *p{n}_b(void) {{
+CRYPTO_FIPS_TEXT static const NistecP{n}Element *p{n}_b(void) {{
     sync_once_do(&p{n}_b_once, BURROW_FN(Func, p{n}_b_init, NULL));
     return &p{n}_b_value;
 }}
 
 /* Sets p to the point at infinity. */
-static NistecP{n}Point *p{n}_point_new(NistecP{n}Point *p) {{
+CRYPTO_FIPS_TEXT static NistecP{n}Point *p{n}_point_new(NistecP{n}Point *p) {{
     memset(&p->x, 0, sizeof p->x);
     p{n}_one(&p->y);
     memset(&p->z, 0, sizeof p->z);
     return p;
 }}
 
-static NistecP{n}Point *p{n}_point_set_generator(NistecP{n}Point *p) {{
+CRYPTO_FIPS_TEXT static NistecP{n}Point *p{n}_point_set_generator(NistecP{n}Point *p) {{
     static const uint8_t x[p{n}_element_length] = {{
 {gx}
     }};
@@ -537,7 +540,7 @@ static NistecP{n}Point *p{n}_point_set_generator(NistecP{n}Point *p) {{
 }}
 
 /* Sets y2 to x^3 - 3x + b, and returns y2. */
-static NistecP{n}Element *p{n}_polynomial(NistecP{n}Element *y2,
+CRYPTO_FIPS_TEXT static NistecP{n}Element *p{n}_polynomial(NistecP{n}Element *y2,
                                         const NistecP{n}Element *x) {{
     p{n}_square(y2, x);
     p{n}_mul(y2, y2, x);
@@ -550,7 +553,7 @@ static NistecP{n}Element *p{n}_polynomial(NistecP{n}Element *y2,
     return p{n}_add(y2, y2, p{n}_b());
 }}
 
-static int p{n}_check_on_curve(const NistecP{n}Element *x, const NistecP{n}Element *y,
+CRYPTO_FIPS_TEXT static int p{n}_check_on_curve(const NistecP{n}Element *x, const NistecP{n}Element *y,
                               Error *err) {{
     /* y^2 = x^3 - 3x + b */
     NistecP{n}Element rhs, lhs;
@@ -567,7 +570,7 @@ static int p{n}_check_on_curve(const NistecP{n}Element *x, const NistecP{n}Eleme
  * specified in SEC 1, Version 2.0, Section 2.3.4. If the point is not on the
  * curve, it returns NULL and an error, and the receiver is unchanged.
  * Otherwise, it returns p. */
-static NistecP{n}Point *p{n}_point_set_bytes(NistecP{n}Point *p, Slice b, Error *err) {{
+CRYPTO_FIPS_TEXT static NistecP{n}Point *p{n}_point_set_bytes(NistecP{n}Point *p, Slice b, Error *err) {{
     const uint8_t *bb = b.p;
     NistecP{n}Element x, y;
 
@@ -625,7 +628,7 @@ static NistecP{n}Point *p{n}_point_set_bytes(NistecP{n}Point *p, Slice b, Error 
 /* Writes the uncompressed or infinity encoding of p, as specified in SEC 1,
  * Version 2.0, Section 2.3.3, and returns its length. Note that the encoding
  * of the point at infinity is shorter than all other encodings. */
-static Int p{n}_point_bytes(const NistecP{n}Point *p, uint8_t *out) {{
+CRYPTO_FIPS_TEXT static Int p{n}_point_bytes(const NistecP{n}Point *p, uint8_t *out) {{
     /* The SEC 1 representation of the point at infinity is a single zero byte,
      * and only infinity has z = 0. */
     if (p{n}_is_zero(&p->z) == 1) {{
@@ -647,7 +650,7 @@ static Int p{n}_point_bytes(const NistecP{n}Point *p, uint8_t *out) {{
 /* Writes the encoding of the x-coordinate of p, as specified in SEC 1, Version
  * 2.0, Section 2.3.5, or returns NULL and an error if p is the point at
  * infinity. */
-static uint8_t *p{n}_point_bytes_x(const NistecP{n}Point *p, uint8_t *out, Error *err) {{
+CRYPTO_FIPS_TEXT static uint8_t *p{n}_point_bytes_x(const NistecP{n}Point *p, uint8_t *out, Error *err) {{
     if (p{n}_is_zero(&p->z) == 1) {{
         BURROW_OUT(err, errors_new(error_allocator(),
                                    BURROW_S("P{n} point is the point at infinity")));
@@ -665,7 +668,7 @@ static uint8_t *p{n}_point_bytes_x(const NistecP{n}Point *p, uint8_t *out, Error
 /* Writes the compressed or infinity encoding of p, as specified in SEC 1,
  * Version 2.0, Section 2.3.3, and returns its length. Note that the encoding
  * of the point at infinity is shorter than all other encodings. */
-static Int p{n}_point_bytes_compressed(const NistecP{n}Point *p, uint8_t *out) {{
+CRYPTO_FIPS_TEXT static Int p{n}_point_bytes_compressed(const NistecP{n}Point *p, uint8_t *out) {{
     if (p{n}_is_zero(&p->z) == 1) {{
         out[0] = 0;
         return 1;
@@ -686,7 +689,7 @@ static Int p{n}_point_bytes_compressed(const NistecP{n}Point *p, uint8_t *out) {
 }}
 
 /* Sets q = p1 + p2, and returns q. The points may overlap. */
-static NistecP{n}Point *p{n}_point_add(NistecP{n}Point *q, const NistecP{n}Point *p1,
+CRYPTO_FIPS_TEXT static NistecP{n}Point *p{n}_point_add(NistecP{n}Point *q, const NistecP{n}Point *p1,
                                      const NistecP{n}Point *p2) {{
     /* Complete addition formula for a = -3 from "Complete addition formulas for
      * prime order elliptic curves" (https://eprint.iacr.org/2015/1060), A.2. */
@@ -747,7 +750,7 @@ static NistecP{n}Point *p{n}_point_add(NistecP{n}Point *q, const NistecP{n}Point
 }}
 
 /* Sets q = p + p, and returns q. The points may overlap. */
-static NistecP{n}Point *p{n}_point_double(NistecP{n}Point *q, const NistecP{n}Point *p) {{
+CRYPTO_FIPS_TEXT static NistecP{n}Point *p{n}_point_double(NistecP{n}Point *q, const NistecP{n}Point *p) {{
     /* Complete addition formula for a = -3 from "Complete addition formulas for
      * prime order elliptic curves" (https://eprint.iacr.org/2015/1060), A.2. */
 
@@ -798,7 +801,7 @@ static NistecP{n}Point *p{n}_point_double(NistecP{n}Point *q, const NistecP{n}Po
 }}
 
 /* Sets q to p1 if cond == 1, and to p2 if cond == 0. */
-static NistecP{n}Point *p{n}_point_select(NistecP{n}Point *q, const NistecP{n}Point *p1,
+CRYPTO_FIPS_TEXT static NistecP{n}Point *p{n}_point_select(NistecP{n}Point *q, const NistecP{n}Point *p1,
                                         const NistecP{n}Point *p2, int cond) {{
     p{n}_select(&q->x, &p1->x, &p2->x, cond);
     p{n}_select(&q->y, &p1->y, &p2->y, cond);
@@ -819,7 +822,7 @@ typedef struct P{n}Table {{
 /* Selects the n-th multiple of the table base point into p. It works in
  * constant time by iterating over every entry of the table. n must be in
  * [0, 15]. */
-static void p{n}_table_select(const P{n}Table *table, NistecP{n}Point *p, uint8_t n) {{
+CRYPTO_FIPS_TEXT static void p{n}_table_select(const P{n}Table *table, NistecP{n}Point *p, uint8_t n) {{
     if (n >= 16)
         panic_str(BURROW_S(
             "nistec: internal error: p{n}Table called with out-of-bounds value"));
@@ -831,7 +834,7 @@ static void p{n}_table_select(const P{n}Table *table, NistecP{n}Point *p, uint8_
 }}
 
 /* Sets p = scalar * q, and returns p. */
-static NistecP{n}Point *p{n}_point_scalar_mult(NistecP{n}Point *p, const NistecP{n}Point *q,
+CRYPTO_FIPS_TEXT static NistecP{n}Point *p{n}_point_scalar_mult(NistecP{n}Point *p, const NistecP{n}Point *q,
                                              Slice scalar, Error *err) {{
     (void)err;
     const uint8_t *s = scalar.p;
@@ -882,9 +885,9 @@ static NistecP{n}Point *p{n}_point_scalar_mult(NistecP{n}Point *p, const NistecP
 static P{n}Table p{n}_generator_table[p{n}_element_length * 2];
 static SyncOnce p{n}_generator_table_once;
 
-static void p{n}_generator_table_init(void *env) {{
+CRYPTO_FIPS_TEXT static void p{n}_generator_table_init(void *env) {{
     (void)env;
-    NistecP{n}Point base;
+    NistecP{n}Point base = {{0}};
     p{n}_point_set_generator(&base);
     for (int i = 0; i < p{n}_element_length * 2; i++) {{
         p{n}_generator_table[i].p[0] = base;
@@ -899,7 +902,7 @@ static void p{n}_generator_table_init(void *env) {{
 }}
 
 /* Sets p = scalar * B, where B is the canonical generator, and returns p. */
-static NistecP{n}Point *p{n}_point_scalar_base_mult(NistecP{n}Point *p, Slice scalar,
+CRYPTO_FIPS_TEXT static NistecP{n}Point *p{n}_point_scalar_base_mult(NistecP{n}Point *p, Slice scalar,
                                                   Error *err) {{
     if (scalar.len != p{n}_element_length) {{
         BURROW_OUT(err, errors_new(error_allocator(), BURROW_S("invalid scalar length")));
@@ -938,54 +941,54 @@ static NistecP{n}Point *p{n}_point_scalar_base_mult(NistecP{n}Point *p, Slice sc
 VTABLE = """
 /* ---------------------------------------------------------------- curve */
 
-static NistecPoint *p{n}_v_point_new(NistecPoint *p) {{
+CRYPTO_FIPS_TEXT static NistecPoint *p{n}_v_point_new(NistecPoint *p) {{
     p{n}_point_new(&p->p{n});
     return p;
 }}
 
-static NistecPoint *p{n}_v_set_generator(NistecPoint *p) {{
+CRYPTO_FIPS_TEXT static NistecPoint *p{n}_v_set_generator(NistecPoint *p) {{
     p{n}_point_set_generator(&p->p{n});
     return p;
 }}
 
-static NistecPoint *p{n}_v_set(NistecPoint *p, const NistecPoint *q) {{
+CRYPTO_FIPS_TEXT static NistecPoint *p{n}_v_set(NistecPoint *p, const NistecPoint *q) {{
     p->p{n} = q->p{n};
     return p;
 }}
 
-static NistecPoint *p{n}_v_set_bytes(NistecPoint *p, Slice b, Error *err) {{
+CRYPTO_FIPS_TEXT static NistecPoint *p{n}_v_set_bytes(NistecPoint *p, Slice b, Error *err) {{
     return p{n}_point_set_bytes(&p->p{n}, b, err) == NULL ? NULL : p;
 }}
 
-static Int p{n}_v_bytes(const NistecPoint *p, uint8_t *out) {{
+CRYPTO_FIPS_TEXT static Int p{n}_v_bytes(const NistecPoint *p, uint8_t *out) {{
     return p{n}_point_bytes(&p->p{n}, out);
 }}
 
-static uint8_t *p{n}_v_bytes_x(const NistecPoint *p, uint8_t *out, Error *err) {{
+CRYPTO_FIPS_TEXT static uint8_t *p{n}_v_bytes_x(const NistecPoint *p, uint8_t *out, Error *err) {{
     return p{n}_point_bytes_x(&p->p{n}, out, err);
 }}
 
-static Int p{n}_v_bytes_compressed(const NistecPoint *p, uint8_t *out) {{
+CRYPTO_FIPS_TEXT static Int p{n}_v_bytes_compressed(const NistecPoint *p, uint8_t *out) {{
     return p{n}_point_bytes_compressed(&p->p{n}, out);
 }}
 
-static NistecPoint *p{n}_v_add(NistecPoint *q, const NistecPoint *p1,
+CRYPTO_FIPS_TEXT static NistecPoint *p{n}_v_add(NistecPoint *q, const NistecPoint *p1,
                               const NistecPoint *p2) {{
     p{n}_point_add(&q->p{n}, &p1->p{n}, &p2->p{n});
     return q;
 }}
 
-static NistecPoint *p{n}_v_double(NistecPoint *q, const NistecPoint *p) {{
+CRYPTO_FIPS_TEXT static NistecPoint *p{n}_v_double(NistecPoint *q, const NistecPoint *p) {{
     p{n}_point_double(&q->p{n}, &p->p{n});
     return q;
 }}
 
-static NistecPoint *p{n}_v_scalar_mult(NistecPoint *p, const NistecPoint *q, Slice scalar,
+CRYPTO_FIPS_TEXT static NistecPoint *p{n}_v_scalar_mult(NistecPoint *p, const NistecPoint *q, Slice scalar,
                                       Error *err) {{
     return p{n}_point_scalar_mult(&p->p{n}, &q->p{n}, scalar, err) == NULL ? NULL : p;
 }}
 
-static NistecPoint *p{n}_v_scalar_base_mult(NistecPoint *p, Slice scalar, Error *err) {{
+CRYPTO_FIPS_TEXT static NistecPoint *p{n}_v_scalar_base_mult(NistecPoint *p, Slice scalar, Error *err) {{
     return p{n}_point_scalar_base_mult(&p->p{n}, scalar, err) == NULL ? NULL : p;
 }}
 
@@ -1105,11 +1108,12 @@ text = """\
 #ifndef BURROW_CRYPTO_NISTEC_P256_TABLE_H
 #define BURROW_CRYPTO_NISTEC_P256_TABLE_H
 
+#include "fips140_module.h"
 #include "nistec.h"
 
 #include <stdint.h>
 
-static const uint64_t p256_generator_tables[43][32][2][4] = {{
+CRYPTO_FIPS_RODATA static const uint64_t p256_generator_tables[43][32][2][4] = {{
 {rows}
 }};
 

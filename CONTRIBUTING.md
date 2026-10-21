@@ -38,6 +38,16 @@ The recipe is the same every time.
 
 None of this is negotiable per PR, but all of it is negotiable in an issue. If a rule is wrong it should be changed everywhere rather than waived once.
 
+## Crypto code
+
+The hard part of crypto in C is not the algorithms, it is keeping the compiler from helping. Go's crypto code is written so that the time it takes does not depend on secrets, and a port has to keep that property through a compiler that is free to turn a mask back into a branch. The reasoning behind these rules is in [docs/design/12-packages-crypto.md](docs/design/12-packages-crypto.md) section 3.
+
+- Anything that depends on a secret goes through `crypto/subtle`: `subtle_constant_time_compare`, `subtle_constant_time_select`, `subtle_constant_time_byte_eq`, `subtle_constant_time_eq`, `subtle_constant_time_less_or_eq` and `subtle_constant_time_copy`, or through a package's own helpers that Go has too, like `ct_mask` and `ct_eq` in `src/crypto/bigmod.c`. No `if`, no `?:`, no `memcmp`, no array index and no division on secret data. Go's code already follows this, so a port that keeps the shape of the Go function keeps it too. The risk is in the places where C offers a shortcut Go didn't have.
+- The helpers in `src/crypto/subtle.c` pass their values through `ct_hide`, an empty `asm` statement that stops GCC and Clang from reasoning about the value. MSVC has no such statement, so that file turns MSVC's optimiser off with `#pragma optimize("", off)`. A new helper of that kind belongs in `subtle.c` with the barrier, not copied into another file without it.
+- No profile guided optimisation. Nothing in the build uses `-fprofile-use` or anything like it, and that has to stay true, because PGO puts branches where the profile says they pay off and that is exactly what a secret must not decide.
+- Nothing zeroes secrets yet. Go's crypto packages don't wipe key material either, and the `crypto_wipe` in the design doc does not exist. A plain `memset` on a buffer about to be freed is not a fix, because the compiler can drop it.
+- None of this is checked by a machine yet. `dudect`, ctgrind and an assembly diff on `subtle.c` are planned and tracked in the crypto milestone, and until they land the check is a reviewer reading the diff. Say in the pull request when a change touches code that handles secrets, so that somebody reads it with this list in mind.
+
 ## Commits and pull requests
 
 Write the commit message as a sentence that says what changed and why, in the present tense, addressed to somebody reading `git log` in two years. Prefix it with the package when there is one.

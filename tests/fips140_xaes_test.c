@@ -25,6 +25,14 @@
 #include <stdint.h>
 #include <string.h>
 
+/* ACVP tests consider fixed data part of the output, not part of the input, and
+ * all the pre-generated vectors at
+ * https://github.com/usnistgov/ACVP-Server/blob/3a7333f6/gen-val/json-files/KDF-1.0/expectedResults.json
+ * have a 32-byte fixed data, while ours is always 14 bytes. Instead, test
+ * against the XAES-256-GCM vectors, which were tested against OpenSSL's Counter
+ * KDF. This also ensures the KDF will work for XAES-256-GCM. */
+
+/* Not in Go: what xaesSeal and xaesOpen share. It returns the GCM nonce. */
 static Slice xaes_gcm(Alloc *a, Slice key, Slice nonce, CipherAEAD *g) {
     AesBlock c;
     burrow__aes_block_init(&c, (const Byte *)key.p, key.len);

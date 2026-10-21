@@ -167,3 +167,46 @@
    Memcheck:Cond
    fun:ecdsa_nat_bytes*
 }
+
+# RSA's decrypt, which signing uses too, checks that the result encrypts back
+# to the input, and fails with ErrDecryption if not, which only a fault in the
+# computation can cause. The other branches in rsa_fips_decrypt are on whether
+# the key has CRT values and on the ciphertext, which are public.
+{
+   rsa decrypt check
+   Memcheck:Cond
+   fun:rsa_fips_decrypt*
+}
+
+# OAEP decryption fails with ErrDecryption when the padding is wrong. The
+# padding is checked in constant time, and only the result is branched on.
+# Then the message starts after the 0x01 byte, so where it starts and how long
+# it is come from the key until the caller has it. Go returns rest[index+1:]
+# the same way. burrow copies the message out of the scratch memory, and that
+# copy takes its length.
+{
+   rsa OAEP padding check
+   Memcheck:Cond
+   fun:rsa_fips_decrypt_oaep*
+}
+{
+   rsa OAEP message start
+   Memcheck:Cond
+   fun:slice_from
+   fun:rsa_sub
+   fun:rsa_fips_decrypt_oaep*
+}
+{
+   rsa OAEP message copy
+   Memcheck:Cond
+   ...
+   fun:rsa_clone*
+   fun:rsa_decrypt_oaep_hashes*
+}
+{
+   rsa OAEP message copy, address
+   Memcheck:Value8
+   ...
+   fun:rsa_clone*
+   fun:rsa_decrypt_oaep_hashes*
+}

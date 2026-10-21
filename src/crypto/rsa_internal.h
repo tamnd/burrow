@@ -23,6 +23,7 @@
 #include "burrow/slice.h"
 
 #include <stdbool.h>
+#include <stddef.h>
 
 /* millerRabin: a candidate w, with the m that w - 1 = 2 * m. */
 typedef struct RsaMillerRabin RsaMillerRabin;
@@ -63,6 +64,13 @@ bool burrow__rsa_hash_prefix(Str name, Slice *prefix);
 /* nonZeroRandomBytes: fills s with random bytes from random, none of them
  * zero. */
 BURROW_STATIC(ret) Error burrow__rsa_non_zero_random_bytes(Slice s, IoReader random);
+
+/* Not in Go: hands each secret part of priv's precomputed key to mark, the
+ * private exponent, the primes and the values worked out from them, so that
+ * tools/ctgrind.c can mark them undefined. false when priv has no precomputed
+ * key, which rsa_generate_key and rsa_private_key_precompute make. */
+bool burrow__rsa_mark_secrets(const RsaPrivateKey *priv,
+                              void (*mark)(void *p, size_t n));
 
 /* Reads the GODEBUG settings from value as if it were the environment's, or
  * from the environment again when value is NULL. */

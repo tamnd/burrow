@@ -4,7 +4,10 @@
  * The tests that replay Go's recorded handshakes do it through
  * tls_replay_test.h, with the recordings tools/gen-tls-replay-tests.sh put in
  * tls_replay_client_gen.h. The ECH tests run against this package's own
- * server.
+ * server. TestResumption, TestKeyLogTLS12, TestKeyLogTLS13,
+ * TestServerSelectingUnconfiguredApplicationProtocol and the tests from
+ * TestVerifyConnection to TestTLS13OnlyClientHelloCipherSuite come in later
+ * changes.
  *
  * Copyright 2010 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.

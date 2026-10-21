@@ -490,7 +490,6 @@ struct TestingT {
     SyncMutex mu;
     Str name;
     TestingT *parent;
-    int level;
     TestState *tstate;
     Chatty *chatty;
 
@@ -500,6 +499,7 @@ struct TestingT {
      * F writes into the buffer the failing input's message is taken from, and
      * its root throws everything away. */
     Buf *capture;
+    int level;
     bool discard;
     bool has_o; /* Go's c.o, which the root does not have */
 
@@ -519,9 +519,11 @@ struct TestingT {
     bool finished;
     bool is_parallel;
     bool deny_parallel;
+    bool running; /* in Go's running map, for the timeout message */
 
     int64_t start;
     int64_t duration;
+    int64_t running_since; /* and since when */
 
     Context ctx;
     ContextCancelFunc cancel;
@@ -540,10 +542,6 @@ struct TestingT {
     bool in_runner;
     bool has_err;
     Any err;
-
-    /* Go's running map, for the timeout message. */
-    bool running;
-    int64_t running_since;
 };
 
 struct TestingM {
@@ -2115,10 +2113,14 @@ void burrow__testing_t_check_parallel(TestingT *t) {
      * other subtests of the same parent. Since calls like SetEnv or Chdir
      * affects the whole process, we need to deny those if the current test or
      * any parent is parallel. */
-    for (TestingT *c = t; c != NULL; c = c->parent) {
+    /* t is never NULL, as &t.common is never nil in Go, so the loop tests c
+     * after it moves to the parent and not before the first pass. */
+    TestingT *c = t;
+    do {
         if (c->is_parallel)
             panic_str(testing_parallel_conflict);
-    }
+        c = c->parent;
+    } while (c != NULL);
     t->deny_parallel = true;
 }
 

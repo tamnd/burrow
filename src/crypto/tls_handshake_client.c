@@ -82,6 +82,9 @@ BURROW_SENTINEL_ERROR(tcl_err_identity_changed,
                       "tls: server's identity changed during renegotiation");
 BURROW_SENTINEL_ERROR(tcl_err_no_transcript, "tls: internal error: did not keep "
                                              "handshake transcript for TLS 1.2");
+/* Not in Go. See the early data in tcl_client_handshake_with. */
+BURROW_SENTINEL_ERROR(tcl_err_early_data_suite, "tls: internal error: early data "
+                                                "without a TLS 1.3 session");
 BURROW_SENTINEL_ERROR(tcl_err_compression,
                       "tls: server selected unsupported compression format");
 BURROW_SENTINEL_ERROR(tcl_err_point_formats,
@@ -278,7 +281,10 @@ Error burrow__tls_conn_make_client_hello(TlsConn *c, Alloc *a,
         uint16_t *ids = hello->cipher_suites.p;
         Int n = 0;
         for (Int i = 0; i < hello->cipher_suites.len; i++) {
-            if ((burrow__tls_cipher_suite_by_id(ids[i])->flags & TLS_SUITE_TLS12) == 0)
+            /* Not in Go: the check for NULL. Every id here is a suite burrow has,
+             * so it is never NULL, but gcc can't see that in the amalgamation. */
+            const TlsSuite *suite = burrow__tls_cipher_suite_by_id(ids[i]);
+            if (suite != NULL && (suite->flags & TLS_SUITE_TLS12) == 0)
                 ids[n++] = ids[i];
         }
         hello->cipher_suites.len = n;
@@ -708,8 +714,15 @@ static Error tcl_client_handshake_with(TlsConn *c, Context ctx, Alloc *a,
         return err;
 
     if (hello->early_data) {
+        /* Not in Go: the checks for NULL. early_data is only set with a session
+         * whose suite is a TLS 1.3 one, so neither is ever NULL, but gcc and
+         * clang-tidy can't see that. */
         const TlsSuiteTLS13 *suite =
-            burrow__tls_cipher_suite_tls13_by_id(l->session->cipher_suite);
+            l->session == NULL
+                ? NULL
+                : burrow__tls_cipher_suite_tls13_by_id(l->session->cipher_suite);
+        if (suite == NULL)
+            return tcl_err_early_data_suite;
         Hash transcript = burrow__tls_suite13_hash_new(suite)(a);
         const TlsHandshakeMsg *transcript_hello = &h->msg;
         if (ech != NULL)

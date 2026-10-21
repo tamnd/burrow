@@ -27,6 +27,7 @@
 #include "burrow/type.h"
 
 #include "aes_internal.h"
+#include "fips140_module.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -35,7 +36,8 @@
 #define CIPHER_STREAM_BUFFER 512
 
 /* Go's alias.InexactOverlap on two runs of n bytes. */
-static bool cipher_inexact_overlap(const void *x, const void *y, Int n) {
+CRYPTO_FIPS_TEXT static bool cipher_inexact_overlap(const void *x, const void *y,
+                                                    Int n) {
     if (n <= 0)
         return false;
     uintptr_t a = (uintptr_t)x;
@@ -45,7 +47,7 @@ static bool cipher_inexact_overlap(const void *x, const void *y, Int n) {
     return a <= b + (uintptr_t)(n - 1) && b <= a + (uintptr_t)(n - 1);
 }
 
-static Slice cipher_bytes(Byte *p, Int n) {
+CRYPTO_FIPS_TEXT static Slice cipher_bytes(Byte *p, Int n) {
     return slice_from(p, n, n, TYPE_BYTE);
 }
 
@@ -59,7 +61,8 @@ typedef struct CipherCbc {
     Byte *tmp;
 } CipherCbc;
 
-static CipherCbc *cipher_cbc_make(Alloc *a, CipherBlock b, Slice iv, Str bad_iv) {
+CRYPTO_FIPS_TEXT static CipherCbc *cipher_cbc_make(Alloc *a, CipherBlock b, Slice iv,
+                                                   Str bad_iv) {
     Int bs = cipher_block_block_size(b);
     if (iv.len != bs)
         panic_str(bad_iv);
@@ -76,7 +79,8 @@ static CipherCbc *cipher_cbc_make(Alloc *a, CipherBlock b, Slice iv, Str bad_iv)
     return x;
 }
 
-static void cipher_cbc_check(const CipherCbc *x, Slice dst, Slice src) {
+CRYPTO_FIPS_TEXT static void cipher_cbc_check(const CipherCbc *x, Slice dst,
+                                              Slice src) {
     if (src.len % x->block_size != 0)
         panic_str(BURROW_S("crypto/cipher: input not full blocks"));
     if (dst.len < src.len)
@@ -85,11 +89,11 @@ static void cipher_cbc_check(const CipherCbc *x, Slice dst, Slice src) {
         panic_str(BURROW_S("crypto/cipher: invalid buffer overlap"));
 }
 
-static Int cipher_cbc_block_size(void *self) {
+CRYPTO_FIPS_TEXT static Int cipher_cbc_block_size(void *self) {
     return ((CipherCbc *)self)->block_size;
 }
 
-static void cipher_cbc_encrypt(void *self, Slice dst, Slice src) {
+CRYPTO_FIPS_TEXT static void cipher_cbc_encrypt(void *self, Slice dst, Slice src) {
     CipherCbc *x = (CipherCbc *)self;
     cipher_cbc_check(x, dst, src);
     Int bs = x->block_size;
@@ -116,7 +120,8 @@ static void cipher_cbc_encrypt(void *self, Slice dst, Slice src) {
 /* For each block, the decrypted data is XORed with the previous block's
  * ciphertext. Going backwards means dst can be src: by the time a block is
  * written, nothing still to be decrypted needs it. */
-static void cipher_cbc_decrypt_generic(CipherCbc *x, Byte *d, Byte *s, Int n) {
+CRYPTO_FIPS_TEXT static void cipher_cbc_decrypt_generic(CipherCbc *x, Byte *d, Byte *s,
+                                                        Int n) {
     Int bs = x->block_size;
     Int end = n;
     Int start = end - bs;
@@ -149,7 +154,8 @@ static void cipher_cbc_decrypt_generic(CipherCbc *x, Byte *d, Byte *s, Int n) {
 
 /* The same backwards walk, eight blocks at a time through a buffer, so the AES
  * code can work on several at once. */
-static void cipher_cbc_decrypt_aes(CipherCbc *x, Byte *d, const Byte *s, Int n) {
+CRYPTO_FIPS_TEXT static void cipher_cbc_decrypt_aes(CipherCbc *x, Byte *d,
+                                                    const Byte *s, Int n) {
     Byte iv[AES_BLOCK_SIZE];
     memcpy(iv, x->iv, sizeof iv);
     memcpy(x->iv, s + n - AES_BLOCK_SIZE, AES_BLOCK_SIZE);
@@ -176,7 +182,7 @@ static void cipher_cbc_decrypt_aes(CipherCbc *x, Byte *d, const Byte *s, Int n) 
     }
 }
 
-static void cipher_cbc_decrypt(void *self, Slice dst, Slice src) {
+CRYPTO_FIPS_TEXT static void cipher_cbc_decrypt(void *self, Slice dst, Slice src) {
     CipherCbc *x = (CipherCbc *)self;
     cipher_cbc_check(x, dst, src);
     if (src.len == 0)
@@ -192,7 +198,8 @@ static const CipherBlockModeVT cipher_cbc_enc_vt = {NULL, cipher_cbc_block_size,
 static const CipherBlockModeVT cipher_cbc_dec_vt = {NULL, cipher_cbc_block_size,
                                                     cipher_cbc_decrypt};
 
-CipherBlockMode cipher_new_cbc_encrypter(Alloc *a, CipherBlock b, Slice iv) {
+CRYPTO_FIPS_TEXT CipherBlockMode cipher_new_cbc_encrypter(Alloc *a, CipherBlock b,
+                                                          Slice iv) {
     CipherCbc *x = cipher_cbc_make(
         a, b, iv, BURROW_S("cipher.NewCBCEncrypter: IV length must equal block size"));
     if (x == NULL)
@@ -200,7 +207,8 @@ CipherBlockMode cipher_new_cbc_encrypter(Alloc *a, CipherBlock b, Slice iv) {
     return (CipherBlockMode){&cipher_cbc_enc_vt, x};
 }
 
-CipherBlockMode cipher_new_cbc_decrypter(Alloc *a, CipherBlock b, Slice iv) {
+CRYPTO_FIPS_TEXT CipherBlockMode cipher_new_cbc_decrypter(Alloc *a, CipherBlock b,
+                                                          Slice iv) {
     CipherCbc *x = cipher_cbc_make(
         a, b, iv, BURROW_S("cipher.NewCBCDecrypter: IV length must equal block size"));
     if (x == NULL)
@@ -208,7 +216,7 @@ CipherBlockMode cipher_new_cbc_decrypter(Alloc *a, CipherBlock b, Slice iv) {
     return (CipherBlockMode){&cipher_cbc_dec_vt, x};
 }
 
-void cipher_cbc_set_iv(CipherBlockMode m, Slice iv) {
+CRYPTO_FIPS_TEXT void cipher_cbc_set_iv(CipherBlockMode m, Slice iv) {
     if (m.vt != &cipher_cbc_enc_vt && m.vt != &cipher_cbc_dec_vt)
         panic_str(BURROW_S("cipher: SetIV on a BlockMode that is not CBC"));
     CipherCbc *x = (CipherCbc *)m.data;
@@ -227,14 +235,14 @@ typedef struct CipherAesCtr {
     uint64_t offset;
 } CipherAesCtr;
 
-static uint64_t cipher_be64(const Byte *p) {
+CRYPTO_FIPS_TEXT static uint64_t cipher_be64(const Byte *p) {
     uint64_t v = 0;
     for (int i = 0; i < 8; i++)
         v = (v << 8) | p[i];
     return v;
 }
 
-static void cipher_put_be64(Byte *p, uint64_t v) {
+CRYPTO_FIPS_TEXT static void cipher_put_be64(Byte *p, uint64_t v) {
     for (int i = 7; i >= 0; i--) {
         p[i] = (Byte)v;
         v >>= 8;
@@ -243,8 +251,9 @@ static void cipher_put_be64(Byte *p, uint64_t v) {
 
 /* n blocks of key stream starting at counter (hi, lo), XORed with src into
  * dst. src is read in full before dst is written. */
-static void cipher_aes_ctr_blocks(const AesBlock *b, Byte *dst, const Byte *src,
-                                  Int len, uint64_t lo, uint64_t hi) {
+CRYPTO_FIPS_TEXT static void cipher_aes_ctr_blocks(const AesBlock *b, Byte *dst,
+                                                   const Byte *src, Int len,
+                                                   uint64_t lo, uint64_t hi) {
     Byte buf[8 * AES_BLOCK_SIZE] = {0};
     Int n = (len + AES_BLOCK_SIZE - 1) / AES_BLOCK_SIZE;
     for (Int i = 0; i < n; i++) {
@@ -260,8 +269,9 @@ static void cipher_aes_ctr_blocks(const AesBlock *b, Byte *dst, const Byte *src,
 }
 
 /* XORKeyStreamAt: the stream from offset, whatever came before. */
-static void cipher_aes_ctr_xor_at(CipherAesCtr *c, Byte *dst, const Byte *src, Int len,
-                                  uint64_t offset) {
+CRYPTO_FIPS_TEXT static void cipher_aes_ctr_xor_at(CipherAesCtr *c, Byte *dst,
+                                                   const Byte *src, Int len,
+                                                   uint64_t offset) {
     uint64_t q = offset / AES_BLOCK_SIZE;
     uint64_t lo = c->ivlo + q;
     uint64_t hi = c->ivhi + (lo < q);
@@ -295,7 +305,7 @@ static void cipher_aes_ctr_xor_at(CipherAesCtr *c, Byte *dst, const Byte *src, I
     }
 }
 
-static void cipher_aes_ctr_xor(void *self, Slice dst, Slice src) {
+CRYPTO_FIPS_TEXT static void cipher_aes_ctr_xor(void *self, Slice dst, Slice src) {
     CipherAesCtr *c = (CipherAesCtr *)self;
     if (dst.len < src.len)
         panic_str(BURROW_S("crypto/aes: len(dst) < len(src)"));
@@ -310,8 +320,8 @@ static void cipher_aes_ctr_xor(void *self, Slice dst, Slice src) {
 
 static const CipherStreamVT cipher_aes_ctr_vt = {NULL, cipher_aes_ctr_xor};
 
-bool burrow__aes_ctr_xor_key_stream_at(CipherStream s, Slice dst, Slice src,
-                                       uint64_t offset) {
+CRYPTO_FIPS_TEXT bool burrow__aes_ctr_xor_key_stream_at(CipherStream s, Slice dst,
+                                                        Slice src, uint64_t offset) {
     if (s.vt != &cipher_aes_ctr_vt)
         return false;
     if (dst.len < src.len)
@@ -334,7 +344,7 @@ typedef struct CipherCtr {
     Int out_used;
 } CipherCtr;
 
-static void cipher_ctr_refill(CipherCtr *x) {
+CRYPTO_FIPS_TEXT static void cipher_ctr_refill(CipherCtr *x) {
     Int remain = x->out_len - x->out_used;
     memmove(x->out, x->out + x->out_used, (size_t)remain);
     Int bs = x->block_size;
@@ -353,7 +363,7 @@ static void cipher_ctr_refill(CipherCtr *x) {
     x->out_used = 0;
 }
 
-static void cipher_ctr_xor(void *self, Slice dst, Slice src) {
+CRYPTO_FIPS_TEXT static void cipher_ctr_xor(void *self, Slice dst, Slice src) {
     CipherCtr *x = (CipherCtr *)self;
     if (dst.len < src.len)
         panic_str(BURROW_S("crypto/cipher: output smaller than input"));
@@ -377,7 +387,7 @@ static void cipher_ctr_xor(void *self, Slice dst, Slice src) {
 
 static const CipherStreamVT cipher_ctr_vt = {NULL, cipher_ctr_xor};
 
-CipherStream cipher_new_ctr(Alloc *a, CipherBlock b, Slice iv) {
+CRYPTO_FIPS_TEXT CipherStream cipher_new_ctr(Alloc *a, CipherBlock b, Slice iv) {
     const AesBlock *ab = burrow__aes_block_of(b);
     if (ab != NULL) {
         if (iv.len != AES_BLOCK_SIZE)
@@ -419,7 +429,7 @@ typedef struct CipherOfb {
     Int out_used;
 } CipherOfb;
 
-static void cipher_ofb_refill(CipherOfb *x) {
+CRYPTO_FIPS_TEXT static void cipher_ofb_refill(CipherOfb *x) {
     Int bs = x->block_size;
     Int remain = x->out_len - x->out_used;
     if (remain > x->out_used)
@@ -435,7 +445,7 @@ static void cipher_ofb_refill(CipherOfb *x) {
     x->out_used = 0;
 }
 
-static void cipher_ofb_xor(void *self, Slice dst, Slice src) {
+CRYPTO_FIPS_TEXT static void cipher_ofb_xor(void *self, Slice dst, Slice src) {
     CipherOfb *x = (CipherOfb *)self;
     if (dst.len < src.len)
         panic_str(BURROW_S("crypto/cipher: output smaller than input"));
@@ -459,7 +469,7 @@ static void cipher_ofb_xor(void *self, Slice dst, Slice src) {
 
 static const CipherStreamVT cipher_ofb_vt = {NULL, cipher_ofb_xor};
 
-CipherStream cipher_new_ofb(Alloc *a, CipherBlock b, Slice iv) {
+CRYPTO_FIPS_TEXT CipherStream cipher_new_ofb(Alloc *a, CipherBlock b, Slice iv) {
     Int bs = cipher_block_block_size(b);
     if (iv.len != bs)
         panic_str(BURROW_S("cipher.NewOFB: IV length must equal block size"));
@@ -488,7 +498,7 @@ typedef struct CipherCfb {
     bool decrypt;
 } CipherCfb;
 
-static void cipher_cfb_xor(void *self, Slice dst, Slice src) {
+CRYPTO_FIPS_TEXT static void cipher_cfb_xor(void *self, Slice dst, Slice src) {
     CipherCfb *x = (CipherCfb *)self;
     if (dst.len < src.len)
         panic_str(BURROW_S("crypto/cipher: output smaller than input"));
@@ -524,7 +534,8 @@ static void cipher_cfb_xor(void *self, Slice dst, Slice src) {
 
 static const CipherStreamVT cipher_cfb_vt = {NULL, cipher_cfb_xor};
 
-static CipherStream cipher_new_cfb(Alloc *a, CipherBlock b, Slice iv, bool decrypt) {
+CRYPTO_FIPS_TEXT static CipherStream cipher_new_cfb(Alloc *a, CipherBlock b, Slice iv,
+                                                    bool decrypt) {
     Int bs = cipher_block_block_size(b);
     if (iv.len != bs) {
         /* Stack trace will indicate whether it was de- or en-cryption. */
@@ -544,17 +555,20 @@ static CipherStream cipher_new_cfb(Alloc *a, CipherBlock b, Slice iv, bool decry
     return (CipherStream){&cipher_cfb_vt, x};
 }
 
-CipherStream cipher_new_cfb_encrypter(Alloc *a, CipherBlock b, Slice iv) {
+CRYPTO_FIPS_TEXT CipherStream cipher_new_cfb_encrypter(Alloc *a, CipherBlock b,
+                                                       Slice iv) {
     return cipher_new_cfb(a, b, iv, false);
 }
 
-CipherStream cipher_new_cfb_decrypter(Alloc *a, CipherBlock b, Slice iv) {
+CRYPTO_FIPS_TEXT CipherStream cipher_new_cfb_decrypter(Alloc *a, CipherBlock b,
+                                                       Slice iv) {
     return cipher_new_cfb(a, b, iv, true);
 }
 
 /* ----------------------------------------------------------------- io */
 
-Int cipher_stream_reader_read(CipherStreamReader r, Slice dst, Error *err) {
+CRYPTO_FIPS_TEXT Int cipher_stream_reader_read(CipherStreamReader r, Slice dst,
+                                               Error *err) {
     Int n = r.r.vt->read(r.r.data, dst, err);
     if (n > 0) {
         Slice got = slice_from(dst.p, n, n, TYPE_BYTE);
@@ -563,17 +577,19 @@ Int cipher_stream_reader_read(CipherStreamReader r, Slice dst, Error *err) {
     return n;
 }
 
-static Int cipher_stream_reader_vt_read(void *self, Slice p, Error *err) {
+CRYPTO_FIPS_TEXT static Int cipher_stream_reader_vt_read(void *self, Slice p,
+                                                         Error *err) {
     return cipher_stream_reader_read(*(const CipherStreamReader *)self, p, err);
 }
 
 static const IoReaderVT cipher_stream_reader_vt = {NULL, cipher_stream_reader_vt_read};
 
-IoReader cipher_stream_reader_as_io_reader(CipherStreamReader *r) {
+CRYPTO_FIPS_TEXT IoReader cipher_stream_reader_as_io_reader(CipherStreamReader *r) {
     return (IoReader){&cipher_stream_reader_vt, r};
 }
 
-Int cipher_stream_writer_write(CipherStreamWriter w, Slice src, Error *err) {
+CRYPTO_FIPS_TEXT Int cipher_stream_writer_write(CipherStreamWriter w, Slice src,
+                                                Error *err) {
     /* Go makes a new slice for every write. A small one fits on the stack. */
     Byte small[512];
     Byte *c = small;
@@ -597,18 +613,19 @@ Int cipher_stream_writer_write(CipherStreamWriter w, Slice src, Error *err) {
     return n;
 }
 
-Error cipher_stream_writer_close(CipherStreamWriter w) {
+CRYPTO_FIPS_TEXT Error cipher_stream_writer_close(CipherStreamWriter w) {
     if (w.closer.vt != NULL)
         return w.closer.vt->close(w.closer.data);
     return BURROW_NO_ERROR;
 }
 
-static Int cipher_stream_writer_vt_write(void *self, Slice p, Error *err) {
+CRYPTO_FIPS_TEXT static Int cipher_stream_writer_vt_write(void *self, Slice p,
+                                                          Error *err) {
     return cipher_stream_writer_write(*(const CipherStreamWriter *)self, p, err);
 }
 
 static const IoWriterVT cipher_stream_writer_vt = {NULL, cipher_stream_writer_vt_write};
 
-IoWriter cipher_stream_writer_as_io_writer(CipherStreamWriter *w) {
+CRYPTO_FIPS_TEXT IoWriter cipher_stream_writer_as_io_writer(CipherStreamWriter *w) {
     return (IoWriter){&cipher_stream_writer_vt, w};
 }

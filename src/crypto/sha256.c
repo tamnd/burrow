@@ -20,6 +20,7 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "fips140_module.h"
 #include "internal.h"
 
 #include <string.h>
@@ -32,7 +33,7 @@ typedef struct Sha256Digest {
     bool is224;
 } Sha256Digest;
 
-static const uint32_t sha256_k[64] = {
+CRYPTO_FIPS_RODATA static const uint32_t sha256_k[64] = {
     0x428A2F98U, 0x71374491U, 0xB5C0FBCFU, 0xE9B5DBA5U, 0x3956C25BU, 0x59F111F1U,
     0x923F82A4U, 0xAB1C5ED5U, 0xD807AA98U, 0x12835B01U, 0x243185BEU, 0x550C7DC3U,
     0x72BE5D74U, 0x80DEB1FEU, 0x9BDC06A7U, 0xC19BF174U, 0xE49B69C1U, 0xEFBE4786U,
@@ -46,23 +47,23 @@ static const uint32_t sha256_k[64] = {
     0x90BEFFFAU, 0xA4506CEBU, 0xBEF9A3F7U, 0xC67178F2U,
 };
 
-static inline uint32_t sha256_rotr(uint32_t x, int k) {
+CRYPTO_FIPS_TEXT static inline uint32_t sha256_rotr(uint32_t x, int k) {
     return (x >> k) | (x << (32 - k));
 }
 
-static inline uint32_t sha256_be32(const Byte *p) {
+CRYPTO_FIPS_TEXT static inline uint32_t sha256_be32(const Byte *p) {
     return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 |
            (uint32_t)p[3];
 }
 
-static inline void sha256_put_be32(Byte *b, uint32_t v) {
+CRYPTO_FIPS_TEXT static inline void sha256_put_be32(Byte *b, uint32_t v) {
     b[0] = (Byte)(v >> 24);
     b[1] = (Byte)(v >> 16);
     b[2] = (Byte)(v >> 8);
     b[3] = (Byte)v;
 }
 
-static inline void sha256_put_be64(Byte *b, uint64_t v) {
+CRYPTO_FIPS_TEXT static inline void sha256_put_be64(Byte *b, uint64_t v) {
     for (int i = 0; i < 8; i++)
         b[i] = (Byte)(v >> (56 - 8 * i));
 }
@@ -81,7 +82,8 @@ static inline void sha256_put_be64(Byte *b, uint64_t v) {
     } while (0)
 
 /* Hashes n bytes of p, which is a whole number of blocks. */
-static void sha256_block_generic(Sha256Digest *dig, const Byte *p, Int n) {
+CRYPTO_FIPS_TEXT static void sha256_block_generic(Sha256Digest *dig, const Byte *p,
+                                                  Int n) {
     uint32_t w[64];
     uint32_t h0 = dig->h[0], h1 = dig->h[1], h2 = dig->h[2], h3 = dig->h[3];
     uint32_t h4 = dig->h[4], h5 = dig->h[5], h6 = dig->h[6], h7 = dig->h[7];
@@ -132,8 +134,8 @@ static void sha256_block_generic(Sha256Digest *dig, const Byte *p, Int n) {
 /* sha256block_amd64.s's SHA-NI path, written with intrinsics. The eight words
  * of state are kept as ABEF and CDGH, the order sha256rnds2 wants, and each
  * sha256rnds2 does two rounds. */
-CRYPTO_TARGET_X86_SHA static void sha256_block_x86(uint32_t h[8], const Byte *p,
-                                                   Int n) {
+CRYPTO_FIPS_TEXT CRYPTO_TARGET_X86_SHA static void
+sha256_block_x86(uint32_t h[8], const Byte *p, Int n) {
     const __m128i swap =
         _mm_set_epi8(12, 13, 14, 15, 8, 9, 10, 11, 4, 5, 6, 7, 0, 1, 2, 3);
     __m128i t = _mm_shuffle_epi32(crypto_x86_load(h), 0xB1);
@@ -236,8 +238,8 @@ CRYPTO_TARGET_X86_SHA static void sha256_block_x86(uint32_t h[8], const Byte *p,
 /* sha256block_arm64.s, written with intrinsics. Each sha256h and sha256h2 pair
  * does four rounds, and the schedule for four rounds on is worked out as the
  * current four go through. */
-CRYPTO_TARGET_ARM64_SHA2 static void sha256_block_arm64(uint32_t h[8], const Byte *p,
-                                                        Int n) {
+CRYPTO_FIPS_TEXT CRYPTO_TARGET_ARM64_SHA2 static void
+sha256_block_arm64(uint32_t h[8], const Byte *p, Int n) {
     uint32x4_t s0 = vld1q_u32(h);
     uint32x4_t s1 = vld1q_u32(h + 4);
     for (; n >= SHA256_BLOCK_SIZE; p += SHA256_BLOCK_SIZE, n -= SHA256_BLOCK_SIZE) {
@@ -335,7 +337,7 @@ CRYPTO_TARGET_ARM64_SHA2 static void sha256_block_arm64(uint32_t h[8], const Byt
 
 /* The hardware path when there is one, as Go's blockSHA2 and blockSHANI
  * choose, and the portable code otherwise. */
-static void sha256_block(Sha256Digest *dig, const Byte *p, Int n) {
+CRYPTO_FIPS_TEXT static void sha256_block(Sha256Digest *dig, const Byte *p, Int n) {
 #if defined(CRYPTO_X86_SHA)
     if ((pal_cpu_features() & CRYPTO_X86_SHA_NEEDS) == CRYPTO_X86_SHA_NEEDS) {
         sha256_block_x86(dig->h, p, n);
@@ -351,7 +353,7 @@ static void sha256_block(Sha256Digest *dig, const Byte *p, Int n) {
     sha256_block_generic(dig, p, n);
 }
 
-static void sha256_reset(void *self) {
+CRYPTO_FIPS_TEXT static void sha256_reset(void *self) {
     Sha256Digest *d = self;
     static const uint32_t init256[8] = {
         0x6A09E667U, 0xBB67AE85U, 0x3C6EF372U, 0xA54FF53AU,
@@ -369,7 +371,7 @@ static void sha256_reset(void *self) {
 static void sha256_update(Sha256Digest *d, const Byte *p, Int n);
 
 /* Always writes all 32 bytes. SHA-224 keeps the first 28. */
-static void sha256_check_sum(Sha256Digest *d, Byte out[SHA256_SIZE]) {
+CRYPTO_FIPS_TEXT static void sha256_check_sum(Sha256Digest *d, Byte out[SHA256_SIZE]) {
     /* Padding: add 1 bit and 0 bits until 56 bytes mod 64, then the length in
      * bits as a big endian 64 bit number. */
     uint64_t len = d->len;
@@ -383,7 +385,7 @@ static void sha256_check_sum(Sha256Digest *d, Byte out[SHA256_SIZE]) {
         sha256_put_be32(out + 4 * i, d->h[i]);
 }
 
-static void sha256_update(Sha256Digest *d, const Byte *p, Int n) {
+CRYPTO_FIPS_TEXT static void sha256_update(Sha256Digest *d, const Byte *p, Int n) {
     if (n == 0)
         return; /* p may be NULL, and memcpy may not be given one */
     d->len += (uint64_t)n;
@@ -410,13 +412,13 @@ static void sha256_update(Sha256Digest *d, const Byte *p, Int n) {
     }
 }
 
-static Int sha256_write(void *self, Slice p, Error *err) {
+CRYPTO_FIPS_TEXT static Int sha256_write(void *self, Slice p, Error *err) {
     sha256_update(self, (const Byte *)p.p, p.len);
     BURROW_OUT(err, BURROW_NO_ERROR);
     return p.len;
 }
 
-static Slice sha256_sum_append(void *self, Alloc *a, Slice in) {
+CRYPTO_FIPS_TEXT static Slice sha256_sum_append(void *self, Alloc *a, Slice in) {
     /* Work on a copy so the caller can keep writing. */
     Sha256Digest d0 = *(Sha256Digest *)self;
     Byte h[SHA256_SIZE];
@@ -427,12 +429,12 @@ static Slice sha256_sum_append(void *self, Alloc *a, Slice in) {
                         ((Sha256Digest *)self)->is224 ? SHA256_SIZE224 : SHA256_SIZE);
 }
 
-static Int sha256_block_size(void *self) {
+CRYPTO_FIPS_TEXT static Int sha256_block_size(void *self) {
     (void)self;
     return SHA256_BLOCK_SIZE;
 }
 
-static Int sha256_size(void *self) {
+CRYPTO_FIPS_TEXT static Int sha256_size(void *self) {
     return ((Sha256Digest *)self)->is224 ? SHA256_SIZE224 : SHA256_SIZE;
 }
 
@@ -444,7 +446,8 @@ BURROW_SENTINEL_ERROR(sha256_err_identifier,
                       "crypto/sha256: invalid hash state identifier");
 BURROW_SENTINEL_ERROR(sha256_err_size, "crypto/sha256: invalid hash state size");
 
-static Slice sha256_append_binary(Sha256Digest *d, Alloc *a, Slice b, Error *err) {
+CRYPTO_FIPS_TEXT static Slice sha256_append_binary(Sha256Digest *d, Alloc *a, Slice b,
+                                                   Error *err) {
     Byte st[sha256_marshaled_size];
     memcpy(st, d->is224 ? SHA256_MAGIC224 : SHA256_MAGIC256, 4);
     for (Int i = 0; i < 8; i++)
@@ -461,7 +464,8 @@ static Slice sha256_append_binary(Sha256Digest *d, Alloc *a, Slice b, Error *err
     return r;
 }
 
-static Slice sha256_marshal_binary(Sha256Digest *d, Alloc *a, Error *err) {
+CRYPTO_FIPS_TEXT static Slice sha256_marshal_binary(Sha256Digest *d, Alloc *a,
+                                                    Error *err) {
     Slice b = slice_make(a, TYPE_BYTE, 0, sha256_marshaled_size);
     if (b.p == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -470,7 +474,8 @@ static Slice sha256_marshal_binary(Sha256Digest *d, Alloc *a, Error *err) {
     return sha256_append_binary(d, a, b, err);
 }
 
-static Error sha256_unmarshal_binary(Sha256Digest *d, Alloc *a, Slice b) {
+CRYPTO_FIPS_TEXT static Error sha256_unmarshal_binary(Sha256Digest *d, Alloc *a,
+                                                      Slice b) {
     (void)a;
     const Byte *p = b.p;
     if (b.len < 4 || memcmp(p, d->is224 ? SHA256_MAGIC224 : SHA256_MAGIC256, 4) != 0)
@@ -530,7 +535,7 @@ static const HashClonerVT sha256_vt = {
     sha256_clone,
 };
 
-static HashCloner sha256_clone(void *self, Alloc *a, Error *err) {
+CRYPTO_FIPS_TEXT static HashCloner sha256_clone(void *self, Alloc *a, Error *err) {
     Sha256Digest *r = BURROW_NEW(a, Sha256Digest);
     if (r == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -542,7 +547,7 @@ static HashCloner sha256_clone(void *self, Alloc *a, Error *err) {
     return h;
 }
 
-static Hash sha256_make(Alloc *a, bool is224) {
+CRYPTO_FIPS_TEXT static Hash sha256_make(Alloc *a, bool is224) {
     Sha256Digest *d = BURROW_NEW(a, Sha256Digest);
     if (d == NULL)
         return (Hash){NULL, NULL};
@@ -552,15 +557,15 @@ static Hash sha256_make(Alloc *a, bool is224) {
     return h;
 }
 
-Hash sha256_new(Alloc *a) {
+CRYPTO_FIPS_TEXT Hash sha256_new(Alloc *a) {
     return sha256_make(a, false);
 }
 
-Hash sha256_new224(Alloc *a) {
+CRYPTO_FIPS_TEXT Hash sha256_new224(Alloc *a) {
     return sha256_make(a, true);
 }
 
-Sha256Sum256Ret sha256_sum256(Slice data) {
+CRYPTO_FIPS_TEXT Sha256Sum256Ret sha256_sum256(Slice data) {
     Sha256Digest d;
     Sha256Sum256Ret r;
     d.is224 = false;
@@ -570,7 +575,7 @@ Sha256Sum256Ret sha256_sum256(Slice data) {
     return r;
 }
 
-Sha256Sum224Ret sha256_sum224(Slice data) {
+CRYPTO_FIPS_TEXT Sha256Sum224Ret sha256_sum224(Slice data) {
     Sha256Digest d;
     Sha256Sum224Ret r;
     Byte h[SHA256_SIZE];

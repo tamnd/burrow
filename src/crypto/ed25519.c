@@ -25,6 +25,7 @@
 #include "burrow/type.h"
 
 #include "edwards25519.h"
+#include "fips140_module.h"
 #include "rand_internal.h"
 #include "sha512_internal.h"
 
@@ -99,7 +100,7 @@ const Type burrow_type_Ed25519Options = {
 
 /* prefix followed by n in decimal, in buf, which has room for any prefix here
  * and any Int. */
-static Str ed_text_n(Byte buf[96], const char *prefix, Int n) {
+CRYPTO_FIPS_TEXT static Str ed_text_n(Byte buf[96], const char *prefix, Int n) {
     Int plen = (Int)strlen(prefix);
     memcpy(buf, prefix, (size_t)plen);
     Byte digits[20];
@@ -117,18 +118,18 @@ static Str ed_text_n(Byte buf[96], const char *prefix, Int n) {
     return str_from_bytes(buf, len);
 }
 
-static Error ed_error_n(const char *prefix, Int n) {
+CRYPTO_FIPS_TEXT static Error ed_error_n(const char *prefix, Int n) {
     Byte buf[96];
     return errors_new(error_allocator(), ed_text_n(buf, prefix, n));
 }
 
-static Error ed_error(const char *text) {
+CRYPTO_FIPS_TEXT static Error ed_error(const char *text) {
     return errors_new(error_allocator(), str_from_cstr(text));
 }
 
 /* A panic whose text has a number in it, copied somewhere that outlives the
  * jump. With no memory for the copy the text goes without the number. */
-BURROW_NORETURN static void ed_panic_n(const char *prefix, Int n) {
+CRYPTO_FIPS_TEXT BURROW_NORETURN static void ed_panic_n(const char *prefix, Int n) {
     Byte buf[96];
     Str s = ed_text_n(buf, prefix, n);
     Byte *p = (Byte *)mem_alloc_nozero(error_allocator(), (size_t)s.len, 1);
@@ -151,7 +152,7 @@ typedef struct EdPrivate {
 
 /* The SHA-512 of the seed, the scalar from its first half and the prefix from
  * its second. */
-static void ed_expand_seed(EdPrivate *k) {
+CRYPTO_FIPS_TEXT static void ed_expand_seed(EdPrivate *k) {
     Sha512Digest hs;
     uint8_t h[SHA512_SIZE];
     burrow__sha512_init(&hs);
@@ -164,7 +165,7 @@ static void ed_expand_seed(EdPrivate *k) {
 }
 
 /* newPrivateKeyFromSeed, for a seed already known to be 32 bytes. */
-static void ed_private_from_seed(EdPrivate *k, const uint8_t *seed) {
+CRYPTO_FIPS_TEXT static void ed_private_from_seed(EdPrivate *k, const uint8_t *seed) {
     memcpy(k->seed, seed, ED25519_SEED_SIZE);
     ed_expand_seed(k);
     Edwards25519Point A;
@@ -175,7 +176,7 @@ static void ed_private_from_seed(EdPrivate *k, const uint8_t *seed) {
 /* newPrivateKey, for 64 bytes. The public key is taken as it is, and not
  * decoded into a point, which Go notes would add a fifth to the cost of a
  * signature for something signing does not use. */
-static void ed_private_from_bytes(EdPrivate *k, const uint8_t *priv) {
+CRYPTO_FIPS_TEXT static void ed_private_from_bytes(EdPrivate *k, const uint8_t *priv) {
     memcpy(k->seed, priv, ED25519_SEED_SIZE);
     ed_expand_seed(k);
     memcpy(k->pub, priv + 32, ED25519_PUBLIC_KEY_SIZE);
@@ -186,7 +187,7 @@ static void ed_private_from_bytes(EdPrivate *k, const uint8_t *priv) {
  * strings are 32 bytes and a final byte saying which. */
 typedef enum EdDom { ED_DOM_PURE, ED_DOM_PH, ED_DOM_CTX } EdDom;
 
-static void ed_write_dom(Sha512Digest *h, EdDom dom, Str context) {
+CRYPTO_FIPS_TEXT static void ed_write_dom(Sha512Digest *h, EdDom dom, Str context) {
     static const char prefix[] = "SigEd25519 no Ed25519 collisions";
     if (dom == ED_DOM_PURE)
         return;
@@ -196,9 +197,9 @@ static void ed_write_dom(Sha512Digest *h, EdDom dom, Str context) {
     burrow__sha512_write(h, context.p, context.len);
 }
 
-static void ed_sign_with_dom(uint8_t signature[ED25519_SIGNATURE_SIZE],
-                             const EdPrivate *k, Slice message, EdDom dom,
-                             Str context) {
+CRYPTO_FIPS_TEXT static void ed_sign_with_dom(uint8_t signature[ED25519_SIGNATURE_SIZE],
+                                              const EdPrivate *k, Slice message,
+                                              EdDom dom, Str context) {
     Sha512Digest mh;
     uint8_t message_digest[SHA512_SIZE];
     burrow__sha512_init(&mh);
@@ -237,9 +238,9 @@ static void ed_sign_with_dom(uint8_t signature[ED25519_SIGNATURE_SIZE],
 }
 
 /* signPH and signCtx, which check the lengths first, and sign. */
-static Error ed_sign_variant(uint8_t signature[ED25519_SIGNATURE_SIZE],
-                             const EdPrivate *k, Slice message, EdDom dom,
-                             Str context) {
+CRYPTO_FIPS_TEXT static Error ed_sign_variant(uint8_t signature[ED25519_SIGNATURE_SIZE],
+                                              const EdPrivate *k, Slice message,
+                                              EdDom dom, Str context) {
     if (dom == ED_DOM_PH) {
         if (message.len != SHA512_SIZE)
             return ed_error_n("ed25519: bad Ed25519ph message hash length: ",
@@ -255,8 +256,10 @@ static Error ed_sign_variant(uint8_t signature[ED25519_SIGNATURE_SIZE],
     return BURROW_NO_ERROR;
 }
 
-static Error ed_verify_with_dom(const Edwards25519Point *A, const uint8_t a_bytes[32],
-                                Slice message, Slice sig, EdDom dom, Str context) {
+CRYPTO_FIPS_TEXT static Error ed_verify_with_dom(const Edwards25519Point *A,
+                                                 const uint8_t a_bytes[32],
+                                                 Slice message, Slice sig, EdDom dom,
+                                                 Str context) {
     if (sig.len != ED25519_SIGNATURE_SIZE)
         return ed_error_n("ed25519: bad signature length: ", sig.len);
     const uint8_t *s = sig.p;
@@ -297,20 +300,22 @@ static Error ed_verify_with_dom(const Edwards25519Point *A, const uint8_t a_byte
 /* ------------------------------------------------------------------- keys */
 
 /* A copy of n bytes at p from a, or a nil Slice with no memory. */
-static Slice ed_copy(Alloc *a, const void *p, Int n) {
+CRYPTO_FIPS_TEXT static Slice ed_copy(Alloc *a, const void *p, Int n) {
     Slice out = slice_make(a, TYPE_BYTE, n, n);
     if (out.p != NULL)
         memcpy(out.p, p, (size_t)n);
     return out;
 }
 
-bool ed25519_public_key_equal(Ed25519PublicKey pub, CryptoPublicKey x) {
+CRYPTO_FIPS_TEXT bool ed25519_public_key_equal(Ed25519PublicKey pub,
+                                               CryptoPublicKey x) {
     if (x.t != TYPE_ED25519_PUBLIC_KEY || x.data == NULL)
         return false;
     return subtle_constant_time_compare(pub, *(const Slice *)x.data) == 1;
 }
 
-Ed25519PublicKey ed25519_private_key_public(Ed25519PrivateKey priv, Alloc *a) {
+CRYPTO_FIPS_TEXT Ed25519PublicKey ed25519_private_key_public(Ed25519PrivateKey priv,
+                                                             Alloc *a) {
     /* Go copies priv[32:] into 32 bytes, so a key that is too short panics
      * as slicing it does, and one that is short of 64 gives zeros at the end. */
     if (priv.len < 32)
@@ -326,13 +331,14 @@ Ed25519PublicKey ed25519_private_key_public(Ed25519PrivateKey priv, Alloc *a) {
     return out;
 }
 
-bool ed25519_private_key_equal(Ed25519PrivateKey priv, CryptoPrivateKey x) {
+CRYPTO_FIPS_TEXT bool ed25519_private_key_equal(Ed25519PrivateKey priv,
+                                                CryptoPrivateKey x) {
     if (x.t != TYPE_ED25519_PRIVATE_KEY || x.data == NULL)
         return false;
     return subtle_constant_time_compare(priv, *(const Slice *)x.data) == 1;
 }
 
-Slice ed25519_private_key_seed(Ed25519PrivateKey priv, Alloc *a) {
+CRYPTO_FIPS_TEXT Slice ed25519_private_key_seed(Ed25519PrivateKey priv, Alloc *a) {
     if (priv.cap < ED25519_SEED_SIZE)
         runtime_slice_bounds_out_of_range(0, ED25519_SEED_SIZE, priv.cap);
     return ed_copy(a, priv.p, ED25519_SEED_SIZE);
@@ -340,18 +346,19 @@ Slice ed25519_private_key_seed(Ed25519PrivateKey priv, Alloc *a) {
 
 /* -------------------------------------------------------------- options */
 
-CryptoHash ed25519_options_hash_func(const Ed25519Options *o) {
+CRYPTO_FIPS_TEXT CryptoHash ed25519_options_hash_func(const Ed25519Options *o) {
     return o->hash;
 }
 
-static CryptoHash ed_options_hash_func(void *self) {
+CRYPTO_FIPS_TEXT static CryptoHash ed_options_hash_func(void *self) {
     return ed25519_options_hash_func(self);
 }
 
 static const CryptoSignerOptsVT ed_options_vt = {TYPE_ED25519_OPTIONS,
                                                  ed_options_hash_func};
 
-CryptoSignerOpts ed25519_options_as_signer_opts(const Ed25519Options *o) {
+CRYPTO_FIPS_TEXT CryptoSignerOpts
+ed25519_options_as_signer_opts(const Ed25519Options *o) {
     CryptoSignerOpts out = {&ed_options_vt, (void *)(uintptr_t)o};
     return out;
 }
@@ -360,7 +367,7 @@ CryptoSignerOpts ed25519_options_as_signer_opts(const Ed25519Options *o) {
 
 /* The checks Go's privateKeyCache.Get makes on its way to the key: &priv[0]
  * for its key, and then the length. Returns the error for a bad length. */
-static Error ed_unpack_private(EdPrivate *k, Ed25519PrivateKey priv) {
+CRYPTO_FIPS_TEXT static Error ed_unpack_private(EdPrivate *k, Ed25519PrivateKey priv) {
     if (priv.len == 0)
         runtime_index_out_of_range(0, 0);
     if (priv.len != ED25519_PRIVATE_KEY_SIZE)
@@ -369,8 +376,9 @@ static Error ed_unpack_private(EdPrivate *k, Ed25519PrivateKey priv) {
     return BURROW_NO_ERROR;
 }
 
-Slice ed25519_private_key_sign(Ed25519PrivateKey priv, Alloc *a, IoReader rand,
-                               Slice message, CryptoSignerOpts opts, Error *err) {
+CRYPTO_FIPS_TEXT Slice ed25519_private_key_sign(Ed25519PrivateKey priv, Alloc *a,
+                                                IoReader rand, Slice message,
+                                                CryptoSignerOpts opts, Error *err) {
     (void)rand;
     EdPrivate k;
     Error e = ed_unpack_private(&k, priv);
@@ -409,13 +417,14 @@ Slice ed25519_private_key_sign(Ed25519PrivateKey priv, Alloc *a, IoReader rand,
     return out;
 }
 
-static CryptoPublicKey ed_signer_public(void *self) {
+CRYPTO_FIPS_TEXT static CryptoPublicKey ed_signer_public(void *self) {
     Ed25519Signer *s = self;
     return BURROW_ANY(TYPE_ED25519_PUBLIC_KEY, &s->pub);
 }
 
-static Slice ed_signer_sign(void *self, Alloc *a, IoReader rand, Slice digest,
-                            CryptoSignerOpts opts, Error *err) {
+CRYPTO_FIPS_TEXT static Slice ed_signer_sign(void *self, Alloc *a, IoReader rand,
+                                             Slice digest, CryptoSignerOpts opts,
+                                             Error *err) {
     return ed25519_private_key_sign(((Ed25519Signer *)self)->priv, a, rand, digest,
                                     opts, err);
 }
@@ -423,7 +432,8 @@ static Slice ed_signer_sign(void *self, Alloc *a, IoReader rand, Slice digest,
 static const CryptoSignerVT ed_signer_vt = {TYPE_ED25519_PRIVATE_KEY, ed_signer_public,
                                             ed_signer_sign};
 
-CryptoSigner ed25519_private_key_signer(Ed25519PrivateKey priv, Ed25519Signer *s) {
+CRYPTO_FIPS_TEXT CryptoSigner ed25519_private_key_signer(Ed25519PrivateKey priv,
+                                                         Ed25519Signer *s) {
     s->priv = priv;
     /* priv[32:], which is what Public copies. */
     if (priv.len < 32)
@@ -435,7 +445,7 @@ CryptoSigner ed25519_private_key_signer(Ed25519PrivateKey priv, Ed25519Signer *s
 
 /* ------------------------------------------------------------ functions */
 
-Ed25519PrivateKey ed25519_new_key_from_seed(Alloc *a, Slice seed) {
+CRYPTO_FIPS_TEXT Ed25519PrivateKey ed25519_new_key_from_seed(Alloc *a, Slice seed) {
     if (seed.len != ED25519_SEED_SIZE)
         ed_panic_n("ed25519: bad seed length: ", seed.len);
     EdPrivate k;
@@ -449,8 +459,9 @@ Ed25519PrivateKey ed25519_new_key_from_seed(Alloc *a, Slice seed) {
     return out;
 }
 
-Ed25519PublicKey ed25519_generate_key(Alloc *a, IoReader random,
-                                      Ed25519PrivateKey *priv, Error *err) {
+CRYPTO_FIPS_TEXT Ed25519PublicKey ed25519_generate_key(Alloc *a, IoReader random,
+                                                       Ed25519PrivateKey *priv,
+                                                       Error *err) {
     *priv = slice_nil(TYPE_BYTE);
     if (random.vt == NULL)
         random = burrow__crypto_rand_nil_reader();
@@ -485,7 +496,7 @@ Ed25519PublicKey ed25519_generate_key(Alloc *a, IoReader random,
     return pub;
 }
 
-Slice ed25519_sign(Alloc *a, Ed25519PrivateKey priv, Slice message) {
+CRYPTO_FIPS_TEXT Slice ed25519_sign(Alloc *a, Ed25519PrivateKey priv, Slice message) {
     EdPrivate k;
     Error e = ed_unpack_private(&k, priv);
     if (BURROW_FAILED(e))
@@ -496,13 +507,14 @@ Slice ed25519_sign(Alloc *a, Ed25519PrivateKey priv, Slice message) {
     return ed_copy(a, signature, ED25519_SIGNATURE_SIZE);
 }
 
-bool ed25519_verify(Ed25519PublicKey pub, Slice message, Slice sig) {
+CRYPTO_FIPS_TEXT bool ed25519_verify(Ed25519PublicKey pub, Slice message, Slice sig) {
     Ed25519Options opts = {0, BURROW_STR_EMPTY};
     return BURROW_OK(ed25519_verify_with_options(pub, message, sig, &opts));
 }
 
-Error ed25519_verify_with_options(Ed25519PublicKey pub, Slice message, Slice sig,
-                                  const Ed25519Options *opts) {
+CRYPTO_FIPS_TEXT Error ed25519_verify_with_options(Ed25519PublicKey pub, Slice message,
+                                                   Slice sig,
+                                                   const Ed25519Options *opts) {
     if (pub.len != ED25519_PUBLIC_KEY_SIZE)
         ed_panic_n("ed25519: bad public key length: ", pub.len);
 

@@ -17,36 +17,38 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "fips140_module.h"
+
 #include <stdint.h>
 
 /* d, the curve constant, and 2d. */
-const Edwards25519Element burrow__ge_d = {929955233495203, 466365720129213,
-                                          1662059464998953, 2033849074728123,
-                                          1442794654840575};
-const Edwards25519Element burrow__ge_d2 = {1859910466990425, 932731440258426,
-                                           1072319116312658, 1815898335770999,
-                                           633789495995903};
+CRYPTO_FIPS_RODATA const Edwards25519Element burrow__ge_d = {
+    929955233495203, 466365720129213, 1662059464998953, 2033849074728123,
+    1442794654840575};
+CRYPTO_FIPS_RODATA const Edwards25519Element burrow__ge_d2 = {
+    1859910466990425, 932731440258426, 1072319116312658, 1815898335770999,
+    633789495995903};
 
-static const uint8_t ge_generator_bytes[32] = {
+CRYPTO_FIPS_RODATA static const uint8_t ge_generator_bytes[32] = {
     0x58, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
     0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66,
     0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66, 0x66};
 
-static bool ge_fe_is_zero_value(const Edwards25519Element *v) {
+CRYPTO_FIPS_TEXT static bool ge_fe_is_zero_value(const Edwards25519Element *v) {
     return (v->l0 | v->l1 | v->l2 | v->l3 | v->l4) == 0;
 }
 
 /* A zero Point has x and y both zero, and no point on the curve does, since
  * that is not a solution of the curve equation. */
-static void ge_check_initialized(const Edwards25519Point *p) {
+CRYPTO_FIPS_TEXT static void ge_check_initialized(const Edwards25519Point *p) {
     if (ge_fe_is_zero_value(&p->x) && ge_fe_is_zero_value(&p->y))
         panic_str(BURROW_S("edwards25519: use of uninitialized Point"));
 }
 
 /* ------------------------------------------------------------ constructors */
 
-static Edwards25519Point *ge_from_const_bytes(Edwards25519Point *v,
-                                              const uint8_t b[32]) {
+CRYPTO_FIPS_TEXT static Edwards25519Point *ge_from_const_bytes(Edwards25519Point *v,
+                                                               const uint8_t b[32]) {
     Error err = {0};
     burrow__ge_set_bytes(v, slice_from((void *)(uintptr_t)b, 32, 32, TYPE_BYTE), &err);
     return v;
@@ -54,7 +56,7 @@ static Edwards25519Point *ge_from_const_bytes(Edwards25519Point *v,
 
 /* What decoding the bytes 1, 0, 0 ... gives, set directly since every scalar
  * multiplication starts from it. */
-Edwards25519Point *burrow__ge_identity(Edwards25519Point *v) {
+CRYPTO_FIPS_TEXT Edwards25519Point *burrow__ge_identity(Edwards25519Point *v) {
     burrow__fe_zero(&v->x);
     burrow__fe_one(&v->y);
     burrow__fe_one(&v->z);
@@ -62,18 +64,19 @@ Edwards25519Point *burrow__ge_identity(Edwards25519Point *v) {
     return v;
 }
 
-Edwards25519Point *burrow__ge_generator(Edwards25519Point *v) {
+CRYPTO_FIPS_TEXT Edwards25519Point *burrow__ge_generator(Edwards25519Point *v) {
     return ge_from_const_bytes(v, ge_generator_bytes);
 }
 
-Edwards25519ProjP2 *burrow__ge_p2_zero(Edwards25519ProjP2 *v) {
+CRYPTO_FIPS_TEXT Edwards25519ProjP2 *burrow__ge_p2_zero(Edwards25519ProjP2 *v) {
     burrow__fe_zero(&v->X);
     burrow__fe_one(&v->Y);
     burrow__fe_one(&v->Z);
     return v;
 }
 
-Edwards25519ProjCached *burrow__ge_cached_zero(Edwards25519ProjCached *v) {
+CRYPTO_FIPS_TEXT Edwards25519ProjCached *
+burrow__ge_cached_zero(Edwards25519ProjCached *v) {
     burrow__fe_one(&v->YplusX);
     burrow__fe_one(&v->YminusX);
     burrow__fe_one(&v->Z);
@@ -81,7 +84,8 @@ Edwards25519ProjCached *burrow__ge_cached_zero(Edwards25519ProjCached *v) {
     return v;
 }
 
-Edwards25519AffineCached *burrow__ge_affine_zero(Edwards25519AffineCached *v) {
+CRYPTO_FIPS_TEXT Edwards25519AffineCached *
+burrow__ge_affine_zero(Edwards25519AffineCached *v) {
     burrow__fe_one(&v->YplusX);
     burrow__fe_one(&v->YminusX);
     burrow__fe_zero(&v->T2d);
@@ -90,14 +94,15 @@ Edwards25519AffineCached *burrow__ge_affine_zero(Edwards25519AffineCached *v) {
 
 /* -------------------------------------------------------------- assignments */
 
-Edwards25519Point *burrow__ge_set(Edwards25519Point *v, const Edwards25519Point *u) {
+CRYPTO_FIPS_TEXT Edwards25519Point *burrow__ge_set(Edwards25519Point *v,
+                                                   const Edwards25519Point *u) {
     *v = *u;
     return v;
 }
 
 /* ----------------------------------------------------------------- encoding */
 
-void burrow__ge_bytes(const Edwards25519Point *v, uint8_t out[32]) {
+CRYPTO_FIPS_TEXT void burrow__ge_bytes(const Edwards25519Point *v, uint8_t out[32]) {
     ge_check_initialized(v);
 
     Edwards25519Element z_inv, x, y;
@@ -109,7 +114,8 @@ void burrow__ge_bytes(const Edwards25519Point *v, uint8_t out[32]) {
     out[31] |= (uint8_t)(burrow__fe_is_negative(&x) << 7);
 }
 
-Edwards25519Point *burrow__ge_set_bytes(Edwards25519Point *v, Slice x, Error *err) {
+CRYPTO_FIPS_TEXT Edwards25519Point *burrow__ge_set_bytes(Edwards25519Point *v, Slice x,
+                                                         Error *err) {
     /* Section 5.1.3 of RFC 8032 says a y that is not reduced is invalid, and
      * that is the one check it adds over Section 3.1. Go leaves it out to
      * match most implementations, ref10 among them, which is what consensus
@@ -163,24 +169,24 @@ Edwards25519Point *burrow__ge_set_bytes(Edwards25519Point *v, Slice x, Error *er
 
 /* --------------------------------------------------- conversions to and from */
 
-Edwards25519ProjP2 *burrow__ge_p2_from_p1xp1(Edwards25519ProjP2 *v,
-                                             const Edwards25519ProjP1xP1 *p) {
+CRYPTO_FIPS_TEXT Edwards25519ProjP2 *
+burrow__ge_p2_from_p1xp1(Edwards25519ProjP2 *v, const Edwards25519ProjP1xP1 *p) {
     burrow__fe_multiply(&v->X, &p->X, &p->T);
     burrow__fe_multiply(&v->Y, &p->Y, &p->Z);
     burrow__fe_multiply(&v->Z, &p->Z, &p->T);
     return v;
 }
 
-Edwards25519ProjP2 *burrow__ge_p2_from_p3(Edwards25519ProjP2 *v,
-                                          const Edwards25519Point *p) {
+CRYPTO_FIPS_TEXT Edwards25519ProjP2 *burrow__ge_p2_from_p3(Edwards25519ProjP2 *v,
+                                                           const Edwards25519Point *p) {
     v->X = p->x;
     v->Y = p->y;
     v->Z = p->z;
     return v;
 }
 
-Edwards25519Point *burrow__ge_from_p1xp1(Edwards25519Point *v,
-                                         const Edwards25519ProjP1xP1 *p) {
+CRYPTO_FIPS_TEXT Edwards25519Point *
+burrow__ge_from_p1xp1(Edwards25519Point *v, const Edwards25519ProjP1xP1 *p) {
     burrow__fe_multiply(&v->x, &p->X, &p->T);
     burrow__fe_multiply(&v->y, &p->Y, &p->Z);
     burrow__fe_multiply(&v->z, &p->Z, &p->T);
@@ -188,8 +194,8 @@ Edwards25519Point *burrow__ge_from_p1xp1(Edwards25519Point *v,
     return v;
 }
 
-Edwards25519Point *burrow__ge_from_p2(Edwards25519Point *v,
-                                      const Edwards25519ProjP2 *p) {
+CRYPTO_FIPS_TEXT Edwards25519Point *burrow__ge_from_p2(Edwards25519Point *v,
+                                                       const Edwards25519ProjP2 *p) {
     burrow__fe_multiply(&v->x, &p->X, &p->Z);
     burrow__fe_multiply(&v->y, &p->Y, &p->Z);
     burrow__fe_square(&v->z, &p->Z);
@@ -197,8 +203,8 @@ Edwards25519Point *burrow__ge_from_p2(Edwards25519Point *v,
     return v;
 }
 
-Edwards25519ProjCached *burrow__ge_cached_from_p3(Edwards25519ProjCached *v,
-                                                  const Edwards25519Point *p) {
+CRYPTO_FIPS_TEXT Edwards25519ProjCached *
+burrow__ge_cached_from_p3(Edwards25519ProjCached *v, const Edwards25519Point *p) {
     burrow__fe_add(&v->YplusX, &p->y, &p->x);
     burrow__fe_subtract(&v->YminusX, &p->y, &p->x);
     v->Z = p->z;
@@ -206,8 +212,8 @@ Edwards25519ProjCached *burrow__ge_cached_from_p3(Edwards25519ProjCached *v,
     return v;
 }
 
-Edwards25519AffineCached *burrow__ge_affine_from_p3(Edwards25519AffineCached *v,
-                                                    const Edwards25519Point *p) {
+CRYPTO_FIPS_TEXT Edwards25519AffineCached *
+burrow__ge_affine_from_p3(Edwards25519AffineCached *v, const Edwards25519Point *p) {
     burrow__fe_add(&v->YplusX, &p->y, &p->x);
     burrow__fe_subtract(&v->YminusX, &p->y, &p->x);
     burrow__fe_multiply(&v->T2d, &p->t, &burrow__ge_d2);
@@ -222,9 +228,9 @@ Edwards25519AffineCached *burrow__ge_affine_from_p3(Edwards25519AffineCached *v,
 
 /* --------------------------------------------------------- (re)addition */
 
-Edwards25519ProjP1xP1 *burrow__ge_p1xp1_add(Edwards25519ProjP1xP1 *v,
-                                            const Edwards25519Point *p,
-                                            const Edwards25519ProjCached *q) {
+CRYPTO_FIPS_TEXT Edwards25519ProjP1xP1 *
+burrow__ge_p1xp1_add(Edwards25519ProjP1xP1 *v, const Edwards25519Point *p,
+                     const Edwards25519ProjCached *q) {
     Edwards25519Element YplusX, YminusX, PP, MM, TT2d, ZZ2;
 
     burrow__fe_add(&YplusX, &p->y, &p->x);
@@ -244,9 +250,9 @@ Edwards25519ProjP1xP1 *burrow__ge_p1xp1_add(Edwards25519ProjP1xP1 *v,
     return v;
 }
 
-Edwards25519ProjP1xP1 *burrow__ge_p1xp1_sub(Edwards25519ProjP1xP1 *v,
-                                            const Edwards25519Point *p,
-                                            const Edwards25519ProjCached *q) {
+CRYPTO_FIPS_TEXT Edwards25519ProjP1xP1 *
+burrow__ge_p1xp1_sub(Edwards25519ProjP1xP1 *v, const Edwards25519Point *p,
+                     const Edwards25519ProjCached *q) {
     Edwards25519Element YplusX, YminusX, PP, MM, TT2d, ZZ2;
 
     burrow__fe_add(&YplusX, &p->y, &p->x);
@@ -266,9 +272,9 @@ Edwards25519ProjP1xP1 *burrow__ge_p1xp1_sub(Edwards25519ProjP1xP1 *v,
     return v;
 }
 
-Edwards25519ProjP1xP1 *burrow__ge_p1xp1_add_affine(Edwards25519ProjP1xP1 *v,
-                                                   const Edwards25519Point *p,
-                                                   const Edwards25519AffineCached *q) {
+CRYPTO_FIPS_TEXT Edwards25519ProjP1xP1 *
+burrow__ge_p1xp1_add_affine(Edwards25519ProjP1xP1 *v, const Edwards25519Point *p,
+                            const Edwards25519AffineCached *q) {
     Edwards25519Element YplusX, YminusX, PP, MM, TT2d, Z2;
 
     burrow__fe_add(&YplusX, &p->y, &p->x);
@@ -287,9 +293,9 @@ Edwards25519ProjP1xP1 *burrow__ge_p1xp1_add_affine(Edwards25519ProjP1xP1 *v,
     return v;
 }
 
-Edwards25519ProjP1xP1 *burrow__ge_p1xp1_sub_affine(Edwards25519ProjP1xP1 *v,
-                                                   const Edwards25519Point *p,
-                                                   const Edwards25519AffineCached *q) {
+CRYPTO_FIPS_TEXT Edwards25519ProjP1xP1 *
+burrow__ge_p1xp1_sub_affine(Edwards25519ProjP1xP1 *v, const Edwards25519Point *p,
+                            const Edwards25519AffineCached *q) {
     Edwards25519Element YplusX, YminusX, PP, MM, TT2d, Z2;
 
     burrow__fe_add(&YplusX, &p->y, &p->x);
@@ -308,8 +314,9 @@ Edwards25519ProjP1xP1 *burrow__ge_p1xp1_sub_affine(Edwards25519ProjP1xP1 *v,
     return v;
 }
 
-Edwards25519Point *burrow__ge_add(Edwards25519Point *v, const Edwards25519Point *p,
-                                  const Edwards25519Point *q) {
+CRYPTO_FIPS_TEXT Edwards25519Point *burrow__ge_add(Edwards25519Point *v,
+                                                   const Edwards25519Point *p,
+                                                   const Edwards25519Point *q) {
     ge_check_initialized(p);
     ge_check_initialized(q);
     Edwards25519ProjCached q_cached;
@@ -319,8 +326,9 @@ Edwards25519Point *burrow__ge_add(Edwards25519Point *v, const Edwards25519Point 
     return burrow__ge_from_p1xp1(v, &result);
 }
 
-Edwards25519Point *burrow__ge_subtract(Edwards25519Point *v, const Edwards25519Point *p,
-                                       const Edwards25519Point *q) {
+CRYPTO_FIPS_TEXT Edwards25519Point *burrow__ge_subtract(Edwards25519Point *v,
+                                                        const Edwards25519Point *p,
+                                                        const Edwards25519Point *q) {
     ge_check_initialized(p);
     ge_check_initialized(q);
     Edwards25519ProjCached q_cached;
@@ -332,8 +340,8 @@ Edwards25519Point *burrow__ge_subtract(Edwards25519Point *v, const Edwards25519P
 
 /* ---------------------------------------------------------------- doubling */
 
-Edwards25519ProjP1xP1 *burrow__ge_p1xp1_double(Edwards25519ProjP1xP1 *v,
-                                               const Edwards25519ProjP2 *p) {
+CRYPTO_FIPS_TEXT Edwards25519ProjP1xP1 *
+burrow__ge_p1xp1_double(Edwards25519ProjP1xP1 *v, const Edwards25519ProjP2 *p) {
     Edwards25519Element XX, YY, ZZ2, XplusYsq;
 
     burrow__fe_square(&XX, &p->X);
@@ -353,7 +361,8 @@ Edwards25519ProjP1xP1 *burrow__ge_p1xp1_double(Edwards25519ProjP1xP1 *v,
 
 /* ---------------------------------------------------------- negation, equal */
 
-Edwards25519Point *burrow__ge_negate(Edwards25519Point *v, const Edwards25519Point *p) {
+CRYPTO_FIPS_TEXT Edwards25519Point *burrow__ge_negate(Edwards25519Point *v,
+                                                      const Edwards25519Point *p) {
     ge_check_initialized(p);
     burrow__fe_negate(&v->x, &p->x);
     v->y = p->y;
@@ -362,7 +371,8 @@ Edwards25519Point *burrow__ge_negate(Edwards25519Point *v, const Edwards25519Poi
     return v;
 }
 
-int burrow__ge_equal(const Edwards25519Point *v, const Edwards25519Point *u) {
+CRYPTO_FIPS_TEXT int burrow__ge_equal(const Edwards25519Point *v,
+                                      const Edwards25519Point *u) {
     ge_check_initialized(v);
     ge_check_initialized(u);
 
@@ -378,31 +388,34 @@ int burrow__ge_equal(const Edwards25519Point *v, const Edwards25519Point *u) {
 /* ------------------------------------------------- constant time operations */
 
 /* a if cond is 1 and b if cond is 0. */
-static void ge_cached_select(Edwards25519ProjCached *v, const Edwards25519ProjCached *a,
-                             const Edwards25519ProjCached *b, int cond) {
+CRYPTO_FIPS_TEXT static void ge_cached_select(Edwards25519ProjCached *v,
+                                              const Edwards25519ProjCached *a,
+                                              const Edwards25519ProjCached *b,
+                                              int cond) {
     burrow__fe_select(&v->YplusX, &a->YplusX, &b->YplusX, cond);
     burrow__fe_select(&v->YminusX, &a->YminusX, &b->YminusX, cond);
     burrow__fe_select(&v->Z, &a->Z, &b->Z, cond);
     burrow__fe_select(&v->T2d, &a->T2d, &b->T2d, cond);
 }
 
-static void ge_affine_select(Edwards25519AffineCached *v,
-                             const Edwards25519AffineCached *a,
-                             const Edwards25519AffineCached *b, int cond) {
+CRYPTO_FIPS_TEXT static void ge_affine_select(Edwards25519AffineCached *v,
+                                              const Edwards25519AffineCached *a,
+                                              const Edwards25519AffineCached *b,
+                                              int cond) {
     burrow__fe_select(&v->YplusX, &a->YplusX, &b->YplusX, cond);
     burrow__fe_select(&v->YminusX, &a->YminusX, &b->YminusX, cond);
     burrow__fe_select(&v->T2d, &a->T2d, &b->T2d, cond);
 }
 
 /* -v if cond is 1, and v as it is if cond is 0. */
-static void ge_cached_cond_neg(Edwards25519ProjCached *v, int cond) {
+CRYPTO_FIPS_TEXT static void ge_cached_cond_neg(Edwards25519ProjCached *v, int cond) {
     Edwards25519Element neg;
     burrow__fe_swap(&v->YplusX, &v->YminusX, cond);
     burrow__fe_negate(&neg, &v->T2d);
     burrow__fe_select(&v->T2d, &neg, &v->T2d, cond);
 }
 
-static void ge_affine_cond_neg(Edwards25519AffineCached *v, int cond) {
+CRYPTO_FIPS_TEXT static void ge_affine_cond_neg(Edwards25519AffineCached *v, int cond) {
     Edwards25519Element neg;
     burrow__fe_swap(&v->YplusX, &v->YminusX, cond);
     burrow__fe_negate(&neg, &v->T2d);
@@ -411,8 +424,8 @@ static void ge_affine_cond_neg(Edwards25519AffineCached *v, int cond) {
 
 /* ------------------------------------------------------------------- tables */
 
-void burrow__ge_proj_table_from_p3(Edwards25519ProjLookupTable *v,
-                                   const Edwards25519Point *q) {
+CRYPTO_FIPS_TEXT void burrow__ge_proj_table_from_p3(Edwards25519ProjLookupTable *v,
+                                                    const Edwards25519Point *q) {
     /* Goes from q to 8q, each the one before plus q. */
     burrow__ge_cached_from_p3(&v->points[0], q);
     Edwards25519Point tmp_p3;
@@ -424,8 +437,8 @@ void burrow__ge_proj_table_from_p3(Edwards25519ProjLookupTable *v,
     }
 }
 
-void burrow__ge_affine_table_from_p3(Edwards25519AffineLookupTable *v,
-                                     const Edwards25519Point *q) {
+CRYPTO_FIPS_TEXT void burrow__ge_affine_table_from_p3(Edwards25519AffineLookupTable *v,
+                                                      const Edwards25519Point *q) {
     burrow__ge_affine_from_p3(&v->points[0], q);
     Edwards25519Point tmp_p3;
     Edwards25519ProjP1xP1 tmp_p1xp1;
@@ -436,8 +449,8 @@ void burrow__ge_affine_table_from_p3(Edwards25519AffineLookupTable *v,
     }
 }
 
-void burrow__ge_naf5_table_from_p3(Edwards25519NafLookupTable5 *v,
-                                   const Edwards25519Point *q) {
+CRYPTO_FIPS_TEXT void burrow__ge_naf5_table_from_p3(Edwards25519NafLookupTable5 *v,
+                                                    const Edwards25519Point *q) {
     /* q, 3q, 5q up to 15q, each the one before plus 2q. */
     burrow__ge_cached_from_p3(&v->points[0], q);
     Edwards25519Point q2;
@@ -451,8 +464,8 @@ void burrow__ge_naf5_table_from_p3(Edwards25519NafLookupTable5 *v,
     }
 }
 
-void burrow__ge_naf8_table_from_p3(Edwards25519NafLookupTable8 *v,
-                                   const Edwards25519Point *q) {
+CRYPTO_FIPS_TEXT void burrow__ge_naf8_table_from_p3(Edwards25519NafLookupTable8 *v,
+                                                    const Edwards25519Point *q) {
     burrow__ge_affine_from_p3(&v->points[0], q);
     Edwards25519Point q2;
     burrow__ge_add(&q2, q, q);
@@ -465,8 +478,9 @@ void burrow__ge_naf8_table_from_p3(Edwards25519NafLookupTable8 *v,
     }
 }
 
-void burrow__ge_proj_table_select(const Edwards25519ProjLookupTable *v,
-                                  Edwards25519ProjCached *dest, int8_t x) {
+CRYPTO_FIPS_TEXT void burrow__ge_proj_table_select(const Edwards25519ProjLookupTable *v,
+                                                   Edwards25519ProjCached *dest,
+                                                   int8_t x) {
     /* |x| in constant time. */
     int8_t xmask = (int8_t)(x >> 7);
     uint8_t xabs = (uint8_t)((x + xmask) ^ xmask);
@@ -481,8 +495,9 @@ void burrow__ge_proj_table_select(const Edwards25519ProjLookupTable *v,
     ge_cached_cond_neg(dest, xmask & 1);
 }
 
-void burrow__ge_affine_table_select(const Edwards25519AffineLookupTable *v,
-                                    Edwards25519AffineCached *dest, int8_t x) {
+CRYPTO_FIPS_TEXT void
+burrow__ge_affine_table_select(const Edwards25519AffineLookupTable *v,
+                               Edwards25519AffineCached *dest, int8_t x) {
     int8_t xmask = (int8_t)(x >> 7);
     uint8_t xabs = (uint8_t)((x + xmask) ^ xmask);
 
@@ -494,21 +509,24 @@ void burrow__ge_affine_table_select(const Edwards25519AffineLookupTable *v,
     ge_affine_cond_neg(dest, xmask & 1);
 }
 
-void burrow__ge_naf5_table_select(const Edwards25519NafLookupTable5 *v,
-                                  Edwards25519ProjCached *dest, int8_t x) {
+CRYPTO_FIPS_TEXT void burrow__ge_naf5_table_select(const Edwards25519NafLookupTable5 *v,
+                                                   Edwards25519ProjCached *dest,
+                                                   int8_t x) {
     *dest = v->points[x / 2];
 }
 
-void burrow__ge_naf8_table_select(const Edwards25519NafLookupTable8 *v,
-                                  Edwards25519AffineCached *dest, int8_t x) {
+CRYPTO_FIPS_TEXT void burrow__ge_naf8_table_select(const Edwards25519NafLookupTable8 *v,
+                                                   Edwards25519AffineCached *dest,
+                                                   int8_t x) {
     *dest = v->points[x / 2];
 }
 
 /* ------------------------------------------------------ scalar multiplication */
 
 /* Four doublings of *tmp1 into *v, with *tmp2 as scratch: v = 16 * tmp1. */
-static void ge_times16(Edwards25519Point *v, Edwards25519ProjP1xP1 *tmp1,
-                       Edwards25519ProjP2 *tmp2) {
+CRYPTO_FIPS_TEXT static void ge_times16(Edwards25519Point *v,
+                                        Edwards25519ProjP1xP1 *tmp1,
+                                        Edwards25519ProjP2 *tmp2) {
     for (int k = 0; k < 4; k++) {
         burrow__ge_p2_from_p1xp1(tmp2, tmp1);
         burrow__ge_p1xp1_double(tmp1, tmp2);
@@ -516,8 +534,8 @@ static void ge_times16(Edwards25519Point *v, Edwards25519ProjP1xP1 *tmp1,
     burrow__ge_from_p1xp1(v, tmp1);
 }
 
-Edwards25519Point *burrow__ge_scalar_base_mult(Edwards25519Point *v,
-                                               const Edwards25519Scalar *x) {
+CRYPTO_FIPS_TEXT Edwards25519Point *
+burrow__ge_scalar_base_mult(Edwards25519Point *v, const Edwards25519Scalar *x) {
     /* x = sum(x_i * 16^i), so x * B = sum(B * x_i * 16^i), as the Ed25519 paper
      * has it. Grouping the even and the odd coefficients,
      *
@@ -561,9 +579,9 @@ Edwards25519Point *burrow__ge_scalar_base_mult(Edwards25519Point *v,
     return v;
 }
 
-Edwards25519Point *burrow__ge_scalar_mult(Edwards25519Point *v,
-                                          const Edwards25519Scalar *x,
-                                          const Edwards25519Point *q) {
+CRYPTO_FIPS_TEXT Edwards25519Point *burrow__ge_scalar_mult(Edwards25519Point *v,
+                                                           const Edwards25519Scalar *x,
+                                                           const Edwards25519Point *q) {
     ge_check_initialized(q);
 
     Edwards25519ProjLookupTable table;
@@ -596,7 +614,7 @@ Edwards25519Point *burrow__ge_scalar_mult(Edwards25519Point *v,
     return v;
 }
 
-Edwards25519Point *burrow__ge_var_time_double_scalar_base_mult(
+CRYPTO_FIPS_TEXT Edwards25519Point *burrow__ge_var_time_double_scalar_base_mult(
     Edwards25519Point *v, const Edwards25519Scalar *a, const Edwards25519Point *A,
     const Edwards25519Scalar *b) {
     ge_check_initialized(A);

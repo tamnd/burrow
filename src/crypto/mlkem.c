@@ -23,6 +23,7 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "fips140_module.h"
 #include "mlkem_internal.h"
 #include "rand_internal.h"
 #include "sha3_internal.h"
@@ -38,45 +39,47 @@ enum {
 };
 
 /* Reduces a value a < 2q. */
-static inline MlkemFieldElement mlkem_field_reduce_once(uint16_t a) {
+CRYPTO_FIPS_TEXT static inline MlkemFieldElement mlkem_field_reduce_once(uint16_t a) {
     uint16_t x = (uint16_t)(a - MLKEM_Q);
     /* If x underflowed, then x >= 2¹⁶ - q > 2¹⁵, so the top bit is set. */
     x = (uint16_t)(x + (x >> 15) * MLKEM_Q);
     return x;
 }
 
-MlkemFieldElement burrow__mlkem_field_add(MlkemFieldElement a, MlkemFieldElement b) {
+CRYPTO_FIPS_TEXT MlkemFieldElement burrow__mlkem_field_add(MlkemFieldElement a,
+                                                           MlkemFieldElement b) {
     return mlkem_field_reduce_once((uint16_t)(a + b));
 }
 
-MlkemFieldElement burrow__mlkem_field_sub(MlkemFieldElement a, MlkemFieldElement b) {
+CRYPTO_FIPS_TEXT MlkemFieldElement burrow__mlkem_field_sub(MlkemFieldElement a,
+                                                           MlkemFieldElement b) {
     return mlkem_field_reduce_once((uint16_t)(a - b + MLKEM_Q));
 }
 
 /* Barrett reduction, to keep away from a division that might not be constant
  * time. */
-MlkemFieldElement burrow__mlkem_field_reduce(uint32_t a) {
+CRYPTO_FIPS_TEXT MlkemFieldElement burrow__mlkem_field_reduce(uint32_t a) {
     uint32_t quotient =
         (uint32_t)(((uint64_t)a * MLKEM_BARRETT_MULTIPLIER) >> MLKEM_BARRETT_SHIFT);
     return mlkem_field_reduce_once((uint16_t)(a - quotient * MLKEM_Q));
 }
 
-MlkemFieldElement burrow__mlkem_field_mul(MlkemFieldElement a, MlkemFieldElement b) {
+CRYPTO_FIPS_TEXT MlkemFieldElement burrow__mlkem_field_mul(MlkemFieldElement a,
+                                                           MlkemFieldElement b) {
     return burrow__mlkem_field_reduce((uint32_t)a * (uint32_t)b);
 }
 
 /* a * (b - c), with the reduction of the subtraction left to the one of the
  * product. */
-static inline MlkemFieldElement
+CRYPTO_FIPS_TEXT static inline MlkemFieldElement
 mlkem_field_mul_sub(MlkemFieldElement a, MlkemFieldElement b, MlkemFieldElement c) {
     return burrow__mlkem_field_reduce((uint32_t)a * (uint32_t)(b - c + MLKEM_Q));
 }
 
 /* a * b + c * d, with one reduction. */
-static inline MlkemFieldElement mlkem_field_add_mul(MlkemFieldElement a,
-                                                    MlkemFieldElement b,
-                                                    MlkemFieldElement c,
-                                                    MlkemFieldElement d) {
+CRYPTO_FIPS_TEXT static inline MlkemFieldElement
+mlkem_field_add_mul(MlkemFieldElement a, MlkemFieldElement b, MlkemFieldElement c,
+                    MlkemFieldElement d) {
     uint32_t x = (uint32_t)a * (uint32_t)b;
     x += (uint32_t)c * (uint32_t)d;
     return burrow__mlkem_field_reduce(x);
@@ -84,7 +87,7 @@ static inline MlkemFieldElement mlkem_field_add_mul(MlkemFieldElement a,
 
 /* Maps x uniformly to 0 to 2ᵈ-1, which is (x * 2ᵈ) / q rounded to the nearest
  * integer, a half rounding up, as FIPS 203, Section 2.3, has it. */
-uint16_t burrow__mlkem_compress(MlkemFieldElement x, uint8_t d) {
+CRYPTO_FIPS_TEXT uint16_t burrow__mlkem_compress(MlkemFieldElement x, uint8_t d) {
     /* Barrett reduction gives a quotient and a remainder in [0, 2q), with
      * dividend = quotient * q + remainder. */
     uint32_t dividend = (uint32_t)x << d;
@@ -105,7 +108,7 @@ uint16_t burrow__mlkem_compress(MlkemFieldElement x, uint8_t d) {
 
 /* Maps y in 0 to 2ᵈ-1 uniformly to the field, which is (y * q) / 2ᵈ rounded to
  * the nearest integer, a half rounding up. */
-MlkemFieldElement burrow__mlkem_decompress(uint16_t y, uint8_t d) {
+CRYPTO_FIPS_TEXT MlkemFieldElement burrow__mlkem_decompress(uint16_t y, uint8_t d) {
     uint32_t dividend = (uint32_t)y * MLKEM_Q;
     uint32_t quotient = dividend >> d;
     /* The top bit of the remainder is 1 for the half that rounds up. */
@@ -116,18 +119,20 @@ MlkemFieldElement burrow__mlkem_decompress(uint16_t y, uint8_t d) {
 
 /* ------------------------------------------------------------------- ring */
 
-static void mlkem_poly_add(MlkemRing *s, const MlkemRing *a, const MlkemRing *b) {
+CRYPTO_FIPS_TEXT static void mlkem_poly_add(MlkemRing *s, const MlkemRing *a,
+                                            const MlkemRing *b) {
     for (int i = 0; i < MLKEM_N; i++)
         s->c[i] = burrow__mlkem_field_add(a->c[i], b->c[i]);
 }
 
-static void mlkem_poly_sub(MlkemRing *s, const MlkemRing *a, const MlkemRing *b) {
+CRYPTO_FIPS_TEXT static void mlkem_poly_sub(MlkemRing *s, const MlkemRing *a,
+                                            const MlkemRing *b) {
     for (int i = 0; i < MLKEM_N; i++)
         s->c[i] = burrow__mlkem_field_sub(a->c[i], b->c[i]);
 }
 
 /* ByteEncode₁₂, FIPS 203, Algorithm 5, into the 384 bytes at out. */
-static void mlkem_poly_byte_encode(Byte *out, const MlkemRing *f) {
+CRYPTO_FIPS_TEXT static void mlkem_poly_byte_encode(Byte *out, const MlkemRing *f) {
     for (int i = 0; i < MLKEM_N; i += 2) {
         uint32_t x = (uint32_t)f->c[i] | (uint32_t)f->c[i + 1] << 12;
         out[0] = (Byte)x;
@@ -140,7 +145,7 @@ static void mlkem_poly_byte_encode(Byte *out, const MlkemRing *f) {
 /* ByteDecode₁₂, FIPS 203, Algorithm 6, from the 384 bytes at b, with the check
  * that every coefficient is reduced. That is the modulus check of ML-KEM
  * encapsulation. */
-static bool mlkem_poly_byte_decode(MlkemRing *f, const Byte *b) {
+CRYPTO_FIPS_TEXT static bool mlkem_poly_byte_decode(MlkemRing *f, const Byte *b) {
     /* The check runs over every coefficient, as Go stops at the first bad
      * one. Neither is secret: it is a public key. */
     for (int i = 0; i < MLKEM_N; i += 2) {
@@ -155,13 +160,15 @@ static bool mlkem_poly_byte_decode(MlkemRing *f, const Byte *b) {
     return true;
 }
 
-void burrow__mlkem_ring_compress_and_encode1(Byte *out, const MlkemRing *f) {
+CRYPTO_FIPS_TEXT void burrow__mlkem_ring_compress_and_encode1(Byte *out,
+                                                              const MlkemRing *f) {
     memset(out, 0, MLKEM_ENCODING_SIZE1);
     for (int i = 0; i < MLKEM_N; i++)
         out[i / 8] |= (Byte)(burrow__mlkem_compress(f->c[i], 1) << (i % 8));
 }
 
-void burrow__mlkem_ring_decode_and_decompress1(MlkemRing *f, const Byte *b) {
+CRYPTO_FIPS_TEXT void burrow__mlkem_ring_decode_and_decompress1(MlkemRing *f,
+                                                                const Byte *b) {
     for (int i = 0; i < MLKEM_N; i++) {
         uint16_t b_i = b[i / 8] >> (i % 8) & 1;
         /* ⌈q/2⌋, rounded up as FIPS 203, Section 2.3, says. 0 decompresses to
@@ -170,20 +177,23 @@ void burrow__mlkem_ring_decode_and_decompress1(MlkemRing *f, const Byte *b) {
     }
 }
 
-void burrow__mlkem_ring_compress_and_encode4(Byte *out, const MlkemRing *f) {
+CRYPTO_FIPS_TEXT void burrow__mlkem_ring_compress_and_encode4(Byte *out,
+                                                              const MlkemRing *f) {
     for (int i = 0; i < MLKEM_N; i += 2)
         out[i / 2] = (Byte)(burrow__mlkem_compress(f->c[i], 4) |
                             burrow__mlkem_compress(f->c[i + 1], 4) << 4);
 }
 
-void burrow__mlkem_ring_decode_and_decompress4(MlkemRing *f, const Byte *b) {
+CRYPTO_FIPS_TEXT void burrow__mlkem_ring_decode_and_decompress4(MlkemRing *f,
+                                                                const Byte *b) {
     for (int i = 0; i < MLKEM_N; i += 2) {
         f->c[i] = burrow__mlkem_decompress((uint16_t)(b[i / 2] & 0xf), 4);
         f->c[i + 1] = burrow__mlkem_decompress((uint16_t)(b[i / 2] >> 4), 4);
     }
 }
 
-void burrow__mlkem_ring_compress_and_encode10(Byte *out, const MlkemRing *f) {
+CRYPTO_FIPS_TEXT void burrow__mlkem_ring_compress_and_encode10(Byte *out,
+                                                               const MlkemRing *f) {
     for (int i = 0; i < MLKEM_N; i += 4) {
         uint64_t x = 0;
         x |= (uint64_t)burrow__mlkem_compress(f->c[i], 10);
@@ -199,7 +209,8 @@ void burrow__mlkem_ring_compress_and_encode10(Byte *out, const MlkemRing *f) {
     }
 }
 
-void burrow__mlkem_ring_decode_and_decompress10(MlkemRing *f, const Byte *b) {
+CRYPTO_FIPS_TEXT void burrow__mlkem_ring_decode_and_decompress10(MlkemRing *f,
+                                                                 const Byte *b) {
     for (int i = 0; i < MLKEM_N; i += 4) {
         uint64_t x = (uint64_t)b[0] | (uint64_t)b[1] << 8 | (uint64_t)b[2] << 16 |
                      (uint64_t)b[3] << 24 | (uint64_t)b[4] << 32;
@@ -211,7 +222,8 @@ void burrow__mlkem_ring_decode_and_decompress10(MlkemRing *f, const Byte *b) {
     }
 }
 
-void burrow__mlkem_ring_compress_and_encode(Byte *out, const MlkemRing *f, uint8_t d) {
+CRYPTO_FIPS_TEXT void
+burrow__mlkem_ring_compress_and_encode(Byte *out, const MlkemRing *f, uint8_t d) {
     Byte b = 0;
     unsigned b_idx = 0;
     for (int i = 0; i < MLKEM_N; i++) {
@@ -231,7 +243,8 @@ void burrow__mlkem_ring_compress_and_encode(Byte *out, const MlkemRing *f, uint8
     }
 }
 
-void burrow__mlkem_ring_decode_and_decompress(MlkemRing *f, const Byte *b, uint8_t d) {
+CRYPTO_FIPS_TEXT void
+burrow__mlkem_ring_decode_and_decompress(MlkemRing *f, const Byte *b, uint8_t d) {
     unsigned b_idx = 0;
     for (int i = 0; i < MLKEM_N; i++) {
         uint16_t c = 0;
@@ -253,7 +266,8 @@ void burrow__mlkem_ring_decode_and_decompress(MlkemRing *f, const Byte *b, uint8
 
 /* SamplePolyCBD, FIPS 203, Algorithm 8, with η = 2: a ring element from the
  * centred binomial distribution, from 128 bytes of SHAKE256(s || b). */
-static void mlkem_sample_poly_cbd(MlkemRing *f, const Byte s[32], Byte b) {
+CRYPTO_FIPS_TEXT static void mlkem_sample_poly_cbd(MlkemRing *f, const Byte s[32],
+                                                   Byte b) {
     Sha3 prf;
     burrow__shake256_init(&prf);
     burrow__sha3_write(&prf, s, 32);
@@ -276,7 +290,7 @@ static void mlkem_sample_poly_cbd(MlkemRing *f, const Byte s[32], Byte b) {
 
 /* ζ^(2BitRev7(i)+1) mod q, FIPS 203, Appendix A, with the negative values
  * made positive. */
-const MlkemFieldElement burrow__mlkem_gammas[128] = {
+CRYPTO_FIPS_RODATA const MlkemFieldElement burrow__mlkem_gammas[128] = {
     17,   3312, 2761, 568,  583,  2746, 2649, 680,  1637, 1692, 723,  2606, 2288,
     1041, 1100, 2229, 1409, 1920, 2662, 667,  3281, 48,   233,  3096, 756,  2573,
     2156, 1173, 3015, 314,  3050, 279,  1703, 1626, 1651, 1678, 2789, 540,  1789,
@@ -290,7 +304,8 @@ const MlkemFieldElement burrow__mlkem_gammas[128] = {
 };
 
 /* MultiplyNTTs, FIPS 203, Algorithm 11. h can be f or g. */
-static void mlkem_ntt_mul(MlkemRing *h, const MlkemRing *f, const MlkemRing *g) {
+CRYPTO_FIPS_TEXT static void mlkem_ntt_mul(MlkemRing *h, const MlkemRing *f,
+                                           const MlkemRing *g) {
     for (int i = 0; i < MLKEM_N; i += 2) {
         MlkemFieldElement a0 = f->c[i], a1 = f->c[i + 1];
         MlkemFieldElement b0 = g->c[i], b1 = g->c[i + 1];
@@ -301,7 +316,7 @@ static void mlkem_ntt_mul(MlkemRing *h, const MlkemRing *f, const MlkemRing *g) 
 }
 
 /* ζ^BitRev7(k) mod q, FIPS 203, Appendix A. */
-const MlkemFieldElement burrow__mlkem_zetas[128] = {
+CRYPTO_FIPS_RODATA const MlkemFieldElement burrow__mlkem_zetas[128] = {
     1,    1729, 2580, 3289, 2642, 630,  1897, 848,  1062, 1919, 193,  797,  2786,
     3260, 569,  1746, 296,  2447, 1339, 1476, 3046, 56,   2240, 1333, 1426, 2094,
     535,  2882, 2393, 2879, 1974, 821,  289,  331,  3253, 1756, 1197, 2304, 2277,
@@ -315,7 +330,7 @@ const MlkemFieldElement burrow__mlkem_zetas[128] = {
 };
 
 /* NTT, FIPS 203, Algorithm 9, in place. */
-static void mlkem_ntt(MlkemRing *r) {
+CRYPTO_FIPS_TEXT static void mlkem_ntt(MlkemRing *r) {
     MlkemFieldElement *f = r->c;
     int k = 1;
     for (int len = 128; len >= 2; len /= 2) {
@@ -332,7 +347,7 @@ static void mlkem_ntt(MlkemRing *r) {
 }
 
 /* NTT⁻¹, FIPS 203, Algorithm 10, in place. */
-static void mlkem_inverse_ntt(MlkemRing *r) {
+CRYPTO_FIPS_TEXT static void mlkem_inverse_ntt(MlkemRing *r) {
     MlkemFieldElement *f = r->c;
     int k = 127;
     for (int len = 2; len <= 128; len *= 2) {
@@ -354,7 +369,8 @@ static void mlkem_inverse_ntt(MlkemRing *r) {
  * SHAKE128(rho || ii || jj). It takes 12 bits at a time, little endian, and
  * drops the ones that are not less than q, about 19% of them, three bytes
  * making two. */
-static void mlkem_sample_ntt(MlkemRing *a, const Byte rho[32], Byte ii, Byte jj) {
+CRYPTO_FIPS_TEXT static void mlkem_sample_ntt(MlkemRing *a, const Byte rho[32], Byte ii,
+                                              Byte jj) {
     Sha3 xof;
     burrow__shake128_init(&xof);
     burrow__sha3_write(&xof, rho, 32);
@@ -459,13 +475,13 @@ typedef struct MlkemView {
     MlkemRing *s;
 } MlkemView;
 
-static MlkemView mlkem_view_ek768(const MlkemEncapsulationKey768 *ek) {
+CRYPTO_FIPS_TEXT static MlkemView mlkem_view_ek768(const MlkemEncapsulationKey768 *ek) {
     MlkemEncapsulationKey768 *e = (MlkemEncapsulationKey768 *)(uintptr_t)ek;
     MlkemView v = {3, 10, 4, e->rho, e->h, e->t, e->a, NULL, NULL, NULL};
     return v;
 }
 
-static MlkemView mlkem_view_dk768(const MlkemDecapsulationKey768 *dk) {
+CRYPTO_FIPS_TEXT static MlkemView mlkem_view_dk768(const MlkemDecapsulationKey768 *dk) {
     MlkemDecapsulationKey768 *k = (MlkemDecapsulationKey768 *)(uintptr_t)dk;
     MlkemView v = mlkem_view_ek768(&k->ek);
     v.d = k->d;
@@ -474,13 +490,15 @@ static MlkemView mlkem_view_dk768(const MlkemDecapsulationKey768 *dk) {
     return v;
 }
 
-static MlkemView mlkem_view_ek1024(const MlkemEncapsulationKey1024 *ek) {
+CRYPTO_FIPS_TEXT static MlkemView
+mlkem_view_ek1024(const MlkemEncapsulationKey1024 *ek) {
     MlkemEncapsulationKey1024 *e = (MlkemEncapsulationKey1024 *)(uintptr_t)ek;
     MlkemView v = {4, 11, 5, e->rho, e->h, e->t, e->a, NULL, NULL, NULL};
     return v;
 }
 
-static MlkemView mlkem_view_dk1024(const MlkemDecapsulationKey1024 *dk) {
+CRYPTO_FIPS_TEXT static MlkemView
+mlkem_view_dk1024(const MlkemDecapsulationKey1024 *dk) {
     MlkemDecapsulationKey1024 *k = (MlkemDecapsulationKey1024 *)(uintptr_t)dk;
     MlkemView v = mlkem_view_ek1024(&k->ek);
     v.d = k->d;
@@ -489,16 +507,16 @@ static MlkemView mlkem_view_dk1024(const MlkemDecapsulationKey1024 *dk) {
     return v;
 }
 
-static Int mlkem_ek_size(const MlkemView *v) {
+CRYPTO_FIPS_TEXT static Int mlkem_ek_size(const MlkemView *v) {
     return v->k * MLKEM_ENCODING_SIZE12 + 32;
 }
 
-static Int mlkem_ciphertext_size(const MlkemView *v) {
+CRYPTO_FIPS_TEXT static Int mlkem_ciphertext_size(const MlkemView *v) {
     return v->k * v->du * 32 + v->dv * 32;
 }
 
 /* The encoded encapsulation key, ByteEncode₁₂(t) || ρ, into out. */
-static void mlkem_ek_bytes(const MlkemView *v, Byte *out) {
+CRYPTO_FIPS_TEXT static void mlkem_ek_bytes(const MlkemView *v, Byte *out) {
     for (int i = 0; i < v->k; i++) {
         mlkem_poly_byte_encode(out, &v->t[i]);
         out += MLKEM_ENCODING_SIZE12;
@@ -506,7 +524,7 @@ static void mlkem_ek_bytes(const MlkemView *v, Byte *out) {
     memcpy(out, v->rho, 32);
 }
 
-static void mlkem_expand_a(const MlkemView *v) {
+CRYPTO_FIPS_TEXT static void mlkem_expand_a(const MlkemView *v) {
     for (int i = 0; i < v->k; i++)
         for (int j = 0; j < v->k; j++)
             mlkem_sample_ntt(&v->a[i * v->k + j], v->rho, (Byte)j, (Byte)i);
@@ -514,7 +532,8 @@ static void mlkem_expand_a(const MlkemView *v) {
 
 /* ML-KEM.KeyGen_internal, FIPS 203, Algorithm 16, and K-PKE.KeyGen, Algorithm
  * 13, merged. */
-static void mlkem_kem_key_gen(const MlkemView *v, const Byte d[32], const Byte z[32]) {
+CRYPTO_FIPS_TEXT static void mlkem_kem_key_gen(const MlkemView *v, const Byte d[32],
+                                               const Byte z[32]) {
     int k = v->k;
     memcpy(v->d, d, 32);
     memcpy(v->z, z, 32);
@@ -565,7 +584,7 @@ static void mlkem_kem_key_gen(const MlkemView *v, const Byte d[32], const Byte z
 
 /* The start of K-PKE.Encrypt, FIPS 203, Algorithm 14: parsing ek, with its
  * hash, t and A. ek is the right length. */
-static bool mlkem_parse_ek(const MlkemView *v, const Byte *ek) {
+CRYPTO_FIPS_TEXT static bool mlkem_parse_ek(const MlkemView *v, const Byte *ek) {
     Sha3 hh;
     burrow__sha3_init256(&hh);
     burrow__sha3_write(&hh, ek, mlkem_ek_size(v));
@@ -582,8 +601,8 @@ static bool mlkem_parse_ek(const MlkemView *v, const Byte *ek) {
 
 /* K-PKE.Encrypt, FIPS 203, Algorithm 14, with t and A from parsing: the
  * ciphertext of m with randomness rnd, into c. */
-static void mlkem_pke_encrypt(const MlkemView *v, Byte *c, const Byte m[32],
-                              const Byte rnd[32]) {
+CRYPTO_FIPS_TEXT static void mlkem_pke_encrypt(const MlkemView *v, Byte *c,
+                                               const Byte m[32], const Byte rnd[32]) {
     int k = v->k;
     MlkemRing r[MLKEM_K_MAX], e1[MLKEM_K_MAX], e2;
     Byte n = 0;
@@ -634,7 +653,8 @@ static void mlkem_pke_encrypt(const MlkemView *v, Byte *c, const Byte m[32],
 
 /* K-PKE.Decrypt, FIPS 203, Algorithm 15, with s kept from key generation: the
  * message in c, into m. */
-static void mlkem_pke_decrypt(const MlkemView *v, Byte m[32], const Byte *c) {
+CRYPTO_FIPS_TEXT static void mlkem_pke_decrypt(const MlkemView *v, Byte m[32],
+                                               const Byte *c) {
     int k = v->k;
     MlkemRing mask, u, p;
     memset(&mask, 0, sizeof mask);
@@ -662,8 +682,8 @@ static void mlkem_pke_decrypt(const MlkemView *v, Byte m[32], const Byte *c) {
 
 /* ML-KEM.Encaps_internal, FIPS 203, Algorithm 17: the shared key into key and
  * the ciphertext into c. */
-static void mlkem_kem_encaps(const MlkemView *v, Byte key[32], Byte *c,
-                             const Byte m[32]) {
+CRYPTO_FIPS_TEXT static void mlkem_kem_encaps(const MlkemView *v, Byte key[32], Byte *c,
+                                              const Byte m[32]) {
     Sha3 g;
     burrow__sha3_init512(&g);
     burrow__sha3_write(&g, m, 32);
@@ -677,7 +697,8 @@ static void mlkem_kem_encaps(const MlkemView *v, Byte key[32], Byte *c,
 /* ML-KEM.Decaps_internal, FIPS 203, Algorithm 18: the shared key in c. A c
  * that does not encrypt again to itself gives the implicit rejection key
  * instead, chosen in constant time. */
-static void mlkem_kem_decaps(const MlkemView *v, Byte key[32], const Byte *c) {
+CRYPTO_FIPS_TEXT static void mlkem_kem_decaps(const MlkemView *v, Byte key[32],
+                                              const Byte *c) {
     Int csize = mlkem_ciphertext_size(v);
     Byte m[32];
     mlkem_pke_decrypt(v, m, c);
@@ -709,23 +730,24 @@ static void mlkem_kem_decaps(const MlkemView *v, Byte key[32], const Byte *c) {
 
 /* ------------------------------------------------------------ the API */
 
-static void mlkem_set_error(Error *err, const char *msg) {
+CRYPTO_FIPS_TEXT static void mlkem_set_error(Error *err, const char *msg) {
     BURROW_OUT(err, errors_new(error_allocator(), str_from_cstr(msg)));
 }
 
-static Alloc *mlkem_alloc(Alloc *a) {
+CRYPTO_FIPS_TEXT static Alloc *mlkem_alloc(Alloc *a) {
     return a != NULL ? a : heap_allocator();
 }
 
 /* A copy of the n bytes at p as a new Slice from a. */
-static Slice mlkem_bytes(Alloc *a, const Byte *p, Int n) {
+CRYPTO_FIPS_TEXT static Slice mlkem_bytes(Alloc *a, const Byte *p, Int n) {
     Slice s = slice_make(mlkem_alloc(a), TYPE_BYTE, n, n);
     if (s.p != NULL)
         memcpy(s.p, p, (size_t)n);
     return s;
 }
 
-static void *mlkem_new(Alloc *a, size_t size, size_t align, Error *err) {
+CRYPTO_FIPS_TEXT static void *mlkem_new(Alloc *a, size_t size, size_t align,
+                                        Error *err) {
     void *p = mem_alloc(a, size, align);
     if (p == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -737,8 +759,9 @@ static void *mlkem_new(Alloc *a, size_t size, size_t align, Error *err) {
 }
 
 /* Encapsulate with the message m, as two new Slices from a. */
-static Slice mlkem_encapsulate_with(const MlkemView *v, Alloc *a, const Byte m[32],
-                                    Slice *ciphertext) {
+CRYPTO_FIPS_TEXT static Slice mlkem_encapsulate_with(const MlkemView *v, Alloc *a,
+                                                     const Byte m[32],
+                                                     Slice *ciphertext) {
     Byte key[MLKEM_SHARED_KEY_SIZE];
     Byte c[MLKEM_CIPHERTEXT_SIZE1024];
     mlkem_kem_encaps(v, key, c, m);
@@ -755,7 +778,8 @@ static Slice mlkem_encapsulate_with(const MlkemView *v, Alloc *a, const Byte m[3
     return k;
 }
 
-static Slice mlkem_encapsulate(const MlkemView *v, Alloc *a, Slice *ciphertext) {
+CRYPTO_FIPS_TEXT static Slice mlkem_encapsulate(const MlkemView *v, Alloc *a,
+                                                Slice *ciphertext) {
     Byte m[MLKEM_MESSAGE_SIZE];
     burrow__crypto_rand_system(slice_from(m, sizeof m, sizeof m, TYPE_BYTE));
     Slice k = mlkem_encapsulate_with(v, a, m, ciphertext);
@@ -763,8 +787,8 @@ static Slice mlkem_encapsulate(const MlkemView *v, Alloc *a, Slice *ciphertext) 
     return k;
 }
 
-static Slice mlkem_decapsulate(const MlkemView *v, Alloc *a, Slice ciphertext,
-                               Error *err) {
+CRYPTO_FIPS_TEXT static Slice mlkem_decapsulate(const MlkemView *v, Alloc *a,
+                                                Slice ciphertext, Error *err) {
     if (ciphertext.len != mlkem_ciphertext_size(v)) {
         mlkem_set_error(err, "mlkem: invalid ciphertext length");
         return slice_nil(TYPE_BYTE);
@@ -783,7 +807,8 @@ static Slice mlkem_decapsulate(const MlkemView *v, Alloc *a, Slice ciphertext,
 
 /* TestingOnlyNewDecapsulationKey: s, then the encapsulation key, then H(ek),
  * then z. */
-static bool mlkem_parse_expanded(const MlkemView *v, Slice b, Error *err) {
+CRYPTO_FIPS_TEXT static bool mlkem_parse_expanded(const MlkemView *v, Slice b,
+                                                  Error *err) {
     const Byte *p = (const Byte *)b.p;
     for (int i = 0; i < v->k; i++) {
         if (!mlkem_poly_byte_decode(&v->s[i], p)) {
@@ -809,7 +834,7 @@ static bool mlkem_parse_expanded(const MlkemView *v, Slice b, Error *err) {
     return true;
 }
 
-static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a) {
+CRYPTO_FIPS_TEXT static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a) {
     Int n = (Int)v->k * MLKEM_ENCODING_SIZE12 + mlkem_ek_size(v) + 32 + 32;
     Slice b = slice_make(mlkem_alloc(a), TYPE_BYTE, n, n);
     if (b.p == NULL)
@@ -829,7 +854,8 @@ static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a) {
 /* The functions of each size. The bodies are the same with 768 or 1024 in the
  * names, so they are written once. */
 #define MLKEM_FUNCS(N)                                                                 \
-    static MlkemDecapsulationKey##N *mlkem_new_dk##N(Alloc *a, Error *err) {           \
+    CRYPTO_FIPS_TEXT static MlkemDecapsulationKey##N *mlkem_new_dk##N(Alloc *a,        \
+                                                                      Error *err) {    \
         a = mlkem_alloc(a);                                                            \
         MlkemDecapsulationKey##N *dk =                                                 \
             mlkem_new(a, sizeof *dk, _Alignof(MlkemDecapsulationKey##N), err);         \
@@ -838,7 +864,7 @@ static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a) {
         return dk;                                                                     \
     }                                                                                  \
                                                                                        \
-    MlkemDecapsulationKey##N *burrow__mlkem_generate_key_internal##N(                  \
+    CRYPTO_FIPS_TEXT MlkemDecapsulationKey##N *burrow__mlkem_generate_key_internal##N( \
         Alloc *a, const Byte d[32], const Byte z[32]) {                                \
         MlkemDecapsulationKey##N *dk = mlkem_new_dk##N(a, NULL);                       \
         if (dk == NULL)                                                                \
@@ -848,7 +874,8 @@ static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a) {
         return dk;                                                                     \
     }                                                                                  \
                                                                                        \
-    MlkemDecapsulationKey##N *mlkem_generate_key##N(Alloc *a, Error *err) {            \
+    CRYPTO_FIPS_TEXT MlkemDecapsulationKey##N *mlkem_generate_key##N(Alloc *a,         \
+                                                                     Error *err) {     \
         MlkemDecapsulationKey##N *dk = mlkem_new_dk##N(a, err);                        \
         if (dk == NULL)                                                                \
             return NULL;                                                               \
@@ -860,8 +887,8 @@ static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a) {
         return dk;                                                                     \
     }                                                                                  \
                                                                                        \
-    MlkemDecapsulationKey##N *mlkem_new_decapsulation_key##N(Alloc *a, Slice seed,     \
-                                                             Error *err) {             \
+    CRYPTO_FIPS_TEXT MlkemDecapsulationKey##N *mlkem_new_decapsulation_key##N(         \
+        Alloc *a, Slice seed, Error *err) {                                            \
         if (seed.len != MLKEM_SEED_SIZE) {                                             \
             mlkem_set_error(err, "mlkem: invalid seed length");                        \
             return NULL;                                                               \
@@ -875,8 +902,9 @@ static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a) {
         return dk;                                                                     \
     }                                                                                  \
                                                                                        \
-    MlkemDecapsulationKey##N *burrow__mlkem_testing_only_new_decapsulation_key##N(     \
-        Alloc *a, Slice b, Error *err) {                                               \
+    CRYPTO_FIPS_TEXT MlkemDecapsulationKey##N *                                        \
+    burrow__mlkem_testing_only_new_decapsulation_key##N(Alloc *a, Slice b,             \
+                                                        Error *err) {                  \
         if (b.len != MLKEM_DECAPSULATION_KEY_SIZE##N) {                                \
             mlkem_set_error(err, "mlkem: invalid NIST decapsulation key length");      \
             return NULL;                                                               \
@@ -892,13 +920,14 @@ static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a) {
         return dk;                                                                     \
     }                                                                                  \
                                                                                        \
-    Slice burrow__mlkem_testing_only_expanded_bytes##N(                                \
+    CRYPTO_FIPS_TEXT Slice burrow__mlkem_testing_only_expanded_bytes##N(               \
         const MlkemDecapsulationKey##N *dk, Alloc *a) {                                \
         MlkemView v = mlkem_view_dk##N(dk);                                            \
         return mlkem_expanded_bytes(&v, a);                                            \
     }                                                                                  \
                                                                                        \
-    void mlkem_decapsulation_key##N##_free(MlkemDecapsulationKey##N *dk) {             \
+    CRYPTO_FIPS_TEXT void mlkem_decapsulation_key##N##_free(                           \
+        MlkemDecapsulationKey##N *dk) {                                                \
         if (dk == NULL)                                                                \
             return;                                                                    \
         Alloc *a = dk->alloc;                                                          \
@@ -906,8 +935,8 @@ static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a) {
         mem_free(a, dk, sizeof *dk, _Alignof(MlkemDecapsulationKey##N));               \
     }                                                                                  \
                                                                                        \
-    Slice mlkem_decapsulation_key##N##_bytes(const MlkemDecapsulationKey##N *dk,       \
-                                             Alloc *a) {                               \
+    CRYPTO_FIPS_TEXT Slice mlkem_decapsulation_key##N##_bytes(                         \
+        const MlkemDecapsulationKey##N *dk, Alloc *a) {                                \
         Byte b[MLKEM_SEED_SIZE];                                                       \
         memcpy(b, dk->d, 32);                                                          \
         memcpy(b + 32, dk->z, 32);                                                     \
@@ -916,28 +945,30 @@ static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a) {
         return s;                                                                      \
     }                                                                                  \
                                                                                        \
-    Slice mlkem_decapsulation_key##N##_decapsulate(                                    \
+    CRYPTO_FIPS_TEXT Slice mlkem_decapsulation_key##N##_decapsulate(                   \
         const MlkemDecapsulationKey##N *dk, Alloc *a, Slice ciphertext, Error *err) {  \
         MlkemView v = mlkem_view_dk##N(dk);                                            \
         return mlkem_decapsulate(&v, a, ciphertext, err);                              \
     }                                                                                  \
                                                                                        \
-    const MlkemEncapsulationKey##N *mlkem_decapsulation_key##N##_encapsulation_key(    \
+    CRYPTO_FIPS_TEXT const MlkemEncapsulationKey##N *                                  \
+    mlkem_decapsulation_key##N##_encapsulation_key(                                    \
         const MlkemDecapsulationKey##N *dk) {                                          \
         return &dk->ek;                                                                \
     }                                                                                  \
                                                                                        \
-    CryptoEncapsulator mlkem_decapsulation_key##N##_encapsulator(                      \
+    CRYPTO_FIPS_TEXT CryptoEncapsulator mlkem_decapsulation_key##N##_encapsulator(     \
         const MlkemDecapsulationKey##N *dk) {                                          \
         return mlkem_encapsulation_key##N##_as_encapsulator(&dk->ek);                  \
     }                                                                                  \
                                                                                        \
-    static CryptoEncapsulator mlkem_dk##N##_vt_encapsulator(void *self) {              \
+    CRYPTO_FIPS_TEXT static CryptoEncapsulator mlkem_dk##N##_vt_encapsulator(          \
+        void *self) {                                                                  \
         return mlkem_decapsulation_key##N##_encapsulator(self);                        \
     }                                                                                  \
                                                                                        \
-    static Slice mlkem_dk##N##_vt_decapsulate(void *self, Alloc *a, Slice ciphertext,  \
-                                              Error *err) {                            \
+    CRYPTO_FIPS_TEXT static Slice mlkem_dk##N##_vt_decapsulate(                        \
+        void *self, Alloc *a, Slice ciphertext, Error *err) {                          \
         return mlkem_decapsulation_key##N##_decapsulate(self, a, ciphertext, err);     \
     }                                                                                  \
                                                                                        \
@@ -947,13 +978,13 @@ static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a) {
         mlkem_dk##N##_vt_decapsulate,                                                  \
     };                                                                                 \
                                                                                        \
-    CryptoDecapsulator mlkem_decapsulation_key##N##_as_decapsulator(                   \
+    CRYPTO_FIPS_TEXT CryptoDecapsulator mlkem_decapsulation_key##N##_as_decapsulator(  \
         const MlkemDecapsulationKey##N *dk) {                                          \
         CryptoDecapsulator d = {&mlkem_dk##N##_vt, (void *)(uintptr_t)dk};             \
         return d;                                                                      \
     }                                                                                  \
                                                                                        \
-    MlkemEncapsulationKey##N *mlkem_new_encapsulation_key##N(                          \
+    CRYPTO_FIPS_TEXT MlkemEncapsulationKey##N *mlkem_new_encapsulation_key##N(         \
         Alloc *a, Slice encapsulation_key, Error *err) {                               \
         if (encapsulation_key.len != MLKEM_ENCAPSULATION_KEY_SIZE##N) {                \
             mlkem_set_error(err, "mlkem: invalid encapsulation key length");           \
@@ -974,32 +1005,33 @@ static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a) {
         return ek;                                                                     \
     }                                                                                  \
                                                                                        \
-    void mlkem_encapsulation_key##N##_free(MlkemEncapsulationKey##N *ek) {             \
+    CRYPTO_FIPS_TEXT void mlkem_encapsulation_key##N##_free(                           \
+        MlkemEncapsulationKey##N *ek) {                                                \
         if (ek == NULL || ek->alloc == NULL)                                           \
             return;                                                                    \
         mem_free(ek->alloc, ek, sizeof *ek, _Alignof(MlkemEncapsulationKey##N));       \
     }                                                                                  \
                                                                                        \
-    Slice mlkem_encapsulation_key##N##_bytes(const MlkemEncapsulationKey##N *ek,       \
-                                             Alloc *a) {                               \
+    CRYPTO_FIPS_TEXT Slice mlkem_encapsulation_key##N##_bytes(                         \
+        const MlkemEncapsulationKey##N *ek, Alloc *a) {                                \
         MlkemView v = mlkem_view_ek##N(ek);                                            \
         Byte b[MLKEM_ENCAPSULATION_KEY_SIZE##N];                                       \
         mlkem_ek_bytes(&v, b);                                                         \
         return mlkem_bytes(a, b, MLKEM_ENCAPSULATION_KEY_SIZE##N);                     \
     }                                                                                  \
                                                                                        \
-    Slice mlkem_encapsulation_key##N##_encapsulate(const MlkemEncapsulationKey##N *ek, \
-                                                   Alloc *a, Slice *ciphertext) {      \
+    CRYPTO_FIPS_TEXT Slice mlkem_encapsulation_key##N##_encapsulate(                   \
+        const MlkemEncapsulationKey##N *ek, Alloc *a, Slice *ciphertext) {             \
         MlkemView v = mlkem_view_ek##N(ek);                                            \
         return mlkem_encapsulate(&v, a, ciphertext);                                   \
     }                                                                                  \
                                                                                        \
-    static Slice mlkem_ek##N##_vt_bytes(void *self, Alloc *a) {                        \
+    CRYPTO_FIPS_TEXT static Slice mlkem_ek##N##_vt_bytes(void *self, Alloc *a) {       \
         return mlkem_encapsulation_key##N##_bytes(self, a);                            \
     }                                                                                  \
                                                                                        \
-    static CryptoEncapsulateResult mlkem_ek##N##_vt_encapsulate(void *self,            \
-                                                                Alloc *a) {            \
+    CRYPTO_FIPS_TEXT static CryptoEncapsulateResult mlkem_ek##N##_vt_encapsulate(      \
+        void *self, Alloc *a) {                                                        \
         CryptoEncapsulateResult r;                                                     \
         r.shared_key =                                                                 \
             mlkem_encapsulation_key##N##_encapsulate(self, a, &r.ciphertext);          \
@@ -1012,7 +1044,7 @@ static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a) {
         mlkem_ek##N##_vt_encapsulate,                                                  \
     };                                                                                 \
                                                                                        \
-    CryptoEncapsulator mlkem_encapsulation_key##N##_as_encapsulator(                   \
+    CRYPTO_FIPS_TEXT CryptoEncapsulator mlkem_encapsulation_key##N##_as_encapsulator(  \
         const MlkemEncapsulationKey##N *ek) {                                          \
         CryptoEncapsulator e = {&mlkem_ek##N##_vt, (void *)(uintptr_t)ek};             \
         return e;                                                                      \
@@ -1021,16 +1053,15 @@ static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a) {
 MLKEM_FUNCS(768)
 MLKEM_FUNCS(1024)
 
-Slice burrow__mlkem_encapsulate_internal768(const MlkemEncapsulationKey768 *ek,
-                                            Alloc *a, const Byte m[32],
-                                            Slice *ciphertext) {
+CRYPTO_FIPS_TEXT Slice burrow__mlkem_encapsulate_internal768(
+    const MlkemEncapsulationKey768 *ek, Alloc *a, const Byte m[32], Slice *ciphertext) {
     MlkemView v = mlkem_view_ek768(ek);
     return mlkem_encapsulate_with(&v, a, m, ciphertext);
 }
 
-Slice burrow__mlkem_encapsulate_internal1024(const MlkemEncapsulationKey1024 *ek,
-                                             Alloc *a, const Byte m[32],
-                                             Slice *ciphertext) {
+CRYPTO_FIPS_TEXT Slice
+burrow__mlkem_encapsulate_internal1024(const MlkemEncapsulationKey1024 *ek, Alloc *a,
+                                       const Byte m[32], Slice *ciphertext) {
     MlkemView v = mlkem_view_ek1024(ek);
     return mlkem_encapsulate_with(&v, a, m, ciphertext);
 }

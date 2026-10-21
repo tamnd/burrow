@@ -20,12 +20,13 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "fips140_module.h"
 #include "internal.h"
 #include "sha512_internal.h"
 
 #include <string.h>
 
-static const uint64_t sha512_k[80] = {
+CRYPTO_FIPS_RODATA static const uint64_t sha512_k[80] = {
     0x428A2F98D728AE22ULL, 0x7137449123EF65CDULL, 0xB5C0FBCFEC4D3B2FULL,
     0xE9B5DBA58189DBBCULL, 0x3956C25BF348B538ULL, 0x59F111F1B605D019ULL,
     0x923F82A4AF194F9BULL, 0xAB1C5ED5DA6D8118ULL, 0xD807AA98A3030242ULL,
@@ -55,17 +56,17 @@ static const uint64_t sha512_k[80] = {
     0x5FCB6FAB3AD6FAECULL, 0x6C44198C4A475817ULL,
 };
 
-static inline uint64_t sha512_rotr(uint64_t x, int k) {
+CRYPTO_FIPS_TEXT static inline uint64_t sha512_rotr(uint64_t x, int k) {
     return (x >> k) | (x << (64 - k));
 }
 
-static inline uint64_t sha512_be64(const Byte *p) {
+CRYPTO_FIPS_TEXT static inline uint64_t sha512_be64(const Byte *p) {
     return (uint64_t)p[0] << 56 | (uint64_t)p[1] << 48 | (uint64_t)p[2] << 40 |
            (uint64_t)p[3] << 32 | (uint64_t)p[4] << 24 | (uint64_t)p[5] << 16 |
            (uint64_t)p[6] << 8 | (uint64_t)p[7];
 }
 
-static inline void sha512_put_be64(Byte *b, uint64_t v) {
+CRYPTO_FIPS_TEXT static inline void sha512_put_be64(Byte *b, uint64_t v) {
     for (int i = 0; i < 8; i++)
         b[i] = (Byte)(v >> (56 - 8 * i));
 }
@@ -85,7 +86,8 @@ static inline void sha512_put_be64(Byte *b, uint64_t v) {
     } while (0)
 
 /* Hashes n bytes of p, which is a whole number of blocks. */
-static void sha512_block_generic(Sha512Digest *dig, const Byte *p, Int n) {
+CRYPTO_FIPS_TEXT static void sha512_block_generic(Sha512Digest *dig, const Byte *p,
+                                                  Int n) {
     uint64_t w[80];
     uint64_t h0 = dig->h[0], h1 = dig->h[1], h2 = dig->h[2], h3 = dig->h[3];
     uint64_t h4 = dig->h[4], h5 = dig->h[5], h6 = dig->h[6], h7 = dig->h[7];
@@ -138,8 +140,8 @@ static void sha512_block_generic(Sha512Digest *dig, const Byte *p, Int n) {
  * sha512h2 pair does two rounds. After them the new AB and EF are in the
  * registers that held CD and GH, so the four swap roles every two rounds and
  * are back where they started after four. */
-CRYPTO_TARGET_ARM64_SHA512 static void sha512_block_arm64(uint64_t h[8], const Byte *p,
-                                                          Int n) {
+CRYPTO_FIPS_TEXT CRYPTO_TARGET_ARM64_SHA512 static void
+sha512_block_arm64(uint64_t h[8], const Byte *p, Int n) {
     uint64x2_t s0 = vld1q_u64(h);
     uint64x2_t s1 = vld1q_u64(h + 2);
     uint64x2_t s2 = vld1q_u64(h + 4);
@@ -404,7 +406,7 @@ CRYPTO_TARGET_ARM64_SHA512 static void sha512_block_arm64(uint64_t h[8], const B
 #endif
 
 /* The hardware path when there is one, and the portable code otherwise. */
-static void sha512_block(Sha512Digest *dig, const Byte *p, Int n) {
+CRYPTO_FIPS_TEXT static void sha512_block(Sha512Digest *dig, const Byte *p, Int n) {
 #if defined(CRYPTO_ARM64_SHA512)
     if ((pal_cpu_features() & PAL_CPU_ARM64_SHA512) != 0) {
         sha512_block_arm64(dig->h, p, n);
@@ -414,7 +416,7 @@ static void sha512_block(Sha512Digest *dig, const Byte *p, Int n) {
     sha512_block_generic(dig, p, n);
 }
 
-static void sha512_reset(void *self) {
+CRYPTO_FIPS_TEXT static void sha512_reset(void *self) {
     Sha512Digest *d = self;
     static const uint64_t init512[8] = {
         0x6A09E667F3BCC908ULL, 0xBB67AE8584CAA73BULL, 0x3C6EF372FE94F82BULL,
@@ -459,7 +461,7 @@ static void sha512_reset(void *self) {
 static void sha512_update(Sha512Digest *d, const Byte *p, Int n);
 
 /* Always writes all 64 bytes. The shorter sums keep a prefix. */
-static void sha512_check_sum(Sha512Digest *d, Byte out[SHA512_SIZE]) {
+CRYPTO_FIPS_TEXT static void sha512_check_sum(Sha512Digest *d, Byte out[SHA512_SIZE]) {
     /* Padding: add 1 bit and 0 bits until 112 bytes mod 128, then the length
      * in bits as a big endian 128 bit number, of which the top half is always
      * zero here. */
@@ -474,7 +476,7 @@ static void sha512_check_sum(Sha512Digest *d, Byte out[SHA512_SIZE]) {
         sha512_put_be64(out + 8 * i, d->h[i]);
 }
 
-static void sha512_update(Sha512Digest *d, const Byte *p, Int n) {
+CRYPTO_FIPS_TEXT static void sha512_update(Sha512Digest *d, const Byte *p, Int n) {
     if (n == 0)
         return; /* p may be NULL, and memcpy may not be given one */
     d->len += (uint64_t)n;
@@ -501,13 +503,13 @@ static void sha512_update(Sha512Digest *d, const Byte *p, Int n) {
     }
 }
 
-static Int sha512_write(void *self, Slice p, Error *err) {
+CRYPTO_FIPS_TEXT static Int sha512_write(void *self, Slice p, Error *err) {
     sha512_update(self, (const Byte *)p.p, p.len);
     BURROW_OUT(err, BURROW_NO_ERROR);
     return p.len;
 }
 
-static Slice sha512_sum_append(void *self, Alloc *a, Slice in) {
+CRYPTO_FIPS_TEXT static Slice sha512_sum_append(void *self, Alloc *a, Slice in) {
     /* Work on a copy so the caller can keep writing. */
     Sha512Digest d0 = *(Sha512Digest *)self;
     Byte h[SHA512_SIZE];
@@ -517,12 +519,12 @@ static Slice sha512_sum_append(void *self, Alloc *a, Slice in) {
     return slice_append(a, in, h, ((Sha512Digest *)self)->size);
 }
 
-static Int sha512_block_size(void *self) {
+CRYPTO_FIPS_TEXT static Int sha512_block_size(void *self) {
     (void)self;
     return SHA512_BLOCK_SIZE;
 }
 
-static Int sha512_size(void *self) {
+CRYPTO_FIPS_TEXT static Int sha512_size(void *self) {
     return ((Sha512Digest *)self)->size;
 }
 
@@ -534,7 +536,7 @@ BURROW_SENTINEL_ERROR(sha512_err_size, "crypto/sha512: invalid hash state size")
 
 /* The fourth byte of the magic string, "sha\x04" for SHA-384 to "sha\x07" for
  * SHA-512. */
-static Byte sha512_magic(Int size) {
+CRYPTO_FIPS_TEXT static Byte sha512_magic(Int size) {
     switch (size) {
     case SHA512_SIZE384:
         return 4;
@@ -547,7 +549,8 @@ static Byte sha512_magic(Int size) {
     }
 }
 
-static Slice sha512_append_binary(Sha512Digest *d, Alloc *a, Slice b, Error *err) {
+CRYPTO_FIPS_TEXT static Slice sha512_append_binary(Sha512Digest *d, Alloc *a, Slice b,
+                                                   Error *err) {
     Byte st[sha512_marshaled_size];
     memcpy(st, "sha", 3);
     st[3] = sha512_magic(d->size);
@@ -565,7 +568,8 @@ static Slice sha512_append_binary(Sha512Digest *d, Alloc *a, Slice b, Error *err
     return r;
 }
 
-static Slice sha512_marshal_binary(Sha512Digest *d, Alloc *a, Error *err) {
+CRYPTO_FIPS_TEXT static Slice sha512_marshal_binary(Sha512Digest *d, Alloc *a,
+                                                    Error *err) {
     Slice b = slice_make(a, TYPE_BYTE, 0, sha512_marshaled_size);
     if (b.p == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -574,7 +578,8 @@ static Slice sha512_marshal_binary(Sha512Digest *d, Alloc *a, Error *err) {
     return sha512_append_binary(d, a, b, err);
 }
 
-static Error sha512_unmarshal_binary(Sha512Digest *d, Alloc *a, Slice b) {
+CRYPTO_FIPS_TEXT static Error sha512_unmarshal_binary(Sha512Digest *d, Alloc *a,
+                                                      Slice b) {
     (void)a;
     const Byte *p = b.p;
     if (b.len < 4 || memcmp(p, "sha", 3) != 0 || p[3] != sha512_magic(d->size))
@@ -633,7 +638,7 @@ static const HashClonerVT sha512_vt = {
     sha512_clone,
 };
 
-static HashCloner sha512_clone(void *self, Alloc *a, Error *err) {
+CRYPTO_FIPS_TEXT static HashCloner sha512_clone(void *self, Alloc *a, Error *err) {
     Sha512Digest *r = BURROW_NEW(a, Sha512Digest);
     if (r == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -645,7 +650,7 @@ static HashCloner sha512_clone(void *self, Alloc *a, Error *err) {
     return h;
 }
 
-static Hash sha512_make(Alloc *a, Int size) {
+CRYPTO_FIPS_TEXT static Hash sha512_make(Alloc *a, Int size) {
     Sha512Digest *d = BURROW_NEW(a, Sha512Digest);
     if (d == NULL)
         return (Hash){NULL, NULL};
@@ -655,23 +660,24 @@ static Hash sha512_make(Alloc *a, Int size) {
     return h;
 }
 
-Hash sha512_new(Alloc *a) {
+CRYPTO_FIPS_TEXT Hash sha512_new(Alloc *a) {
     return sha512_make(a, SHA512_SIZE);
 }
 
-Hash sha512_new384(Alloc *a) {
+CRYPTO_FIPS_TEXT Hash sha512_new384(Alloc *a) {
     return sha512_make(a, SHA512_SIZE384);
 }
 
-Hash sha512_new512224(Alloc *a) {
+CRYPTO_FIPS_TEXT Hash sha512_new512224(Alloc *a) {
     return sha512_make(a, SHA512_SIZE224);
 }
 
-Hash sha512_new512256(Alloc *a) {
+CRYPTO_FIPS_TEXT Hash sha512_new512256(Alloc *a) {
     return sha512_make(a, SHA512_SIZE256);
 }
 
-static void sha512_one_shot(Int size, Slice data, Byte out[SHA512_SIZE]) {
+CRYPTO_FIPS_TEXT static void sha512_one_shot(Int size, Slice data,
+                                             Byte out[SHA512_SIZE]) {
     Sha512Digest d;
     d.size = size;
     sha512_reset(&d);
@@ -679,13 +685,13 @@ static void sha512_one_shot(Int size, Slice data, Byte out[SHA512_SIZE]) {
     sha512_check_sum(&d, out);
 }
 
-Sha512Sum512Ret sha512_sum512(Slice data) {
+CRYPTO_FIPS_TEXT Sha512Sum512Ret sha512_sum512(Slice data) {
     Sha512Sum512Ret r;
     sha512_one_shot(SHA512_SIZE, data, r.a);
     return r;
 }
 
-Sha512Sum384Ret sha512_sum384(Slice data) {
+CRYPTO_FIPS_TEXT Sha512Sum384Ret sha512_sum384(Slice data) {
     Sha512Sum384Ret r;
     Byte h[SHA512_SIZE];
     sha512_one_shot(SHA512_SIZE384, data, h);
@@ -693,7 +699,7 @@ Sha512Sum384Ret sha512_sum384(Slice data) {
     return r;
 }
 
-Sha512Sum512224Ret sha512_sum512224(Slice data) {
+CRYPTO_FIPS_TEXT Sha512Sum512224Ret sha512_sum512224(Slice data) {
     Sha512Sum512224Ret r;
     Byte h[SHA512_SIZE];
     sha512_one_shot(SHA512_SIZE224, data, h);
@@ -701,7 +707,7 @@ Sha512Sum512224Ret sha512_sum512224(Slice data) {
     return r;
 }
 
-Sha512Sum512256Ret sha512_sum512256(Slice data) {
+CRYPTO_FIPS_TEXT Sha512Sum512256Ret sha512_sum512256(Slice data) {
     Sha512Sum512256Ret r;
     Byte h[SHA512_SIZE];
     sha512_one_shot(SHA512_SIZE256, data, h);
@@ -709,15 +715,15 @@ Sha512Sum512256Ret sha512_sum512256(Slice data) {
     return r;
 }
 
-void burrow__sha512_init(Sha512Digest *d) {
+CRYPTO_FIPS_TEXT void burrow__sha512_init(Sha512Digest *d) {
     d->size = SHA512_SIZE;
     sha512_reset(d);
 }
 
-void burrow__sha512_write(Sha512Digest *d, const void *p, Int n) {
+CRYPTO_FIPS_TEXT void burrow__sha512_write(Sha512Digest *d, const void *p, Int n) {
     sha512_update(d, p, n);
 }
 
-void burrow__sha512_sum(Sha512Digest *d, Byte out[SHA512_SIZE]) {
+CRYPTO_FIPS_TEXT void burrow__sha512_sum(Sha512Digest *d, Byte out[SHA512_SIZE]) {
     sha512_check_sum(d, out);
 }

@@ -18,9 +18,12 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "fips140_module.h"
+
 #include <stdint.h>
 
-Slice hkdf_extract(Alloc *a, HashNewFunc h, Slice secret, Slice salt, Error *err) {
+CRYPTO_FIPS_TEXT Slice hkdf_extract(Alloc *a, HashNewFunc h, Slice secret, Slice salt,
+                                    Error *err) {
     BURROW_OUT(err, BURROW_NO_ERROR);
     /* A missing salt is a block of zeros as long as the sum, and HMAC pads
      * an empty key with zeros to the block size anyway, so an empty salt
@@ -34,8 +37,9 @@ Slice hkdf_extract(Alloc *a, HashNewFunc h, Slice secret, Slice salt, Error *err
     return hash_sum(a, ext, slice_nil(TYPE_BYTE));
 }
 
-static Slice hkdf_expand_unchecked(Alloc *a, HashNewFunc h, Slice prk, Str info,
-                                   Int key_length, Error *err) {
+CRYPTO_FIPS_TEXT static Slice hkdf_expand_unchecked(Alloc *a, HashNewFunc h, Slice prk,
+                                                    Str info, Int key_length,
+                                                    Error *err) {
     Slice out = slice_make(a, TYPE_BYTE, 0, key_length);
     Hash exp = hmac_new(a, h, prk);
     if (exp.vt == NULL || (out.p == NULL && key_length > 0)) {
@@ -66,7 +70,8 @@ static Slice hkdf_expand_unchecked(Alloc *a, HashNewFunc h, Slice prk, Str info,
 
 /* Go checks the length against the hash's size in the exported functions,
  * before the FIPS module that does the work ever sees it. */
-static bool hkdf_too_long(Alloc *a, HashNewFunc h, Int key_length, Error *err) {
+CRYPTO_FIPS_TEXT static bool hkdf_too_long(Alloc *a, HashNewFunc h, Int key_length,
+                                           Error *err) {
     Hash probe = h(a);
     if (probe.vt == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -80,15 +85,15 @@ static bool hkdf_too_long(Alloc *a, HashNewFunc h, Int key_length, Error *err) {
     return false;
 }
 
-Slice hkdf_expand(Alloc *a, HashNewFunc h, Slice pseudorandom_key, Str info,
-                  Int key_length, Error *err) {
+CRYPTO_FIPS_TEXT Slice hkdf_expand(Alloc *a, HashNewFunc h, Slice pseudorandom_key,
+                                   Str info, Int key_length, Error *err) {
     if (hkdf_too_long(a, h, key_length, err))
         return slice_nil(TYPE_BYTE);
     return hkdf_expand_unchecked(a, h, pseudorandom_key, info, key_length, err);
 }
 
-Slice hkdf_key(Alloc *a, HashNewFunc h, Slice secret, Slice salt, Str info,
-               Int key_length, Error *err) {
+CRYPTO_FIPS_TEXT Slice hkdf_key(Alloc *a, HashNewFunc h, Slice secret, Slice salt,
+                                Str info, Int key_length, Error *err) {
     if (hkdf_too_long(a, h, key_length, err))
         return slice_nil(TYPE_BYTE);
     Slice prk = hkdf_extract(a, h, secret, salt, err);

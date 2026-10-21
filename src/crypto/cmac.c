@@ -18,15 +18,16 @@
 #include "burrow/type.h"
 
 #include "aes_internal.h"
+#include "fips140_module.h"
 
 #include <string.h>
 
-static Slice cmac_bytes(Byte *p, Int n) {
+CRYPTO_FIPS_TEXT static Slice cmac_bytes(Byte *p, Int n) {
     return slice_from(p, n, n, TYPE_BYTE);
 }
 
 /* shiftLeft sets x to x << 1, and returns MSB₁(x). */
-static Byte cmac_shift_left(Byte x[AES_BLOCK_SIZE]) {
+CRYPTO_FIPS_TEXT static Byte cmac_shift_left(Byte x[AES_BLOCK_SIZE]) {
     Byte msb = 0;
     for (int i = AES_BLOCK_SIZE - 1; i >= 0; i--) {
         Byte next = (Byte)(x[i] >> 7);
@@ -36,7 +37,7 @@ static Byte cmac_shift_left(Byte x[AES_BLOCK_SIZE]) {
     return msb;
 }
 
-static void cmac_derive_subkeys(Cmac *c) {
+CRYPTO_FIPS_TEXT static void cmac_derive_subkeys(Cmac *c) {
     burrow__aes_encrypt_blocks(&c->b, c->k1, c->k1, 1);
     Byte msb = cmac_shift_left(c->k1);
     c->k1[AES_BLOCK_SIZE - 1] ^= (Byte)(msb * 0x87);
@@ -46,13 +47,13 @@ static void cmac_derive_subkeys(Cmac *c) {
     c->k2[AES_BLOCK_SIZE - 1] ^= (Byte)(msb * 0x87);
 }
 
-void burrow__cmac_init(Cmac *c, const AesBlock *b) {
+CRYPTO_FIPS_TEXT void burrow__cmac_init(Cmac *c, const AesBlock *b) {
     memset(c, 0, sizeof *c);
     c->b = *b;
     cmac_derive_subkeys(c);
 }
 
-void burrow__cmac_mac(Cmac *c, Byte out[AES_BLOCK_SIZE], Slice m) {
+CRYPTO_FIPS_TEXT void burrow__cmac_mac(Cmac *c, Byte out[AES_BLOCK_SIZE], Slice m) {
     Byte x[AES_BLOCK_SIZE] = {0};
     Slice xs = cmac_bytes(x, AES_BLOCK_SIZE);
     if (m.len == 0) {

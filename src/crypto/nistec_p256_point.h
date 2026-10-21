@@ -40,7 +40,7 @@ _Static_assert(sizeof(fiat_p256_limb) == sizeof(NistecLimb),
 
 enum { p256_element_length = 32 };
 
-static void p256_reverse(uint8_t *v) {
+CRYPTO_FIPS_TEXT static void p256_reverse(uint8_t *v) {
     for (int i = 0; i < p256_element_length / 2; i++) {
         uint8_t t = v[i];
         v[i] = v[p256_element_length - 1 - i];
@@ -50,57 +50,62 @@ static void p256_reverse(uint8_t *v) {
 
 /* ------------------------------------------------------------- element */
 
-static NistecP256Element *p256_one(NistecP256Element *e) {
+CRYPTO_FIPS_TEXT static NistecP256Element *p256_one(NistecP256Element *e) {
     fiat_p256_set_one(e->l);
     return e;
 }
 
-static NistecP256Element *p256_add(NistecP256Element *e, const NistecP256Element *t1,
-                                   const NistecP256Element *t2) {
+CRYPTO_FIPS_TEXT static NistecP256Element *p256_add(NistecP256Element *e,
+                                                    const NistecP256Element *t1,
+                                                    const NistecP256Element *t2) {
     fiat_p256_add(e->l, t1->l, t2->l);
     return e;
 }
 
-static NistecP256Element *p256_sub(NistecP256Element *e, const NistecP256Element *t1,
-                                   const NistecP256Element *t2) {
+CRYPTO_FIPS_TEXT static NistecP256Element *p256_sub(NistecP256Element *e,
+                                                    const NistecP256Element *t1,
+                                                    const NistecP256Element *t2) {
     fiat_p256_sub(e->l, t1->l, t2->l);
     return e;
 }
 
-static NistecP256Element *p256_mul(NistecP256Element *e, const NistecP256Element *t1,
-                                   const NistecP256Element *t2) {
+CRYPTO_FIPS_TEXT static NistecP256Element *p256_mul(NistecP256Element *e,
+                                                    const NistecP256Element *t1,
+                                                    const NistecP256Element *t2) {
     fiat_p256_mul(e->l, t1->l, t2->l);
     return e;
 }
 
-static NistecP256Element *p256_square(NistecP256Element *e,
-                                      const NistecP256Element *t) {
+CRYPTO_FIPS_TEXT static NistecP256Element *p256_square(NistecP256Element *e,
+                                                       const NistecP256Element *t) {
     fiat_p256_square(e->l, t->l);
     return e;
 }
 
 /* Writes the 32 byte big endian encoding of e to out. */
-static void p256_bytes(const NistecP256Element *e, uint8_t *out) {
+CRYPTO_FIPS_TEXT static void p256_bytes(const NistecP256Element *e, uint8_t *out) {
     fiat_p256_non_montgomery_domain_field_element tmp;
     fiat_p256_from_montgomery(tmp, e->l);
     fiat_p256_to_bytes(out, tmp);
     p256_reverse(out);
 }
 
-static void p256_from_canonical_bytes(NistecP256Element *e, const uint8_t *in) {
+CRYPTO_FIPS_TEXT static void p256_from_canonical_bytes(NistecP256Element *e,
+                                                       const uint8_t *in) {
     fiat_p256_non_montgomery_domain_field_element tmp;
     fiat_p256_from_bytes(tmp, in);
     fiat_p256_to_montgomery(e->l, tmp);
 }
 
-static int p256_equal(const NistecP256Element *e, const NistecP256Element *t) {
+CRYPTO_FIPS_TEXT static int p256_equal(const NistecP256Element *e,
+                                       const NistecP256Element *t) {
     uint8_t eb[p256_element_length], tb[p256_element_length];
     p256_bytes(e, eb);
     p256_bytes(t, tb);
     return burrow__nistec_equal_bytes(eb, tb, p256_element_length);
 }
 
-static int p256_is_zero(const NistecP256Element *e) {
+CRYPTO_FIPS_TEXT static int p256_is_zero(const NistecP256Element *e) {
     uint8_t eb[p256_element_length], zero[p256_element_length];
     memset(zero, 0, sizeof zero);
     p256_bytes(e, eb);
@@ -109,8 +114,8 @@ static int p256_is_zero(const NistecP256Element *e) {
 
 /* Sets e to the value of the 32 big endian bytes at v. Go's SetBytes also
  * takes a slice of the wrong length, which nothing here passes it. */
-static NistecP256Element *p256_set_bytes(NistecP256Element *e, const uint8_t *v,
-                                         Error *err) {
+CRYPTO_FIPS_TEXT static NistecP256Element *
+p256_set_bytes(NistecP256Element *e, const uint8_t *v, Error *err) {
     /* Check for non-canonical encodings (p + k, 2p + k, etc.) by comparing to
      * the encoding of -1 mod p, so p - 1, the highest canonical encoding. */
     NistecP256Element zero, one, minus_one;
@@ -131,16 +136,18 @@ static NistecP256Element *p256_set_bytes(NistecP256Element *e, const uint8_t *v,
 }
 
 /* Sets v to a if cond is 1 and to b if cond is 0. */
-static NistecP256Element *p256_select(NistecP256Element *v, const NistecP256Element *a,
-                                      const NistecP256Element *b, int cond) {
+CRYPTO_FIPS_TEXT static NistecP256Element *p256_select(NistecP256Element *v,
+                                                       const NistecP256Element *a,
+                                                       const NistecP256Element *b,
+                                                       int cond) {
     fiat_p256_selectznz(v->l, (fiat_p256_uint1)cond, b->l, a->l);
     return v;
 }
 
 /* Sets e to 1/x and returns e. If x is 0, the result is 0. Inversion is
  * exponentiation by p - 2. */
-static NistecP256Element *p256_invert(NistecP256Element *e,
-                                      const NistecP256Element *x) {
+CRYPTO_FIPS_TEXT static NistecP256Element *p256_invert(NistecP256Element *e,
+                                                       const NistecP256Element *x) {
     NistecP256Element z_, t0_, t1_;
     NistecP256Element *z = &z_, *t0 = &t0_, *t1 = &t1_;
     /* Inversion is implemented as exponentiation with exponent p − 2.
@@ -203,7 +210,8 @@ static NistecP256Element *p256_invert(NistecP256Element *e,
 }
 
 /* Sets e to the square of x, n times over, for n of at least 1. */
-static void p256_square_n(NistecP256Element *e, const NistecP256Element *x, int n) {
+CRYPTO_FIPS_TEXT static void p256_square_n(NistecP256Element *e,
+                                           const NistecP256Element *x, int n) {
     p256_square(e, x);
     for (int i = 1; i < n; i++)
         p256_square(e, e);
@@ -211,7 +219,8 @@ static void p256_square_n(NistecP256Element *e, const NistecP256Element *x, int 
 
 /* Sets e to a square root of x. If x is not a square, returns 0 and leaves e
  * unchanged. e and x can overlap. */
-static int p256_sqrt(NistecP256Element *e, const NistecP256Element *x) {
+CRYPTO_FIPS_TEXT static int p256_sqrt(NistecP256Element *e,
+                                      const NistecP256Element *x) {
     NistecP256Element t0_, t1_;
     NistecP256Element *t0 = &t0_, *t1 = &t1_;
     /* Since p = 3 mod 4, exponentiation by (p + 1) / 4 yields a square root candidate.
@@ -258,7 +267,7 @@ static int p256_sqrt(NistecP256Element *e, const NistecP256Element *x) {
 static NistecP256Element p256_b_value;
 static SyncOnce p256_b_once;
 
-static void p256_b_init(void *env) {
+CRYPTO_FIPS_TEXT static void p256_b_init(void *env) {
     (void)env;
     static const uint8_t b[p256_element_length] = {
         0x5a, 0xc6, 0x35, 0xd8, 0xaa, 0x3a, 0x93, 0xe7, 0xb3, 0xeb, 0xbd,
@@ -268,20 +277,20 @@ static void p256_b_init(void *env) {
     p256_set_bytes(&p256_b_value, b, NULL);
 }
 
-static const NistecP256Element *p256_b(void) {
+CRYPTO_FIPS_TEXT static const NistecP256Element *p256_b(void) {
     sync_once_do(&p256_b_once, BURROW_FN(Func, p256_b_init, NULL));
     return &p256_b_value;
 }
 
 /* Sets p to the point at infinity. */
-static NistecP256Point *p256_point_new(NistecP256Point *p) {
+CRYPTO_FIPS_TEXT static NistecP256Point *p256_point_new(NistecP256Point *p) {
     memset(&p->x, 0, sizeof p->x);
     p256_one(&p->y);
     memset(&p->z, 0, sizeof p->z);
     return p;
 }
 
-static NistecP256Point *p256_point_set_generator(NistecP256Point *p) {
+CRYPTO_FIPS_TEXT static NistecP256Point *p256_point_set_generator(NistecP256Point *p) {
     static const uint8_t x[p256_element_length] = {
         0x6b, 0x17, 0xd1, 0xf2, 0xe1, 0x2c, 0x42, 0x47, 0xf8, 0xbc, 0xe6,
         0xe5, 0x63, 0xa4, 0x40, 0xf2, 0x77, 0x03, 0x7d, 0x81, 0x2d, 0xeb,
@@ -299,8 +308,8 @@ static NistecP256Point *p256_point_set_generator(NistecP256Point *p) {
 }
 
 /* Sets y2 to x^3 - 3x + b, and returns y2. */
-static NistecP256Element *p256_polynomial(NistecP256Element *y2,
-                                          const NistecP256Element *x) {
+CRYPTO_FIPS_TEXT static NistecP256Element *p256_polynomial(NistecP256Element *y2,
+                                                           const NistecP256Element *x) {
     p256_square(y2, x);
     p256_mul(y2, y2, x);
 
@@ -312,8 +321,9 @@ static NistecP256Element *p256_polynomial(NistecP256Element *y2,
     return p256_add(y2, y2, p256_b());
 }
 
-static int p256_check_on_curve(const NistecP256Element *x, const NistecP256Element *y,
-                               Error *err) {
+CRYPTO_FIPS_TEXT static int p256_check_on_curve(const NistecP256Element *x,
+                                                const NistecP256Element *y,
+                                                Error *err) {
     /* y^2 = x^3 - 3x + b */
     NistecP256Element rhs, lhs;
     p256_polynomial(&rhs, x);
@@ -330,7 +340,8 @@ static int p256_check_on_curve(const NistecP256Element *x, const NistecP256Eleme
  * specified in SEC 1, Version 2.0, Section 2.3.4. If the point is not on the
  * curve, it returns NULL and an error, and the receiver is unchanged.
  * Otherwise, it returns p. */
-static NistecP256Point *p256_point_set_bytes(NistecP256Point *p, Slice b, Error *err) {
+CRYPTO_FIPS_TEXT static NistecP256Point *p256_point_set_bytes(NistecP256Point *p,
+                                                              Slice b, Error *err) {
     const uint8_t *bb = b.p;
     NistecP256Element x, y;
 
@@ -390,7 +401,7 @@ static NistecP256Point *p256_point_set_bytes(NistecP256Point *p, Slice b, Error 
 /* Writes the uncompressed or infinity encoding of p, as specified in SEC 1,
  * Version 2.0, Section 2.3.3, and returns its length. Note that the encoding
  * of the point at infinity is shorter than all other encodings. */
-static Int p256_point_bytes(const NistecP256Point *p, uint8_t *out) {
+CRYPTO_FIPS_TEXT static Int p256_point_bytes(const NistecP256Point *p, uint8_t *out) {
     /* The SEC 1 representation of the point at infinity is a single zero byte,
      * and only infinity has z = 0. */
     if (p256_is_zero(&p->z) == 1) {
@@ -412,7 +423,8 @@ static Int p256_point_bytes(const NistecP256Point *p, uint8_t *out) {
 /* Writes the encoding of the x-coordinate of p, as specified in SEC 1, Version
  * 2.0, Section 2.3.5, or returns NULL and an error if p is the point at
  * infinity. */
-static uint8_t *p256_point_bytes_x(const NistecP256Point *p, uint8_t *out, Error *err) {
+CRYPTO_FIPS_TEXT static uint8_t *p256_point_bytes_x(const NistecP256Point *p,
+                                                    uint8_t *out, Error *err) {
     if (p256_is_zero(&p->z) == 1) {
         BURROW_OUT(err, errors_new(error_allocator(),
                                    BURROW_S("P256 point is the point at infinity")));
@@ -430,7 +442,8 @@ static uint8_t *p256_point_bytes_x(const NistecP256Point *p, uint8_t *out, Error
 /* Writes the compressed or infinity encoding of p, as specified in SEC 1,
  * Version 2.0, Section 2.3.3, and returns its length. Note that the encoding
  * of the point at infinity is shorter than all other encodings. */
-static Int p256_point_bytes_compressed(const NistecP256Point *p, uint8_t *out) {
+CRYPTO_FIPS_TEXT static Int p256_point_bytes_compressed(const NistecP256Point *p,
+                                                        uint8_t *out) {
     if (p256_is_zero(&p->z) == 1) {
         out[0] = 0;
         return 1;
@@ -451,8 +464,9 @@ static Int p256_point_bytes_compressed(const NistecP256Point *p, uint8_t *out) {
 }
 
 /* Sets q = p1 + p2, and returns q. The points may overlap. */
-static NistecP256Point *p256_point_add(NistecP256Point *q, const NistecP256Point *p1,
-                                       const NistecP256Point *p2) {
+CRYPTO_FIPS_TEXT static NistecP256Point *p256_point_add(NistecP256Point *q,
+                                                        const NistecP256Point *p1,
+                                                        const NistecP256Point *p2) {
     /* Complete addition formula for a = -3 from "Complete addition formulas for
      * prime order elliptic curves" (https://eprint.iacr.org/2015/1060), A.2. */
 
@@ -512,8 +526,8 @@ static NistecP256Point *p256_point_add(NistecP256Point *q, const NistecP256Point
 }
 
 /* Sets q = p + p, and returns q. The points may overlap. */
-static NistecP256Point *p256_point_double(NistecP256Point *q,
-                                          const NistecP256Point *p) {
+CRYPTO_FIPS_TEXT static NistecP256Point *p256_point_double(NistecP256Point *q,
+                                                           const NistecP256Point *p) {
     /* Complete addition formula for a = -3 from "Complete addition formulas for
      * prime order elliptic curves" (https://eprint.iacr.org/2015/1060), A.2. */
 
@@ -564,8 +578,10 @@ static NistecP256Point *p256_point_double(NistecP256Point *q,
 }
 
 /* Sets q to p1 if cond == 1, and to p2 if cond == 0. */
-static NistecP256Point *p256_point_select(NistecP256Point *q, const NistecP256Point *p1,
-                                          const NistecP256Point *p2, int cond) {
+CRYPTO_FIPS_TEXT static NistecP256Point *p256_point_select(NistecP256Point *q,
+                                                           const NistecP256Point *p1,
+                                                           const NistecP256Point *p2,
+                                                           int cond) {
     p256_select(&q->x, &p1->x, &p2->x, cond);
     p256_select(&q->y, &p1->y, &p2->y, cond);
     p256_select(&q->z, &p1->z, &p2->z, cond);

@@ -13,7 +13,9 @@
 
 #include "edwards25519.h"
 
-const Edwards25519AffineLookupTable burrow__ge_basepoint_table[32] = {
+#include "fips140_module.h"
+
+CRYPTO_FIPS_RODATA const Edwards25519AffineLookupTable burrow__ge_basepoint_table[32] = {
     /* 256^0 * B */
     {{
         {
@@ -1392,7 +1394,7 @@ const Edwards25519AffineLookupTable burrow__ge_basepoint_table[32] = {
     }},
 };
 
-const Edwards25519NafLookupTable8 burrow__ge_basepoint_naf_table = {{
+CRYPTO_FIPS_RODATA const Edwards25519NafLookupTable8 burrow__ge_basepoint_naf_table = {{
     /* 1 * B */
     {
         {0x493c6f58c3b85, 0x0df7181c325f7, 0x0f50b0b3e4cb7, 0x5329385a44c32, 0x07cf9d3a33d4b},

@@ -26,6 +26,8 @@
 #include "burrow/slice.h"
 #include "burrow/sync.h"
 
+#include "fips140_module.h"
+
 #include <stdint.h>
 #include <string.h>
 
@@ -37,7 +39,7 @@ _Static_assert(sizeof(fiat_p521_limb) == sizeof(NistecLimb),
 
 enum { p521_element_length = 66 };
 
-static void p521_reverse(uint8_t *v) {
+CRYPTO_FIPS_TEXT static void p521_reverse(uint8_t *v) {
     for (int i = 0; i < p521_element_length / 2; i++) {
         uint8_t t = v[i];
         v[i] = v[p521_element_length - 1 - i];
@@ -47,58 +49,63 @@ static void p521_reverse(uint8_t *v) {
 
 /* ------------------------------------------------------------- element */
 
-static NistecP521Element *p521_one(NistecP521Element *e) {
+CRYPTO_FIPS_TEXT static NistecP521Element *p521_one(NistecP521Element *e) {
     memset(e, 0, sizeof *e);
     e->l[0] = 1;
     return e;
 }
 
-static NistecP521Element *p521_add(NistecP521Element *e, const NistecP521Element *t1,
-                                   const NistecP521Element *t2) {
+CRYPTO_FIPS_TEXT static NistecP521Element *p521_add(NistecP521Element *e,
+                                                    const NistecP521Element *t1,
+                                                    const NistecP521Element *t2) {
     fiat_p521_loose_field_element loose;
     fiat_p521_add(loose, t1->l, t2->l);
     fiat_p521_carry(e->l, loose);
     return e;
 }
 
-static NistecP521Element *p521_sub(NistecP521Element *e, const NistecP521Element *t1,
-                                   const NistecP521Element *t2) {
+CRYPTO_FIPS_TEXT static NistecP521Element *p521_sub(NistecP521Element *e,
+                                                    const NistecP521Element *t1,
+                                                    const NistecP521Element *t2) {
     fiat_p521_loose_field_element loose;
     fiat_p521_sub(loose, t1->l, t2->l);
     fiat_p521_carry(e->l, loose);
     return e;
 }
 
-static NistecP521Element *p521_mul(NistecP521Element *e, const NistecP521Element *t1,
-                                   const NistecP521Element *t2) {
+CRYPTO_FIPS_TEXT static NistecP521Element *p521_mul(NistecP521Element *e,
+                                                    const NistecP521Element *t1,
+                                                    const NistecP521Element *t2) {
     fiat_p521_carry_mul(e->l, t1->l, t2->l);
     return e;
 }
 
-static NistecP521Element *p521_square(NistecP521Element *e,
-                                      const NistecP521Element *t) {
+CRYPTO_FIPS_TEXT static NistecP521Element *p521_square(NistecP521Element *e,
+                                                       const NistecP521Element *t) {
     fiat_p521_carry_square(e->l, t->l);
     return e;
 }
 
 /* Writes the 66 byte big endian encoding of e to out. */
-static void p521_bytes(const NistecP521Element *e, uint8_t *out) {
+CRYPTO_FIPS_TEXT static void p521_bytes(const NistecP521Element *e, uint8_t *out) {
     fiat_p521_to_bytes(out, e->l);
     p521_reverse(out);
 }
 
-static void p521_from_canonical_bytes(NistecP521Element *e, const uint8_t *in) {
+CRYPTO_FIPS_TEXT static void p521_from_canonical_bytes(NistecP521Element *e,
+                                                       const uint8_t *in) {
     fiat_p521_from_bytes(e->l, in);
 }
 
-static int p521_equal(const NistecP521Element *e, const NistecP521Element *t) {
+CRYPTO_FIPS_TEXT static int p521_equal(const NistecP521Element *e,
+                                       const NistecP521Element *t) {
     uint8_t eb[p521_element_length], tb[p521_element_length];
     p521_bytes(e, eb);
     p521_bytes(t, tb);
     return burrow__nistec_equal_bytes(eb, tb, p521_element_length);
 }
 
-static int p521_is_zero(const NistecP521Element *e) {
+CRYPTO_FIPS_TEXT static int p521_is_zero(const NistecP521Element *e) {
     uint8_t eb[p521_element_length], zero[p521_element_length];
     memset(zero, 0, sizeof zero);
     p521_bytes(e, eb);
@@ -107,8 +114,8 @@ static int p521_is_zero(const NistecP521Element *e) {
 
 /* Sets e to the value of the 66 big endian bytes at v. Go's SetBytes also
  * takes a slice of the wrong length, which nothing here passes it. */
-static NistecP521Element *p521_set_bytes(NistecP521Element *e, const uint8_t *v,
-                                         Error *err) {
+CRYPTO_FIPS_TEXT static NistecP521Element *
+p521_set_bytes(NistecP521Element *e, const uint8_t *v, Error *err) {
     /* Check for non-canonical encodings (p + k, 2p + k, etc.) by comparing to
      * the encoding of -1 mod p, so p - 1, the highest canonical encoding. */
     NistecP521Element zero, one, minus_one;
@@ -129,16 +136,18 @@ static NistecP521Element *p521_set_bytes(NistecP521Element *e, const uint8_t *v,
 }
 
 /* Sets v to a if cond is 1 and to b if cond is 0. */
-static NistecP521Element *p521_select(NistecP521Element *v, const NistecP521Element *a,
-                                      const NistecP521Element *b, int cond) {
+CRYPTO_FIPS_TEXT static NistecP521Element *p521_select(NistecP521Element *v,
+                                                       const NistecP521Element *a,
+                                                       const NistecP521Element *b,
+                                                       int cond) {
     fiat_p521_selectznz(v->l, (fiat_p521_uint1)cond, b->l, a->l);
     return v;
 }
 
 /* Sets e to 1/x and returns e. If x is 0, the result is 0. Inversion is
  * exponentiation by p - 2. */
-static NistecP521Element *p521_invert(NistecP521Element *e,
-                                      const NistecP521Element *x) {
+CRYPTO_FIPS_TEXT static NistecP521Element *p521_invert(NistecP521Element *e,
+                                                       const NistecP521Element *x) {
     NistecP521Element z_, t0_;
     NistecP521Element *z = &z_, *t0 = &t0_;
     /* Inversion is implemented as exponentiation with exponent p − 2.
@@ -207,7 +216,8 @@ static NistecP521Element *p521_invert(NistecP521Element *e,
 }
 
 /* Sets z to a square root candidate for x. z and x must not overlap. */
-static void p521_sqrt_candidate(NistecP521Element *z, const NistecP521Element *x) {
+CRYPTO_FIPS_TEXT static void p521_sqrt_candidate(NistecP521Element *z,
+                                                 const NistecP521Element *x) {
     /* Since p = 3 mod 4, exponentiation by (p + 1) / 4 yields a square root candidate.
      *
      * The sequence of 0 multiplications and 519 squarings is derived from the
@@ -221,7 +231,8 @@ static void p521_sqrt_candidate(NistecP521Element *z, const NistecP521Element *x
 
 /* Sets e to a square root of x. If x is not a square, returns 0 and leaves e
  * unchanged. e and x can overlap. */
-static int p521_sqrt(NistecP521Element *e, const NistecP521Element *x) {
+CRYPTO_FIPS_TEXT static int p521_sqrt(NistecP521Element *e,
+                                      const NistecP521Element *x) {
     NistecP521Element candidate, square;
     p521_sqrt_candidate(&candidate, x);
     p521_square(&square, &candidate);
@@ -237,7 +248,7 @@ static int p521_sqrt(NistecP521Element *e, const NistecP521Element *x) {
 static NistecP521Element p521_b_value;
 static SyncOnce p521_b_once;
 
-static void p521_b_init(void *env) {
+CRYPTO_FIPS_TEXT static void p521_b_init(void *env) {
     (void)env;
     static const uint8_t b[p521_element_length] = {
         0x00, 0x51, 0x95, 0x3e, 0xb9, 0x61, 0x8e, 0x1c, 0x9a, 0x1f, 0x92,
@@ -250,20 +261,20 @@ static void p521_b_init(void *env) {
     p521_set_bytes(&p521_b_value, b, NULL);
 }
 
-static const NistecP521Element *p521_b(void) {
+CRYPTO_FIPS_TEXT static const NistecP521Element *p521_b(void) {
     sync_once_do(&p521_b_once, BURROW_FN(Func, p521_b_init, NULL));
     return &p521_b_value;
 }
 
 /* Sets p to the point at infinity. */
-static NistecP521Point *p521_point_new(NistecP521Point *p) {
+CRYPTO_FIPS_TEXT static NistecP521Point *p521_point_new(NistecP521Point *p) {
     memset(&p->x, 0, sizeof p->x);
     p521_one(&p->y);
     memset(&p->z, 0, sizeof p->z);
     return p;
 }
 
-static NistecP521Point *p521_point_set_generator(NistecP521Point *p) {
+CRYPTO_FIPS_TEXT static NistecP521Point *p521_point_set_generator(NistecP521Point *p) {
     static const uint8_t x[p521_element_length] = {
         0x00, 0xc6, 0x85, 0x8e, 0x06, 0xb7, 0x04, 0x04, 0xe9, 0xcd, 0x9e,
         0x3e, 0xcb, 0x66, 0x23, 0x95, 0xb4, 0x42, 0x9c, 0x64, 0x81, 0x39,
@@ -287,8 +298,8 @@ static NistecP521Point *p521_point_set_generator(NistecP521Point *p) {
 }
 
 /* Sets y2 to x^3 - 3x + b, and returns y2. */
-static NistecP521Element *p521_polynomial(NistecP521Element *y2,
-                                          const NistecP521Element *x) {
+CRYPTO_FIPS_TEXT static NistecP521Element *p521_polynomial(NistecP521Element *y2,
+                                                           const NistecP521Element *x) {
     p521_square(y2, x);
     p521_mul(y2, y2, x);
 
@@ -300,8 +311,9 @@ static NistecP521Element *p521_polynomial(NistecP521Element *y2,
     return p521_add(y2, y2, p521_b());
 }
 
-static int p521_check_on_curve(const NistecP521Element *x, const NistecP521Element *y,
-                               Error *err) {
+CRYPTO_FIPS_TEXT static int p521_check_on_curve(const NistecP521Element *x,
+                                                const NistecP521Element *y,
+                                                Error *err) {
     /* y^2 = x^3 - 3x + b */
     NistecP521Element rhs, lhs;
     p521_polynomial(&rhs, x);
@@ -318,7 +330,8 @@ static int p521_check_on_curve(const NistecP521Element *x, const NistecP521Eleme
  * specified in SEC 1, Version 2.0, Section 2.3.4. If the point is not on the
  * curve, it returns NULL and an error, and the receiver is unchanged.
  * Otherwise, it returns p. */
-static NistecP521Point *p521_point_set_bytes(NistecP521Point *p, Slice b, Error *err) {
+CRYPTO_FIPS_TEXT static NistecP521Point *p521_point_set_bytes(NistecP521Point *p,
+                                                              Slice b, Error *err) {
     const uint8_t *bb = b.p;
     NistecP521Element x, y;
 
@@ -378,7 +391,7 @@ static NistecP521Point *p521_point_set_bytes(NistecP521Point *p, Slice b, Error 
 /* Writes the uncompressed or infinity encoding of p, as specified in SEC 1,
  * Version 2.0, Section 2.3.3, and returns its length. Note that the encoding
  * of the point at infinity is shorter than all other encodings. */
-static Int p521_point_bytes(const NistecP521Point *p, uint8_t *out) {
+CRYPTO_FIPS_TEXT static Int p521_point_bytes(const NistecP521Point *p, uint8_t *out) {
     /* The SEC 1 representation of the point at infinity is a single zero byte,
      * and only infinity has z = 0. */
     if (p521_is_zero(&p->z) == 1) {
@@ -400,7 +413,8 @@ static Int p521_point_bytes(const NistecP521Point *p, uint8_t *out) {
 /* Writes the encoding of the x-coordinate of p, as specified in SEC 1, Version
  * 2.0, Section 2.3.5, or returns NULL and an error if p is the point at
  * infinity. */
-static uint8_t *p521_point_bytes_x(const NistecP521Point *p, uint8_t *out, Error *err) {
+CRYPTO_FIPS_TEXT static uint8_t *p521_point_bytes_x(const NistecP521Point *p,
+                                                    uint8_t *out, Error *err) {
     if (p521_is_zero(&p->z) == 1) {
         BURROW_OUT(err, errors_new(error_allocator(),
                                    BURROW_S("P521 point is the point at infinity")));
@@ -418,7 +432,8 @@ static uint8_t *p521_point_bytes_x(const NistecP521Point *p, uint8_t *out, Error
 /* Writes the compressed or infinity encoding of p, as specified in SEC 1,
  * Version 2.0, Section 2.3.3, and returns its length. Note that the encoding
  * of the point at infinity is shorter than all other encodings. */
-static Int p521_point_bytes_compressed(const NistecP521Point *p, uint8_t *out) {
+CRYPTO_FIPS_TEXT static Int p521_point_bytes_compressed(const NistecP521Point *p,
+                                                        uint8_t *out) {
     if (p521_is_zero(&p->z) == 1) {
         out[0] = 0;
         return 1;
@@ -439,8 +454,9 @@ static Int p521_point_bytes_compressed(const NistecP521Point *p, uint8_t *out) {
 }
 
 /* Sets q = p1 + p2, and returns q. The points may overlap. */
-static NistecP521Point *p521_point_add(NistecP521Point *q, const NistecP521Point *p1,
-                                       const NistecP521Point *p2) {
+CRYPTO_FIPS_TEXT static NistecP521Point *p521_point_add(NistecP521Point *q,
+                                                        const NistecP521Point *p1,
+                                                        const NistecP521Point *p2) {
     /* Complete addition formula for a = -3 from "Complete addition formulas for
      * prime order elliptic curves" (https://eprint.iacr.org/2015/1060), A.2. */
 
@@ -500,8 +516,8 @@ static NistecP521Point *p521_point_add(NistecP521Point *q, const NistecP521Point
 }
 
 /* Sets q = p + p, and returns q. The points may overlap. */
-static NistecP521Point *p521_point_double(NistecP521Point *q,
-                                          const NistecP521Point *p) {
+CRYPTO_FIPS_TEXT static NistecP521Point *p521_point_double(NistecP521Point *q,
+                                                           const NistecP521Point *p) {
     /* Complete addition formula for a = -3 from "Complete addition formulas for
      * prime order elliptic curves" (https://eprint.iacr.org/2015/1060), A.2. */
 
@@ -552,8 +568,10 @@ static NistecP521Point *p521_point_double(NistecP521Point *q,
 }
 
 /* Sets q to p1 if cond == 1, and to p2 if cond == 0. */
-static NistecP521Point *p521_point_select(NistecP521Point *q, const NistecP521Point *p1,
-                                          const NistecP521Point *p2, int cond) {
+CRYPTO_FIPS_TEXT static NistecP521Point *p521_point_select(NistecP521Point *q,
+                                                           const NistecP521Point *p1,
+                                                           const NistecP521Point *p2,
+                                                           int cond) {
     p521_select(&q->x, &p1->x, &p2->x, cond);
     p521_select(&q->y, &p1->y, &p2->y, cond);
     p521_select(&q->z, &p1->z, &p2->z, cond);
@@ -571,7 +589,8 @@ typedef struct P521Table {
 /* Selects the n-th multiple of the table base point into p. It works in
  * constant time by iterating over every entry of the table. n must be in
  * [0, 15]. */
-static void p521_table_select(const P521Table *table, NistecP521Point *p, uint8_t n) {
+CRYPTO_FIPS_TEXT static void p521_table_select(const P521Table *table,
+                                               NistecP521Point *p, uint8_t n) {
     if (n >= 16)
         panic_str(BURROW_S(
             "nistec: internal error: p521Table called with out-of-bounds value"));
@@ -583,9 +602,9 @@ static void p521_table_select(const P521Table *table, NistecP521Point *p, uint8_
 }
 
 /* Sets p = scalar * q, and returns p. */
-static NistecP521Point *p521_point_scalar_mult(NistecP521Point *p,
-                                               const NistecP521Point *q, Slice scalar,
-                                               Error *err) {
+CRYPTO_FIPS_TEXT static NistecP521Point *
+p521_point_scalar_mult(NistecP521Point *p, const NistecP521Point *q, Slice scalar,
+                       Error *err) {
     (void)err;
     const uint8_t *s = scalar.p;
 
@@ -635,7 +654,7 @@ static NistecP521Point *p521_point_scalar_mult(NistecP521Point *p,
 static P521Table p521_generator_table[p521_element_length * 2];
 static SyncOnce p521_generator_table_once;
 
-static void p521_generator_table_init(void *env) {
+CRYPTO_FIPS_TEXT static void p521_generator_table_init(void *env) {
     (void)env;
     NistecP521Point base = {0};
     p521_point_set_generator(&base);
@@ -652,8 +671,8 @@ static void p521_generator_table_init(void *env) {
 }
 
 /* Sets p = scalar * B, where B is the canonical generator, and returns p. */
-static NistecP521Point *p521_point_scalar_base_mult(NistecP521Point *p, Slice scalar,
-                                                    Error *err) {
+CRYPTO_FIPS_TEXT static NistecP521Point *
+p521_point_scalar_base_mult(NistecP521Point *p, Slice scalar, Error *err) {
     if (scalar.len != p521_element_length) {
         BURROW_OUT(err,
                    errors_new(error_allocator(), BURROW_S("invalid scalar length")));
@@ -690,54 +709,59 @@ static NistecP521Point *p521_point_scalar_base_mult(NistecP521Point *p, Slice sc
 
 /* ---------------------------------------------------------------- curve */
 
-static NistecPoint *p521_v_point_new(NistecPoint *p) {
+CRYPTO_FIPS_TEXT static NistecPoint *p521_v_point_new(NistecPoint *p) {
     p521_point_new(&p->p521);
     return p;
 }
 
-static NistecPoint *p521_v_set_generator(NistecPoint *p) {
+CRYPTO_FIPS_TEXT static NistecPoint *p521_v_set_generator(NistecPoint *p) {
     p521_point_set_generator(&p->p521);
     return p;
 }
 
-static NistecPoint *p521_v_set(NistecPoint *p, const NistecPoint *q) {
+CRYPTO_FIPS_TEXT static NistecPoint *p521_v_set(NistecPoint *p, const NistecPoint *q) {
     p->p521 = q->p521;
     return p;
 }
 
-static NistecPoint *p521_v_set_bytes(NistecPoint *p, Slice b, Error *err) {
+CRYPTO_FIPS_TEXT static NistecPoint *p521_v_set_bytes(NistecPoint *p, Slice b,
+                                                      Error *err) {
     return p521_point_set_bytes(&p->p521, b, err) == NULL ? NULL : p;
 }
 
-static Int p521_v_bytes(const NistecPoint *p, uint8_t *out) {
+CRYPTO_FIPS_TEXT static Int p521_v_bytes(const NistecPoint *p, uint8_t *out) {
     return p521_point_bytes(&p->p521, out);
 }
 
-static uint8_t *p521_v_bytes_x(const NistecPoint *p, uint8_t *out, Error *err) {
+CRYPTO_FIPS_TEXT static uint8_t *p521_v_bytes_x(const NistecPoint *p, uint8_t *out,
+                                                Error *err) {
     return p521_point_bytes_x(&p->p521, out, err);
 }
 
-static Int p521_v_bytes_compressed(const NistecPoint *p, uint8_t *out) {
+CRYPTO_FIPS_TEXT static Int p521_v_bytes_compressed(const NistecPoint *p,
+                                                    uint8_t *out) {
     return p521_point_bytes_compressed(&p->p521, out);
 }
 
-static NistecPoint *p521_v_add(NistecPoint *q, const NistecPoint *p1,
-                               const NistecPoint *p2) {
+CRYPTO_FIPS_TEXT static NistecPoint *p521_v_add(NistecPoint *q, const NistecPoint *p1,
+                                                const NistecPoint *p2) {
     p521_point_add(&q->p521, &p1->p521, &p2->p521);
     return q;
 }
 
-static NistecPoint *p521_v_double(NistecPoint *q, const NistecPoint *p) {
+CRYPTO_FIPS_TEXT static NistecPoint *p521_v_double(NistecPoint *q,
+                                                   const NistecPoint *p) {
     p521_point_double(&q->p521, &p->p521);
     return q;
 }
 
-static NistecPoint *p521_v_scalar_mult(NistecPoint *p, const NistecPoint *q,
-                                       Slice scalar, Error *err) {
+CRYPTO_FIPS_TEXT static NistecPoint *
+p521_v_scalar_mult(NistecPoint *p, const NistecPoint *q, Slice scalar, Error *err) {
     return p521_point_scalar_mult(&p->p521, &q->p521, scalar, err) == NULL ? NULL : p;
 }
 
-static NistecPoint *p521_v_scalar_base_mult(NistecPoint *p, Slice scalar, Error *err) {
+CRYPTO_FIPS_TEXT static NistecPoint *p521_v_scalar_base_mult(NistecPoint *p,
+                                                             Slice scalar, Error *err) {
     return p521_point_scalar_base_mult(&p->p521, scalar, err) == NULL ? NULL : p;
 }
 

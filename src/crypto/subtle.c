@@ -25,6 +25,8 @@
 #include "burrow/dit.h"
 #include "burrow/panic.h"
 
+#include "fips140_module.h"
+
 #include <stdint.h>
 #include <string.h>
 
@@ -32,7 +34,7 @@
 #pragma optimize("", off)
 #endif
 
-static uint64_t ct_hide(uint64_t x) {
+CRYPTO_FIPS_TEXT static uint64_t ct_hide(uint64_t x) {
 #if defined(__GNUC__) || defined(__clang__)
     __asm__("" : "+r"(x));
 #else
@@ -44,7 +46,7 @@ static uint64_t ct_hide(uint64_t x) {
 
 /* 1 if x is zero and 0 if it is not. x | -x has its top bit set exactly when
  * x is not zero. */
-static uint64_t ct_is_zero(uint64_t x) {
+CRYPTO_FIPS_TEXT static uint64_t ct_is_zero(uint64_t x) {
     x = ct_hide(x);
     return 1 ^ ((x | (0 - x)) >> 63);
 }
@@ -52,31 +54,31 @@ static uint64_t ct_is_zero(uint64_t x) {
 /* 1 if a < b as signed numbers and 0 if not. The top bit of a - b is the
  * answer unless the subtraction overflowed, which can only happen when a and b
  * have different signs and the result has a sign different from a's. */
-static uint64_t ct_less(int64_t a, int64_t b) {
+CRYPTO_FIPS_TEXT static uint64_t ct_less(int64_t a, int64_t b) {
     uint64_t ua = ct_hide((uint64_t)a);
     uint64_t ub = ct_hide((uint64_t)b);
     uint64_t d = ua - ub;
     return (d ^ ((ua ^ ub) & (d ^ ua))) >> 63;
 }
 
-Int subtle_constant_time_byte_eq(uint8_t x, uint8_t y) {
+CRYPTO_FIPS_TEXT Int subtle_constant_time_byte_eq(uint8_t x, uint8_t y) {
     return (Int)ct_is_zero((uint64_t)(x ^ y));
 }
 
-Int subtle_constant_time_eq(int32_t x, int32_t y) {
+CRYPTO_FIPS_TEXT Int subtle_constant_time_eq(int32_t x, int32_t y) {
     return (Int)ct_is_zero((uint64_t)((uint32_t)x ^ (uint32_t)y));
 }
 
-Int subtle_constant_time_select(Int v, Int x, Int y) {
+CRYPTO_FIPS_TEXT Int subtle_constant_time_select(Int v, Int x, Int y) {
     Uint mask = (Uint)ct_hide(0 - (1 ^ ct_is_zero((uint64_t)(Uint)v)));
     return (Int)(((Uint)x & mask) | ((Uint)y & ~mask));
 }
 
-Int subtle_constant_time_less_or_eq(Int x, Int y) {
+CRYPTO_FIPS_TEXT Int subtle_constant_time_less_or_eq(Int x, Int y) {
     return (Int)(1 ^ ct_less((int64_t)y, (int64_t)x));
 }
 
-Int subtle_constant_time_compare(Slice x, Slice y) {
+CRYPTO_FIPS_TEXT Int subtle_constant_time_compare(Slice x, Slice y) {
     if (x.len != y.len)
         return 0;
     const Byte *p = (const Byte *)x.p;
@@ -87,7 +89,7 @@ Int subtle_constant_time_compare(Slice x, Slice y) {
     return subtle_constant_time_byte_eq(v, 0);
 }
 
-void subtle_constant_time_copy(Int v, Slice x, Slice y) {
+CRYPTO_FIPS_TEXT void subtle_constant_time_copy(Int v, Slice x, Slice y) {
     if (x.len != y.len)
         panic_str(BURROW_S("subtle: slices have different lengths"));
     Byte xmask = (Byte)ct_hide((uint64_t)(Uint)(v - 1));
@@ -100,7 +102,7 @@ void subtle_constant_time_copy(Int v, Slice x, Slice y) {
 
 /* Go's alias.InexactOverlap on two n byte runs: they share memory without
  * starting at the same place. */
-static bool inexact_overlap(const void *a, const void *b, Int n) {
+CRYPTO_FIPS_TEXT static bool inexact_overlap(const void *a, const void *b, Int n) {
     uintptr_t x = (uintptr_t)a;
     uintptr_t y = (uintptr_t)b;
     if (x == y)
@@ -108,7 +110,7 @@ static bool inexact_overlap(const void *a, const void *b, Int n) {
     return x <= y + (uintptr_t)(n - 1) && y <= x + (uintptr_t)(n - 1);
 }
 
-Int subtle_xor_bytes(Slice dst, Slice x, Slice y) {
+CRYPTO_FIPS_TEXT Int subtle_xor_bytes(Slice dst, Slice x, Slice y) {
     Int n = x.len < y.len ? x.len : y.len;
     if (n == 0)
         return 0;
@@ -139,12 +141,12 @@ Int subtle_xor_bytes(Slice dst, Slice x, Slice y) {
 #pragma optimize("", on)
 #endif
 
-static void dit_restore(void *env) {
+CRYPTO_FIPS_TEXT static void dit_restore(void *env) {
     if (!*(const bool *)env)
         burrow__dit_set_disabled();
 }
 
-void subtle_with_data_independent_timing(Func f) {
+CRYPTO_FIPS_TEXT void subtle_with_data_independent_timing(Func f) {
     if (!burrow__dit_supported()) {
         f.f(f.env);
         return;

@@ -28,6 +28,7 @@
 #include "burrow/type.h"
 
 #include "aes_internal.h"
+#include "fips140_module.h"
 #include "internal.h"
 #include "rand_internal.h"
 
@@ -67,12 +68,13 @@ typedef struct CipherGcm {
     Byte h[GCM_BLOCK_SIZE];
 } CipherGcm;
 
-static Slice gcm_bytes(Byte *p, Int n) {
+CRYPTO_FIPS_TEXT static Slice gcm_bytes(Byte *p, Int n) {
     return slice_from(p, n, n, TYPE_BYTE);
 }
 
 /* Go's alias.InexactOverlap and alias.AnyOverlap on runs of bytes. */
-static bool gcm_any_overlap(const void *x, Int xn, const void *y, Int yn) {
+CRYPTO_FIPS_TEXT static bool gcm_any_overlap(const void *x, Int xn, const void *y,
+                                             Int yn) {
     if (xn <= 0 || yn <= 0)
         return false;
     uintptr_t a = (uintptr_t)x;
@@ -80,7 +82,8 @@ static bool gcm_any_overlap(const void *x, Int xn, const void *y, Int yn) {
     return a <= b + (uintptr_t)(yn - 1) && b <= a + (uintptr_t)(xn - 1);
 }
 
-static bool gcm_inexact_overlap(const void *x, Int xn, const void *y, Int yn) {
+CRYPTO_FIPS_TEXT static bool gcm_inexact_overlap(const void *x, Int xn, const void *y,
+                                                 Int yn) {
     if (xn <= 0 || yn <= 0 || x == y)
         return false;
     return gcm_any_overlap(x, xn, y, yn);
@@ -89,7 +92,8 @@ static bool gcm_inexact_overlap(const void *x, Int xn, const void *y, Int yn) {
 /* Go's sliceForAppend: dst with n more bytes on the end, in place when its
  * capacity allows and copied to a new array from a when it does not. *tail is
  * where the n bytes start. A nil slice when a is out of memory. */
-static Slice gcm_slice_for_append(Alloc *a, Slice dst, Int n, Byte **tail) {
+CRYPTO_FIPS_TEXT static Slice gcm_slice_for_append(Alloc *a, Slice dst, Int n,
+                                                   Byte **tail) {
     Int total = dst.len + n;
     Slice head;
     if (dst.p != NULL && dst.cap >= total) {
@@ -107,19 +111,19 @@ static Slice gcm_slice_for_append(Alloc *a, Slice dst, Int n, Byte **tail) {
     return head;
 }
 
-static uint32_t gcm_be32(const Byte *p) {
+CRYPTO_FIPS_TEXT static uint32_t gcm_be32(const Byte *p) {
     return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 |
            (uint32_t)p[3];
 }
 
-static void gcm_put_be32(Byte *p, uint32_t v) {
+CRYPTO_FIPS_TEXT static void gcm_put_be32(Byte *p, uint32_t v) {
     p[0] = (Byte)(v >> 24);
     p[1] = (Byte)(v >> 16);
     p[2] = (Byte)(v >> 8);
     p[3] = (Byte)v;
 }
 
-static void gcm_put_be64(Byte *p, uint64_t v) {
+CRYPTO_FIPS_TEXT static void gcm_put_be64(Byte *p, uint64_t v) {
     gcm_put_be32(p, (uint32_t)(v >> 32));
     gcm_put_be32(p + 4, (uint32_t)v);
 }
@@ -130,7 +134,7 @@ static void gcm_put_be64(Byte *p, uint64_t v) {
  * four, every fourth bit in each, so that an ordinary multiply of two parts
  * leaves three zero bits between the ones it means, and the carries land in
  * those and are masked away. */
-static uint64_t gcm_mul32(uint32_t x, uint32_t y) {
+CRYPTO_FIPS_TEXT static uint64_t gcm_mul32(uint32_t x, uint32_t y) {
     uint32_t xm[4], ym[4];
     uint64_t z[4];
     for (int i = 0; i < 4; i++) {
@@ -148,7 +152,8 @@ static uint64_t gcm_mul32(uint32_t x, uint32_t y) {
 
 /* One block of Go's ghash: y = (y ^ block) * h, with Karatsuba twice over and
  * then the reduction. */
-static void gcm_ct_block(uint32_t y[4], const uint32_t h[4], const Byte *block) {
+CRYPTO_FIPS_TEXT static void gcm_ct_block(uint32_t y[4], const uint32_t h[4],
+                                          const Byte *block) {
     for (int i = 0; i < 4; i++)
         y[3 - i] ^= gcm_be32(block + 4 * (size_t)i);
     uint64_t z_lo[3], z_hi[3], z_sum[3];
@@ -187,7 +192,8 @@ static void gcm_ct_block(uint32_t y[4], const uint32_t h[4], const Byte *block) 
     y[3] = (uint32_t)(z[3] >> 32);
 }
 
-static void gcm_ghash_ct(const Byte *hkey, Byte *ys, const Byte *p, size_t n) {
+CRYPTO_FIPS_TEXT static void gcm_ghash_ct(const Byte *hkey, Byte *ys, const Byte *p,
+                                          size_t n) {
     uint32_t y[4], h[4];
     for (int i = 0; i < 4; i++) {
         h[3 - i] = gcm_be32(hkey + 4 * (size_t)i);
@@ -208,20 +214,23 @@ static void gcm_ghash_ct(const Byte *hkey, Byte *ys, const Byte *p, size_t n) {
 
 #if defined(CRYPTO_X86_AES)
 
-CRYPTO_TARGET_X86_GCM static inline __m128i gcm_x86_load(const void *p) {
+CRYPTO_FIPS_TEXT CRYPTO_TARGET_X86_GCM static inline __m128i
+gcm_x86_load(const void *p) {
     __m128i v;
     memcpy(&v, p, sizeof v);
     return v;
 }
 
-CRYPTO_TARGET_X86_GCM static inline void gcm_x86_store(void *p, __m128i v) {
+CRYPTO_FIPS_TEXT CRYPTO_TARGET_X86_GCM static inline void gcm_x86_store(void *p,
+                                                                        __m128i v) {
     memcpy(p, &v, sizeof v);
 }
 
 /* a * b in GF(2^128), both byte reversed, from Intel's paper on PCLMULQDQ and
  * GCM: the 256 bit carryless product, shifted left a bit because GCM's bits
  * run the other way, then reduced modulo x^128 + x^7 + x^2 + x + 1. */
-CRYPTO_TARGET_X86_GCM static __m128i gcm_x86_mul(__m128i a, __m128i b) {
+CRYPTO_FIPS_TEXT CRYPTO_TARGET_X86_GCM static __m128i gcm_x86_mul(__m128i a,
+                                                                  __m128i b) {
     __m128i lo = _mm_clmulepi64_si128(a, b, 0x00);
     __m128i mid = _mm_xor_si128(_mm_clmulepi64_si128(a, b, 0x10),
                                 _mm_clmulepi64_si128(a, b, 0x01));
@@ -252,8 +261,8 @@ CRYPTO_TARGET_X86_GCM static __m128i gcm_x86_mul(__m128i a, __m128i b) {
     return _mm_xor_si128(hi, lo);
 }
 
-CRYPTO_TARGET_X86_GCM static void gcm_ghash_x86(const Byte *hkey, Byte *ys,
-                                                const Byte *p, size_t n) {
+CRYPTO_FIPS_TEXT CRYPTO_TARGET_X86_GCM static void
+gcm_ghash_x86(const Byte *hkey, Byte *ys, const Byte *p, size_t n) {
     const __m128i rev =
         _mm_set_epi8(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15);
     __m128i h = _mm_shuffle_epi8(gcm_x86_load(hkey), rev);
@@ -277,8 +286,8 @@ CRYPTO_TARGET_X86_GCM static void gcm_ghash_x86(const Byte *hkey, Byte *ys,
 /* The x86 code above, an instruction for an instruction: the lanes are laid
  * out the same way on a little endian arm64. */
 
-CRYPTO_TARGET_ARM64_AES static inline uint32x4_t gcm_arm64_clmul(uint32x4_t a, int ai,
-                                                                 uint32x4_t b, int bi) {
+CRYPTO_FIPS_TEXT CRYPTO_TARGET_ARM64_AES static inline uint32x4_t
+gcm_arm64_clmul(uint32x4_t a, int ai, uint32x4_t b, int bi) {
     uint64x2_t a64 = vreinterpretq_u64_u32(a);
     uint64x2_t b64 = vreinterpretq_u64_u32(b);
     poly64_t x = (poly64_t)(ai ? vgetq_lane_u64(a64, 1) : vgetq_lane_u64(a64, 0));
@@ -292,7 +301,8 @@ CRYPTO_TARGET_ARM64_AES static inline uint32x4_t gcm_arm64_clmul(uint32x4_t a, i
 #define GCM_ARM64_BYTES_DOWN(v, k)                                                     \
     vreinterpretq_u32_u8(vextq_u8(vreinterpretq_u8_u32(v), vdupq_n_u8(0), (k)))
 
-CRYPTO_TARGET_ARM64_AES static uint32x4_t gcm_arm64_mul(uint32x4_t a, uint32x4_t b) {
+CRYPTO_FIPS_TEXT CRYPTO_TARGET_ARM64_AES static uint32x4_t gcm_arm64_mul(uint32x4_t a,
+                                                                         uint32x4_t b) {
     uint32x4_t lo = gcm_arm64_clmul(a, 0, b, 0);
     uint32x4_t mid =
         veorq_u32(gcm_arm64_clmul(a, 0, b, 1), gcm_arm64_clmul(a, 1, b, 0));
@@ -322,13 +332,14 @@ CRYPTO_TARGET_ARM64_AES static uint32x4_t gcm_arm64_mul(uint32x4_t a, uint32x4_t
 }
 
 /* Sixteen bytes from p, last first. */
-CRYPTO_TARGET_ARM64_AES static inline uint32x4_t gcm_arm64_load_rev(const Byte *p) {
+CRYPTO_FIPS_TEXT CRYPTO_TARGET_ARM64_AES static inline uint32x4_t
+gcm_arm64_load_rev(const Byte *p) {
     uint8x16_t v = vrev64q_u8(vld1q_u8(p));
     return vreinterpretq_u32_u8(vextq_u8(v, v, 8));
 }
 
-CRYPTO_TARGET_ARM64_AES static void gcm_ghash_arm64(const Byte *hkey, Byte *ys,
-                                                    const Byte *p, size_t n) {
+CRYPTO_FIPS_TEXT CRYPTO_TARGET_ARM64_AES static void
+gcm_ghash_arm64(const Byte *hkey, Byte *ys, const Byte *p, size_t n) {
     uint32x4_t h = gcm_arm64_load_rev(hkey);
     uint32x4_t y = gcm_arm64_load_rev(ys);
     for (; n >= GCM_BLOCK_SIZE; n -= GCM_BLOCK_SIZE, p += GCM_BLOCK_SIZE)
@@ -351,8 +362,8 @@ CRYPTO_TARGET_ARM64_AES static void gcm_ghash_arm64(const Byte *hkey, Byte *ys,
 
 /* Folds n bytes of p into the GHASH state y under hkey, the last block padded
  * with zeros when n is not a multiple of 16. */
-static void gcm_ghash(const CipherGcm *g, const Byte *hkey, Byte *y, const Byte *p,
-                      size_t n) {
+CRYPTO_FIPS_TEXT static void gcm_ghash(const CipherGcm *g, const Byte *hkey, Byte *y,
+                                       const Byte *p, size_t n) {
     switch (g->ghash) {
 #if defined(CRYPTO_X86_AES)
     case GCM_GHASH_X86:
@@ -371,7 +382,8 @@ static void gcm_ghash(const CipherGcm *g, const Byte *hkey, Byte *y, const Byte 
 }
 
 /* Encrypts n blocks of src into dst. */
-static void gcm_encrypt_blocks(const CipherGcm *g, Byte *dst, Byte *src, size_t n) {
+CRYPTO_FIPS_TEXT static void gcm_encrypt_blocks(const CipherGcm *g, Byte *dst,
+                                                Byte *src, size_t n) {
     if (g->aes != NULL) {
         burrow__aes_encrypt_blocks(g->aes, dst, src, n);
         return;
@@ -381,7 +393,7 @@ static void gcm_encrypt_blocks(const CipherGcm *g, Byte *dst, Byte *src, size_t 
                              gcm_bytes(src + i * GCM_BLOCK_SIZE, GCM_BLOCK_SIZE));
 }
 
-static void gcm_hash_key(const CipherGcm *g, Byte *h) {
+CRYPTO_FIPS_TEXT static void gcm_hash_key(const CipherGcm *g, Byte *h) {
     if (g->aes != NULL) {
         memcpy(h, g->h, GCM_BLOCK_SIZE);
         return;
@@ -391,13 +403,14 @@ static void gcm_hash_key(const CipherGcm *g, Byte *h) {
 }
 
 /* gcmInc32: the last four bytes of the counter block, big endian, plus one. */
-static void gcm_inc32(Byte *counter) {
+CRYPTO_FIPS_TEXT static void gcm_inc32(Byte *counter) {
     gcm_put_be32(counter + 12, gcm_be32(counter + 12) + 1);
 }
 
 /* gcmCounterCryptGeneric, GCM_BATCH blocks at a time. out may be src exactly. */
-static void gcm_counter_crypt(const CipherGcm *g, Byte *out, const Byte *src, size_t n,
-                              Byte *counter) {
+CRYPTO_FIPS_TEXT static void gcm_counter_crypt(const CipherGcm *g, Byte *out,
+                                               const Byte *src, size_t n,
+                                               Byte *counter) {
     Byte ctrs[GCM_BATCH * GCM_BLOCK_SIZE];
     Byte mask[GCM_BATCH * GCM_BLOCK_SIZE];
     while (n > 0) {
@@ -420,8 +433,9 @@ static void gcm_counter_crypt(const CipherGcm *g, Byte *out, const Byte *src, si
 
 /* deriveCounter: the first counter block from the nonce, which is the nonce and
  * then 1 for a 12 byte nonce and GHASH of it for any other length. */
-static void gcm_derive_counter(const CipherGcm *g, const Byte *h, Byte *counter,
-                               const Byte *nonce, Int nonce_len) {
+CRYPTO_FIPS_TEXT static void gcm_derive_counter(const CipherGcm *g, const Byte *h,
+                                                Byte *counter, const Byte *nonce,
+                                                Int nonce_len) {
     if (nonce_len == GCM_STANDARD_NONCE_SIZE) {
         memcpy(counter, nonce, GCM_STANDARD_NONCE_SIZE);
         memset(counter + GCM_STANDARD_NONCE_SIZE, 0, 3);
@@ -437,8 +451,9 @@ static void gcm_derive_counter(const CipherGcm *g, const Byte *h, Byte *counter,
 
 /* gcmAuth: GHASH of the additional data, the ciphertext and their lengths in
  * bits, masked with tag_mask, into out. */
-static void gcm_auth(const CipherGcm *g, const Byte *h, Byte *out, const Byte *tag_mask,
-                     const Byte *ct, Int ct_len, const Byte *ad, Int ad_len) {
+CRYPTO_FIPS_TEXT static void gcm_auth(const CipherGcm *g, const Byte *h, Byte *out,
+                                      const Byte *tag_mask, const Byte *ct, Int ct_len,
+                                      const Byte *ad, Int ad_len) {
     Byte len_block[GCM_BLOCK_SIZE];
     gcm_put_be64(len_block, (uint64_t)ad_len * 8);
     gcm_put_be64(len_block + 8, (uint64_t)ct_len * 8);
@@ -451,9 +466,10 @@ static void gcm_auth(const CipherGcm *g, const Byte *h, Byte *out, const Byte *t
 }
 
 /* sealGeneric: pt_len bytes of ciphertext and then the tag into out. */
-static void gcm_seal_into(const CipherGcm *g, Byte *out, const Byte *nonce,
-                          Int nonce_len, const Byte *pt, Int pt_len, const Byte *ad,
-                          Int ad_len) {
+CRYPTO_FIPS_TEXT static void gcm_seal_into(const CipherGcm *g, Byte *out,
+                                           const Byte *nonce, Int nonce_len,
+                                           const Byte *pt, Int pt_len, const Byte *ad,
+                                           Int ad_len) {
     Byte h[GCM_BLOCK_SIZE], counter[GCM_BLOCK_SIZE], tag_mask[GCM_BLOCK_SIZE] = {0};
     gcm_hash_key(g, h);
     gcm_derive_counter(g, h, counter, nonce, nonce_len);
@@ -465,9 +481,9 @@ static void gcm_seal_into(const CipherGcm *g, Byte *out, const Byte *nonce,
 }
 
 /* openGeneric: false when the tag is wrong, and then out is untouched. */
-static bool gcm_open_into(const CipherGcm *g, Byte *out, const Byte *nonce,
-                          Int nonce_len, Byte *ct, Int ct_len, const Byte *ad,
-                          Int ad_len) {
+CRYPTO_FIPS_TEXT static bool gcm_open_into(const CipherGcm *g, Byte *out,
+                                           const Byte *nonce, Int nonce_len, Byte *ct,
+                                           Int ct_len, const Byte *ad, Int ad_len) {
     Byte h[GCM_BLOCK_SIZE], counter[GCM_BLOCK_SIZE], tag_mask[GCM_BLOCK_SIZE] = {0};
     gcm_hash_key(g, h);
     gcm_derive_counter(g, h, counter, nonce, nonce_len);
@@ -483,16 +499,16 @@ static bool gcm_open_into(const CipherGcm *g, Byte *out, const Byte *nonce,
     return true;
 }
 
-static Int gcm_nonce_size(void *self) {
+CRYPTO_FIPS_TEXT static Int gcm_nonce_size(void *self) {
     return ((const CipherGcm *)self)->nonce_size;
 }
 
-static Int gcm_overhead(void *self) {
+CRYPTO_FIPS_TEXT static Int gcm_overhead(void *self) {
     return ((const CipherGcm *)self)->tag_size;
 }
 
-static Slice gcm_seal(void *self, Alloc *a, Slice dst, Slice nonce, Slice plaintext,
-                      Slice additional_data) {
+CRYPTO_FIPS_TEXT static Slice gcm_seal(void *self, Alloc *a, Slice dst, Slice nonce,
+                                       Slice plaintext, Slice additional_data) {
     const CipherGcm *g = (const CipherGcm *)self;
     if (nonce.len != g->nonce_size)
         panic_str(BURROW_S("crypto/cipher: incorrect nonce length given to GCM"));
@@ -516,8 +532,9 @@ static Slice gcm_seal(void *self, Alloc *a, Slice dst, Slice nonce, Slice plaint
     return ret;
 }
 
-static Slice gcm_open(void *self, Alloc *a, Slice dst, Slice nonce, Slice ciphertext,
-                      Slice additional_data, Error *err) {
+CRYPTO_FIPS_TEXT static Slice gcm_open(void *self, Alloc *a, Slice dst, Slice nonce,
+                                       Slice ciphertext, Slice additional_data,
+                                       Error *err) {
     const CipherGcm *g = (const CipherGcm *)self;
     if (nonce.len != g->nonce_size)
         panic_str(BURROW_S("crypto/cipher: incorrect nonce length given to GCM"));
@@ -560,18 +577,19 @@ static const CipherAEADVT gcm_vt = {NULL, gcm_nonce_size, gcm_overhead, gcm_seal
 
 /* ------------------------------------------------------ the random nonces */
 
-static Int gcm_random_nonce_size(void *self) {
+CRYPTO_FIPS_TEXT static Int gcm_random_nonce_size(void *self) {
     (void)self;
     return 0;
 }
 
-static Int gcm_random_overhead(void *self) {
+CRYPTO_FIPS_TEXT static Int gcm_random_overhead(void *self) {
     (void)self;
     return GCM_STANDARD_NONCE_SIZE + GCM_TAG_SIZE;
 }
 
-static Slice gcm_random_seal(void *self, Alloc *a, Slice dst, Slice nonce,
-                             Slice plaintext, Slice additional_data) {
+CRYPTO_FIPS_TEXT static Slice gcm_random_seal(void *self, Alloc *a, Slice dst,
+                                              Slice nonce, Slice plaintext,
+                                              Slice additional_data) {
     const CipherGcm *g = (const CipherGcm *)self;
     if (nonce.len != 0)
         panic_str(
@@ -604,8 +622,9 @@ static Slice gcm_random_seal(void *self, Alloc *a, Slice dst, Slice nonce,
     return ret;
 }
 
-static Slice gcm_random_open(void *self, Alloc *a, Slice dst, Slice nonce,
-                             Slice ciphertext, Slice additional_data, Error *err) {
+CRYPTO_FIPS_TEXT static Slice gcm_random_open(void *self, Alloc *a, Slice dst,
+                                              Slice nonce, Slice ciphertext,
+                                              Slice additional_data, Error *err) {
     const CipherGcm *g = (const CipherGcm *)self;
     if (nonce.len != 0)
         panic_str(
@@ -659,7 +678,7 @@ static const CipherAEADVT gcm_random_vt = {
 
 /* ------------------------------------------------------------ constructors */
 
-static int gcm_pick_ghash(const AesBlock *aes) {
+CRYPTO_FIPS_TEXT static int gcm_pick_ghash(const AesBlock *aes) {
     if (aes == NULL)
         return GCM_GHASH_CT;
 #if defined(CRYPTO_X86_AES)
@@ -674,14 +693,15 @@ static int gcm_pick_ghash(const AesBlock *aes) {
     return GCM_GHASH_CT;
 }
 
-static CipherAEAD gcm_fail(Error *err, const char *msg) {
+CRYPTO_FIPS_TEXT static CipherAEAD gcm_fail(Error *err, const char *msg) {
     BURROW_OUT(err, errors_new(error_allocator(), str_from_cstr(msg)));
     return (CipherAEAD){NULL, NULL};
 }
 
 /* newGCM and newGCMFallback, which check the same things in the same order. */
-static CipherAEAD gcm_new(Alloc *a, CipherBlock b, Int nonce_size, Int tag_size,
-                          const CipherAEADVT *vt, Error *err) {
+CRYPTO_FIPS_TEXT static CipherAEAD gcm_new(Alloc *a, CipherBlock b, Int nonce_size,
+                                           Int tag_size, const CipherAEADVT *vt,
+                                           Error *err) {
     if (tag_size < GCM_MINIMUM_TAG_SIZE || tag_size > GCM_BLOCK_SIZE)
         return gcm_fail(err, "cipher: incorrect tag size given to GCM");
     if (nonce_size <= 0)
@@ -705,21 +725,22 @@ static CipherAEAD gcm_new(Alloc *a, CipherBlock b, Int nonce_size, Int tag_size,
     return (CipherAEAD){vt, g};
 }
 
-CipherAEAD cipher_new_gcm(Alloc *a, CipherBlock b, Error *err) {
+CRYPTO_FIPS_TEXT CipherAEAD cipher_new_gcm(Alloc *a, CipherBlock b, Error *err) {
     return gcm_new(a, b, GCM_STANDARD_NONCE_SIZE, GCM_TAG_SIZE, &gcm_vt, err);
 }
 
-CipherAEAD cipher_new_gcm_with_nonce_size(Alloc *a, CipherBlock b, Int size,
-                                          Error *err) {
+CRYPTO_FIPS_TEXT CipherAEAD cipher_new_gcm_with_nonce_size(Alloc *a, CipherBlock b,
+                                                           Int size, Error *err) {
     return gcm_new(a, b, size, GCM_TAG_SIZE, &gcm_vt, err);
 }
 
-CipherAEAD cipher_new_gcm_with_tag_size(Alloc *a, CipherBlock b, Int tag_size,
-                                        Error *err) {
+CRYPTO_FIPS_TEXT CipherAEAD cipher_new_gcm_with_tag_size(Alloc *a, CipherBlock b,
+                                                         Int tag_size, Error *err) {
     return gcm_new(a, b, GCM_STANDARD_NONCE_SIZE, tag_size, &gcm_vt, err);
 }
 
-CipherAEAD cipher_new_gcm_with_random_nonce(Alloc *a, CipherBlock b, Error *err) {
+CRYPTO_FIPS_TEXT CipherAEAD cipher_new_gcm_with_random_nonce(Alloc *a, CipherBlock b,
+                                                             Error *err) {
     if (burrow__aes_block_of(b) == NULL)
         return gcm_fail(err, "cipher: NewGCMWithRandomNonce requires aes.Block");
     return gcm_new(a, b, GCM_STANDARD_NONCE_SIZE, GCM_TAG_SIZE, &gcm_random_vt, err);

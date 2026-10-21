@@ -21,6 +21,7 @@
 #include "burrow/type.h"
 
 #include "edwards25519.h"
+#include "fips140_module.h"
 #include "nistec.h"
 #include "rand_internal.h"
 
@@ -91,20 +92,20 @@ struct EcdhCurve {
     const uint8_t *order;
 };
 
-static const uint8_t ecdh_p256_order[32] = {
+CRYPTO_FIPS_RODATA static const uint8_t ecdh_p256_order[32] = {
     0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17,
     0x9e, 0x84, 0xf3, 0xb9, 0xca, 0xc2, 0xfc, 0x63, 0x25, 0x51,
 };
 
-static const uint8_t ecdh_p384_order[48] = {
+CRYPTO_FIPS_RODATA static const uint8_t ecdh_p384_order[48] = {
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xc7, 0x63, 0x4d, 0x81, 0xf4, 0x37, 0x2d, 0xdf, 0x58, 0x1a, 0x0d, 0xb2,
     0x48, 0xb0, 0xa7, 0x7a, 0xec, 0xec, 0x19, 0x6a, 0xcc, 0xc5, 0x29, 0x73,
 };
 
-static const uint8_t ecdh_p521_order[66] = {
+CRYPTO_FIPS_RODATA static const uint8_t ecdh_p521_order[66] = {
     0x01, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xfa, 0x51, 0x86, 0x87, 0x83, 0xbf, 0x2f, 0x96, 0x6b,
@@ -120,20 +121,20 @@ static const EcdhCurve ecdh_curve_p521 = {"P-521", &burrow__nistec_p521,
                                           ecdh_p521_order};
 static const EcdhCurve ecdh_curve_x25519 = {"X25519", NULL, NULL};
 
-const EcdhCurve *ecdh_p256(void) {
+CRYPTO_FIPS_TEXT const EcdhCurve *ecdh_p256(void) {
     return &ecdh_curve_p256;
 }
-const EcdhCurve *ecdh_p384(void) {
+CRYPTO_FIPS_TEXT const EcdhCurve *ecdh_p384(void) {
     return &ecdh_curve_p384;
 }
-const EcdhCurve *ecdh_p521(void) {
+CRYPTO_FIPS_TEXT const EcdhCurve *ecdh_p521(void) {
     return &ecdh_curve_p521;
 }
-const EcdhCurve *ecdh_x25519(void) {
+CRYPTO_FIPS_TEXT const EcdhCurve *ecdh_x25519(void) {
     return &ecdh_curve_x25519;
 }
 
-Str ecdh_curve_string(const EcdhCurve *c) {
+CRYPTO_FIPS_TEXT Str ecdh_curve_string(const EcdhCurve *c) {
     return str_from_cstr(c->name);
 }
 
@@ -141,16 +142,16 @@ Str ecdh_curve_string(const EcdhCurve *c) {
 
 #define ECDH_X25519_SIZE 32
 
-static void ecdh_set_error(Error *err, const char *msg) {
+CRYPTO_FIPS_TEXT static void ecdh_set_error(Error *err, const char *msg) {
     BURROW_OUT(err, errors_new(error_allocator(), str_from_cstr(msg)));
 }
 
-static Alloc *ecdh_alloc(Alloc *a) {
+CRYPTO_FIPS_TEXT static Alloc *ecdh_alloc(Alloc *a) {
     return a != NULL ? a : heap_allocator();
 }
 
-static EcdhPublicKey *ecdh_new_public(const EcdhCurve *c, Alloc *a, const uint8_t *q,
-                                      Int n, Error *err) {
+CRYPTO_FIPS_TEXT static EcdhPublicKey *
+ecdh_new_public(const EcdhCurve *c, Alloc *a, const uint8_t *q, Int n, Error *err) {
     a = ecdh_alloc(a);
     size_t size = sizeof(EcdhPublicKey) + (size_t)n;
     EcdhPublicKey *k = mem_alloc(a, size, _Alignof(EcdhPublicKey));
@@ -168,8 +169,10 @@ static EcdhPublicKey *ecdh_new_public(const EcdhCurve *c, Alloc *a, const uint8_
     return k;
 }
 
-static EcdhPrivateKey *ecdh_new_private(const EcdhCurve *c, Alloc *a, const uint8_t *d,
-                                        Int dn, const uint8_t *q, Int qn, Error *err) {
+CRYPTO_FIPS_TEXT static EcdhPrivateKey *ecdh_new_private(const EcdhCurve *c, Alloc *a,
+                                                         const uint8_t *d, Int dn,
+                                                         const uint8_t *q, Int qn,
+                                                         Error *err) {
     a = ecdh_alloc(a);
     size_t size = sizeof(EcdhPrivateKey) + (size_t)dn + (size_t)qn;
     EcdhPrivateKey *k = mem_alloc(a, size, _Alignof(EcdhPrivateKey));
@@ -192,7 +195,7 @@ static EcdhPrivateKey *ecdh_new_private(const EcdhCurve *c, Alloc *a, const uint
     return k;
 }
 
-void ecdh_private_key_free(EcdhPrivateKey *k) {
+CRYPTO_FIPS_TEXT void ecdh_private_key_free(EcdhPrivateKey *k) {
     if (k == NULL)
         return;
     /* The scalar is secret, so it does not go back to the allocator as it
@@ -201,7 +204,7 @@ void ecdh_private_key_free(EcdhPrivateKey *k) {
     mem_free(k->a, k, k->size, _Alignof(EcdhPrivateKey));
 }
 
-void ecdh_public_key_free(EcdhPublicKey *k) {
+CRYPTO_FIPS_TEXT void ecdh_public_key_free(EcdhPublicKey *k) {
     if (k == NULL)
         return;
     mem_free(k->a, k, k->size, _Alignof(EcdhPublicKey));
@@ -209,8 +212,8 @@ void ecdh_public_key_free(EcdhPublicKey *k) {
 
 /* --------------------------------------------------------------------- X25519 */
 
-static void ecdh_x25519_scalar_mult(uint8_t dst[32], const uint8_t *scalar,
-                                    const uint8_t *point) {
+CRYPTO_FIPS_TEXT static void
+ecdh_x25519_scalar_mult(uint8_t dst[32], const uint8_t *scalar, const uint8_t *point) {
     uint8_t e[32];
     memcpy(e, scalar, 32);
     e[0] &= 248;
@@ -263,14 +266,15 @@ static void ecdh_x25519_scalar_mult(uint8_t dst[32], const uint8_t *scalar,
     memset(e, 0, sizeof e);
 }
 
-static int ecdh_is_zero(const uint8_t *x, Int n) {
+CRYPTO_FIPS_TEXT static int ecdh_is_zero(const uint8_t *x, Int n) {
     uint8_t acc = 0;
     for (Int i = 0; i < n; i++)
         acc |= x[i];
     return acc == 0;
 }
 
-static EcdhPrivateKey *ecdh_x25519_new_private(Alloc *a, Slice key, Error *err) {
+CRYPTO_FIPS_TEXT static EcdhPrivateKey *ecdh_x25519_new_private(Alloc *a, Slice key,
+                                                                Error *err) {
     if (key.len != ECDH_X25519_SIZE) {
         ecdh_set_error(err, "crypto/ecdh: invalid private key size");
         return NULL;
@@ -285,7 +289,8 @@ static EcdhPrivateKey *ecdh_x25519_new_private(Alloc *a, Slice key, Error *err) 
 
 /* fips140/ecdh's NewPrivateKey after the checks on key: the public key, the
  * uncompressed encoding of key times the generator, in out. */
-static Int ecdh_nist_public(const EcdhCurve *c, const uint8_t *key, uint8_t *out) {
+CRYPTO_FIPS_TEXT static Int ecdh_nist_public(const EcdhCurve *c, const uint8_t *key,
+                                             uint8_t *out) {
     NistecPoint p;
     Error e = BURROW_NO_ERROR;
     Int n = c->nist->element_bytes;
@@ -304,7 +309,7 @@ static Int ecdh_nist_public(const EcdhCurve *c, const uint8_t *key, uint8_t *out
 /* Whether key is a valid scalar: element_bytes long, not zero and less than
  * the order. Go's isLess is a borrow chain over 64 bit words, and this is one
  * over bytes, which gives the same borrow. */
-static int ecdh_nist_valid_scalar(const EcdhCurve *c, Slice key) {
+CRYPTO_FIPS_TEXT static int ecdh_nist_valid_scalar(const EcdhCurve *c, Slice key) {
     Int n = c->nist->element_bytes;
     if (key.len != n)
         return 0;
@@ -315,8 +320,8 @@ static int ecdh_nist_valid_scalar(const EcdhCurve *c, Slice key) {
     return !burrow__nistec_less_or_eq_bytes(c->order, k, n);
 }
 
-static EcdhPrivateKey *ecdh_nist_new_private(const EcdhCurve *c, Alloc *a, Slice key,
-                                             Error *err) {
+CRYPTO_FIPS_TEXT static EcdhPrivateKey *
+ecdh_nist_new_private(const EcdhCurve *c, Alloc *a, Slice key, Error *err) {
     if (!ecdh_nist_valid_scalar(c, key)) {
         ecdh_set_error(err, "crypto/ecdh: invalid private key");
         return NULL;
@@ -328,7 +333,7 @@ static EcdhPrivateKey *ecdh_nist_new_private(const EcdhCurve *c, Alloc *a, Slice
 
 /* drbg.ReadWithReader: the system generator for the default reader, which is
  * what drbg.Read is outside FIPS mode, and io.ReadFull for anything else. */
-static int ecdh_read(IoReader r, uint8_t *p, Int n, Error *err) {
+CRYPTO_FIPS_TEXT static int ecdh_read(IoReader r, uint8_t *p, Int n, Error *err) {
     Slice s = slice_from(p, n, n, TYPE_BYTE);
     if (burrow__crypto_rand_is_default_reader(r)) {
         burrow__crypto_rand_system(s);
@@ -345,8 +350,8 @@ static int ecdh_read(IoReader r, uint8_t *p, Int n, Error *err) {
 
 /* ------------------------------------------------------------------ Curve */
 
-EcdhPrivateKey *ecdh_curve_generate_key(const EcdhCurve *c, Alloc *a, IoReader rand,
-                                        Error *err) {
+CRYPTO_FIPS_TEXT EcdhPrivateKey *ecdh_curve_generate_key(const EcdhCurve *c, Alloc *a,
+                                                         IoReader rand, Error *err) {
     if (rand.vt == NULL)
         rand = burrow__crypto_rand_nil_reader();
     rand = burrow__crypto_rand_custom_reader(rand);
@@ -383,15 +388,15 @@ EcdhPrivateKey *ecdh_curve_generate_key(const EcdhCurve *c, Alloc *a, IoReader r
     }
 }
 
-EcdhPrivateKey *ecdh_curve_new_private_key(const EcdhCurve *c, Alloc *a, Slice key,
-                                           Error *err) {
+CRYPTO_FIPS_TEXT EcdhPrivateKey *
+ecdh_curve_new_private_key(const EcdhCurve *c, Alloc *a, Slice key, Error *err) {
     if (c->nist == NULL)
         return ecdh_x25519_new_private(a, key, err);
     return ecdh_nist_new_private(c, a, key, err);
 }
 
-EcdhPublicKey *ecdh_curve_new_public_key(const EcdhCurve *c, Alloc *a, Slice key,
-                                         Error *err) {
+CRYPTO_FIPS_TEXT EcdhPublicKey *ecdh_curve_new_public_key(const EcdhCurve *c, Alloc *a,
+                                                          Slice key, Error *err) {
     const uint8_t *k = key.p;
     if (c->nist == NULL) {
         if (key.len != ECDH_X25519_SIZE) {
@@ -415,8 +420,8 @@ EcdhPublicKey *ecdh_curve_new_public_key(const EcdhCurve *c, Alloc *a, Slice key
 
 /* ------------------------------------------------------------- PrivateKey */
 
-Slice ecdh_private_key_ecdh(const EcdhPrivateKey *k, Alloc *a,
-                            const EcdhPublicKey *remote, Error *err) {
+CRYPTO_FIPS_TEXT Slice ecdh_private_key_ecdh(const EcdhPrivateKey *k, Alloc *a,
+                                             const EcdhPublicKey *remote, Error *err) {
     if (k->curve != remote->curve) {
         ecdh_set_error(err, "crypto/ecdh: private key and public key curves do not "
                             "match");
@@ -461,7 +466,7 @@ Slice ecdh_private_key_ecdh(const EcdhPrivateKey *k, Alloc *a,
     return s;
 }
 
-static Slice ecdh_clone(Alloc *a, Slice b) {
+CRYPTO_FIPS_TEXT static Slice ecdh_clone(Alloc *a, Slice b) {
     a = ecdh_alloc(a);
     Slice s = slice_make(a, TYPE_BYTE, b.len, b.len);
     if (s.p != NULL)
@@ -469,15 +474,16 @@ static Slice ecdh_clone(Alloc *a, Slice b) {
     return s;
 }
 
-Slice ecdh_private_key_bytes(const EcdhPrivateKey *k, Alloc *a) {
+CRYPTO_FIPS_TEXT Slice ecdh_private_key_bytes(const EcdhPrivateKey *k, Alloc *a) {
     return ecdh_clone(a, k->private_key);
 }
 
-const EcdhCurve *ecdh_private_key_curve(const EcdhPrivateKey *k) {
+CRYPTO_FIPS_TEXT const EcdhCurve *ecdh_private_key_curve(const EcdhPrivateKey *k) {
     return k->curve;
 }
 
-bool ecdh_private_key_equal(const EcdhPrivateKey *k, CryptoPrivateKey x) {
+CRYPTO_FIPS_TEXT bool ecdh_private_key_equal(const EcdhPrivateKey *k,
+                                             CryptoPrivateKey x) {
     if (x.t != TYPE_ECDH_PRIVATE_KEY || x.data == NULL)
         return false;
     const EcdhPrivateKey *xx = x.data;
@@ -485,25 +491,26 @@ bool ecdh_private_key_equal(const EcdhPrivateKey *k, CryptoPrivateKey x) {
            subtle_constant_time_compare(k->private_key, xx->private_key) == 1;
 }
 
-const EcdhPublicKey *ecdh_private_key_public_key(const EcdhPrivateKey *k) {
+CRYPTO_FIPS_TEXT const EcdhPublicKey *
+ecdh_private_key_public_key(const EcdhPrivateKey *k) {
     return &k->public_key;
 }
 
-CryptoPublicKey ecdh_private_key_public(const EcdhPrivateKey *k) {
+CRYPTO_FIPS_TEXT CryptoPublicKey ecdh_private_key_public(const EcdhPrivateKey *k) {
     return BURROW_ANY(TYPE_ECDH_PUBLIC_KEY, (uintptr_t)&k->public_key);
 }
 
 /* -------------------------------------------------------------- PublicKey */
 
-Slice ecdh_public_key_bytes(const EcdhPublicKey *k, Alloc *a) {
+CRYPTO_FIPS_TEXT Slice ecdh_public_key_bytes(const EcdhPublicKey *k, Alloc *a) {
     return ecdh_clone(a, k->public_key);
 }
 
-const EcdhCurve *ecdh_public_key_curve(const EcdhPublicKey *k) {
+CRYPTO_FIPS_TEXT const EcdhCurve *ecdh_public_key_curve(const EcdhPublicKey *k) {
     return k->curve;
 }
 
-bool ecdh_public_key_equal(const EcdhPublicKey *k, CryptoPublicKey x) {
+CRYPTO_FIPS_TEXT bool ecdh_public_key_equal(const EcdhPublicKey *k, CryptoPublicKey x) {
     if (x.t != TYPE_ECDH_PUBLIC_KEY || x.data == NULL)
         return false;
     const EcdhPublicKey *xx = x.data;
@@ -513,16 +520,16 @@ bool ecdh_public_key_equal(const EcdhPublicKey *k, CryptoPublicKey x) {
 
 /* ----------------------------------------------------------- KeyExchanger */
 
-static const EcdhPublicKey *ecdh_kx_public_key(void *self) {
+CRYPTO_FIPS_TEXT static const EcdhPublicKey *ecdh_kx_public_key(void *self) {
     return ecdh_private_key_public_key(self);
 }
 
-static const EcdhCurve *ecdh_kx_curve(void *self) {
+CRYPTO_FIPS_TEXT static const EcdhCurve *ecdh_kx_curve(void *self) {
     return ecdh_private_key_curve(self);
 }
 
-static Slice ecdh_kx_ecdh(void *self, Alloc *a, const EcdhPublicKey *remote,
-                          Error *err) {
+CRYPTO_FIPS_TEXT static Slice ecdh_kx_ecdh(void *self, Alloc *a,
+                                           const EcdhPublicKey *remote, Error *err) {
     return ecdh_private_key_ecdh(self, a, remote, err);
 }
 
@@ -533,7 +540,8 @@ static const EcdhKeyExchangerVT ecdh_kx_vt = {
     ecdh_kx_ecdh,
 };
 
-EcdhKeyExchanger ecdh_private_key_key_exchanger(const EcdhPrivateKey *k) {
+CRYPTO_FIPS_TEXT EcdhKeyExchanger
+ecdh_private_key_key_exchanger(const EcdhPrivateKey *k) {
     EcdhKeyExchanger x = {&ecdh_kx_vt, (void *)(uintptr_t)k};
     return x;
 }

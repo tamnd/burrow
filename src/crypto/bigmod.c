@@ -29,6 +29,8 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "fips140_module.h"
+
 #include <stdint.h>
 #include <string.h>
 
@@ -36,7 +38,7 @@
 #define SW ((Int)BIGMOD_S)
 #define PRE BIGMOD_PREALLOC_LIMBS
 
-static BigmodChoice not_(BigmodChoice c) {
+CRYPTO_FIPS_TEXT static BigmodChoice not_(BigmodChoice c) {
     return 1 ^ c;
 }
 
@@ -48,7 +50,7 @@ static BigmodChoice not_(BigmodChoice c) {
  * in Exp reads memory at an address chosen by the exponent. make ctgrind found
  * that. MSVC has no empty asm statement, so there the mask is read back
  * through a volatile, which the compiler has to load and cannot see into. */
-static Uint ct_mask(BigmodChoice on) {
+CRYPTO_FIPS_TEXT static Uint ct_mask(BigmodChoice on) {
     Uint mask = 0 - (Uint)on;
 #if defined(__GNUC__) || defined(__clang__)
     __asm__("" : "+r"(mask));
@@ -60,7 +62,7 @@ static Uint ct_mask(BigmodChoice on) {
 }
 
 /* ctEq: 1 if x == y, and 0 otherwise, in time that does not depend on them. */
-static BigmodChoice ct_eq(Uint x, Uint y) {
+CRYPTO_FIPS_TEXT static BigmodChoice ct_eq(Uint x, Uint y) {
     /* If x != y, then either x - y or y - x will generate a carry. */
     Uint c1, c2;
     (void)bits_sub(x, y, 0, &c1);
@@ -69,16 +71,16 @@ static BigmodChoice ct_eq(Uint x, Uint y) {
 }
 
 /* x >> n for any n, with Go's meaning of 0 once n is the size of a word. */
-static Uint shr(Uint x, Uint n) {
+CRYPTO_FIPS_TEXT static Uint shr(Uint x, Uint n) {
     return n >= W ? 0 : x >> n;
 }
 
-static void *bigmod_error(Error *err, const char *msg) {
+CRYPTO_FIPS_TEXT static void *bigmod_error(Error *err, const char *msg) {
     BURROW_OUT(err, errors_new(error_allocator(), str_from_cstr(msg)));
     return NULL;
 }
 
-static void bigmod_oom(void) {
+CRYPTO_FIPS_TEXT static void bigmod_oom(void) {
     panic_str(BURROW_S("bigmod: out of memory"));
 }
 
@@ -88,11 +90,11 @@ static void bigmod_oom(void) {
  * has len words in use but limbs is NULL, which cannot happen: limbs only
  * stays NULL while cap, and so len, is zero. */
 
-void bigmod_nat_init(BigmodNat *x, Alloc *a) {
+CRYPTO_FIPS_TEXT void bigmod_nat_init(BigmodNat *x, Alloc *a) {
     *x = (BigmodNat){NULL, 0, 0, a, false};
 }
 
-BigmodNat *bigmod_new_nat(Alloc *a) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_new_nat(Alloc *a) {
     BigmodNat *x =
         mem_alloc(a != NULL ? a : heap_allocator(), sizeof *x, _Alignof(BigmodNat));
     if (x == NULL)
@@ -101,15 +103,15 @@ BigmodNat *bigmod_new_nat(Alloc *a) {
     return x;
 }
 
-void bigmod_nat_init_buf(BigmodNat *x, Uint *buf, Int cap) {
+CRYPTO_FIPS_TEXT void bigmod_nat_init_buf(BigmodNat *x, Uint *buf, Int cap) {
     *x = (BigmodNat){buf, 0, cap, NULL, true};
 }
 
-static Alloc *nat_alloc(const BigmodNat *x) {
+CRYPTO_FIPS_TEXT static Alloc *nat_alloc(const BigmodNat *x) {
     return x->a != NULL ? x->a : heap_allocator();
 }
 
-void bigmod_nat_free(BigmodNat *x) {
+CRYPTO_FIPS_TEXT void bigmod_nat_free(BigmodNat *x) {
     if (x->limbs != NULL && !x->borrowed)
         mem_free(nat_alloc(x), x->limbs, (size_t)x->cap * sizeof(Uint), _Alignof(Uint));
     x->limbs = NULL;
@@ -119,7 +121,7 @@ void bigmod_nat_free(BigmodNat *x) {
 }
 
 /* make([]uint, n) as x's words, keeping the first keep of the old ones. */
-static void nat_grow(BigmodNat *x, Int n, Int keep) {
+CRYPTO_FIPS_TEXT static void nat_grow(BigmodNat *x, Int n, Int keep) {
     Uint *p = mem_alloc(nat_alloc(x), (size_t)n * sizeof(Uint), _Alignof(Uint));
     if (p == NULL)
         bigmod_oom();
@@ -133,7 +135,7 @@ static void nat_grow(BigmodNat *x, Int n, Int keep) {
     x->len = len;
 }
 
-BigmodNat *bigmod_nat_expand(BigmodNat *x, Int n) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_expand(BigmodNat *x, Int n) {
     if (x->len > n)
         panic_str(BURROW_S("bigmod: internal error: shrinking nat"));
     if (x->cap < n) {
@@ -146,7 +148,7 @@ BigmodNat *bigmod_nat_expand(BigmodNat *x, Int n) {
     return x;
 }
 
-BigmodNat *bigmod_nat_reset(BigmodNat *x, Int n) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_reset(BigmodNat *x, Int n) {
     if (x->cap < n) {
         nat_grow(x, n, 0);
         x->len = n;
@@ -161,7 +163,7 @@ BigmodNat *bigmod_nat_reset(BigmodNat *x, Int n) {
 }
 
 /* bigEndianUint: the SW bytes at buf, big endian. */
-static Uint big_endian_uint(const uint8_t *buf) {
+CRYPTO_FIPS_TEXT static Uint big_endian_uint(const uint8_t *buf) {
     Uint v = 0;
     for (Int i = 0; i < SW; i++)
         v = v << 8 | buf[i];
@@ -169,7 +171,7 @@ static Uint big_endian_uint(const uint8_t *buf) {
 }
 
 /* setBytes: x = b, big endian, in the words x already has. */
-static bool limbs_set_bytes(BigmodNat *x, Slice b) {
+CRYPTO_FIPS_TEXT static bool limbs_set_bytes(BigmodNat *x, Slice b) {
     const uint8_t *p = b.p;
     Int i = b.len, k = 0;
     while (k < x->len && i >= SW) {
@@ -184,14 +186,14 @@ static bool limbs_set_bytes(BigmodNat *x, Slice b) {
     return i <= 0;
 }
 
-BigmodNat *bigmod_nat_reset_to_bytes(BigmodNat *x, Slice b) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_reset_to_bytes(BigmodNat *x, Slice b) {
     bigmod_nat_reset(x, (b.len + SW - 1) / SW);
     if (!limbs_set_bytes(x, b))
         panic_str(BURROW_S("bigmod: internal error: bad arithmetic"));
     return bigmod_nat_trim(x);
 }
 
-BigmodNat *bigmod_nat_trim(BigmodNat *x) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_trim(BigmodNat *x) {
     /* Trim most significant (trailing in little-endian) zero limbs. We assume
      * comparison with zero (but not the branch) is constant time. */
     for (Int i = x->len - 1; i >= 0; i--) {
@@ -203,7 +205,7 @@ BigmodNat *bigmod_nat_trim(BigmodNat *x) {
     return x;
 }
 
-BigmodNat *bigmod_nat_set(BigmodNat *x, const BigmodNat *y) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_set(BigmodNat *x, const BigmodNat *y) {
     if (x == y)
         return x;
     bigmod_nat_reset(x, y->len);
@@ -212,18 +214,19 @@ BigmodNat *bigmod_nat_set(BigmodNat *x, const BigmodNat *y) {
     return x;
 }
 
-Slice bigmod_nat_bits(BigmodNat *x) {
+CRYPTO_FIPS_TEXT Slice bigmod_nat_bits(BigmodNat *x) {
     return slice_from(x->limbs, x->len, x->len, TYPE_UINT);
 }
 
-BigmodNat *bigmod_nat_set_bits(BigmodNat *x, Slice y) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_set_bits(BigmodNat *x, Slice y) {
     bigmod_nat_reset(x, y.len);
     if (y.len > 0)
         memcpy(x->limbs, y.p, (size_t)y.len * sizeof(Uint));
     return x;
 }
 
-Slice bigmod_nat_bytes(const BigmodNat *x, Alloc *a, const BigmodModulus *m) {
+CRYPTO_FIPS_TEXT Slice bigmod_nat_bytes(const BigmodNat *x, Alloc *a,
+                                        const BigmodModulus *m) {
     Int i = bigmod_modulus_size(m);
     uint8_t *bytes = NULL;
     if (i > 0) {
@@ -251,7 +254,8 @@ Slice bigmod_nat_bytes(const BigmodNat *x, Alloc *a, const BigmodModulus *m) {
 }
 
 /* cmpGeq: 1 if x >= y, and 0 otherwise, for x and y of the same length. */
-static BigmodChoice nat_cmp_geq(const BigmodNat *x, const BigmodNat *y) {
+CRYPTO_FIPS_TEXT static BigmodChoice nat_cmp_geq(const BigmodNat *x,
+                                                 const BigmodNat *y) {
     Uint c = 0;
     for (Int i = 0; i < x->len; i++)
         (void)bits_sub(x->limbs[i], y->limbs[i], c, &c);
@@ -262,7 +266,8 @@ static BigmodChoice nat_cmp_geq(const BigmodNat *x, const BigmodNat *y) {
 
 /* assign: x = y if on is 1, and nothing otherwise, for x and y of the same
  * length. */
-static BigmodNat *nat_assign(BigmodNat *x, BigmodChoice on, const BigmodNat *y) {
+CRYPTO_FIPS_TEXT static BigmodNat *nat_assign(BigmodNat *x, BigmodChoice on,
+                                              const BigmodNat *y) {
     Uint mask = ct_mask(on);
     for (Int i = 0; i < x->len; i++)
         x->limbs[i] ^= mask & (x->limbs[i] ^ y->limbs[i]);
@@ -270,7 +275,7 @@ static BigmodNat *nat_assign(BigmodNat *x, BigmodChoice on, const BigmodNat *y) 
 }
 
 /* add: x += y, returning the carry, for x and y of the same length. */
-static Uint limbs_add(BigmodNat *x, const BigmodNat *y) {
+CRYPTO_FIPS_TEXT static Uint limbs_add(BigmodNat *x, const BigmodNat *y) {
     Uint c = 0;
     for (Int i = 0; i < x->len; i++)
         x->limbs[i] = bits_add(x->limbs[i], y->limbs[i], c, &c);
@@ -278,15 +283,15 @@ static Uint limbs_add(BigmodNat *x, const BigmodNat *y) {
 }
 
 /* sub: x -= y, returning the borrow, for x and y of the same length. */
-static Uint limbs_sub(BigmodNat *x, const BigmodNat *y) {
+CRYPTO_FIPS_TEXT static Uint limbs_sub(BigmodNat *x, const BigmodNat *y) {
     Uint c = 0;
     for (Int i = 0; i < x->len; i++)
         x->limbs[i] = bits_sub(x->limbs[i], y->limbs[i], c, &c);
     return c;
 }
 
-BigmodNat *bigmod_nat_set_bytes(BigmodNat *x, Slice b, const BigmodModulus *m,
-                                Error *err) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_set_bytes(BigmodNat *x, Slice b,
+                                                 const BigmodModulus *m, Error *err) {
     bigmod_nat_reset_for(x, m);
     if (!limbs_set_bytes(x, b))
         return bigmod_error(err, "input overflows the modulus size");
@@ -296,7 +301,7 @@ BigmodNat *bigmod_nat_set_bytes(BigmodNat *x, Slice b, const BigmodModulus *m,
 }
 
 /* bitLen: bits.Len, leaking only the length of n and not its value. */
-static Int bit_len(Uint n) {
+CRYPTO_FIPS_TEXT static Int bit_len(Uint n) {
     Int len = 0;
     /* We assume, here and elsewhere, that comparison to zero is constant time
      * with respect to different non-zero values. */
@@ -307,8 +312,9 @@ static Int bit_len(Uint n) {
     return len;
 }
 
-BigmodNat *bigmod_nat_set_overflowing_bytes(BigmodNat *x, Slice b,
-                                            const BigmodModulus *m, Error *err) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_set_overflowing_bytes(BigmodNat *x, Slice b,
+                                                             const BigmodModulus *m,
+                                                             Error *err) {
     bigmod_nat_reset_for(x, m);
     if (!limbs_set_bytes(x, b))
         return bigmod_error(err, "input overflows the modulus size");
@@ -322,13 +328,13 @@ BigmodNat *bigmod_nat_set_overflowing_bytes(BigmodNat *x, Slice b,
     return x;
 }
 
-BigmodNat *bigmod_nat_set_uint(BigmodNat *x, Uint y) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_set_uint(BigmodNat *x, Uint y) {
     bigmod_nat_reset(x, 1);
     x->limbs[0] = y;
     return x;
 }
 
-BigmodChoice bigmod_nat_equal(const BigmodNat *x, const BigmodNat *y) {
+CRYPTO_FIPS_TEXT BigmodChoice bigmod_nat_equal(const BigmodNat *x, const BigmodNat *y) {
     BigmodChoice equal = 1;
     for (Int i = 0; i < x->len; i++)
         /* NOLINTNEXTLINE(clang-analyzer-core.CallAndMessage) */
@@ -336,14 +342,14 @@ BigmodChoice bigmod_nat_equal(const BigmodNat *x, const BigmodNat *y) {
     return equal;
 }
 
-BigmodChoice bigmod_nat_is_zero(const BigmodNat *x) {
+CRYPTO_FIPS_TEXT BigmodChoice bigmod_nat_is_zero(const BigmodNat *x) {
     BigmodChoice zero = 1;
     for (Int i = 0; i < x->len; i++)
         zero &= ct_eq(x->limbs[i], 0);
     return zero;
 }
 
-BigmodChoice bigmod_nat_is_one(const BigmodNat *x) {
+CRYPTO_FIPS_TEXT BigmodChoice bigmod_nat_is_one(const BigmodNat *x) {
     if (x->len == 0)
         return 0;
     BigmodChoice one = ct_eq(x->limbs[0], 1);
@@ -352,7 +358,8 @@ BigmodChoice bigmod_nat_is_one(const BigmodNat *x) {
     return one;
 }
 
-BigmodChoice bigmod_nat_is_minus_one(const BigmodNat *x, const BigmodModulus *m) {
+CRYPTO_FIPS_TEXT BigmodChoice bigmod_nat_is_minus_one(const BigmodNat *x,
+                                                      const BigmodModulus *m) {
     Uint buf[PRE];
     BigmodNat minus_one;
     bigmod_nat_init_buf(&minus_one, buf, PRE);
@@ -363,13 +370,13 @@ BigmodChoice bigmod_nat_is_minus_one(const BigmodNat *x, const BigmodModulus *m)
     return r;
 }
 
-BigmodChoice bigmod_nat_is_odd(const BigmodNat *x) {
+CRYPTO_FIPS_TEXT BigmodChoice bigmod_nat_is_odd(const BigmodNat *x) {
     if (x->len == 0)
         return 0;
     return x->limbs[0] & 1;
 }
 
-Uint bigmod_nat_trailing_zero_bits_var_time(const BigmodNat *x) {
+CRYPTO_FIPS_TEXT Uint bigmod_nat_trailing_zero_bits_var_time(const BigmodNat *x) {
     Uint t = 0;
     for (Int i = 0; i < x->len; i++) {
         Uint l = x->limbs[i];
@@ -383,7 +390,7 @@ Uint bigmod_nat_trailing_zero_bits_var_time(const BigmodNat *x) {
     return t;
 }
 
-BigmodNat *bigmod_nat_shift_right_var_time(BigmodNat *x, Uint n) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_shift_right_var_time(BigmodNat *x, Uint n) {
     Int size = x->len;
     Uint shift = n % W;
     Uint shift_limbs = n / W;
@@ -407,7 +414,7 @@ BigmodNat *bigmod_nat_shift_right_var_time(BigmodNat *x, Uint n) {
     return x;
 }
 
-Int bigmod_nat_bit_len_var_time(const BigmodNat *x) {
+CRYPTO_FIPS_TEXT Int bigmod_nat_bit_len_var_time(const BigmodNat *x) {
     for (Int i = x->len - 1; i >= 0; i--) {
         if (x->limbs[i] != 0)
             return i * (Int)W + bit_len(x->limbs[i]);
@@ -417,16 +424,17 @@ Int bigmod_nat_bit_len_var_time(const BigmodNat *x) {
 
 /* ---------------------------------------------------------------- Modulus */
 
-BigmodNat *bigmod_nat_expand_for(BigmodNat *x, const BigmodModulus *m) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_expand_for(BigmodNat *x,
+                                                  const BigmodModulus *m) {
     return bigmod_nat_expand(x, m->nat.len);
 }
 
-BigmodNat *bigmod_nat_reset_for(BigmodNat *x, const BigmodModulus *m) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_reset_for(BigmodNat *x, const BigmodModulus *m) {
     return bigmod_nat_reset(x, m->nat.len);
 }
 
 /* rr: R*R with R = 2^(_W * n) and n = len(m.nat.limbs), into m->rr. */
-static void modulus_rr(BigmodModulus *m) {
+CRYPTO_FIPS_TEXT static void modulus_rr(BigmodModulus *m) {
     BigmodNat *rr = &m->rr;
     bigmod_nat_expand_for(rr, m);
     Uint n = (Uint)rr->len;
@@ -471,7 +479,7 @@ static void modulus_rr(BigmodModulus *m) {
 }
 
 /* minusInverseModW: -x⁻¹ mod 2^_W, for x odd. */
-static Uint minus_inverse_mod_w(Uint x) {
+CRYPTO_FIPS_TEXT static Uint minus_inverse_mod_w(Uint x) {
     /* Every iteration of this loop doubles the least-significant bits of
      * correct inverse in y. The first three bits are already correct (1⁻¹ =
      * 1, 3⁻¹ = 3, 5⁻¹ = 5, and 7⁻¹ = 7 mod 8), so doubling five times is
@@ -485,7 +493,7 @@ static Uint minus_inverse_mod_w(Uint x) {
 }
 
 /* newModulus: the struct around n, which it takes, from a. */
-static BigmodModulus *new_modulus(Alloc *a, BigmodNat *n, Error *err) {
+CRYPTO_FIPS_TEXT static BigmodModulus *new_modulus(Alloc *a, BigmodNat *n, Error *err) {
     if (bigmod_nat_is_zero(n) == 1 || bigmod_nat_is_one(n) == 1) {
         bigmod_nat_free(n);
         return bigmod_error(err, "modulus must be > 1");
@@ -508,15 +516,15 @@ static BigmodModulus *new_modulus(Alloc *a, BigmodNat *n, Error *err) {
     return m;
 }
 
-BigmodModulus *bigmod_new_modulus(Alloc *a, Slice b, Error *err) {
+CRYPTO_FIPS_TEXT BigmodModulus *bigmod_new_modulus(Alloc *a, Slice b, Error *err) {
     BigmodNat n;
     bigmod_nat_init(&n, a);
     bigmod_nat_reset_to_bytes(&n, b);
     return new_modulus(a, &n, err);
 }
 
-BigmodModulus *bigmod_new_modulus_product(Alloc *a, Slice x_bytes, Slice y_bytes,
-                                          Error *err) {
+CRYPTO_FIPS_TEXT BigmodModulus *bigmod_new_modulus_product(Alloc *a, Slice x_bytes,
+                                                           Slice y_bytes, Error *err) {
     BigmodNat x, y, n;
     bigmod_nat_init(&x, NULL);
     bigmod_nat_init(&y, NULL);
@@ -533,22 +541,22 @@ BigmodModulus *bigmod_new_modulus_product(Alloc *a, Slice x_bytes, Slice y_bytes
     return new_modulus(a, bigmod_nat_trim(&n), err);
 }
 
-void bigmod_modulus_free(BigmodModulus *m) {
+CRYPTO_FIPS_TEXT void bigmod_modulus_free(BigmodModulus *m) {
     Alloc *a = nat_alloc(&m->nat);
     bigmod_nat_free(&m->nat);
     bigmod_nat_free(&m->rr);
     mem_free(a, m, sizeof *m, _Alignof(BigmodModulus));
 }
 
-Int bigmod_modulus_size(const BigmodModulus *m) {
+CRYPTO_FIPS_TEXT Int bigmod_modulus_size(const BigmodModulus *m) {
     return (bigmod_modulus_bit_len(m) + 7) / 8;
 }
 
-Int bigmod_modulus_bit_len(const BigmodModulus *m) {
+CRYPTO_FIPS_TEXT Int bigmod_modulus_bit_len(const BigmodModulus *m) {
     return bigmod_nat_bit_len_var_time(&m->nat);
 }
 
-BigmodNat *bigmod_modulus_nat(const BigmodModulus *m, Alloc *a) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_modulus_nat(const BigmodModulus *m, Alloc *a) {
     /* Make a copy so that the caller can't modify m.nat or alias it with
      * another Nat in a modulus operation. */
     BigmodNat *n = bigmod_new_nat(a);
@@ -557,7 +565,8 @@ BigmodNat *bigmod_modulus_nat(const BigmodModulus *m, Alloc *a) {
 
 /* ------------------------------------------------------------- arithmetic */
 
-BigmodNat *bigmod_nat_shift_in(BigmodNat *x, Uint y, const BigmodModulus *m) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_shift_in(BigmodNat *x, Uint y,
+                                                const BigmodModulus *m) {
     Uint buf[PRE];
     BigmodNat d;
     bigmod_nat_init_buf(&d, buf, PRE);
@@ -594,7 +603,8 @@ BigmodNat *bigmod_nat_shift_in(BigmodNat *x, Uint y, const BigmodModulus *m) {
     return x;
 }
 
-BigmodNat *bigmod_nat_mod(BigmodNat *out, const BigmodNat *x, const BigmodModulus *m) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_mod(BigmodNat *out, const BigmodNat *x,
+                                           const BigmodModulus *m) {
     bigmod_nat_reset_for(out, m);
     /* Working our way from the most significant to the least significant
      * limb, we can insert each limb at the least significant position,
@@ -620,8 +630,9 @@ BigmodNat *bigmod_nat_mod(BigmodNat *out, const BigmodNat *x, const BigmodModulu
     return out;
 }
 
-void bigmod_nat_maybe_subtract_modulus(BigmodNat *x, BigmodChoice always,
-                                       const BigmodModulus *m) {
+CRYPTO_FIPS_TEXT void bigmod_nat_maybe_subtract_modulus(BigmodNat *x,
+                                                        BigmodChoice always,
+                                                        const BigmodModulus *m) {
     Uint buf[PRE];
     BigmodNat t;
     bigmod_nat_init_buf(&t, buf, PRE);
@@ -634,7 +645,8 @@ void bigmod_nat_maybe_subtract_modulus(BigmodNat *x, BigmodChoice always,
     bigmod_nat_free(&t);
 }
 
-BigmodNat *bigmod_nat_sub(BigmodNat *x, const BigmodNat *y, const BigmodModulus *m) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_sub(BigmodNat *x, const BigmodNat *y,
+                                           const BigmodModulus *m) {
     Uint underflow = limbs_sub(x, y);
     /* If the subtraction underflowed, add m. */
     Uint buf[PRE];
@@ -647,7 +659,7 @@ BigmodNat *bigmod_nat_sub(BigmodNat *x, const BigmodNat *y, const BigmodModulus 
     return x;
 }
 
-BigmodNat *bigmod_nat_sub_one(BigmodNat *x, const BigmodModulus *m) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_sub_one(BigmodNat *x, const BigmodModulus *m) {
     Uint buf[PRE];
     BigmodNat one;
     bigmod_nat_init_buf(&one, buf, PRE);
@@ -660,20 +672,23 @@ BigmodNat *bigmod_nat_sub_one(BigmodNat *x, const BigmodModulus *m) {
     return x;
 }
 
-BigmodNat *bigmod_nat_add(BigmodNat *x, const BigmodNat *y, const BigmodModulus *m) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_add(BigmodNat *x, const BigmodNat *y,
+                                           const BigmodModulus *m) {
     Uint overflow = limbs_add(x, y);
     bigmod_nat_maybe_subtract_modulus(x, overflow, m);
     return x;
 }
 
-BigmodNat *bigmod_nat_montgomery_representation(BigmodNat *x, const BigmodModulus *m) {
+CRYPTO_FIPS_TEXT BigmodNat *
+bigmod_nat_montgomery_representation(BigmodNat *x, const BigmodModulus *m) {
     /* A Montgomery multiplication (which computes a * b / R) by R * R works
      * out to a multiplication by R, which takes the value out of the
      * Montgomery domain. */
     return bigmod_nat_montgomery_mul(x, x, &m->rr, m);
 }
 
-BigmodNat *bigmod_nat_montgomery_reduction(BigmodNat *x, const BigmodModulus *m) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_montgomery_reduction(BigmodNat *x,
+                                                            const BigmodModulus *m) {
     /* By Montgomery multiplying with 1 not in Montgomery representation, we
      * convert out back from Montgomery representation, because it works out
      * to dividing by R. */
@@ -689,7 +704,7 @@ BigmodNat *bigmod_nat_montgomery_reduction(BigmodNat *x, const BigmodModulus *m)
 
 /* T: the 2n words of scratch montgomeryMul and Mul need, from buf while they
  * fit and from the heap when not. */
-static Uint *scratch_words(Uint *buf, Int cap, Int n) {
+CRYPTO_FIPS_TEXT static Uint *scratch_words(Uint *buf, Int cap, Int n) {
     if (n <= cap) {
         memset(buf, 0, (size_t)n * sizeof(Uint));
         return buf;
@@ -701,13 +716,14 @@ static Uint *scratch_words(Uint *buf, Int cap, Int n) {
     return p;
 }
 
-static void scratch_free(Uint *p, Uint *buf, Int n) {
+CRYPTO_FIPS_TEXT static void scratch_free(Uint *p, Uint *buf, Int n) {
     if (p != buf)
         mem_free(heap_allocator(), p, (size_t)n * sizeof(Uint), _Alignof(Uint));
 }
 
-BigmodNat *bigmod_nat_montgomery_mul(BigmodNat *x, const BigmodNat *a,
-                                     const BigmodNat *b, const BigmodModulus *m) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_montgomery_mul(BigmodNat *x, const BigmodNat *a,
+                                                      const BigmodNat *b,
+                                                      const BigmodModulus *m) {
     Int n = m->nat.len;
     const Uint *m_limbs = m->nat.limbs;
     const Uint *a_limbs = a->limbs;
@@ -760,7 +776,7 @@ BigmodNat *bigmod_nat_montgomery_mul(BigmodNat *x, const BigmodNat *a,
     return x;
 }
 
-Uint bigmod_add_mul_vvw(Uint *z, const Uint *x, Uint y, Int len) {
+CRYPTO_FIPS_TEXT Uint bigmod_add_mul_vvw(Uint *z, const Uint *x, Uint y, Int len) {
     Uint carry = 0;
     for (Int i = 0; i < len; i++) {
         Uint lo;
@@ -779,19 +795,20 @@ Uint bigmod_add_mul_vvw(Uint *z, const Uint *x, Uint y, Int len) {
     return carry;
 }
 
-Uint bigmod_add_mul_vvw1024(Uint *z, const Uint *x, Uint y) {
+CRYPTO_FIPS_TEXT Uint bigmod_add_mul_vvw1024(Uint *z, const Uint *x, Uint y) {
     return bigmod_add_mul_vvw(z, x, y, 1024 / BIGMOD_W);
 }
 
-Uint bigmod_add_mul_vvw1536(Uint *z, const Uint *x, Uint y) {
+CRYPTO_FIPS_TEXT Uint bigmod_add_mul_vvw1536(Uint *z, const Uint *x, Uint y) {
     return bigmod_add_mul_vvw(z, x, y, 1536 / BIGMOD_W);
 }
 
-Uint bigmod_add_mul_vvw2048(Uint *z, const Uint *x, Uint y) {
+CRYPTO_FIPS_TEXT Uint bigmod_add_mul_vvw2048(Uint *z, const Uint *x, Uint y) {
     return bigmod_add_mul_vvw(z, x, y, 2048 / BIGMOD_W);
 }
 
-BigmodNat *bigmod_nat_mul(BigmodNat *x, const BigmodNat *y, const BigmodModulus *m) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_mul(BigmodNat *x, const BigmodNat *y,
+                                           const BigmodModulus *m) {
     if (m->odd) {
         /* A Montgomery multiplication by a value out of the Montgomery domain
          * takes the result out of Montgomery representation. */
@@ -822,8 +839,8 @@ BigmodNat *bigmod_nat_mul(BigmodNat *x, const BigmodNat *y, const BigmodModulus 
     return x;
 }
 
-BigmodNat *bigmod_nat_exp(BigmodNat *out, const BigmodNat *x, Slice e,
-                          const BigmodModulus *m) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_exp(BigmodNat *out, const BigmodNat *x, Slice e,
+                                           const BigmodModulus *m) {
     if (!m->odd)
         panic_str(BURROW_S("bigmod: modulus for Exp must be odd"));
 
@@ -877,8 +894,9 @@ BigmodNat *bigmod_nat_exp(BigmodNat *out, const BigmodNat *x, Slice e,
     return bigmod_nat_montgomery_reduction(out, m);
 }
 
-BigmodNat *bigmod_nat_exp_short_var_time(BigmodNat *out, const BigmodNat *x, Uint e,
-                                         const BigmodModulus *m) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_exp_short_var_time(BigmodNat *out,
+                                                          const BigmodNat *x, Uint e,
+                                                          const BigmodModulus *m) {
     if (!m->odd)
         panic_str(BURROW_S("bigmod: modulus for ExpShortVarTime must be odd"));
     /* For short exponents, precomputing a table and using a window like in
@@ -899,7 +917,7 @@ BigmodNat *bigmod_nat_exp_short_var_time(BigmodNat *out, const BigmodNat *x, Uin
     return bigmod_nat_montgomery_reduction(out, m);
 }
 
-static void rshift1(BigmodNat *a, Uint carry) {
+CRYPTO_FIPS_TEXT static void rshift1(BigmodNat *a, Uint carry) {
     Int size = a->len;
     for (Int i = 0; i < size; i++) {
         a->limbs[i] >>= 1;
@@ -912,7 +930,7 @@ static void rshift1(BigmodNat *a, Uint carry) {
 
 /* &Modulus{nat: n}: a modulus that is only its number, which is all Add needs
  * of one. */
-static BigmodModulus modulus_view(const BigmodNat *n) {
+CRYPTO_FIPS_TEXT static BigmodModulus modulus_view(const BigmodNat *n) {
     BigmodModulus m;
     memset(&m, 0, sizeof m);
     m.nat = *n;
@@ -924,8 +942,8 @@ static BigmodModulus modulus_view(const BigmodNat *n) {
  * which the caller frees. u has the size of the larger of a and m, and A the
  * size of m. NULL, or the error's text when either a or m is zero, or they
  * are both even. */
-static const char *extended_gcd(const BigmodNat *a, const BigmodNat *m, BigmodNat *u,
-                                BigmodNat *A) {
+CRYPTO_FIPS_TEXT static const char *extended_gcd(const BigmodNat *a, const BigmodNat *m,
+                                                 BigmodNat *u, BigmodNat *A) {
     /* This is the extended binary GCD algorithm described in the Handbook of
      * Applied Cryptography, Algorithm 14.61, adapted by BoringSSL to bound
      * coefficients and avoid negative numbers. For more details and proof of
@@ -1038,8 +1056,8 @@ static const char *extended_gcd(const BigmodNat *a, const BigmodNat *m, BigmodNa
     return NULL;
 }
 
-bool bigmod_nat_inverse_var_time(BigmodNat *x, const BigmodNat *a,
-                                 const BigmodModulus *m) {
+CRYPTO_FIPS_TEXT bool bigmod_nat_inverse_var_time(BigmodNat *x, const BigmodNat *a,
+                                                  const BigmodModulus *m) {
     BigmodNat u, A;
     bigmod_nat_init(&u, NULL);
     bigmod_nat_init(&A, NULL);
@@ -1051,8 +1069,8 @@ bool bigmod_nat_inverse_var_time(BigmodNat *x, const BigmodNat *a,
     return ok;
 }
 
-BigmodNat *bigmod_nat_gcd_var_time(BigmodNat *x, const BigmodNat *a, const BigmodNat *b,
-                                   Error *err) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_gcd_var_time(BigmodNat *x, const BigmodNat *a,
+                                                    const BigmodNat *b, Error *err) {
     BigmodNat u, A;
     bigmod_nat_init(&u, NULL);
     bigmod_nat_init(&A, NULL);
@@ -1064,12 +1082,12 @@ BigmodNat *bigmod_nat_gcd_var_time(BigmodNat *x, const BigmodNat *a, const Bigmo
     return msg != NULL ? bigmod_error(err, msg) : x;
 }
 
-BigmodNat *bigmod_nat_shift_right_by_one(BigmodNat *x) {
+CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_shift_right_by_one(BigmodNat *x) {
     rshift1(x, 0);
     return x;
 }
 
-Uint bigmod_nat_div_short_var_time(BigmodNat *x, Uint y) {
+CRYPTO_FIPS_TEXT Uint bigmod_nat_div_short_var_time(BigmodNat *x, Uint y) {
     if (y == 0)
         panic_str(BURROW_S("bigmod: division by zero"));
 

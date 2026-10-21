@@ -23,6 +23,7 @@
 #include "burrow/panic.h"
 #include "burrow/slice.h"
 
+#include "fips140_module.h"
 #include "nistec_p256_point.h"
 #include "nistec_p256_table.h"
 
@@ -44,9 +45,9 @@ typedef struct P256AffinePoint {
  * This is the complete mixed addition formula for a = -3 from "Complete
  * addition formulas for prime order elliptic curves",
  * https://eprint.iacr.org/2015/1060, Algorithm 5. */
-static NistecP256Point *p256_point_add_affine(NistecP256Point *q,
-                                              const NistecP256Point *p1,
-                                              const P256AffinePoint *p2, int infinity) {
+CRYPTO_FIPS_TEXT static NistecP256Point *
+p256_point_add_affine(NistecP256Point *q, const NistecP256Point *p1,
+                      const P256AffinePoint *p2, int infinity) {
     NistecP256Element t0, t1, t2, t3, t4, x3, y3, z3;
     p256_mul(&t0, &p1->x, &p2->x);   /* t0 ← X1 · X2 */
     p256_mul(&t1, &p1->y, &p2->y);   /* t1 ← Y1 · Y2 */
@@ -92,7 +93,7 @@ static NistecP256Point *p256_point_add_affine(NistecP256Point *q,
 }
 
 /* Sets y to -y if cond is 1, and leaves it if cond is 0. */
-static void p256_negate_y(NistecP256Element *y, int cond) {
+CRYPTO_FIPS_TEXT static void p256_negate_y(NistecP256Element *y, int cond) {
     NistecP256Element zero, neg_y;
     memset(&zero, 0, sizeof zero);
     p256_sub(&neg_y, &zero, y);
@@ -106,14 +107,14 @@ typedef struct P256OrdElement {
     uint64_t w[4];
 } P256OrdElement;
 
-static uint64_t p256_be64(const uint8_t *b) {
+CRYPTO_FIPS_TEXT static uint64_t p256_be64(const uint8_t *b) {
     return (uint64_t)b[0] << 56 | (uint64_t)b[1] << 48 | (uint64_t)b[2] << 40 |
            (uint64_t)b[3] << 32 | (uint64_t)b[4] << 24 | (uint64_t)b[5] << 16 |
            (uint64_t)b[6] << 8 | (uint64_t)b[7];
 }
 
 /* x - y - b, setting *b to the borrow out. */
-static uint64_t p256_sub64(uint64_t x, uint64_t y, uint64_t *b) {
+CRYPTO_FIPS_TEXT static uint64_t p256_sub64(uint64_t x, uint64_t y, uint64_t *b) {
     uint64_t d = x - y - *b;
     *b = ((~x & y) | (~(x ^ y) & d)) >> 63;
     return d;
@@ -122,7 +123,7 @@ static uint64_t p256_sub64(uint64_t x, uint64_t y, uint64_t *b) {
 /* Sets s to the big endian value of the 32 bytes at x, reduced modulo the
  * order. Since twice the order is more than 2^256, one conditional subtraction
  * of it is enough. */
-static void p256_ord_set_bytes(P256OrdElement *s, const uint8_t *x) {
+CRYPTO_FIPS_TEXT static void p256_ord_set_bytes(P256OrdElement *s, const uint8_t *x) {
     s->w[0] = p256_be64(x + 24);
     s->w[1] = p256_be64(x + 16);
     s->w[2] = p256_be64(x + 8);
@@ -144,7 +145,7 @@ static void p256_ord_set_bytes(P256OrdElement *s, const uint8_t *x) {
  * through the time this takes, which is fine, as it is the same for every
  * scalar. Go shifts by 64 - n when n is a multiple of 64, which gives zero
  * there and is undefined in C, so that case is left out. */
-static uint64_t p256_ord_rsh(const P256OrdElement *s, int n) {
+CRYPTO_FIPS_TEXT static uint64_t p256_ord_rsh(const P256OrdElement *s, int n) {
     int i = n / 64;
     n = n % 64;
     uint64_t res = s->w[i] >> n;
@@ -163,7 +164,8 @@ typedef struct P256Table {
 
 /* Sets p to the n-th multiple of the table's point, or to infinity for 0, in
  * time that does not depend on n. n is at most 16. */
-static void p256_table_select(const P256Table *table, NistecP256Point *p, uint8_t n) {
+CRYPTO_FIPS_TEXT static void p256_table_select(const P256Table *table,
+                                               NistecP256Point *p, uint8_t n) {
     if (n > 16)
         panic_str(BURROW_S("nistec: internal error: p256Table called with "
                            "out-of-bounds value"));
@@ -174,7 +176,8 @@ static void p256_table_select(const P256Table *table, NistecP256Point *p, uint8_
     }
 }
 
-static void p256_table_compute(P256Table *table, const NistecP256Point *q) {
+CRYPTO_FIPS_TEXT static void p256_table_compute(P256Table *table,
+                                                const NistecP256Point *q) {
     table->p[0] = *q;
     for (int i = 1; i < 16; i += 2) {
         p256_point_double(&table->p[i], &table->p[i / 2]);
@@ -185,7 +188,7 @@ static void p256_table_compute(P256Table *table, const NistecP256Point *q) {
 
 /* The signed digit of a window of five bits and the one below it: a magnitude
  * of at most 16 and a sign. */
-static uint8_t p256_booth_w5(uint64_t in, int *sign) {
+CRYPTO_FIPS_TEXT static uint8_t p256_booth_w5(uint64_t in, int *sign) {
     uint64_t s = ~((in >> 5) - 1);
     uint64_t d = (1 << 6) - in - 1;
     d = (d & s) | (in & ~s);
@@ -196,9 +199,9 @@ static uint8_t p256_booth_w5(uint64_t in, int *sign) {
 
 /* Sets p = scalar * q, for a 32 byte big endian scalar. Any other length is an
  * error, and leaves p as it was. */
-static NistecP256Point *p256_point_scalar_mult(NistecP256Point *p,
-                                               const NistecP256Point *q, Slice scalar,
-                                               Error *err) {
+CRYPTO_FIPS_TEXT static NistecP256Point *
+p256_point_scalar_mult(NistecP256Point *p, const NistecP256Point *q, Slice scalar,
+                       Error *err) {
     if (scalar.len != 32) {
         BURROW_OUT(err,
                    errors_new(error_allocator(), BURROW_S("invalid scalar length")));
@@ -257,7 +260,8 @@ static NistecP256Point *p256_point_scalar_mult(NistecP256Point *p,
  *
  * The tables hold each coordinate as four 64 bit words. On a machine with
  * fiat-crypto's 32 bit field each word is two of its words, low half first. */
-static void p256_affine_table_select(int i, P256AffinePoint *p, uint8_t n) {
+CRYPTO_FIPS_TEXT static void p256_affine_table_select(int i, P256AffinePoint *p,
+                                                      uint8_t n) {
     if (n > 32)
         panic_str(BURROW_S("nistec: internal error: p256AffineTable.Select called with "
                            "out-of-bounds value"));
@@ -286,7 +290,7 @@ static void p256_affine_table_select(int i, P256AffinePoint *p, uint8_t n) {
 }
 
 /* The same as p256_booth_w5, for a window of six bits. */
-static uint8_t p256_booth_w6(uint64_t in, int *sign) {
+CRYPTO_FIPS_TEXT static uint8_t p256_booth_w6(uint64_t in, int *sign) {
     uint64_t s = ~((in >> 6) - 1);
     uint64_t d = (1 << 7) - in - 1;
     d = (d & s) | (in & ~s);
@@ -301,8 +305,8 @@ static uint8_t p256_booth_w6(uint64_t in, int *sign) {
  * This works like p256_point_scalar_mult, but the table is fixed and each one
  * is the one before doubled six times, so the loop moves to the next table
  * where the other doubles. */
-static NistecP256Point *p256_point_scalar_base_mult(NistecP256Point *p, Slice scalar,
-                                                    Error *err) {
+CRYPTO_FIPS_TEXT static NistecP256Point *
+p256_point_scalar_base_mult(NistecP256Point *p, Slice scalar, Error *err) {
     if (scalar.len != 32) {
         BURROW_OUT(err,
                    errors_new(error_allocator(), BURROW_S("invalid scalar length")));
@@ -355,54 +359,59 @@ static NistecP256Point *p256_point_scalar_base_mult(NistecP256Point *p, Slice sc
 
 /* ------------------------------------------------------------------ curve */
 
-static NistecPoint *p256_v_point_new(NistecPoint *p) {
+CRYPTO_FIPS_TEXT static NistecPoint *p256_v_point_new(NistecPoint *p) {
     p256_point_new(&p->p256);
     return p;
 }
 
-static NistecPoint *p256_v_set_generator(NistecPoint *p) {
+CRYPTO_FIPS_TEXT static NistecPoint *p256_v_set_generator(NistecPoint *p) {
     p256_point_set_generator(&p->p256);
     return p;
 }
 
-static NistecPoint *p256_v_set(NistecPoint *p, const NistecPoint *q) {
+CRYPTO_FIPS_TEXT static NistecPoint *p256_v_set(NistecPoint *p, const NistecPoint *q) {
     p->p256 = q->p256;
     return p;
 }
 
-static NistecPoint *p256_v_set_bytes(NistecPoint *p, Slice b, Error *err) {
+CRYPTO_FIPS_TEXT static NistecPoint *p256_v_set_bytes(NistecPoint *p, Slice b,
+                                                      Error *err) {
     return p256_point_set_bytes(&p->p256, b, err) == NULL ? NULL : p;
 }
 
-static Int p256_v_bytes(const NistecPoint *p, uint8_t *out) {
+CRYPTO_FIPS_TEXT static Int p256_v_bytes(const NistecPoint *p, uint8_t *out) {
     return p256_point_bytes(&p->p256, out);
 }
 
-static uint8_t *p256_v_bytes_x(const NistecPoint *p, uint8_t *out, Error *err) {
+CRYPTO_FIPS_TEXT static uint8_t *p256_v_bytes_x(const NistecPoint *p, uint8_t *out,
+                                                Error *err) {
     return p256_point_bytes_x(&p->p256, out, err);
 }
 
-static Int p256_v_bytes_compressed(const NistecPoint *p, uint8_t *out) {
+CRYPTO_FIPS_TEXT static Int p256_v_bytes_compressed(const NistecPoint *p,
+                                                    uint8_t *out) {
     return p256_point_bytes_compressed(&p->p256, out);
 }
 
-static NistecPoint *p256_v_add(NistecPoint *q, const NistecPoint *p1,
-                               const NistecPoint *p2) {
+CRYPTO_FIPS_TEXT static NistecPoint *p256_v_add(NistecPoint *q, const NistecPoint *p1,
+                                                const NistecPoint *p2) {
     p256_point_add(&q->p256, &p1->p256, &p2->p256);
     return q;
 }
 
-static NistecPoint *p256_v_double(NistecPoint *q, const NistecPoint *p) {
+CRYPTO_FIPS_TEXT static NistecPoint *p256_v_double(NistecPoint *q,
+                                                   const NistecPoint *p) {
     p256_point_double(&q->p256, &p->p256);
     return q;
 }
 
-static NistecPoint *p256_v_scalar_mult(NistecPoint *p, const NistecPoint *q,
-                                       Slice scalar, Error *err) {
+CRYPTO_FIPS_TEXT static NistecPoint *
+p256_v_scalar_mult(NistecPoint *p, const NistecPoint *q, Slice scalar, Error *err) {
     return p256_point_scalar_mult(&p->p256, &q->p256, scalar, err) == NULL ? NULL : p;
 }
 
-static NistecPoint *p256_v_scalar_base_mult(NistecPoint *p, Slice scalar, Error *err) {
+CRYPTO_FIPS_TEXT static NistecPoint *p256_v_scalar_base_mult(NistecPoint *p,
+                                                             Slice scalar, Error *err) {
     return p256_point_scalar_base_mult(&p->p256, scalar, err) == NULL ? NULL : p;
 }
 

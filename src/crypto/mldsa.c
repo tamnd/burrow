@@ -26,6 +26,7 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "fips140_module.h"
 #include "mldsa_internal.h"
 #include "rand_internal.h"
 #include "sha3_internal.h"
@@ -92,40 +93,40 @@ static const MldsaParameters mldsa_params87 = {BURROW_S_INIT("ML-DSA-87"),
                                                60,
                                                75};
 
-const MldsaParameters *mldsa_mldsa44(void) {
+CRYPTO_FIPS_TEXT const MldsaParameters *mldsa_mldsa44(void) {
     return &mldsa_params44;
 }
 
-const MldsaParameters *mldsa_mldsa65(void) {
+CRYPTO_FIPS_TEXT const MldsaParameters *mldsa_mldsa65(void) {
     return &mldsa_params65;
 }
 
-const MldsaParameters *mldsa_mldsa87(void) {
+CRYPTO_FIPS_TEXT const MldsaParameters *mldsa_mldsa87(void) {
     return &mldsa_params87;
 }
 
-static bool mldsa_valid_params(const MldsaParameters *p) {
+CRYPTO_FIPS_TEXT static bool mldsa_valid_params(const MldsaParameters *p) {
     return p == &mldsa_params44 || p == &mldsa_params65 || p == &mldsa_params87;
 }
 
-Str mldsa_parameters_string(const MldsaParameters *params) {
+CRYPTO_FIPS_TEXT Str mldsa_parameters_string(const MldsaParameters *params) {
     return mldsa_valid_params(params) ? params->name : BURROW_STR_EMPTY;
 }
 
-Int mldsa_parameters_public_key_size(const MldsaParameters *params) {
+CRYPTO_FIPS_TEXT Int mldsa_parameters_public_key_size(const MldsaParameters *params) {
     return mldsa_valid_params(params) ? params->public_key_size : 0;
 }
 
-Int mldsa_parameters_signature_size(const MldsaParameters *params) {
+CRYPTO_FIPS_TEXT Int mldsa_parameters_signature_size(const MldsaParameters *params) {
     return mldsa_valid_params(params) ? params->signature_size : 0;
 }
 
-Int burrow__mldsa_pub_key_size(const MldsaParameters *p) {
+CRYPTO_FIPS_TEXT Int burrow__mldsa_pub_key_size(const MldsaParameters *p) {
     /* ρ + k × n × 10-bit coefficients of t₁ */
     return 32 + (Int)p->k * MLDSA_N * 10 / 8;
 }
 
-Int burrow__mldsa_sig_size(const MldsaParameters *p) {
+CRYPTO_FIPS_TEXT Int burrow__mldsa_sig_size(const MldsaParameters *p) {
     /* challenge + l × n × (γ₁+1)-bit coefficients of z + hint */
     return (Int)p->lambda / 4 + (Int)p->l * MLDSA_N * (p->gamma1 + 1) / 8 + p->omega +
            p->k;
@@ -133,87 +134,88 @@ Int burrow__mldsa_sig_size(const MldsaParameters *p) {
 
 /* ------------------------------------------------------------ errors */
 
-static Error mldsa_error(const char *msg) {
+CRYPTO_FIPS_TEXT static Error mldsa_error(const char *msg) {
     return errors_new(error_allocator(), str_from_cstr(msg));
 }
 
-static void mldsa_set_error(Error *err, const char *msg) {
+CRYPTO_FIPS_TEXT static void mldsa_set_error(Error *err, const char *msg) {
     BURROW_OUT(err, mldsa_error(msg));
 }
 
-static Alloc *mldsa_alloc(Alloc *a) {
+CRYPTO_FIPS_TEXT static Alloc *mldsa_alloc(Alloc *a) {
     return a != NULL ? a : heap_allocator();
 }
 
 /* ------------------------------------------------------------------ field */
 
 /* x if a <= b and y otherwise, for any a and b, in constant time. */
-static inline int32_t mldsa_ct_select_le(int32_t a, int32_t b, int32_t yes,
-                                         int32_t no) {
+CRYPTO_FIPS_TEXT static inline int32_t mldsa_ct_select_le(int32_t a, int32_t b,
+                                                          int32_t yes, int32_t no) {
     int64_t d = (int64_t)b - (int64_t)a;
     uint32_t mask = (uint32_t)0 - (uint32_t)(1 - (uint32_t)((uint64_t)d >> 63));
     return (int32_t)(((uint32_t)yes & mask) | ((uint32_t)no & ~mask));
 }
 
 /* yes if a == b and no otherwise, in constant time. */
-static inline uint32_t mldsa_ct_select_eq(uint32_t a, uint32_t b, uint32_t yes,
-                                          uint32_t no) {
+CRYPTO_FIPS_TEXT static inline uint32_t mldsa_ct_select_eq(uint32_t a, uint32_t b,
+                                                           uint32_t yes, uint32_t no) {
     uint32_t eq = (uint32_t)(((uint64_t)(a ^ b) - 1) >> 63);
     uint32_t mask = (uint32_t)0 - eq;
     return (yes & mask) | (no & ~mask);
 }
 
 /* 1 if a == b and 0 otherwise, in constant time. */
-static inline uint8_t mldsa_ct_byte_eq(uint8_t a, uint8_t b) {
+CRYPTO_FIPS_TEXT static inline uint8_t mldsa_ct_byte_eq(uint8_t a, uint8_t b) {
     return (uint8_t)((((uint32_t)(a ^ b)) - 1) >> 31);
 }
 
-uint32_t burrow__mldsa_constant_time_abs(int32_t x) {
+CRYPTO_FIPS_TEXT uint32_t burrow__mldsa_constant_time_abs(int32_t x) {
     return (uint32_t)mldsa_ct_select_le(0, x, x, -x);
 }
 
-MldsaFieldElement burrow__mldsa_field_reduce_once(uint32_t a) {
+CRYPTO_FIPS_TEXT MldsaFieldElement burrow__mldsa_field_reduce_once(uint32_t a) {
     uint64_t x = (uint64_t)a - MLDSA_Q;
     uint64_t b = x >> 63;
     return (MldsaFieldElement)(x + b * MLDSA_Q);
 }
 
-MldsaFieldElement burrow__mldsa_field_add(MldsaFieldElement a, MldsaFieldElement b) {
+CRYPTO_FIPS_TEXT MldsaFieldElement burrow__mldsa_field_add(MldsaFieldElement a,
+                                                           MldsaFieldElement b) {
     return burrow__mldsa_field_reduce_once(a + b);
 }
 
-MldsaFieldElement burrow__mldsa_field_sub(MldsaFieldElement a, MldsaFieldElement b) {
+CRYPTO_FIPS_TEXT MldsaFieldElement burrow__mldsa_field_sub(MldsaFieldElement a,
+                                                           MldsaFieldElement b) {
     return burrow__mldsa_field_reduce_once(a - b + MLDSA_Q);
 }
 
 /* x * R⁻¹ mod q for x < q * R. */
-static inline MldsaFieldElement mldsa_montgomery_reduce(uint64_t x) {
+CRYPTO_FIPS_TEXT static inline MldsaFieldElement mldsa_montgomery_reduce(uint64_t x) {
     uint32_t t = (uint32_t)x * MLDSA_Q_NEG_INV;
     uint64_t u = (x + (uint64_t)t * MLDSA_Q) >> 32;
     return burrow__mldsa_field_reduce_once((uint32_t)u);
 }
 
-MldsaFieldElement burrow__mldsa_field_montgomery_mul(MldsaFieldElement a,
-                                                     MldsaFieldElement b) {
+CRYPTO_FIPS_TEXT MldsaFieldElement
+burrow__mldsa_field_montgomery_mul(MldsaFieldElement a, MldsaFieldElement b) {
     return mldsa_montgomery_reduce((uint64_t)a * (uint64_t)b);
 }
 
-MldsaFieldElement burrow__mldsa_field_montgomery_mul_sub(MldsaFieldElement a,
-                                                         MldsaFieldElement b,
-                                                         MldsaFieldElement c) {
+CRYPTO_FIPS_TEXT MldsaFieldElement burrow__mldsa_field_montgomery_mul_sub(
+    MldsaFieldElement a, MldsaFieldElement b, MldsaFieldElement c) {
     return mldsa_montgomery_reduce((uint64_t)a * (uint64_t)(uint32_t)(b - c + MLDSA_Q));
 }
 
-MldsaFieldElement burrow__mldsa_field_montgomery_add_mul(MldsaFieldElement a,
-                                                         MldsaFieldElement b,
-                                                         MldsaFieldElement c,
-                                                         MldsaFieldElement d) {
+CRYPTO_FIPS_TEXT MldsaFieldElement
+burrow__mldsa_field_montgomery_add_mul(MldsaFieldElement a, MldsaFieldElement b,
+                                       MldsaFieldElement c, MldsaFieldElement d) {
     uint64_t x = (uint64_t)a * (uint64_t)b;
     x += (uint64_t)c * (uint64_t)d;
     return mldsa_montgomery_reduce(x);
 }
 
-bool burrow__mldsa_field_to_montgomery(uint32_t a, MldsaFieldElement *out) {
+CRYPTO_FIPS_TEXT bool burrow__mldsa_field_to_montgomery(uint32_t a,
+                                                        MldsaFieldElement *out) {
     if (a >= MLDSA_Q) {
         *out = 0;
         return false;
@@ -223,22 +225,23 @@ bool burrow__mldsa_field_to_montgomery(uint32_t a, MldsaFieldElement *out) {
     return true;
 }
 
-MldsaFieldElement burrow__mldsa_field_sub_to_montgomery(uint32_t a, uint32_t b) {
+CRYPTO_FIPS_TEXT MldsaFieldElement burrow__mldsa_field_sub_to_montgomery(uint32_t a,
+                                                                         uint32_t b) {
     return burrow__mldsa_field_montgomery_mul(a - b + MLDSA_Q, MLDSA_RR);
 }
 
-uint32_t burrow__mldsa_field_from_montgomery(MldsaFieldElement a) {
+CRYPTO_FIPS_TEXT uint32_t burrow__mldsa_field_from_montgomery(MldsaFieldElement a) {
     /* (a * R) * 1 * R⁻¹ ≡ a (mod q) */
     return mldsa_montgomery_reduce(a);
 }
 
-int32_t burrow__mldsa_field_centered_mod(MldsaFieldElement r) {
+CRYPTO_FIPS_TEXT int32_t burrow__mldsa_field_centered_mod(MldsaFieldElement r) {
     int32_t x = (int32_t)burrow__mldsa_field_from_montgomery(r);
     /* x <= q / 2 ? x : x - q */
     return mldsa_ct_select_le(x, MLDSA_Q / 2, x, x - MLDSA_Q);
 }
 
-uint32_t burrow__mldsa_field_infinity_norm(MldsaFieldElement r) {
+CRYPTO_FIPS_TEXT uint32_t burrow__mldsa_field_infinity_norm(MldsaFieldElement r) {
     int32_t x = (int32_t)burrow__mldsa_field_from_montgomery(r);
     /* x <= q / 2 ? x : |x - q|, which is q - x as x < q */
     return (uint32_t)mldsa_ct_select_le(x, MLDSA_Q / 2, x, MLDSA_Q - x);
@@ -257,28 +260,32 @@ typedef struct MldsaRing {
     MldsaFieldElement c[MLDSA_N];
 } MldsaRing;
 
-static void mldsa_poly_add(MldsaRing *s, const MldsaRing *a, const MldsaRing *b) {
+CRYPTO_FIPS_TEXT static void mldsa_poly_add(MldsaRing *s, const MldsaRing *a,
+                                            const MldsaRing *b) {
     for (int i = 0; i < MLDSA_N; i++)
         s->c[i] = mldsa_add(a->c[i], b->c[i]);
 }
 
-static void mldsa_poly_sub(MldsaRing *s, const MldsaRing *a, const MldsaRing *b) {
+CRYPTO_FIPS_TEXT static void mldsa_poly_sub(MldsaRing *s, const MldsaRing *a,
+                                            const MldsaRing *b) {
     for (int i = 0; i < MLDSA_N; i++)
         s->c[i] = mldsa_sub(a->c[i], b->c[i]);
 }
 
 /* s += a ∘ b, the polyAdd of an nttMul. */
-static void mldsa_ntt_mul_add(MldsaRing *s, const MldsaRing *a, const MldsaRing *b) {
+CRYPTO_FIPS_TEXT static void mldsa_ntt_mul_add(MldsaRing *s, const MldsaRing *a,
+                                               const MldsaRing *b) {
     for (int i = 0; i < MLDSA_N; i++)
         s->c[i] = mldsa_add(s->c[i], mldsa_mul(a->c[i], b->c[i]));
 }
 
-static void mldsa_ntt_mul(MldsaRing *p, const MldsaRing *a, const MldsaRing *b) {
+CRYPTO_FIPS_TEXT static void mldsa_ntt_mul(MldsaRing *p, const MldsaRing *a,
+                                           const MldsaRing *b) {
     for (int i = 0; i < MLDSA_N; i++)
         p->c[i] = mldsa_mul(a->c[i], b->c[i]);
 }
 
-const MldsaFieldElement burrow__mldsa_zetas[256] = {
+CRYPTO_FIPS_RODATA const MldsaFieldElement burrow__mldsa_zetas[256] = {
     4193792, 25847,   5771523, 7861508, 237124,  7602457, 7504169, 466468,  1826347,
     2353451, 8021166, 6288512, 3119733, 5495562, 3111497, 2680103, 2725464, 1024112,
     7300517, 3585928, 7830929, 7260833, 2619752, 6271868, 6262231, 4520680, 6980856,
@@ -311,7 +318,7 @@ const MldsaFieldElement burrow__mldsa_zetas[256] = {
 };
 
 /* ntt, in place. */
-static void mldsa_ntt(MldsaRing *p) {
+CRYPTO_FIPS_TEXT static void mldsa_ntt(MldsaRing *p) {
     MldsaFieldElement *f = p->c;
     uint8_t m = 0;
     for (int len = 128; len >= 8; len /= 2) {
@@ -358,7 +365,7 @@ static void mldsa_ntt(MldsaRing *p) {
 }
 
 /* inverseNTT, in place. */
-static void mldsa_inverse_ntt(MldsaRing *p) {
+CRYPTO_FIPS_TEXT static void mldsa_inverse_ntt(MldsaRing *p) {
     MldsaFieldElement *f = p->c;
     uint8_t m = 255;
     for (int start = 0; start < 256; start += 2) {
@@ -407,7 +414,8 @@ static void mldsa_inverse_ntt(MldsaRing *p) {
 }
 
 /* sampleNTT. */
-static void mldsa_sample_ntt(MldsaRing *a, const Byte rho[32], Byte s, Byte r) {
+CRYPTO_FIPS_TEXT static void mldsa_sample_ntt(MldsaRing *a, const Byte rho[32], Byte s,
+                                              Byte r) {
     Sha3 g;
     burrow__shake128_init(&g);
     burrow__sha3_write(&g, rho, 32);
@@ -433,7 +441,8 @@ static void mldsa_sample_ntt(MldsaRing *a, const Byte rho[32], Byte s, Byte r) {
 }
 
 /* coeffFromHalfByte. */
-static bool mldsa_coeff_from_half_byte(Byte b, int eta, MldsaFieldElement *out) {
+CRYPTO_FIPS_TEXT static bool mldsa_coeff_from_half_byte(Byte b, int eta,
+                                                        MldsaFieldElement *out) {
     if (eta == 2) {
         if (b > 14)
             return false;
@@ -450,8 +459,9 @@ static bool mldsa_coeff_from_half_byte(Byte b, int eta, MldsaFieldElement *out) 
 }
 
 /* sampleBoundedPoly, with the 64 bytes of ρ′. */
-static void mldsa_sample_bounded_poly(MldsaRing *a, const Byte rho[64], Byte r,
-                                      const MldsaParameters *p) {
+CRYPTO_FIPS_TEXT static void mldsa_sample_bounded_poly(MldsaRing *a, const Byte rho[64],
+                                                       Byte r,
+                                                       const MldsaParameters *p) {
     Sha3 h;
     burrow__shake256_init(&h);
     burrow__sha3_write(&h, rho, 64);
@@ -482,8 +492,8 @@ static void mldsa_sample_bounded_poly(MldsaRing *a, const Byte rho[64], Byte r,
 }
 
 /* sampleInBall, from the λ/4 bytes of ρ. */
-static void mldsa_sample_in_ball(MldsaRing *c, const Byte *rho,
-                                 const MldsaParameters *p) {
+CRYPTO_FIPS_TEXT static void mldsa_sample_in_ball(MldsaRing *c, const Byte *rho,
+                                                  const MldsaParameters *p) {
     Sha3 h;
     burrow__shake256_init(&h);
     burrow__sha3_write(&h, rho, p->lambda / 4);
@@ -505,8 +515,8 @@ static void mldsa_sample_in_ball(MldsaRing *c, const Byte *rho,
 
 /* ------------------------------------------------------- rounding, hints */
 
-void burrow__mldsa_power2_round(MldsaFieldElement r, uint16_t *hi,
-                                MldsaFieldElement *lo) {
+CRYPTO_FIPS_TEXT void burrow__mldsa_power2_round(MldsaFieldElement r, uint16_t *hi,
+                                                 MldsaFieldElement *lo) {
     uint32_t rr = mldsa_from_mont(r);
     uint32_t r1 = rr + (1 << 12) - 1;
     r1 >>= 13;
@@ -514,14 +524,14 @@ void burrow__mldsa_power2_round(MldsaFieldElement r, uint16_t *hi,
     *hi = (uint16_t)r1;
 }
 
-uint8_t burrow__mldsa_high_bits32(uint32_t x) {
+CRYPTO_FIPS_TEXT uint8_t burrow__mldsa_high_bits32(uint32_t x) {
     uint32_t r1 = (x + 127) >> 7;
     r1 = (r1 * 1025 + (1 << 21)) >> 22;
     r1 &= 0xF;
     return (uint8_t)r1;
 }
 
-uint8_t burrow__mldsa_decompose32(MldsaFieldElement r, int32_t *r0) {
+CRYPTO_FIPS_TEXT uint8_t burrow__mldsa_decompose32(MldsaFieldElement r, int32_t *r0) {
     uint32_t x = mldsa_from_mont(r);
     uint8_t r1 = burrow__mldsa_high_bits32(x);
     int32_t v = (int32_t)x - (int32_t)r1 * 2 * (MLDSA_Q - 1) / 32;
@@ -529,7 +539,7 @@ uint8_t burrow__mldsa_decompose32(MldsaFieldElement r, int32_t *r0) {
     return r1;
 }
 
-uint8_t burrow__mldsa_use_hint32(MldsaFieldElement r, uint8_t hint) {
+CRYPTO_FIPS_TEXT uint8_t burrow__mldsa_use_hint32(MldsaFieldElement r, uint8_t hint) {
     const uint8_t m = 16; /* (q − 1) / (2 * γ2) */
     int32_t r0;
     uint8_t r1 = burrow__mldsa_decompose32(r, &r0);
@@ -542,22 +552,22 @@ uint8_t burrow__mldsa_use_hint32(MldsaFieldElement r, uint8_t hint) {
     return r1;
 }
 
-static uint8_t mldsa_make_hint32(MldsaFieldElement ct0, MldsaFieldElement w,
-                                 MldsaFieldElement cs2) {
+CRYPTO_FIPS_TEXT static uint8_t
+mldsa_make_hint32(MldsaFieldElement ct0, MldsaFieldElement w, MldsaFieldElement cs2) {
     MldsaFieldElement r_plus_z = mldsa_sub(w, cs2);
     uint8_t v1 = burrow__mldsa_high_bits32(mldsa_from_mont(r_plus_z));
     uint8_t r1 = burrow__mldsa_high_bits32(mldsa_from_mont(mldsa_add(r_plus_z, ct0)));
     return (uint8_t)(mldsa_ct_byte_eq(v1, r1) ^ 1);
 }
 
-uint8_t burrow__mldsa_high_bits88(uint32_t x) {
+CRYPTO_FIPS_TEXT uint8_t burrow__mldsa_high_bits88(uint32_t x) {
     uint32_t r1 = (x + 127) >> 7;
     r1 = (r1 * 11275 + (1 << 23)) >> 24;
     r1 = mldsa_ct_select_eq(r1, 44, 0, r1);
     return (uint8_t)r1;
 }
 
-uint8_t burrow__mldsa_decompose88(MldsaFieldElement r, int32_t *r0) {
+CRYPTO_FIPS_TEXT uint8_t burrow__mldsa_decompose88(MldsaFieldElement r, int32_t *r0) {
     uint32_t x = mldsa_from_mont(r);
     uint8_t r1 = burrow__mldsa_high_bits88(x);
     int32_t v = (int32_t)x - (int32_t)r1 * 2 * (MLDSA_Q - 1) / 88;
@@ -565,7 +575,7 @@ uint8_t burrow__mldsa_decompose88(MldsaFieldElement r, int32_t *r0) {
     return r1;
 }
 
-uint8_t burrow__mldsa_use_hint88(MldsaFieldElement r, uint8_t hint) {
+CRYPTO_FIPS_TEXT uint8_t burrow__mldsa_use_hint88(MldsaFieldElement r, uint8_t hint) {
     const uint8_t m = 44; /* (q − 1) / (2 * γ2) */
     int32_t r0;
     uint8_t r1 = burrow__mldsa_decompose88(r, &r0);
@@ -578,16 +588,16 @@ uint8_t burrow__mldsa_use_hint88(MldsaFieldElement r, uint8_t hint) {
     return r1;
 }
 
-static uint8_t mldsa_make_hint88(MldsaFieldElement ct0, MldsaFieldElement w,
-                                 MldsaFieldElement cs2) {
+CRYPTO_FIPS_TEXT static uint8_t
+mldsa_make_hint88(MldsaFieldElement ct0, MldsaFieldElement w, MldsaFieldElement cs2) {
     MldsaFieldElement r_plus_z = mldsa_sub(w, cs2);
     uint8_t v1 = burrow__mldsa_high_bits88(mldsa_from_mont(r_plus_z));
     uint8_t r1 = burrow__mldsa_high_bits88(mldsa_from_mont(mldsa_add(r_plus_z, ct0)));
     return (uint8_t)(mldsa_ct_byte_eq(v1, r1) ^ 1);
 }
 
-static void mldsa_high_bits(Byte w[MLDSA_N], const MldsaRing *r,
-                            const MldsaParameters *p) {
+CRYPTO_FIPS_TEXT static void mldsa_high_bits(Byte w[MLDSA_N], const MldsaRing *r,
+                                             const MldsaParameters *p) {
     for (int i = 0; i < MLDSA_N; i++) {
         uint32_t x = mldsa_from_mont(r->c[i]);
         w[i] = p->gamma2 == 32 ? burrow__mldsa_high_bits32(x)
@@ -595,15 +605,17 @@ static void mldsa_high_bits(Byte w[MLDSA_N], const MldsaRing *r,
     }
 }
 
-static void mldsa_use_hint(Byte w[MLDSA_N], const MldsaRing *r, const Byte h[MLDSA_N],
-                           const MldsaParameters *p) {
+CRYPTO_FIPS_TEXT static void mldsa_use_hint(Byte w[MLDSA_N], const MldsaRing *r,
+                                            const Byte h[MLDSA_N],
+                                            const MldsaParameters *p) {
     for (int i = 0; i < MLDSA_N; i++)
         w[i] = p->gamma2 == 32 ? burrow__mldsa_use_hint32(r->c[i], h[i])
                                : burrow__mldsa_use_hint88(r->c[i], h[i]);
 }
 
-static int mldsa_make_hint(Byte h[MLDSA_N], const MldsaRing *ct0, const MldsaRing *w,
-                           const MldsaRing *cs2, const MldsaParameters *p) {
+CRYPTO_FIPS_TEXT static int mldsa_make_hint(Byte h[MLDSA_N], const MldsaRing *ct0,
+                                            const MldsaRing *w, const MldsaRing *cs2,
+                                            const MldsaParameters *p) {
     int count1s = 0;
     for (int i = 0; i < MLDSA_N; i++) {
         h[i] = p->gamma2 == 32 ? mldsa_make_hint32(ct0->c[i], w->c[i], cs2->c[i])
@@ -616,7 +628,8 @@ static int mldsa_make_hint(Byte h[MLDSA_N], const MldsaRing *ct0, const MldsaRin
 /* ---------------------------------------------------------------- packing */
 
 /* bitPack18 and bitPack20, into the (γ₁+1) * n / 8 bytes at v. */
-static void mldsa_bit_pack(Byte *v, const MldsaRing *r, const MldsaParameters *p) {
+CRYPTO_FIPS_TEXT static void mldsa_bit_pack(Byte *v, const MldsaRing *r,
+                                            const MldsaParameters *p) {
     if (p->gamma1 == 17) {
         const int32_t b = 1 << 17;
         for (int i = 0; i < MLDSA_N; i += 4) {
@@ -655,7 +668,8 @@ static void mldsa_bit_pack(Byte *v, const MldsaRing *r, const MldsaParameters *p
 }
 
 /* bitUnpack18 and bitUnpack20, from the (γ₁+1) * n / 8 bytes at v. */
-static void mldsa_bit_unpack(MldsaRing *r, const Byte *v, const MldsaParameters *p) {
+CRYPTO_FIPS_TEXT static void mldsa_bit_unpack(MldsaRing *r, const Byte *v,
+                                              const MldsaParameters *p) {
     if (p->gamma1 == 17) {
         const uint32_t b = 1 << 17;
         const uint32_t mask18 = (1 << 18) - 1;
@@ -687,7 +701,8 @@ static void mldsa_bit_unpack(MldsaRing *r, const Byte *v, const MldsaParameters 
 }
 
 /* w1Encode, which writes the encoding of w to h. */
-static void mldsa_w1_encode(Sha3 *h, const Byte w[MLDSA_N], const MldsaParameters *p) {
+CRYPTO_FIPS_TEXT static void mldsa_w1_encode(Sha3 *h, const Byte w[MLDSA_N],
+                                             const MldsaParameters *p) {
     Byte buf[6 * MLDSA_N / 8];
     if (p->gamma2 == 32) {
         for (int i = 0; i < MLDSA_N; i += 2)
@@ -705,8 +720,9 @@ static void mldsa_w1_encode(Sha3 *h, const Byte w[MLDSA_N], const MldsaParameter
 }
 
 /* pkEncode, into the pubKeySize bytes at pk. */
-static void mldsa_pk_encode(Byte *pk, const Byte rho[32], uint16_t (*t1)[MLDSA_N],
-                            const MldsaParameters *p) {
+CRYPTO_FIPS_TEXT static void mldsa_pk_encode(Byte *pk, const Byte rho[32],
+                                             uint16_t (*t1)[MLDSA_N],
+                                             const MldsaParameters *p) {
     memcpy(pk, rho, 32);
     pk += 32;
     for (int r = 0; r < p->k; r++) {
@@ -727,8 +743,8 @@ static void mldsa_pk_encode(Byte *pk, const Byte rho[32], uint16_t (*t1)[MLDSA_N
 }
 
 /* pkDecode of the pubKeySize bytes at pk, which gives ρ as pk itself. */
-static void mldsa_pk_decode(const Byte *pk, uint16_t (*t1)[MLDSA_N],
-                            const MldsaParameters *p) {
+CRYPTO_FIPS_TEXT static void mldsa_pk_decode(const Byte *pk, uint16_t (*t1)[MLDSA_N],
+                                             const MldsaParameters *p) {
     pk += 32;
     for (int r = 0; r < p->k; r++) {
         for (int i = 0; i < MLDSA_N; i += 4) {
@@ -743,7 +759,8 @@ static void mldsa_pk_decode(const Byte *pk, uint16_t (*t1)[MLDSA_N],
 }
 
 /* hintEncode, into the ω + k bytes at y. */
-static void mldsa_hint_encode(Byte *y, Byte (*h)[MLDSA_N], const MldsaParameters *p) {
+CRYPTO_FIPS_TEXT static void mldsa_hint_encode(Byte *y, Byte (*h)[MLDSA_N],
+                                               const MldsaParameters *p) {
     memset(y, 0, (size_t)p->omega + (size_t)p->k);
     Byte idx = 0;
     for (int i = 0; i < p->k; i++) {
@@ -756,8 +773,8 @@ static void mldsa_hint_encode(Byte *y, Byte (*h)[MLDSA_N], const MldsaParameters
 }
 
 /* hintDecode of the ω + k bytes at y, into h, which starts out zero. */
-static bool mldsa_hint_decode(const Byte *y, Byte (*h)[MLDSA_N],
-                              const MldsaParameters *p) {
+CRYPTO_FIPS_TEXT static bool mldsa_hint_decode(const Byte *y, Byte (*h)[MLDSA_N],
+                                               const MldsaParameters *p) {
     Byte idx = 0;
     for (int i = 0; i < p->k; i++) {
         Byte limit = y[p->omega + i];
@@ -778,7 +795,8 @@ static bool mldsa_hint_decode(const Byte *y, Byte (*h)[MLDSA_N],
     return true;
 }
 
-static bool mldsa_coefficients_exceed_bound(const MldsaRing *w, uint32_t bound) {
+CRYPTO_FIPS_TEXT static bool mldsa_coefficients_exceed_bound(const MldsaRing *w,
+                                                             uint32_t bound) {
     for (int i = 0; i < MLDSA_N; i++) {
         if (burrow__mldsa_field_infinity_norm(w->c[i]) >= bound)
             return true;
@@ -786,8 +804,9 @@ static bool mldsa_coefficients_exceed_bound(const MldsaRing *w, uint32_t bound) 
     return false;
 }
 
-static bool mldsa_low_bits_exceed_bound(const MldsaRing *w, uint32_t bound,
-                                        const MldsaParameters *p) {
+CRYPTO_FIPS_TEXT static bool mldsa_low_bits_exceed_bound(const MldsaRing *w,
+                                                         uint32_t bound,
+                                                         const MldsaParameters *p) {
     for (int i = 0; i < MLDSA_N; i++) {
         int32_t r0;
         if (p->gamma2 == 32)
@@ -866,7 +885,8 @@ const Type burrow_type_MldsaOptions = {
     NULL,
 };
 
-static void *mldsa_new(Alloc *a, size_t size, size_t align, Error *err) {
+CRYPTO_FIPS_TEXT static void *mldsa_new(Alloc *a, size_t size, size_t align,
+                                        Error *err) {
     void *p = mem_alloc(a, size, align);
     if (p == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -878,7 +898,7 @@ static void *mldsa_new(Alloc *a, size_t size, size_t align, Error *err) {
 }
 
 /* A copy of the n bytes at p as a new Slice from a, or out of memory. */
-static Slice mldsa_bytes(Alloc *a, const Byte *p, Int n, Error *err) {
+CRYPTO_FIPS_TEXT static Slice mldsa_bytes(Alloc *a, const Byte *p, Int n, Error *err) {
     Slice s = slice_make(mldsa_alloc(a), TYPE_BYTE, n, n);
     if (s.p == NULL && n > 0) {
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -891,8 +911,8 @@ static Slice mldsa_bytes(Alloc *a, const Byte *p, Int n, Error *err) {
 }
 
 /* computeMatrixA. */
-static void mldsa_compute_matrix_a(MldsaRing *a, const Byte rho[32],
-                                   const MldsaParameters *p) {
+CRYPTO_FIPS_TEXT static void mldsa_compute_matrix_a(MldsaRing *a, const Byte rho[32],
+                                                    const MldsaParameters *p) {
     for (int r = 0; r < p->k; r++) {
         for (int s = 0; s < p->l; s++)
             mldsa_sample_ntt(&a[r * p->l + s], rho, (Byte)s, (Byte)r);
@@ -900,7 +920,8 @@ static void mldsa_compute_matrix_a(MldsaRing *a, const Byte rho[32],
 }
 
 /* computePublicKeyHash. */
-static void mldsa_compute_public_key_hash(Byte tr[64], const Byte *pk, Int n) {
+CRYPTO_FIPS_TEXT static void mldsa_compute_public_key_hash(Byte tr[64], const Byte *pk,
+                                                           Int n) {
     Sha3 h;
     burrow__shake256_init(&h);
     burrow__sha3_write(&h, pk, n);
@@ -908,7 +929,8 @@ static void mldsa_compute_public_key_hash(Byte tr[64], const Byte *pk, Int n) {
 }
 
 /* computeT1Hat for one row: NTT(t₁ ⋅ 2ᵈ). */
-static void mldsa_compute_t1_hat(MldsaRing *t1_hat, const uint16_t t1[MLDSA_N]) {
+CRYPTO_FIPS_TEXT static void mldsa_compute_t1_hat(MldsaRing *t1_hat,
+                                                  const uint16_t t1[MLDSA_N]) {
     for (int j = 0; j < MLDSA_N; j++) {
         MldsaFieldElement z;
         burrow__mldsa_field_to_montgomery((uint32_t)t1[j] << 13, &z);
@@ -918,7 +940,8 @@ static void mldsa_compute_t1_hat(MldsaRing *t1_hat, const uint16_t t1[MLDSA_N]) 
 }
 
 /* t = InvNTT(s2[i] + Σ A[i][j] ∘ s1[j]), row i of t = A s1 + s2. */
-static void mldsa_compute_t_row(MldsaRing *t, const MldsaPrivateKey *priv, int i) {
+CRYPTO_FIPS_TEXT static void mldsa_compute_t_row(MldsaRing *t,
+                                                 const MldsaPrivateKey *priv, int i) {
     const MldsaParameters *p = priv->pub.p;
     *t = priv->s2[i];
     for (int j = 0; j < p->l; j++)
@@ -927,8 +950,9 @@ static void mldsa_compute_t_row(MldsaRing *t, const MldsaPrivateKey *priv, int i
 }
 
 /* newPrivateKey, into priv, which is zero. */
-static void mldsa_new_private_key_into(MldsaPrivateKey *priv, const Byte seed[32],
-                                       const MldsaParameters *p) {
+CRYPTO_FIPS_TEXT static void mldsa_new_private_key_into(MldsaPrivateKey *priv,
+                                                        const Byte seed[32],
+                                                        const MldsaParameters *p) {
     int k = p->k, l = p->l;
     priv->pub.p = p;
     memcpy(priv->seed, seed, 32);
@@ -970,8 +994,8 @@ static void mldsa_new_private_key_into(MldsaPrivateKey *priv, const Byte seed[32
 }
 
 /* computeMessageHash. */
-static bool mldsa_compute_message_hash(Byte mu[64], const Byte tr[64], Slice msg,
-                                       Str context) {
+CRYPTO_FIPS_TEXT static bool mldsa_compute_message_hash(Byte mu[64], const Byte tr[64],
+                                                        Slice msg, Str context) {
     if (context.len > 255)
         return false;
     Sha3 h;
@@ -1000,9 +1024,9 @@ typedef struct MldsaSignScratch {
 
 /* One turn of the loop of signInternal: NULL and the signature in sig, or why
  * it was rejected. */
-static const char *mldsa_sign_attempt(const MldsaPrivateKey *priv, const Byte mu[64],
-                                      const Byte nonce[64], uint16_t *kappa,
-                                      MldsaSignScratch *s, Byte *sig) {
+CRYPTO_FIPS_TEXT static const char *
+mldsa_sign_attempt(const MldsaPrivateKey *priv, const Byte mu[64], const Byte nonce[64],
+                   uint16_t *kappa, MldsaSignScratch *s, Byte *sig) {
     const MldsaParameters *p = priv->pub.p;
     int k = p->k, l = p->l;
     uint32_t beta = (uint32_t)(p->tau * p->eta);
@@ -1092,9 +1116,9 @@ static const char *mldsa_sign_attempt(const MldsaPrivateKey *priv, const Byte mu
 
 /* signInternal, into the signature size bytes at sig. False when the scratch
  * space cannot be had. */
-static bool mldsa_sign_internal(const MldsaPrivateKey *priv, const Byte mu[64],
-                                const Byte random[32], const MldsaRejectionHook *hook,
-                                Byte *sig) {
+CRYPTO_FIPS_TEXT static bool
+mldsa_sign_internal(const MldsaPrivateKey *priv, const Byte mu[64],
+                    const Byte random[32], const MldsaRejectionHook *hook, Byte *sig) {
     Alloc *heap = heap_allocator();
     MldsaSignScratch *s = mem_alloc(heap, sizeof *s, _Alignof(MldsaSignScratch));
     if (s == NULL)
@@ -1124,9 +1148,9 @@ static bool mldsa_sign_internal(const MldsaPrivateKey *priv, const Byte mu[64],
 }
 
 /* signInternal as a new Slice from a. */
-static Slice mldsa_sign_to_slice(const MldsaPrivateKey *priv, Alloc *a,
-                                 const Byte mu[64], const Byte random[32],
-                                 const MldsaRejectionHook *hook, Error *err) {
+CRYPTO_FIPS_TEXT static Slice
+mldsa_sign_to_slice(const MldsaPrivateKey *priv, Alloc *a, const Byte mu[64],
+                    const Byte random[32], const MldsaRejectionHook *hook, Error *err) {
     Byte sig[MLDSA_MAX_SIG_SIZE];
     if (!mldsa_sign_internal(priv, mu, random, hook, sig)) {
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -1137,8 +1161,9 @@ static Slice mldsa_sign_to_slice(const MldsaPrivateKey *priv, Alloc *a,
 
 /* Sign, SignDeterministic and TestingOnlySignWithRandom, with random NULL for
  * the system's randomness. */
-static Slice mldsa_sign_message(const MldsaPrivateKey *priv, Alloc *a, Slice msg,
-                                Str context, const Byte *random, Error *err) {
+CRYPTO_FIPS_TEXT static Slice mldsa_sign_message(const MldsaPrivateKey *priv, Alloc *a,
+                                                 Slice msg, Str context,
+                                                 const Byte *random, Error *err) {
     Byte mu[64];
     if (!mldsa_compute_message_hash(mu, priv->pub.tr, msg, context)) {
         mldsa_set_error(err, "mldsa: context too long");
@@ -1155,9 +1180,10 @@ static Slice mldsa_sign_message(const MldsaPrivateKey *priv, Alloc *a, Slice msg
 }
 
 /* SignExternalMu and the like, with random NULL for the system's randomness. */
-static Slice mldsa_sign_mu(const MldsaPrivateKey *priv, Alloc *a, Slice mu,
-                           const Byte *random, const MldsaRejectionHook *hook,
-                           Error *err) {
+CRYPTO_FIPS_TEXT static Slice mldsa_sign_mu(const MldsaPrivateKey *priv, Alloc *a,
+                                            Slice mu, const Byte *random,
+                                            const MldsaRejectionHook *hook,
+                                            Error *err) {
     if (mu.len != 64) {
         mldsa_set_error(err, "mldsa: invalid message hash length");
         return slice_nil(TYPE_BYTE);
@@ -1172,17 +1198,16 @@ static Slice mldsa_sign_mu(const MldsaPrivateKey *priv, Alloc *a, Slice mu,
     return sig;
 }
 
-Slice burrow__mldsa_sign_external_mu_deterministic(const MldsaPrivateKey *sk, Alloc *a,
-                                                   Slice mu,
-                                                   const MldsaRejectionHook *hook,
-                                                   Error *err) {
+CRYPTO_FIPS_TEXT Slice burrow__mldsa_sign_external_mu_deterministic(
+    const MldsaPrivateKey *sk, Alloc *a, Slice mu, const MldsaRejectionHook *hook,
+    Error *err) {
     static const Byte zero[32] = {0};
     return mldsa_sign_mu(sk, a, mu, zero, hook, err);
 }
 
-Slice burrow__mldsa_testing_only_sign_with_random(const MldsaPrivateKey *sk, Alloc *a,
-                                                  Slice msg, Str context, Slice random,
-                                                  Error *err) {
+CRYPTO_FIPS_TEXT Slice burrow__mldsa_testing_only_sign_with_random(
+    const MldsaPrivateKey *sk, Alloc *a, Slice msg, Str context, Slice random,
+    Error *err) {
     if (context.len > 255) {
         mldsa_set_error(err, "mldsa: context too long");
         return slice_nil(TYPE_BYTE);
@@ -1194,10 +1219,8 @@ Slice burrow__mldsa_testing_only_sign_with_random(const MldsaPrivateKey *sk, All
     return mldsa_sign_message(sk, a, msg, context, random.p, err);
 }
 
-Slice burrow__mldsa_testing_only_sign_external_mu_with_random(const MldsaPrivateKey *sk,
-                                                              Alloc *a, Slice mu,
-                                                              Slice random,
-                                                              Error *err) {
+CRYPTO_FIPS_TEXT Slice burrow__mldsa_testing_only_sign_external_mu_with_random(
+    const MldsaPrivateKey *sk, Alloc *a, Slice mu, Slice random, Error *err) {
     if (mu.len != 64) {
         mldsa_set_error(err, "mldsa: invalid message hash length");
         return slice_nil(TYPE_BYTE);
@@ -1222,8 +1245,9 @@ typedef struct MldsaVerifyScratch {
 } MldsaVerifyScratch;
 
 /* verifyInternal, from the point where the signature has the right length. */
-static Error mldsa_verify_scratch(const MldsaPublicKey *pub, const Byte mu[64],
-                                  const Byte *sig, MldsaVerifyScratch *s) {
+CRYPTO_FIPS_TEXT static Error mldsa_verify_scratch(const MldsaPublicKey *pub,
+                                                   const Byte mu[64], const Byte *sig,
+                                                   MldsaVerifyScratch *s) {
     const MldsaParameters *p = pub->p;
     int k = p->k, l = p->l;
     uint32_t beta = (uint32_t)(p->tau * p->eta);
@@ -1280,8 +1304,8 @@ static Error mldsa_verify_scratch(const MldsaPublicKey *pub, const Byte mu[64],
 }
 
 /* verifyInternal. */
-static Error mldsa_verify_internal(const MldsaPublicKey *pub, const Byte mu[64],
-                                   Slice sig) {
+CRYPTO_FIPS_TEXT static Error mldsa_verify_internal(const MldsaPublicKey *pub,
+                                                    const Byte mu[64], Slice sig) {
     if (sig.len != pub->p->signature_size)
         return mldsa_error("mldsa: invalid signature length");
     Alloc *heap = heap_allocator();
@@ -1293,7 +1317,8 @@ static Error mldsa_verify_internal(const MldsaPublicKey *pub, const Byte mu[64],
     return e;
 }
 
-Error burrow__mldsa_verify_external_mu(const MldsaPublicKey *pk, Slice mu, Slice sig) {
+CRYPTO_FIPS_TEXT Error burrow__mldsa_verify_external_mu(const MldsaPublicKey *pk,
+                                                        Slice mu, Slice sig) {
     if (mu.len != 64)
         return mldsa_error("mldsa: invalid message hash length");
     return mldsa_verify_internal(pk, mu.p, sig);
@@ -1301,7 +1326,7 @@ Error burrow__mldsa_verify_external_mu(const MldsaPublicKey *pk, Slice mu, Slice
 
 /* ----------------------------------------------------- semi-expanded keys */
 
-static int mldsa_bits_len(uint32_t x) {
+CRYPTO_FIPS_TEXT static int mldsa_bits_len(uint32_t x) {
     int n = 0;
     for (; x != 0; x >>= 1)
         n++;
@@ -1309,14 +1334,15 @@ static int mldsa_bits_len(uint32_t x) {
 }
 
 /* semiExpandedPrivKeySize. */
-static Int mldsa_semi_expanded_size(const MldsaParameters *p) {
+CRYPTO_FIPS_TEXT static Int mldsa_semi_expanded_size(const MldsaParameters *p) {
     Int eta_bitlen = mldsa_bits_len((uint32_t)p->eta) + 1;
     return 32 + 32 + 64 + (Int)p->l * MLDSA_N * eta_bitlen / 8 +
            (Int)p->k * MLDSA_N * eta_bitlen / 8 + (Int)p->k * MLDSA_N * 13 / 8;
 }
 
 /* bitPackSlow, into the n * bitlen / 8 bytes at v, which it returns the end of. */
-static Byte *mldsa_bit_pack_slow(Byte *v, const MldsaRing *r, int a, int b) {
+CRYPTO_FIPS_TEXT static Byte *mldsa_bit_pack_slow(Byte *v, const MldsaRing *r, int a,
+                                                  int b) {
     int bitlen = mldsa_bits_len((uint32_t)(a + b));
     uint32_t acc = 0;
     int acc_bits = 0;
@@ -1337,7 +1363,8 @@ static Byte *mldsa_bit_pack_slow(Byte *v, const MldsaRing *r, int a, int b) {
 
 /* bitUnpackSlow of the n * bitlen / 8 bytes at v. False for a coefficient out
  * of range. */
-static bool mldsa_bit_unpack_slow(MldsaRing *r, const Byte *v, int a, int b) {
+CRYPTO_FIPS_TEXT static bool mldsa_bit_unpack_slow(MldsaRing *r, const Byte *v, int a,
+                                                   int b) {
     int bitlen = mldsa_bits_len((uint32_t)(a + b));
     uint32_t mask = ((uint32_t)1 << bitlen) - 1;
     uint32_t max_value = (uint32_t)(a + b);
@@ -1360,7 +1387,7 @@ static bool mldsa_bit_unpack_slow(MldsaRing *r, const Byte *v, int a, int b) {
 
 enum { MLDSA_T0_BOUND = 1 << (13 - 1) }; /* 2^(d-1) */
 
-MldsaPrivateKey *
+CRYPTO_FIPS_TEXT MldsaPrivateKey *
 burrow__mldsa_testing_only_new_private_key_from_semi_expanded(Alloc *a, Slice sk,
                                                               Error *err) {
     const MldsaParameters *p;
@@ -1451,7 +1478,7 @@ fail:
     return NULL;
 }
 
-Slice burrow__mldsa_testing_only_private_key_semi_expanded_bytes(
+CRYPTO_FIPS_TEXT Slice burrow__mldsa_testing_only_private_key_semi_expanded_bytes(
     const MldsaPrivateKey *sk, Alloc *a) {
     if (sk == NULL || sk->pub.p == NULL)
         return slice_nil(TYPE_BYTE);
@@ -1489,7 +1516,7 @@ Slice burrow__mldsa_testing_only_private_key_semi_expanded_bytes(
 
 /* -------------------------------------------------------------- self test */
 
-Error burrow__mldsa_fips140_cast(const MldsaRejectionHook *hook) {
+CRYPTO_FIPS_TEXT Error burrow__mldsa_fips140_cast(const MldsaRejectionHook *hook) {
     static const Byte seed[32] = {
         0x5c, 0x62, 0x4f, 0xcc, 0x18, 0x62, 0x45, 0x24, 0x52, 0xd0, 0xc6,
         0x65, 0x84, 0x0d, 0x82, 0x37, 0xf4, 0x31, 0x08, 0xe5, 0x49, 0x9e,
@@ -1553,26 +1580,28 @@ Error burrow__mldsa_fips140_cast(const MldsaRejectionHook *hook) {
 
 /* ------------------------------------------------------------- public API */
 
-CryptoHash mldsa_options_hash_func(const MldsaOptions *opts) {
+CRYPTO_FIPS_TEXT CryptoHash mldsa_options_hash_func(const MldsaOptions *opts) {
     (void)opts;
     return 0;
 }
 
-static CryptoHash mldsa_options_vt_hash_func(void *self) {
+CRYPTO_FIPS_TEXT static CryptoHash mldsa_options_vt_hash_func(void *self) {
     return mldsa_options_hash_func(self);
 }
 
 static const CryptoSignerOptsVT mldsa_options_vt = {TYPE_MLDSA_OPTIONS,
                                                     mldsa_options_vt_hash_func};
 
-CryptoSignerOpts mldsa_options_as_signer_opts(const MldsaOptions *opts) {
+CRYPTO_FIPS_TEXT CryptoSignerOpts
+mldsa_options_as_signer_opts(const MldsaOptions *opts) {
     CryptoSignerOpts out = {&mldsa_options_vt, (void *)(uintptr_t)opts};
     return out;
 }
 
 /* A new private key for p from seed, from a. */
-static MldsaPrivateKey *mldsa_private_key_from_seed(const MldsaParameters *p, Alloc *a,
-                                                    const Byte seed[32], Error *err) {
+CRYPTO_FIPS_TEXT static MldsaPrivateKey *
+mldsa_private_key_from_seed(const MldsaParameters *p, Alloc *a, const Byte seed[32],
+                            Error *err) {
     a = mldsa_alloc(a);
     MldsaPrivateKey *priv = mldsa_new(a, sizeof *priv, _Alignof(MldsaPrivateKey), err);
     if (priv == NULL)
@@ -1582,8 +1611,8 @@ static MldsaPrivateKey *mldsa_private_key_from_seed(const MldsaParameters *p, Al
     return priv;
 }
 
-MldsaPrivateKey *mldsa_generate_key(Alloc *a, const MldsaParameters *params,
-                                    Error *err) {
+CRYPTO_FIPS_TEXT MldsaPrivateKey *
+mldsa_generate_key(Alloc *a, const MldsaParameters *params, Error *err) {
     if (!mldsa_valid_params(params)) {
         mldsa_set_error(err, "mldsa: invalid parameters");
         return NULL;
@@ -1595,8 +1624,8 @@ MldsaPrivateKey *mldsa_generate_key(Alloc *a, const MldsaParameters *params,
     return priv;
 }
 
-MldsaPrivateKey *mldsa_new_private_key(Alloc *a, const MldsaParameters *params,
-                                       Slice seed, Error *err) {
+CRYPTO_FIPS_TEXT MldsaPrivateKey *
+mldsa_new_private_key(Alloc *a, const MldsaParameters *params, Slice seed, Error *err) {
     if (!mldsa_valid_params(params)) {
         mldsa_set_error(err, "mldsa: invalid parameters");
         return NULL;
@@ -1608,7 +1637,7 @@ MldsaPrivateKey *mldsa_new_private_key(Alloc *a, const MldsaParameters *params,
     return mldsa_private_key_from_seed(params, a, seed.p, err);
 }
 
-void mldsa_private_key_free(MldsaPrivateKey *sk) {
+CRYPTO_FIPS_TEXT void mldsa_private_key_free(MldsaPrivateKey *sk) {
     if (sk == NULL)
         return;
     Alloc *a = sk->alloc;
@@ -1616,13 +1645,14 @@ void mldsa_private_key_free(MldsaPrivateKey *sk) {
     mem_free(a, sk, sizeof *sk, _Alignof(MldsaPrivateKey));
 }
 
-static const Byte mldsa_zero_seed[32] = {0};
+CRYPTO_FIPS_RODATA static const Byte mldsa_zero_seed[32] = {0};
 
-Slice mldsa_private_key_bytes(const MldsaPrivateKey *sk, Alloc *a) {
+CRYPTO_FIPS_TEXT Slice mldsa_private_key_bytes(const MldsaPrivateKey *sk, Alloc *a) {
     return mldsa_bytes(a, sk != NULL ? sk->seed : mldsa_zero_seed, 32, NULL);
 }
 
-bool mldsa_private_key_equal(const MldsaPrivateKey *sk, CryptoPrivateKey x) {
+CRYPTO_FIPS_TEXT bool mldsa_private_key_equal(const MldsaPrivateKey *sk,
+                                              CryptoPrivateKey x) {
     if (x.t != TYPE_MLDSA_PRIVATE_KEY || x.data == NULL)
         return false;
     const MldsaPrivateKey *other = x.data;
@@ -1635,19 +1665,20 @@ bool mldsa_private_key_equal(const MldsaPrivateKey *sk, CryptoPrivateKey x) {
                slice_from((void *)(uintptr_t)other->seed, 32, 32, TYPE_BYTE)) == 1;
 }
 
-const MldsaPublicKey *mldsa_private_key_public_key(const MldsaPrivateKey *sk) {
+CRYPTO_FIPS_TEXT const MldsaPublicKey *
+mldsa_private_key_public_key(const MldsaPrivateKey *sk) {
     return sk != NULL ? &sk->pub : NULL;
 }
 
-CryptoPublicKey mldsa_private_key_public(const MldsaPrivateKey *sk) {
+CRYPTO_FIPS_TEXT CryptoPublicKey mldsa_private_key_public(const MldsaPrivateKey *sk) {
     return BURROW_ANY(TYPE_MLDSA_PUBLIC_KEY,
                       (uintptr_t)mldsa_private_key_public_key(sk));
 }
 
 /* The switch of Sign and SignDeterministic, with deterministic for the second. */
-static Slice mldsa_sign_with_opts(const MldsaPrivateKey *sk, Alloc *a, Slice message,
-                                  CryptoSignerOpts opts, bool deterministic,
-                                  Error *err) {
+CRYPTO_FIPS_TEXT static Slice mldsa_sign_with_opts(const MldsaPrivateKey *sk, Alloc *a,
+                                                   Slice message, CryptoSignerOpts opts,
+                                                   bool deterministic, Error *err) {
     static const Byte zero[32] = {0};
     if (sk == NULL || sk->pub.p == NULL) {
         mldsa_set_error(err, "mldsa: zero private key");
@@ -1668,37 +1699,41 @@ static Slice mldsa_sign_with_opts(const MldsaPrivateKey *sk, Alloc *a, Slice mes
     return slice_nil(TYPE_BYTE);
 }
 
-Slice mldsa_private_key_sign(const MldsaPrivateKey *sk, Alloc *a, IoReader rand,
-                             Slice message, CryptoSignerOpts opts, Error *err) {
+CRYPTO_FIPS_TEXT Slice mldsa_private_key_sign(const MldsaPrivateKey *sk, Alloc *a,
+                                              IoReader rand, Slice message,
+                                              CryptoSignerOpts opts, Error *err) {
     (void)rand;
     return mldsa_sign_with_opts(sk, a, message, opts, false, err);
 }
 
-Slice mldsa_private_key_sign_deterministic(const MldsaPrivateKey *sk, Alloc *a,
-                                           Slice message, CryptoSignerOpts opts,
-                                           Error *err) {
+CRYPTO_FIPS_TEXT Slice mldsa_private_key_sign_deterministic(const MldsaPrivateKey *sk,
+                                                            Alloc *a, Slice message,
+                                                            CryptoSignerOpts opts,
+                                                            Error *err) {
     return mldsa_sign_with_opts(sk, a, message, opts, true, err);
 }
 
-static CryptoPublicKey mldsa_signer_public(void *self) {
+CRYPTO_FIPS_TEXT static CryptoPublicKey mldsa_signer_public(void *self) {
     return mldsa_private_key_public(self);
 }
 
-static Slice mldsa_signer_sign(void *self, Alloc *a, IoReader rand, Slice digest,
-                               CryptoSignerOpts opts, Error *err) {
+CRYPTO_FIPS_TEXT static Slice mldsa_signer_sign(void *self, Alloc *a, IoReader rand,
+                                                Slice digest, CryptoSignerOpts opts,
+                                                Error *err) {
     return mldsa_private_key_sign(self, a, rand, digest, opts, err);
 }
 
 static const CryptoSignerVT mldsa_signer_vt = {TYPE_MLDSA_PRIVATE_KEY,
                                                mldsa_signer_public, mldsa_signer_sign};
 
-CryptoSigner mldsa_private_key_signer(const MldsaPrivateKey *sk) {
+CRYPTO_FIPS_TEXT CryptoSigner mldsa_private_key_signer(const MldsaPrivateKey *sk) {
     CryptoSigner out = {&mldsa_signer_vt, (void *)(uintptr_t)sk};
     return out;
 }
 
-MldsaPublicKey *mldsa_new_public_key(Alloc *a, const MldsaParameters *params,
-                                     Slice encoding, Error *err) {
+CRYPTO_FIPS_TEXT MldsaPublicKey *mldsa_new_public_key(Alloc *a,
+                                                      const MldsaParameters *params,
+                                                      Slice encoding, Error *err) {
     if (!mldsa_valid_params(params)) {
         mldsa_set_error(err, "mldsa: invalid parameters");
         return NULL;
@@ -1718,7 +1753,7 @@ MldsaPublicKey *mldsa_new_public_key(Alloc *a, const MldsaParameters *params,
     return pub;
 }
 
-void mldsa_public_key_free(MldsaPublicKey *pk) {
+CRYPTO_FIPS_TEXT void mldsa_public_key_free(MldsaPublicKey *pk) {
     if (pk == NULL || pk->alloc == NULL)
         return;
     Alloc *a = pk->alloc;
@@ -1726,17 +1761,18 @@ void mldsa_public_key_free(MldsaPublicKey *pk) {
 }
 
 /* pubKeySize(pk.p), which is 32 for the zero key. */
-static Int mldsa_raw_size(const MldsaPublicKey *pk) {
+CRYPTO_FIPS_TEXT static Int mldsa_raw_size(const MldsaPublicKey *pk) {
     return pk->p != NULL ? pk->p->public_key_size : 32;
 }
 
-Slice mldsa_public_key_bytes(const MldsaPublicKey *pk, Alloc *a) {
+CRYPTO_FIPS_TEXT Slice mldsa_public_key_bytes(const MldsaPublicKey *pk, Alloc *a) {
     if (pk == NULL)
         return slice_nil(TYPE_BYTE);
     return mldsa_bytes(a, pk->raw, mldsa_raw_size(pk), NULL);
 }
 
-bool mldsa_public_key_equal(const MldsaPublicKey *pk, CryptoPublicKey x) {
+CRYPTO_FIPS_TEXT bool mldsa_public_key_equal(const MldsaPublicKey *pk,
+                                             CryptoPublicKey x) {
     if (x.t != TYPE_MLDSA_PUBLIC_KEY || x.data == NULL || pk == NULL)
         return false;
     const MldsaPublicKey *other = x.data;
@@ -1748,14 +1784,15 @@ bool mldsa_public_key_equal(const MldsaPublicKey *pk, CryptoPublicKey x) {
                slice_from((void *)(uintptr_t)other->raw, size, size, TYPE_BYTE)) == 1;
 }
 
-const MldsaParameters *mldsa_public_key_parameters(const MldsaPublicKey *pk) {
+CRYPTO_FIPS_TEXT const MldsaParameters *
+mldsa_public_key_parameters(const MldsaPublicKey *pk) {
     if (pk->p == NULL)
         panic_str(BURROW_S("mldsa: internal error: unknown parameters"));
     return pk->p;
 }
 
-Error mldsa_verify(const MldsaPublicKey *pk, Slice message, Slice signature,
-                   const MldsaOptions *opts) {
+CRYPTO_FIPS_TEXT Error mldsa_verify(const MldsaPublicKey *pk, Slice message,
+                                    Slice signature, const MldsaOptions *opts) {
     if (pk == NULL)
         return mldsa_error("mldsa: nil public key");
     if (pk->p == NULL)
@@ -1769,7 +1806,7 @@ Error mldsa_verify(const MldsaPublicKey *pk, Slice message, Slice signature,
 
 /* ----------------------------------------------------------- test helpers */
 
-MldsaPrivateKey *burrow__mldsa_new_zero_private_key(Alloc *a) {
+CRYPTO_FIPS_TEXT MldsaPrivateKey *burrow__mldsa_new_zero_private_key(Alloc *a) {
     a = mldsa_alloc(a);
     MldsaPrivateKey *priv = mldsa_new(a, sizeof *priv, _Alignof(MldsaPrivateKey), NULL);
     if (priv != NULL)
@@ -1777,7 +1814,7 @@ MldsaPrivateKey *burrow__mldsa_new_zero_private_key(Alloc *a) {
     return priv;
 }
 
-MldsaPublicKey *burrow__mldsa_new_zero_public_key(Alloc *a) {
+CRYPTO_FIPS_TEXT MldsaPublicKey *burrow__mldsa_new_zero_public_key(Alloc *a) {
     a = mldsa_alloc(a);
     MldsaPublicKey *pub = mldsa_new(a, sizeof *pub, _Alignof(MldsaPublicKey), NULL);
     if (pub != NULL)
@@ -1785,8 +1822,8 @@ MldsaPublicKey *burrow__mldsa_new_zero_public_key(Alloc *a) {
     return pub;
 }
 
-bool burrow__mldsa_public_key_identical(const MldsaPublicKey *a,
-                                        const MldsaPublicKey *b) {
+CRYPTO_FIPS_TEXT bool burrow__mldsa_public_key_identical(const MldsaPublicKey *a,
+                                                         const MldsaPublicKey *b) {
     return a->p == b->p && memcmp(a->raw, b->raw, sizeof a->raw) == 0 &&
            memcmp(a->tr, b->tr, sizeof a->tr) == 0;
 }

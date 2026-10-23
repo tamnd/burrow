@@ -395,7 +395,11 @@ static void test_automatic_http2_listen_and_serve(TestingT *t, TlsConfig *tls_co
         (void)tls_conn_close(c);
         tls_conn_free(c);
     }
-    (void)ln.vt->closer.close(ln.data);
+    /* Not in Go: Go closes ln here. ListenAndServeTLS frees ln when Serve
+     * returns, which can be while that close is still using it, so the
+     * server closes it instead. Serve can't untrack ln, and return, until
+     * the server's close of it is done. */
+    (void)http_server_close(&s->s);
     clear_test_hook();
     try_free(s);
     tls_config_release(&client_conf);

@@ -119,6 +119,19 @@ typedef struct H2tTester {
     bool wfailed;
     bool wbusy; /* a chunk of wbuf is being written to cc */
     SyncWaitGroup wwg;
+    /* Not in Go: what the server writes, once h2t_buffer_reads is called.
+     * Go's fake connection buffers that too, so a server write there never
+     * waits for the test to read it. Here one goroutine reads cc into rbuf
+     * as soon as the server writes, and another passes rbuf on to the end of
+     * a second net_pipe, rc, which the client's Framer then reads. rc is cc
+     * until then. */
+    NetConn rc;
+    NetConn rw; /* the other end of rc's pipe */
+    SyncMutex rmu;
+    SyncCond rcond;
+    BytesBuffer rbuf;
+    bool rdone; /* reading cc has stopped */
+    SyncWaitGroup rwg;
 } H2tTester;
 
 static Int h2t_out_write(void *self, Slice p, Error *err) {
@@ -164,6 +177,72 @@ static void h2t_out_job(void *env) {
             st->wfailed = true;
     }
     sync_mutex_unlock(&st->wmu);
+    if (chunk != NULL)
+        mem_free(st->a, chunk, CHUNK, 1);
+}
+
+/* What the client's Framer reads: rc. */
+static Int h2t_in_read(void *self, Slice p, Error *err) {
+    H2tTester *st = (H2tTester *)self;
+    return st->rc.vt->reader.read(st->rc.data, p, err);
+}
+
+static const IoReaderVT h2t_in_vt = {NULL, h2t_in_read};
+
+/* Reads what the server writes into rbuf, until reading cc fails. */
+static void h2t_in_read_job(void *env) {
+    H2tTester *st = (H2tTester *)env;
+    enum { CHUNK = 16 << 10 };
+    Byte *chunk = (Byte *)mem_alloc_nozero(st->a, CHUNK, 1);
+    bool done = false;
+    while (!done) {
+        Error err = BURROW_NO_ERROR;
+        Int n = 0;
+        if (chunk != NULL)
+            n = st->cc.vt->reader.read(
+                st->cc.data, slice_from(chunk, CHUNK, CHUNK, TYPE_BYTE), &err);
+        sync_mutex_lock(&st->rmu);
+        if (n > 0) {
+            Error werr = BURROW_NO_ERROR;
+            (void)bytes_buffer_write(&st->rbuf, slice_from(chunk, n, n, TYPE_BYTE),
+                                     &werr);
+            if (BURROW_FAILED(werr))
+                err = werr;
+        }
+        if (chunk == NULL || BURROW_FAILED(err))
+            st->rdone = true;
+        done = st->rdone;
+        sync_cond_signal(&st->rcond);
+        sync_mutex_unlock(&st->rmu);
+    }
+    if (chunk != NULL)
+        mem_free(st->a, chunk, CHUNK, 1);
+}
+
+/* Passes rbuf on to rw until reading cc has stopped and rbuf is empty, or a
+ * write to rw fails, and then closes rw so that the client reads EOF. */
+static void h2t_in_feed_job(void *env) {
+    H2tTester *st = (H2tTester *)env;
+    enum { CHUNK = 16 << 10 };
+    Byte *chunk = (Byte *)mem_alloc_nozero(st->a, CHUNK, 1);
+    sync_mutex_lock(&st->rmu);
+    while (chunk != NULL) {
+        while (bytes_buffer_len(&st->rbuf) == 0 && !st->rdone)
+            sync_cond_wait(&st->rcond);
+        if (bytes_buffer_len(&st->rbuf) == 0)
+            break;
+        Error err = BURROW_NO_ERROR;
+        Int n = bytes_buffer_read(&st->rbuf, slice_from(chunk, CHUNK, CHUNK, TYPE_BYTE),
+                                  &err);
+        sync_mutex_unlock(&st->rmu);
+        (void)st->rw.vt->writer.write(st->rw.data, slice_from(chunk, n, n, TYPE_BYTE),
+                                      &err);
+        sync_mutex_lock(&st->rmu);
+        if (BURROW_FAILED(err))
+            break;
+    }
+    sync_mutex_unlock(&st->rmu);
+    (void)st->rw.vt->closer.close(st->rw.data);
     if (chunk != NULL)
         mem_free(st->a, chunk, CHUNK, 1);
 }
@@ -227,8 +306,9 @@ static bool h2t_start_server(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *
         return false;
     }
 
+    st->rc = st->cc;
     IoWriter w = {&h2t_out_vt, st};
-    IoReader r = {&st->cc.vt->reader, st->cc.data};
+    IoReader r = {&h2t_in_vt, st};
     st->fr = burrow__http2_new_framer(st->a, w, r);
     st->dec =
         burrow__hpack_new_decoder(st->a, HTTP2_INITIAL_HEADER_TABLE_SIZE, NULL, NULL);
@@ -240,6 +320,34 @@ static bool h2t_start_server(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *
     st->fr->read_meta_headers = st->dec;
     (void)st->cc.vt->set_read_deadline(st->cc.data,
                                        time_add(time_now(), 10 * TIME_SECOND));
+    return true;
+}
+
+/* Not in Go: from here on, what the server writes is buffered as it is in
+ * Go's fake connection, and the server never waits for the test to read it.
+ * The tests that need that call this straight after starting the tester. */
+static bool h2t_buffer_reads(H2tTester *st) {
+    net_pipe(st->a, &st->rc, &st->rw);
+    if (st->rc.data == NULL) {
+        st->rc = st->cc;
+        testing_t_errorf_v(st->t, "no memory for the client's reads");
+        return false;
+    }
+    st->rcond = SYNC_COND(sync_mutex_locker(&st->rmu));
+    st->rbuf = BYTES_BUFFER(st->a);
+    Time none;
+    memset(&none, 0, sizeof none);
+    (void)st->cc.vt->set_read_deadline(st->cc.data, none);
+    (void)st->rc.vt->set_read_deadline(st->rc.data,
+                                       time_add(time_now(), 10 * TIME_SECOND));
+    if (!sync_wait_group_go(&st->rwg, BURROW_FN(Func, h2t_in_read_job, st))) {
+        st->rdone = true;
+        testing_t_errorf_v(st->t, "no goroutine for the client's reads");
+    }
+    if (!sync_wait_group_go(&st->rwg, BURROW_FN(Func, h2t_in_feed_job, st))) {
+        (void)st->rw.vt->closer.close(st->rw.data);
+        testing_t_errorf_v(st->t, "no goroutine for the client's reads");
+    }
     return true;
 }
 
@@ -267,6 +375,11 @@ static void h2t_close(H2tTester *st) {
         sync_mutex_unlock(&st->wmu);
         sync_wait_group_wait(&st->wwg);
         (void)st->cc.vt->closer.close(st->cc.data);
+        if (st->rw.data != NULL) {
+            /* The feeding goroutine may be waiting for the client to read. */
+            (void)st->rc.vt->closer.close(st->rc.data);
+            sync_wait_group_wait(&st->rwg);
+        }
     }
     sync_wait_group_wait(&st->wg);
     http_server_free(&st->srv);
@@ -280,6 +393,10 @@ static void h2t_close(H2tTester *st) {
     bytes_buffer_free(&st->wbuf);
     if (st->sc.data != NULL)
         net_pipe_free(st->sc);
+    if (st->rw.data != NULL) {
+        net_pipe_free(st->rw);
+        bytes_buffer_free(&st->rbuf);
+    }
     if (st->lg != NULL)
         log_logger_free(st->a, st->lg);
 }
@@ -4019,7 +4136,7 @@ static void TestServerRFC9218PriorityAware(TestingT *t) {
 /* wantIdle: nothing more comes from the server for a while. Go checks that
  * the bubble has gone quiet, and this waits 50ms for a frame. */
 static bool h2t_want_idle(H2tTester *st) {
-    (void)st->cc.vt->set_read_deadline(st->cc.data,
+    (void)st->rc.vt->set_read_deadline(st->rc.data,
                                        time_add(time_now(), 50 * TIME_MILLISECOND));
     Error err = BURROW_NO_ERROR;
     Http2Frame *f = burrow__http2_framer_read_frame(st->fr, &err);
@@ -4030,7 +4147,7 @@ static bool h2t_want_idle(H2tTester *st) {
     else if (!ok)
         testing_t_errorf_v(st->t, "reading while idle: %v", err);
     burrow__http2_frame_free(f);
-    (void)st->cc.vt->set_read_deadline(st->cc.data,
+    (void)st->rc.vt->set_read_deadline(st->rc.data,
                                        time_add(time_now(), 10 * TIME_SECOND));
     return ok;
 }
@@ -4043,12 +4160,18 @@ static void h2t_discard_body_handler(void *env, HttpResponseWriter w, HttpReques
                   &err);
 }
 
-/* Go moves its clock past GoAwayTimeout, and this waits for it. */
+/* Go moves its clock past GoAwayTimeout, and this waits for it.
+ *
+ * Not in Go: the reads are buffered. Otherwise the server can still be
+ * flushing the frames the greeting read when the GOAWAY comes in. Then it
+ * has to wait to send its own GOAWAY, and the bad WINDOW_UPDATE changes its
+ * code to FLOW_CONTROL before it goes. */
 static void TestProtocolErrorAfterGoAway(TestingT *t) {
     SKIP_WITHOUT_THREADS(t);
     static const Str kv[] = {S_(":method"), S_("POST"), S_("content-length"), S_("12")};
     H2tTester st;
-    if (h2t_start(&st, t, h2t_discard_body_handler, NULL) && h2t_greet(&st) &&
+    if (h2t_start(&st, t, h2t_discard_body_handler, NULL) && h2t_buffer_reads(&st) &&
+        h2t_greet(&st) &&
         h2t_write_headers(&st, 1, h2t_encode_header(&st, kv, 4), false, true) &&
         h2t_write_data(&st, 1, false, "some ", 5) &&
         /* A GOAWAY with no error, then a window update that overflows. The

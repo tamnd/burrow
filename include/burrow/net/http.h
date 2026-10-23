@@ -1745,13 +1745,13 @@ typedef struct HttpTransport {
     SyncMutex alt_mu;
     struct burrow__HttpAltProto *alt;
     SyncOnce next_proto_once;
-    bool
-        tls_next_proto_was_nil; /* whether tls_next_proto was nil when the once fired */
+    /* Whether tls_next_proto was nil when the once fired. */
+    bool tls_next_proto_was_nil;
     bool h2_configured;
     HttpProtocols h2_protocols;
-    TlsConfig
-        *own_tls_client_config; /* the tls_client_config configureHTTP2 or Clone made */
-    Map *own_tls_next_proto;    /* the tls_next_proto it made, or Clone did */
+    /* The tls_client_config configureHTTP2 or Clone made. */
+    TlsConfig *own_tls_client_config;
+    Map *own_tls_next_proto;           /* the tls_next_proto it made, or Clone did */
     struct burrow__Http2Transport *h2; /* under alt_mu */
     SyncMutex conns_per_host_mu;
     struct burrow__HttpHostBucket *conns_per_host;

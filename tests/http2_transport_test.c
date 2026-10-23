@@ -12,10 +12,10 @@
  * wait for what they expect to arrive, for up to ten seconds, and where Go
  * checks that nothing arrived, they give the client a moment first, which is a
  * weaker check. These were ported before there was TLS, so the requests are
- * for "http" URLs and the connections speak HTTP/2 with prior knowledge. Where Go moves a fake
- * clock along by a few seconds, these wait that long for real. Go's tests that
- * move it along by a minute or more, or look inside the client's state, are not
- * here.
+ * for "http" URLs and the connections speak HTTP/2 with prior knowledge.
+ * Where Go moves a fake clock along by a few seconds, these wait that long for
+ * real. Go's tests that move it along by a minute or more, or look inside the
+ * client's state, are not here.
  *
  * Copyright 2015 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.

@@ -1842,7 +1842,8 @@ static HttpProtocols tp_protocols(const HttpTransport *t) {
          * custom dialers. Let them opt-in themselves via
          * Transport.Protocols.SetHTTP2(true) so we don't surprise them
          * by modifying their tls.Config. Issue 14275.
-         * However, if ForceAttemptHTTP2 is true, it overrides the above checks. */
+         * However, if ForceAttemptHTTP2 is true, it overrides the above
+         * checks. */
     } else if (burrow__http_godebug_http2client_disabled()) {
     } else {
         http_protocols_set_http2(&p, true);
@@ -2241,7 +2242,8 @@ static tp_PConn *tp_dial_conn(HttpTransport *t, Context ctx, const tp_ConnectMet
             memset(&pc->conn, 0, sizeof pc->conn);
             HttpRoundTripper alt = BURROW_CALLF(*next, cm->target_addr, tls_conn);
             if (alt.vt == &tp_erring_rt_vt) {
-                /* pconn.conn was closed by next (http2configureTransports.upgradeFn). */
+                /* pconn.conn was closed by next
+                 * (http2configureTransports.upgradeFn). */
                 e = *(const Error *)alt.data;
                 goto fail;
             }

@@ -627,6 +627,40 @@ static void TestTheSentinelsAreDistinctFromEachOther(TestingT *t) {
     CHECK(errors_is(io_eof, io_eof));
 }
 
+/* ------------------------------------------------- the error on success
+ *
+ * n, err := w.Write(p) sets err to nil when the write works, so a caller can
+ * declare err without a value and test it afterwards. Each one here starts
+ * from a failure already in err and has to clear it. */
+
+static void TestDiscardTeeAndMultiWriterClearTheErrorOnSuccess(TestingT *t) {
+    Byte abc[3] = {'a', 'b', 'c'};
+    Slice p = slice_from(abc, 3, 3, TYPE_BYTE);
+    Error err = io_err_short_write;
+    CHECK_INT_EQ(io_discard.vt->write(io_discard.data, p, &err), 3);
+    CHECK(BURROW_OK(err));
+
+    Chunks c = {{(const Byte *)"abcd", 4}, 0, 8, false, BURROW_NO_ERROR, 0};
+    Sink s = {{0}, 0, 0, 0, BURROW_NO_ERROR, 0};
+    IoTeeReader tr = io_tee_reader(chunks_as_io_reader(&c), sink_as_io_writer(&s));
+    IoReader r = io_tee_reader_as_io_reader(&tr);
+    Byte got[4];
+    Slice buf = slice_from(got, (Int)sizeof got, (Int)sizeof got, TYPE_BYTE);
+    err = io_err_short_write;
+    CHECK_INT_EQ(r.vt->read(r.data, buf, &err), 4);
+    CHECK(BURROW_OK(err));
+    CHECK(sink_holds(&s, "abcd"));
+
+    Sink s2 = {{0}, 0, 0, 0, BURROW_NO_ERROR, 0};
+    IoWriter ws[1] = {sink_as_io_writer(&s2)};
+    IoWriter mw = io_multi_writer(a, ws, 1);
+    CHECK(mw.vt != NULL);
+    err = io_err_short_write;
+    CHECK_INT_EQ(mw.vt->write(mw.data, p, &err), 3);
+    CHECK(BURROW_OK(err));
+    CHECK(sink_holds(&s2, "abc"));
+}
+
 #define TESTS(X)                                                                       \
     X(TestReadFullFillsTheBufferHoweverSmallTheReadsAre)                               \
     X(TestReadFullOfAnEmptyInputIsTheEndAndNotAFailure)                                \
@@ -653,7 +687,8 @@ static void TestTheSentinelsAreDistinctFromEachOther(TestingT *t) {
     X(TestNarrowingANilValueGivesANilValue)                                            \
     X(TestAReaderKeepsItsTypeThroughAnInterface)                                       \
     X(TestTheSentinelsCarryGosMessages)                                                \
-    X(TestTheSentinelsAreDistinctFromEachOther)
+    X(TestTheSentinelsAreDistinctFromEachOther)                                        \
+    X(TestDiscardTeeAndMultiWriterClearTheErrorOnSuccess)
 
 static int TestMain(TestingM *m) {
     setup();

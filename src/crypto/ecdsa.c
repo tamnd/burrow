@@ -570,7 +570,7 @@ CRYPTO_FIPS_TEXT void burrow__ecdsa_drbg_generate(EcdsaDrbg *d, Slice out) {
 }
 
 CRYPTO_FIPS_TEXT static bool ecdsa_drbg_fill(void *env, Slice b, Error *err) {
-    (void)err;
+    BURROW_OUT(err, BURROW_NO_ERROR);
     burrow__ecdsa_drbg_generate(env, b);
     return true;
 }

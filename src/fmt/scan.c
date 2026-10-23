@@ -1323,6 +1323,7 @@ static Int scan_reader(Alloc *a, IoReader r, ScanMode mode, Str format, Slice ar
 
 /* Standard input, a byte at a time through C's stdin. */
 static Int scan_stdin_read(void *self, Slice p, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     (void)self;
     if (p.len == 0)
         return 0;

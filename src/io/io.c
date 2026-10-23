@@ -934,6 +934,7 @@ IoTeeReader io_tee_reader(IoReader r, IoWriter w) {
 }
 
 static Int tee_io_read(void *self, Slice p, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     IoTeeReader *t = (IoTeeReader *)self;
     Int n = BURROW_CALL(t->r, read, p, err);
     if (n > 0) {
@@ -1000,7 +1001,7 @@ IO_TYPE(discard_desc, "discard", IoDiscard,
 
 static Int discard_io_write(void *self, Slice p, Error *err) {
     (void)self;
-    (void)err;
+    BURROW_OUT(err, BURROW_NO_ERROR);
     return p.len;
 }
 

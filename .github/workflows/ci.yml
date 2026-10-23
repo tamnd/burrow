@@ -121,6 +121,10 @@ jobs:
           - name: windows-msvc
             os: windows-latest
             cmake: true
+            # Once the msvc build worked again, it took 7.5 minutes to build
+            # and 12.4 to run the tests, and was cancelled at 20 minutes just
+            # after every test had passed.
+            timeout: 35
           - name: windows-mingw
             os: windows-latest
             cc: gcc

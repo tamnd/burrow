@@ -41,6 +41,7 @@ static bool tp_str_eq(Str a, Str b) {
 
 /* A copy of n bytes at p in a, or "" for none. */
 static Str tp_copy(Alloc *a, const Byte *p, Int n, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (n == 0)
         return BURROW_STR_EMPTY;
     Byte *q = (Byte *)mem_alloc_nozero(a, (size_t)n, 1);
@@ -664,6 +665,7 @@ static void tp_close_dot(TextprotoReader *r);
  * and is good until the next read. lim < 0 means no limit. */
 static bool tp_read_line_slice(TextprotoReader *r, int64_t lim, const Byte **out,
                                Int *n, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     tp_close_dot(r);
     bool first = true;
     r->line_len = 0;
@@ -711,6 +713,7 @@ Str textproto_reader_read_line(TextprotoReader *r, Alloc *a, Error *err) {
 }
 
 static Slice tp_bytes(Alloc *a, const Byte *p, Int n, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     /* bytes.Clone of an empty line is an empty slice, not nil. */
     Byte *q = (Byte *)mem_alloc_nozero(a, (size_t)(n > 0 ? n : 1), 1);
     if (q == NULL) {
@@ -873,6 +876,7 @@ Slice textproto_reader_read_continued_line_bytes(TextprotoReader *r, Alloc *a,
 /* Go's parseCodeLine. */
 static Int tp_parse_code_line(Str line, Int expect, Alloc *a, bool *continued,
                               Str *message, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     *continued = false;
     *message = BURROW_STR_EMPTY;
     if (line.len < 4 || (line.p[3] != ' ' && line.p[3] != '-')) {
@@ -1262,7 +1266,7 @@ TextprotoMIMEHeader burrow__textproto_read_mime_header(TextprotoReader *r, Alloc
 
         Error ce = BURROW_NO_ERROR;
         Str value = tp_copy(a, v, vlen, &ce);
-        if (vv == NULL && copy)
+        if (BURROW_OK(ce) && vv == NULL && copy)
             key = tp_copy(a, key.p, key.len, &ce);
         if (!BURROW_OK(ce)) {
             BURROW_OUT(err, ce);

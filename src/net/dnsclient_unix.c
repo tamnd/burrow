@@ -783,6 +783,7 @@ static bool du_collect(DnsmsgParser *p, Alloc *sa, Str name, Str server, Slice *
  * goLookupIPCNAMEOrder. */
 static Slice du_files_result(Alloc *a, Str name, Str *cname_out, bool *found,
                              Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Str canonical;
     Slice addrs = burrow__net_go_lookup_ip_files(a, name, &canonical);
     *found = addrs.len > 0;

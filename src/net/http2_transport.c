@@ -1731,6 +1731,7 @@ static void h2c_declare_trailer(void *env, Str v) {
  * cause. */
 static HttpResponse *h2c_handle_response(h2c_Conn *cc, h2c_Stream *cs,
                                          const Http2Frame *f, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const Http2MetaHeadersFrame *mh = &f->u.meta_headers;
     bool stream_ended = burrow__http2_headers_frame_stream_ended(f);
     if (mh->truncated) {
@@ -3990,6 +3991,7 @@ static void h2c_gzip_free(h2c_GzipReader *gz) {
  * connection comes with a reference and a stream reservation. */
 static h2c_Conn *h2c_get_client_conn(Http2Transport *t, HttpRequest *req, Str addr,
                                      Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const HttptraceClientTrace *trace =
         httptrace_context_client_trace(http_request_context(req));
     sync_mutex_lock(&t->mu);

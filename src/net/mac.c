@@ -64,6 +64,7 @@ static bool ma_parse(Str s, Byte *hw, Int n) {
 }
 
 NetHardwareAddr net_parse_mac(Alloc *a, Str s, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Int n = 0;
     if (s.len >= 12) {
         if (s.p[2] == ':' || s.p[2] == '-')

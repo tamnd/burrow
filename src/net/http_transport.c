@@ -3159,6 +3159,7 @@ static Error tp_map_round_trip_error(tp_PConn *pc, tp_Trip *tr, int64_t start,
 /* The response the read loop sent, or its error mapped. */
 static HttpResponse *tp_pc_handle_response(tp_PConn *pc, tp_Trip *tr, int64_t start,
                                            Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (tr->res != NULL)
         return tr->res;
     BURROW_OUT(err, tp_map_round_trip_error(pc, tr, start, tr->rl_err));

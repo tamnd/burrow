@@ -877,6 +877,7 @@ typedef struct MpTemp {
 /* os.CreateTemp(dir, "multipart-"): a new file with a random number after the
  * prefix, made with O_EXCL so it cannot be anybody else's. */
 static bool mp_create_temp(Alloc *a, const char *dir, MpTemp *t, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     char tmp[4096];
     if (dir == NULL || dir[0] == 0) {
         PalErrno e = PAL_OK;
@@ -923,6 +924,7 @@ static bool mp_create_temp(Alloc *a, const char *dir, MpTemp *t, Error *err) {
 
 static bool mp_write_all(int64_t fd, const Byte *p, Int n, const char *name,
                          Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     while (n > 0) {
         PalErrno e = PAL_OK;
         int64_t w = pal_write(fd, p, n, &e);

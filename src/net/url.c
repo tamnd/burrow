@@ -868,6 +868,7 @@ static Str blk_unescape(UrlBlock *b, Str s, int mode) {
 
 /* Go's unescape as a step of the parse: the check, then the block. */
 static bool url_unescape_step(UrlBlock *b, Str s, int mode, Str *out, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Int n;
     bool changed;
     Str bad;
@@ -985,6 +986,7 @@ static Error url_err_invalid_port(Str colon_port) {
 
 /* parseHost, into *out. */
 static bool url_parse_host(UrlBlock *b, Str scheme, Str host, Str *out, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Int open = url_last_index_byte(host, '[');
     if (open > 0) {
         *err = url_errors_new("invalid IP-literal");
@@ -1130,6 +1132,7 @@ static Int url_count_byte(Str s, Byte c) {
 
 /* parse, on raw, which is already in the block u heads. */
 static bool url_parse_into(Url *u, UrlBlock *b, Str raw, bool via_request, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (url_contains_ctl(raw)) {
         *err = url_errors_new("net/url: invalid control character in URL");
         return false;

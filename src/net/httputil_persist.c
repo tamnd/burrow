@@ -161,6 +161,7 @@ Error httputil_server_conn_close(HttputilServerConn *sc) {
 
 /* What Read does once it has its turn: NULL with *err set, or the request. */
 static HttpRequest *pc_server_read(HttputilServerConn *sc, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     sync_mutex_lock(&sc->mu);
     if (BURROW_FAILED(sc->we)) { /* no point receiving if the write side is broken */
         *err = sc->we;
@@ -455,6 +456,7 @@ Int httputil_client_conn_pending(HttputilClientConn *cc) {
 
 static HttpResponse *pc_client_read(HttputilClientConn *cc, HttpRequest *req,
                                     Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     sync_mutex_lock(&cc->mu);
     if (BURROW_FAILED(cc->re)) {
         *err = cc->re;

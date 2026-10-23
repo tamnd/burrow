@@ -226,6 +226,7 @@ Str mime_word_encoder_encode(MimeWordEncoder e, Alloc *a, Str charset, Str s) {
 /* ---------------------------------------------------------------- decoding */
 
 static bool mw_from_hex(Byte c, Byte *v, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (c >= '0' && c <= '9') {
         *v = (Byte)(c - '0');
         return true;
@@ -245,6 +246,7 @@ static bool mw_from_hex(Byte c, Byte *v, Error *err) {
 
 /* qDecode, into sa. */
 static Slice mw_q_decode(Alloc *sa, Str s, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice none = {0};
     Byte *dec = (Byte *)mem_alloc_nozero(sa, (size_t)(s.len > 0 ? s.len : 1), 1);
     if (dec == NULL) {
@@ -334,6 +336,7 @@ static Error mw_convert(const MimeWordDecoder *d, Alloc *sa, MimeWordBuf *b,
 
 /* The result of b, copied into a, and the scratch arena let go of. */
 static Str mw_finish(Arena *scratch, MimeWordBuf *b, Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Str none = {NULL, 0};
     Str built = strings_builder_string(&b->b);
     Str out = strings_clone(a, built);

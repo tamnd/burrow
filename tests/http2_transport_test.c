@@ -11,11 +11,11 @@
  * neither side ever waits on the other. Where Go waits for the bubble, these
  * wait for what they expect to arrive, for up to ten seconds, and where Go
  * checks that nothing arrived, they give the client a moment first, which is a
- * weaker check. There is no TLS yet, so the requests are for "http" URLs and
- * the connections speak HTTP/2 with prior knowledge. Where Go moves a fake
- * clock along by a few seconds, these wait that long for real. Go's tests that
- * move it along by a minute or more, or look inside the client's state, are not
- * here.
+ * weaker check. These were ported before there was TLS, so the requests are
+ * for "http" URLs and the connections speak HTTP/2 with prior knowledge.
+ * Where Go moves a fake clock along by a few seconds, these wait that long for
+ * real. Go's tests that move it along by a minute or more, or look inside the
+ * client's state, are not here.
  *
  * Copyright 2015 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -4606,9 +4606,9 @@ static void TestTransportTimeoutServerHangs(TestingT *t) {
 
 /* The tests from here on talk to a real server over loopback TCP, which is
  * Go's newTestServer. Go's speaks HTTP/2 over TLS unless the test asks for
- * h2c. There is no TLS here yet, so this one always speaks h2c, unencrypted
- * HTTP/2 with prior knowledge, and so do the transports, and the checks Go
- * makes on Response.TLS are left out. */
+ * h2c. This one was ported before there was TLS, so it always speaks h2c,
+ * unencrypted HTTP/2 with prior knowledge, and so do the transports, and the
+ * checks Go makes on Response.TLS are left out. */
 
 #if defined(BURROW_NETPOLL_READINESS) && !defined(BURROW_OS_WASI)
 #define H2CT_HAVE_TCP 1
@@ -7215,7 +7215,7 @@ static void TestTransportSlowClose(TestingT *t) {
 }
 
 static void TestTransportDialTLSContext(TestingT *t) {
-    testing_t_skip_v(t, "needs crypto/tls, which isn't ported yet");
+    testing_t_skip_v(t, "needs httptest's TLS server, which isn't ported yet");
 }
 
 static void TestDialRaceResumesDial(TestingT *t) {

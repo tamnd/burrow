@@ -64,6 +64,12 @@ bool burrow__http_has_token(Str v, Str token);
  * bracketed IPv6 address keeps its brackets. The result points into host. */
 BURROW_BORROWS(ret, host) Str burrow__http_remove_port(Str host);
 
+/* adjustNextProtos adds or removes "http/1.1" and "h2" entries from
+ * a tls.Config.NextProtos list, according to the set of protocols in protos.
+ * Not in Go: the list is made in a, and is nil when a is out of memory. */
+Slice burrow__http_adjust_next_protos(Alloc *a, Slice next_protos,
+                                      HttpProtocols protos);
+
 /* isToken, which is httpguts.ValidHeaderFieldName. */
 bool burrow__http_is_token(Str v);
 
@@ -477,7 +483,6 @@ extern const Error burrow__http_err_read_on_closed_res_body;
 extern const Error burrow__http_err_concurrent_read_on_res_body;
 extern const Error burrow__http_err_cannot_rewind;
 extern const Error burrow__http_err_no_host_in_url;
-extern const Error burrow__http_err_no_tls;
 
 /* errTimeout, a net.Error whose Timeout is true. */
 extern const Error burrow__http_err_timeout;

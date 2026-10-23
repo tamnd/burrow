@@ -1658,6 +1658,10 @@ struct TlsConn {
     bool owns_conn;
     TlsConfig *owned_config;
     Str owned_server_name;
+
+    /* Not in Go: what tls_conn_free runs last, set by
+     * burrow__tls_conn_set_on_free. */
+    Func on_free;
 };
 
 /* Not in Go. What Client and Server share: a Conn over conn that runs fn as

@@ -13,9 +13,7 @@
  * with error_retain into an arena of the thing they belong to first, since each
  * goroutine's error_allocator goes away with it.
  *
- * What is left out: HTTP/2 and HTTP/3, TLS of the transport's own, SOCKS5
- * proxies and httptrace. An "https" request needs dial_tls_context or
- * dial_tls until crypto/tls is here.
+ * What is left out: HTTP/3 and SOCKS5 proxies.
  *
  * Copyright 2011 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -25,6 +23,7 @@
 #include "http2.h"
 #include "http_internal.h"
 
+#include "../crypto/tls_on_free.h"
 #include "../xnet/httpguts.h"
 #include "../xnet/httpproxy.h"
 #include "http_ascii.h"
@@ -35,6 +34,7 @@
 #include "burrow/compress/gzip.h"
 #include "burrow/context.h"
 #include "burrow/core.h"
+#include "burrow/crypto/tls.h"
 #include "burrow/declare.h"
 #include "burrow/encoding/base64.h"
 #include "burrow/error.h"
@@ -42,6 +42,7 @@
 #include "burrow/func.h"
 #include "burrow/io.h"
 #include "burrow/log.h"
+#include "burrow/map.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
@@ -108,9 +109,6 @@ BURROW_SENTINEL_ERROR(burrow__http_err_concurrent_read_on_res_body,
 BURROW_SENTINEL_ERROR(burrow__http_err_cannot_rewind,
                       "net/http: cannot rewind body after connection loss");
 BURROW_SENTINEL_ERROR(burrow__http_err_no_host_in_url, "http: no Host in request URL");
-BURROW_SENTINEL_ERROR(burrow__http_err_no_tls,
-                      "net/http: no TLS yet; set Transport.dial_tls_context or "
-                      "dial_tls to make https connections");
 BURROW_SENTINEL_ERROR(tp_err_nil_url, "http: nil Request.URL");
 BURROW_SENTINEL_ERROR(tp_err_nil_header, "http: nil Request.Header");
 BURROW_SENTINEL_ERROR(tp_err_dial_context_nil,
@@ -124,6 +122,7 @@ BURROW_SENTINEL_ERROR(tp_err_unknown_status, "unknown status code");
 BURROW_SENTINEL_ERROR(tp_err_unencrypted_h2,
                       "http: Transport does not support unencrypted HTTP/2");
 BURROW_SENTINEL_ERROR(tp_err_socks5, "net/http: SOCKS5 proxies are not supported yet");
+BURROW_SENTINEL_ERROR(tp_err_stub_round_tripper, "unexpected use of stub RoundTripper");
 
 /* timeoutError, and errTimeout, which is one. A net.Error that is a timeout
  * and is context_deadline_exceeded to errors_is. */
@@ -207,6 +206,45 @@ static Error tp_timeout_clone(const void *self, Alloc *a) {
     if (self == &tp_timeout_value)
         return burrow__http_err_timeout;
     return burrow__http_timeout_error(a, ((const HttpErrTimeout *)self)->text);
+}
+
+/* tlsHandshakeTimeoutError, a net.Error that is a timeout, and unlike
+ * timeoutError is not context_deadline_exceeded to errors_is. */
+static const Type tp_tls_timeout_desc = {
+    BURROW_S_INIT("tlsHandshakeTimeoutError"),
+    BURROW_S_INIT("net/http"),
+    KIND_STRUCT,
+    (uint32_t)sizeof(HttpErrTimeout),
+    (uint16_t)_Alignof(HttpErrTimeout),
+    0,
+    TP_COUNT(burrow__methods_HttpErrTimeout),
+    NULL,
+    burrow__methods_HttpErrTimeout,
+    NULL,
+    NULL,
+    0,
+    0x68747468U, /* "htth" */
+    NULL,
+};
+
+static Error tp_tls_timeout_clone(const void *self, Alloc *a);
+
+static const ErrorVT tp_tls_timeout_vt = {
+    &tp_tls_timeout_desc, tp_timeout_message, NULL, NULL, NULL, NULL,
+    tp_tls_timeout_clone,
+};
+
+static const HttpErrTimeout tp_tls_timeout_value = {
+    BURROW_S_INIT("net/http: TLS handshake timeout")};
+
+static const Error tp_err_tls_handshake_timeout = {&tp_tls_timeout_vt,
+                                                   &tp_tls_timeout_value};
+
+/* There is only the one, so a copy of it is itself. */
+static Error tp_tls_timeout_clone(const void *self, Alloc *a) {
+    (void)self;
+    (void)a;
+    return tp_err_tls_handshake_timeout;
 }
 
 static bool tp_same(Error a, Error b) {
@@ -505,11 +543,14 @@ struct burrow__HttpPConn {
 
     bool saw_eof; /* the read loop's */
     bool is_proxy;
-    bool reused;    /* under mu */
-    bool rl_exited; /* under mu, and reqch takes no more after */
-    bool wl_exited; /* under mu, and writech takes no more after */
-    bool uncounted; /* the dial gave back the count for key, not the close */
-    bool alt;       /* HTTP/2's: conn is t->h2's, and there are no loops */
+    bool reused;             /* under mu */
+    bool rl_exited;          /* under mu, and reqch takes no more after */
+    bool wl_exited;          /* under mu, and writech takes no more after */
+    bool uncounted;          /* the dial gave back the count for key, not the close */
+    bool alt;                /* HTTP/2's: conn is t->h2's, and there are no loops */
+    HttpRoundTripper alt_rt; /* with alt, from TLSNextProto, or none for t->h2 */
+    const TlsConnectionState *tls_state; /* NULL, or &tls_state_v */
+    TlsConnectionState tls_state_v;
 };
 
 /* transportRequest and requestAndChan in one: a single try at sending a request
@@ -887,12 +928,19 @@ static void tp_pc_ref(tp_PConn *pc) {
     (void)sync_atomic_int64_add(&pc->refs, 1);
 }
 
-/* Closes c and gives it back the way the transport gives back each one. */
+static TlsConn *tp_own_tls_conn(NetConn c);
+
+/* Closes c and gives it back the way the transport gives back each one. A TLS
+ * connection the transport made gives back the one under it the same way when
+ * it is freed. */
 static void tp_free_conn(HttpTransport *t, NetConn c) {
     if (c.vt == NULL)
         return;
     (void)c.vt->closer.close(c.data);
-    if (t->free_conn.f != NULL)
+    TlsConn *tc = tp_own_tls_conn(c);
+    if (tc != NULL)
+        tls_conn_free(tc);
+    else if (t->free_conn.f != NULL)
         BURROW_CALLF(t->free_conn, c);
     else
         net_conn_free(c);
@@ -1413,6 +1461,10 @@ static bool tp_want_dial_values(tp_Want *w, Alloc *a, Context ctx,
             return false;
         w->ctxs[w->nctx++] = c;
     }
+    /* The TLS events come from the dial itself, with no context value. */
+    if (BURROW__HTTPTRACE_HAS(trace, tls_handshake_start) ||
+        BURROW__HTTPTRACE_HAS(trace, tls_handshake_done))
+        w->trace_to = trace;
     w->ctx = w->ctxs[w->nctx - 1];
     return true;
 }
@@ -1428,7 +1480,7 @@ static void tp_want_detach_trace(tp_Want *w) {
 /* ---------------------------------------------------------------- dialing */
 
 static tp_PConn *tp_dial_conn(HttpTransport *t, Context ctx, const tp_ConnectMethod *cm,
-                              Error *err);
+                              tp_Want *w, Error *err);
 static void tp_dec_conns_per_host_locked(HttpTransport *t, Str key);
 
 /* dialConnFor. Dials for w, which may have been canceled or given an idle
@@ -1443,7 +1495,7 @@ static void tp_dial_conn_for(HttpTransport *t, tp_Want *w) {
         return;
     }
     Error err = BURROW_NO_ERROR;
-    tp_PConn *pc = tp_dial_conn(t, w->ctx, &w->cm, &err);
+    tp_PConn *pc = tp_dial_conn(t, w->ctx, &w->cm, w, &err);
     bool delivered = tp_want_try_deliver(w, pc, err, (Time){0});
     if (pc != NULL) {
         /* Nobody wanted it, or it is HTTP/2 and can be shared, so it goes in
@@ -1717,29 +1769,348 @@ done:
 static void tp_read_loop(void *env);
 static void tp_write_loop(void *env);
 
-/* dialConn. A connection for cm with its loops going, and a reference for the
- * caller. Only HTTP/1 is spoken, and TLS comes from dial_tls_context or
- * dial_tls, and only to the first hop. */
-/* The HTTP/2 transport, which onceSetNextProtoDefaults makes when protocols
- * has HTTP/2 in it. NULL when it has not, or GODEBUG http2client=0 turns it
- * off. Go registers it for "https" as well, which needs TLS. */
+/* ------------------------------------------------------------------ TLS */
+
+static const Type tp_tls_next_proto_func_desc = {
+    BURROW_S_INIT("func(string, *tls.Conn) RoundTripper"),
+    BURROW_S_INIT("net/http"),
+    KIND_FUNC,
+    (uint32_t)sizeof(HttpTransportTLSNextProtoFunc),
+    (uint16_t)_Alignof(HttpTransportTLSNextProtoFunc),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0x68746e74U, /* "htnt" */
+    NULL,
+};
+
+const Type *const TYPE_HTTP_TRANSPORT_TLS_NEXT_PROTO_FUNC =
+    &tp_tls_next_proto_func_desc;
+
+/* http2ErringRoundTripper, whose round trips all fail with *self. */
+static HttpResponse *tp_erring_round_trip(void *self, HttpRequest *req, Error *err) {
+    (void)req;
+    BURROW_OUT(err, *(const Error *)self);
+    return NULL;
+}
+
+static const HttpRoundTripperVT tp_erring_rt_vt = {NULL, tp_erring_round_trip};
+
+/* The function configureHTTP2 puts in TLSNextProto["h2"]. Not in Go: it
+ * closes and frees c, which it owns. */
+static HttpRoundTripper tp_h2_next_proto_stub(void *env, Str authority, TlsConn *c) {
+    (void)env;
+    (void)authority;
+    (void)tls_conn_close(c);
+    tls_conn_free(c);
+    HttpRoundTripper rt = {&tp_erring_rt_vt,
+                           (void *)(uintptr_t)&tp_err_stub_round_tripper};
+    return rt;
+}
+
+/* Whether t->tls_next_proto has a function that is not nil for proto. */
+static bool tp_has_next_proto_func(const HttpTransport *t, Str proto) {
+    const HttpTransportTLSNextProtoFunc *fn =
+        (const HttpTransportTLSNextProtoFunc *)map_get(t->tls_next_proto, &proto);
+    return fn != NULL && fn->f != NULL;
+}
+
+static bool tp_has_custom_tls_dialer(const HttpTransport *t) {
+    return t->dial_tls.f != NULL || t->dial_tls_context.f != NULL;
+}
+
+/* protocols. */
+static HttpProtocols tp_protocols(const HttpTransport *t) {
+    if (t->protocols != NULL)
+        return *t->protocols; /* user-configured set */
+    HttpProtocols p = {0};
+    http_protocols_set_http1(&p, true); /* default always includes HTTP/1 */
+    if (t->tls_next_proto != NULL) {
+        /* Setting TLSNextProto to an empty map is a documented way
+         * to disable HTTP/2 on a Transport. */
+        if (tp_has_next_proto_func(t, BURROW_S("h2")))
+            http_protocols_set_http2(&p, true);
+    } else if (!t->force_attempt_http2 &&
+               (t->tls_client_config != NULL || t->dial.f != NULL ||
+                t->dial_context.f != NULL || tp_has_custom_tls_dialer(t))) {
+        /* Be conservative and don't automatically enable
+         * http2 if they've specified a custom TLS config or
+         * custom dialers. Let them opt-in themselves via
+         * Transport.Protocols.SetHTTP2(true) so we don't surprise them
+         * by modifying their tls.Config. Issue 14275.
+         * However, if ForceAttemptHTTP2 is true, it overrides the above
+         * checks. */
+    } else if (!burrow__http_godebug_http2client_disabled()) {
+        http_protocols_set_http2(&p, true);
+    }
+    return p;
+}
+
+/* configureHTTP2. When memory runs out, HTTP/2 is left off. The adjusted
+ * NextProtos go in the clone of tls_client_config each connection gets, in
+ * tp_add_tls, rather than in tls_client_config itself. */
+static void tp_configure_http2(HttpTransport *t, HttpProtocols protocols) {
+    Alloc *a = tp_alloc(t);
+    if (t->tls_client_config == NULL) {
+        TlsConfig *cfg = (TlsConfig *)mem_alloc(a, sizeof *cfg, _Alignof(TlsConfig));
+        if (cfg == NULL)
+            return;
+        memset(cfg, 0, sizeof *cfg);
+        t->own_tls_client_config = cfg;
+        t->tls_client_config = cfg;
+    }
+    if (t->tls_next_proto == NULL) {
+        Map *m = map_make(a, TYPE_STRING, TYPE_HTTP_TRANSPORT_TLS_NEXT_PROTO_FUNC, 0);
+        if (m == NULL)
+            return;
+        t->own_tls_next_proto = m;
+        t->tls_next_proto = m;
+    }
+    Http2Transport *t2 = burrow__http2_new_transport(t);
+    if (t2 == NULL)
+        return;
+    /* Historically, the presence of a TLSNextProto["h2"] key has been the
+     * signal to enable/disable HTTP/2 support. Set a value in the map, but
+     * we'll never use it. */
+    Str key = BURROW_S("h2");
+    HttpTransportTLSNextProtoFunc fn =
+        BURROW_FN(HttpTransportTLSNextProtoFunc, tp_h2_next_proto_stub, NULL);
+    if (!map_set(t->tls_next_proto, &key, &fn)) {
+        burrow__http2_transport_free(t2);
+        return;
+    }
+    sync_mutex_lock(&t->alt_mu);
+    t->h2 = t2;
+    sync_mutex_unlock(&t->alt_mu);
+    t->h2_protocols = protocols;
+    t->h2_configured = true;
+}
+
+/* onceSetNextProtoDefaults initializes TLSNextProto.
+ * It must be called via t.nextProtoOnce.Do.
+ *
+ * Go looks for an x/net/http2 transport registered for "https" first, which
+ * there is no such thing as here. */
+static void tp_once_set_next_proto_defaults(void *env) {
+    HttpTransport *t = (HttpTransport *)env;
+    t->tls_next_proto_was_nil = t->tls_next_proto == NULL;
+    if (burrow__http_godebug_http2client_disabled())
+        return;
+    Str h2 = BURROW_S("h2");
+    if (map_get(t->tls_next_proto, &h2) != NULL)
+        return; /* There's an existing HTTP/2 implementation installed. */
+    HttpProtocols protocols = tp_protocols(t);
+    if (!http_protocols_http2(protocols) &&
+        !http_protocols_unencrypted_http2(protocols))
+        return;
+    tp_configure_http2(t, protocols);
+}
+
+static void tp_next_proto_defaults(HttpTransport *t) {
+    sync_once_do(&t->next_proto_once,
+                 BURROW_FN(Func, tp_once_set_next_proto_defaults, t));
+}
+
+/* The HTTP/2 transport, which onceSetNextProtoDefaults makes when the
+ * protocols have HTTP/2 in them, and NULL otherwise. */
 static Http2Transport *tp_h2_transport(HttpTransport *t) {
     sync_mutex_lock(&t->alt_mu);
-    if (!t->h2_tried) {
-        t->h2_tried = true;
-        const HttpProtocols *p = t->protocols;
-        if (p != NULL &&
-            (http_protocols_http2(*p) || http_protocols_unencrypted_http2(*p)) &&
-            !burrow__http_godebug_http2client_disabled())
-            t->h2 = burrow__http2_new_transport(t);
-    }
     Http2Transport *t2 = t->h2;
     sync_mutex_unlock(&t->alt_mu);
     return t2;
 }
 
+/* The TLS hooks of the request's trace, while the dial still has one. */
+static void tp_trace_tls_handshake_start(tp_Want *w) {
+    sync_mutex_lock(&w->trace_mu);
+    httptrace_client_trace_tls_handshake_start(w->trace_to);
+    sync_mutex_unlock(&w->trace_mu);
+}
+
+static void tp_trace_tls_handshake_done(tp_Want *w, TlsConnectionState cs, Error err) {
+    sync_mutex_lock(&w->trace_mu);
+    httptrace_client_trace_tls_handshake_done(w->trace_to, cs, err);
+    sync_mutex_unlock(&w->trace_mu);
+}
+
+/* What a TLS connection the transport made keeps until tls_conn_free gives it
+ * back: the connection under it and the config it was made with, which are
+ * given back after it. */
+typedef struct tp_TlsOwn {
+    HttpTransport *t;
+    NetConn plain;
+    TlsConfig *cfg; /* in arena */
+    Arena arena;
+} tp_TlsOwn;
+
+static void tp_tls_own_free(tp_TlsOwn *o) {
+    Alloc *a = tp_alloc(o->t);
+    if (o->cfg != NULL)
+        tls_config_release(o->cfg);
+    arena_free(&o->arena);
+    mem_free(a, o, sizeof *o, _Alignof(tp_TlsOwn));
+}
+
+/* What tls_conn_free runs last for one of the transport's TLS connections. */
+static void tp_tls_on_free(void *env) {
+    tp_TlsOwn *o = (tp_TlsOwn *)env;
+    tp_free_conn(o->t, o->plain);
+    tp_tls_own_free(o);
+}
+
+/* The TLS connection in c when it is one of the transport's own, and NULL
+ * otherwise. */
+static TlsConn *tp_own_tls_conn(NetConn c) {
+    TlsConn *tc = tls_conn_from_net_conn(c);
+    if (tc == NULL || burrow__tls_conn_on_free(tc).f != tp_tls_on_free)
+        return NULL;
+    return tc;
+}
+
+/* The goroutine of addTLS that runs the handshake, and what it shares with
+ * tp_add_tls, which always waits for it. */
+typedef struct tp_Handshake {
+    TlsConn *tc;
+    Context ctx;
+    tp_Want *w;
+    Chan *done; /* closed once err is set */
+    Arena arena;
+    Error err; /* in arena */
+} tp_Handshake;
+
+static void tp_handshake_job(void *env) {
+    tp_Handshake *h = (tp_Handshake *)env;
+    tp_trace_tls_handshake_start(h->w);
+    Error err = tls_conn_handshake_context(h->tc, h->ctx);
+    h->err = error_retain(arena_allocator(&h->arena), err);
+    chan_close(h->done);
+}
+
+/* Add TLS to a persistent connection, i.e. negotiate a TLS session. If pconn
+ * is already a TLS tunnel, this function establishes a nested TLS session
+ * inside the encrypted channel. The remote endpoint's name may be overridden
+ * by TLSClientConfig.ServerName.
+ *
+ * Not in Go: when it fails, pc->conn is still the connection it had, closed,
+ * for the caller to give back. */
+static Error tp_add_tls(tp_PConn *pc, Context ctx, Str name, bool only_h1, tp_Want *w) {
+    HttpTransport *t = pc->t;
+    Alloc *a = tp_alloc(t);
+    tp_TlsOwn *o = (tp_TlsOwn *)mem_alloc(a, sizeof *o, _Alignof(tp_TlsOwn));
+    if (o == NULL)
+        return burrow_err_out_of_memory;
+    memset(o, 0, sizeof *o);
+    o->t = t;
+    arena_init(&o->arena, a, 0);
+    Alloc *oa = arena_allocator(&o->arena);
+
+    /* Initiate TLS and check remote host name against certificate. */
+    TlsConfig *cfg;
+    if (t->tls_client_config != NULL) {
+        cfg = tls_config_clone(t->tls_client_config, oa);
+    } else {
+        cfg = (TlsConfig *)mem_alloc(oa, sizeof *cfg, _Alignof(TlsConfig));
+        if (cfg != NULL)
+            memset(cfg, 0, sizeof *cfg);
+    }
+    o->cfg = cfg;
+    if (cfg == NULL) {
+        tp_tls_own_free(o);
+        return burrow_err_out_of_memory;
+    }
+    if (cfg->server_name.len == 0) {
+        cfg->server_name = str_clone(oa, name);
+        if (cfg->server_name.len != name.len) {
+            tp_tls_own_free(o);
+            return burrow_err_out_of_memory;
+        }
+    }
+    if (t->h2_configured) {
+        cfg->next_protos =
+            burrow__http_adjust_next_protos(oa, cfg->next_protos, t->h2_protocols);
+        if (cfg->next_protos.p == NULL) {
+            tp_tls_own_free(o);
+            return burrow_err_out_of_memory;
+        }
+    }
+    if (only_h1)
+        cfg->next_protos = (Slice){0};
+    NetConn plain_conn = pc->conn;
+    TlsConn *tls_conn = tls_client(a, plain_conn, cfg);
+    if (tls_conn == NULL) {
+        tp_tls_own_free(o);
+        return burrow_err_out_of_memory;
+    }
+
+    tp_Handshake h;
+    memset(&h, 0, sizeof h);
+    h.tc = tls_conn;
+    h.ctx = ctx;
+    h.w = w;
+    arena_init(&h.arena, a, 0);
+    h.done = chan_make(a, TYPE_BOOL, 0);
+    /* for canceling TLS handshake. Go's is a time.AfterFunc that sends on
+     * the channel the handshake's error comes on, and this is a timer with a
+     * channel of its own to wait on with it. */
+    TimeTimer *timer = NULL;
+    Duration d = t->tls_handshake_timeout;
+    if (d != 0)
+        timer = time_new_timer(a, d);
+    Error err = BURROW_NO_ERROR;
+    if (h.done == NULL || (d != 0 && timer == NULL) ||
+        !go(BURROW_FN(Func, tp_handshake_job, &h))) {
+        err = burrow_err_out_of_memory;
+    } else {
+        bool timed_out = false;
+        if (timer != NULL) {
+            SelectCase cases[2] = {BURROW_RECV(h.done, NULL),
+                                   BURROW_RECV(time_timer_c(timer), NULL)};
+            timed_out = chan_select(cases, 2) == 1;
+            (void)time_timer_stop(timer);
+        }
+        if (timed_out) {
+            /* clang-analyzer finds a path where tp_dial gives an empty conn
+             * with no error, which it never does.
+             * NOLINTNEXTLINE(clang-analyzer-core.NullDereference) */
+            (void)plain_conn.vt->closer.close(plain_conn.data);
+            /* Now that we have closed the connection,
+             * wait for the call to HandshakeContext to return. */
+            tp_wait(h.done);
+            err = tp_err_tls_handshake_timeout;
+        } else {
+            tp_wait(h.done);
+            err = error_retain(error_allocator(), h.err);
+        }
+    }
+    time_timer_free(timer);
+    chan_free(h.done);
+    arena_free(&h.arena);
+    if (BURROW_FAILED(err)) {
+        (void)plain_conn.vt->closer.close(plain_conn.data);
+        tp_trace_tls_handshake_done(w, (TlsConnectionState){0}, err);
+        tls_conn_free(tls_conn);
+        tp_tls_own_free(o);
+        return err;
+    }
+    TlsConnectionState cs = tls_conn_connection_state(tls_conn);
+    tp_trace_tls_handshake_done(w, cs, BURROW_NO_ERROR);
+    o->plain = plain_conn;
+    burrow__tls_conn_set_on_free(tls_conn, BURROW_FN(Func, tp_tls_on_free, o));
+    pc->tls_state_v = cs;
+    pc->tls_state = &pc->tls_state_v;
+    pc->conn = tls_conn_as_net_conn(tls_conn);
+    return BURROW_NO_ERROR;
+}
+
+/* dialConn. A connection for cm with its loops going, and a reference for the
+ * caller, or one that is another round tripper's, with alt set. w is the want
+ * it is for, whose trace gets the TLS events. */
 static tp_PConn *tp_dial_conn(HttpTransport *t, Context ctx, const tp_ConnectMethod *cm,
-                              Error *err) {
+                              tp_Want *w, Error *err) {
     Alloc *a = tp_alloc(t);
     if (cm->proxy_url != NULL && (str_eq(cm->proxy_url->scheme, BURROW_S("socks5")) ||
                                   str_eq(cm->proxy_url->scheme, BURROW_S("socks5h")))) {
@@ -1774,11 +2145,28 @@ static tp_PConn *tp_dial_conn(HttpTransport *t, Context ctx, const tp_ConnectMet
     }
 
     bool https = str_eq(tp_cm_scheme(cm), BURROW_S("https"));
-    if (https && (t->dial_tls_context.f != NULL || t->dial_tls.f != NULL)) {
+    if (https && tp_has_custom_tls_dialer(t)) {
         pc->conn = tp_custom_dial_tls(t, ctx, BURROW_S("tcp"), addr, &e);
         if (BURROW_FAILED(e)) {
             e = tp_wrap_dial_err(cm, e);
             goto fail;
+        }
+        TlsConn *tc = tls_conn_from_net_conn(pc->conn);
+        if (tc != NULL) {
+            /* Handshake here, in case DialTLS didn't. TLSNextProto below
+             * depends on it for knowing the connection state. */
+            tp_trace_tls_handshake_start(w);
+            e = tls_conn_handshake_context(tc, ctx);
+            if (BURROW_FAILED(e)) {
+                /* Go closes the connection in a goroutine of its own. Here
+                 * the fail path closes and frees it before returning. */
+                tp_trace_tls_handshake_done(w, (TlsConnectionState){0}, e);
+                goto fail;
+            }
+            TlsConnectionState cs = tls_conn_connection_state(tc);
+            tp_trace_tls_handshake_done(w, cs, BURROW_NO_ERROR);
+            pc->tls_state_v = cs;
+            pc->tls_state = &pc->tls_state_v;
         }
     } else {
         pc->conn = tp_dial(t, ctx, BURROW_S("tcp"), addr, &e);
@@ -1787,9 +2175,16 @@ static tp_PConn *tp_dial_conn(HttpTransport *t, Context ctx, const tp_ConnectMet
             goto fail;
         }
         if (https) {
-            /* addTLS, which needs crypto/tls. */
-            e = tp_wrap_dial_err(cm, burrow__http_err_no_tls);
-            goto fail;
+            Str first_tls_host = net_split_host_port(addr, NULL, &e);
+            if (BURROW_FAILED(e)) {
+                e = tp_wrap_dial_err(cm, e);
+                goto fail;
+            }
+            e = tp_add_tls(pc, ctx, first_tls_host, cm->only_h1, w);
+            if (BURROW_FAILED(e)) {
+                e = tp_wrap_dial_err(cm, e);
+                goto fail;
+            }
         }
     }
 
@@ -1801,23 +2196,27 @@ static tp_PConn *tp_dial_conn(HttpTransport *t, Context ctx, const tp_ConnectMet
         e = tp_proxy_connect(t, ctx, cm, pc->conn);
         if (BURROW_FAILED(e))
             goto fail;
-        /* addTLS over the tunnel, which needs crypto/tls. */
-        e = burrow__http_err_no_tls;
-        goto fail;
     }
 
-    /* Unencrypted HTTP/2 with prior knowledge. The connection is never TLS of
-     * the transport's own here, so this is the only HTTP/2 there is. The
-     * connection goes to the HTTP/2 transport, and pc is no more than its
-     * place in the pool. */
-    const HttpProtocols *p = t->protocols;
-    if (p != NULL && http_protocols_unencrypted_http2(*p) &&
-        !http_protocols_http1(*p)) {
-        Http2Transport *t2 = tp_h2_transport(t);
-        if (t2 == NULL) {
-            e = tp_err_unencrypted_h2;
+    if (cm->proxy_url != NULL && str_eq(cm->target_scheme, BURROW_S("https"))) {
+        e = tp_add_tls(pc, ctx, burrow__http_remove_port(cm->target_addr), cm->only_h1,
+                       w);
+        if (BURROW_FAILED(e))
             goto fail;
-        }
+    }
+
+    /* Possible unencrypted HTTP/2 with prior knowledge. */
+    const HttpProtocols *p = t->protocols;
+    bool unencrypted_http2 = pc->tls_state == NULL && p != NULL &&
+                             http_protocols_unencrypted_http2(*p) &&
+                             !http_protocols_http1(*p);
+    bool http2 = unencrypted_http2 ||
+                 (pc->tls_state != NULL &&
+                  str_eq(pc->tls_state->negotiated_protocol, BURROW_S("h2")));
+    Http2Transport *t2 = http2 ? tp_h2_transport(t) : NULL;
+    if (t2 != NULL) {
+        /* The connection goes to the HTTP/2 transport, and pc is no more than
+         * its place in the pool. */
         NetConn c = pc->conn;
         memset(&pc->conn, 0, sizeof pc->conn);
         e = burrow__http2_transport_add_conn(t2, cm->target_scheme, cm->target_addr, c);
@@ -1826,6 +2225,35 @@ static tp_PConn *tp_dial_conn(HttpTransport *t, Context ctx, const tp_ConnectMet
         pc->alt = true;
         BURROW_OUT(err, BURROW_NO_ERROR);
         return pc;
+    }
+    if (unencrypted_http2) {
+        e = tp_err_unencrypted_h2;
+        goto fail;
+    }
+
+    const TlsConnectionState *s = pc->tls_state;
+    if (s != NULL && s->negotiated_protocol_is_mutual &&
+        s->negotiated_protocol.len > 0) {
+        TlsConn *tls_conn = tls_conn_from_net_conn(pc->conn);
+        const HttpTransportTLSNextProtoFunc *next =
+            tls_conn != NULL ? (const HttpTransportTLSNextProtoFunc *)map_get(
+                                   t->tls_next_proto, &s->negotiated_protocol)
+                             : NULL;
+        if (next != NULL && next->f != NULL) {
+            /* The function owns the connection from here on. */
+            memset(&pc->conn, 0, sizeof pc->conn);
+            HttpRoundTripper alt = BURROW_CALLF(*next, cm->target_addr, tls_conn);
+            if (alt.vt == &tp_erring_rt_vt) {
+                /* pconn.conn was closed by next
+                 * (http2configureTransports.upgradeFn). */
+                e = *(const Error *)alt.data;
+                goto fail;
+            }
+            pc->alt = true;
+            pc->alt_rt = alt;
+            BURROW_OUT(err, BURROW_NO_ERROR);
+            return pc;
+        }
     }
 
     pc->br = bufio_new_reader_size(a, (IoReader){&tp_pc_reader_vt, pc},
@@ -2388,6 +2816,7 @@ static HttpResponse *tp_read_response(tp_PConn *pc, tp_Trip *tr, Error *err) {
             chan_send(continue_ch, &v);
         }
     }
+    resp->tls = pc->tls_state;
     return resp;
 }
 
@@ -3216,7 +3645,10 @@ static bool tp_round_trip_h2(HttpTransport *t, tp_Call *call, tp_PConn *pc,
                              HttpResponse **res, Error *e) {
     HttpRequest *req = &call->req;
     Error err = BURROW_NO_ERROR;
-    HttpResponse *r = burrow__http2_transport_round_trip(tp_h2_transport(t), req, &err);
+    HttpResponse *r =
+        pc->alt_rt.vt != NULL
+            ? pc->alt_rt.vt->round_trip(pc->alt_rt.data, req, &err)
+            : burrow__http2_transport_round_trip(tp_h2_transport(t), req, &err);
     if (r != NULL) {
         tp_pc_unref(pc);
         /* HTTP/2 requests are not cancelable with CancelRequest, so the
@@ -3402,6 +3834,7 @@ static HttpResponse *tp_round_trip_call(HttpTransport *t, tp_Call *call, Error *
 
 HttpResponse *http_transport_round_trip(HttpTransport *t, HttpRequest *req,
                                         Error *err) {
+    tp_next_proto_defaults(t);
     Error e = tp_check_request(req);
     if (BURROW_FAILED(e)) {
         tp_close_body(req);
@@ -3443,6 +3876,7 @@ HttpRoundTripper http_transport_as_round_tripper(HttpTransport *t) {
 /* ---------------------------------------------------- the rest of Transport */
 
 void http_transport_close_idle_connections(HttpTransport *t) {
+    tp_next_proto_defaults(t);
     /* A connection in the pool has a read loop, which takes it out under
      * idle_mu, or the pool's reference for HTTP/2, so it is still there while
      * this holds idle_mu. */
@@ -3522,7 +3956,8 @@ bool http_transport_register_protocol(HttpTransport *t, Str scheme,
     return ok;
 }
 
-HttpTransport http_transport_clone(const HttpTransport *t, Alloc *a) {
+HttpTransport http_transport_clone(HttpTransport *t, Alloc *a) {
+    tp_next_proto_defaults(t);
     HttpTransport t2;
     memset(&t2, 0, sizeof t2);
     t2.proxy = t->proxy;
@@ -3532,6 +3967,7 @@ HttpTransport http_transport_clone(const HttpTransport *t, Alloc *a) {
     t2.dial_tls_context = t->dial_tls_context;
     t2.dial_tls = t->dial_tls;
     t2.free_conn = t->free_conn;
+    t2.tls_handshake_timeout = t->tls_handshake_timeout;
     t2.disable_keep_alives = t->disable_keep_alives;
     t2.disable_compression = t->disable_compression;
     t2.max_idle_conns = t->max_idle_conns;
@@ -3544,11 +3980,25 @@ HttpTransport http_transport_clone(const HttpTransport *t, Alloc *a) {
         t2.proxy_connect_header = http_header_clone(a, t->proxy_connect_header);
     t2.get_proxy_connect_header = t->get_proxy_connect_header;
     t2.max_response_header_bytes = t->max_response_header_bytes;
+    t2.force_attempt_http2 = t->force_attempt_http2;
     t2.write_buffer_size = t->write_buffer_size;
     t2.read_buffer_size = t->read_buffer_size;
     t2.protocols = t->protocols;
     t2.http2 = t->http2;
     t2.a = t->a;
+    /* Not in Go: what runs out of memory here is left nil. */
+    Alloc *ta = tp_alloc(t);
+    if (t->tls_client_config != NULL) {
+        t2.own_tls_client_config = tls_config_clone(t->tls_client_config, ta);
+        t2.tls_client_config = t2.own_tls_client_config;
+    }
+    if (!t->tls_next_proto_was_nil) {
+        Map *npm = map_clone(ta, t->tls_next_proto);
+        if (npm == NULL)
+            npm = map_make(ta, TYPE_STRING, TYPE_HTTP_TRANSPORT_TLS_NEXT_PROTO_FUNC, 0);
+        t2.own_tls_next_proto = npm;
+        t2.tls_next_proto = npm;
+    }
     return t2;
 }
 
@@ -3576,10 +4026,26 @@ void http_transport_free(HttpTransport *t) {
     sync_mutex_lock(&t->alt_mu);
     Http2Transport *t2 = t->h2;
     t->h2 = NULL;
-    t->h2_tried = false;
     sync_mutex_unlock(&t->alt_mu);
     if (t2 != NULL)
         burrow__http2_transport_free(t2);
+    if (t->own_tls_client_config != NULL) {
+        if (t->tls_client_config == t->own_tls_client_config)
+            t->tls_client_config = NULL;
+        tls_config_release(t->own_tls_client_config);
+        mem_free(a, t->own_tls_client_config, sizeof(TlsConfig), _Alignof(TlsConfig));
+        t->own_tls_client_config = NULL;
+    }
+    if (t->own_tls_next_proto != NULL) {
+        if (t->tls_next_proto == t->own_tls_next_proto)
+            t->tls_next_proto = NULL;
+        map_free(t->own_tls_next_proto);
+        t->own_tls_next_proto = NULL;
+    }
+    memset(&t->next_proto_once, 0, sizeof t->next_proto_once);
+    t->tls_next_proto_was_nil = false;
+    t->h2_configured = false;
+    memset(&t->h2_protocols, 0, sizeof t->h2_protocols);
     sync_mutex_lock(&t->alt_mu);
     while (t->alt != NULL) {
         tp_AltProto *p = t->alt;
@@ -3608,8 +4074,10 @@ static Url *tp_env_proxy(void *env, HttpRequest *req, Alloc *a, Error *err);
 static HttpTransport tp_default_transport = {
     .proxy = {.f = tp_env_proxy, .env = NULL},
     .dial_context = {.f = tp_default_dial, .env = NULL},
+    .force_attempt_http2 = true,
     .max_idle_conns = 100,
     .idle_conn_timeout = 90 * TIME_SECOND,
+    .tls_handshake_timeout = 10 * TIME_SECOND,
     .expect_continue_timeout = 1 * TIME_SECOND,
 };
 

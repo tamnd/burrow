@@ -12,6 +12,7 @@
 
 #include "burrow/context.h"
 #include "burrow/core.h"
+#include "burrow/crypto/tls.h"
 #include "burrow/error.h"
 #include "burrow/func.h"
 #include "burrow/mem.h"
@@ -167,6 +168,19 @@ void httptrace_client_trace_connect_done(const HttptraceClientTrace *t, Str netw
     for (; t != NULL; t = t->burrow_old)
         if (t->connect_done.f != NULL)
             t->connect_done.f(t->connect_done.env, network, addr, err);
+}
+
+void httptrace_client_trace_tls_handshake_start(const HttptraceClientTrace *t) {
+    for (; t != NULL; t = t->burrow_old)
+        if (t->tls_handshake_start.f != NULL)
+            t->tls_handshake_start.f(t->tls_handshake_start.env);
+}
+
+void httptrace_client_trace_tls_handshake_done(const HttptraceClientTrace *t,
+                                               TlsConnectionState state, Error err) {
+    for (; t != NULL; t = t->burrow_old)
+        if (t->tls_handshake_done.f != NULL)
+            t->tls_handshake_done.f(t->tls_handshake_done.env, state, err);
 }
 
 void httptrace_client_trace_wrote_header_field(const HttptraceClientTrace *t, Str key,

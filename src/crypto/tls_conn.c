@@ -44,6 +44,7 @@
 #include "burrow/type.h"
 
 #include "tls_internal.h"
+#include "tls_on_free.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -828,7 +829,18 @@ void tls_conn_free(TlsConn *c) {
     if (c->owned_server_name.len > 0)
         mem_free(c->a, (void *)(uintptr_t)c->owned_server_name.p,
                  (size_t)c->owned_server_name.len, 1);
+    Func on_free = c->on_free;
     mem_free(c->a, c, sizeof *c, _Alignof(TlsConn));
+    if (on_free.f != NULL)
+        BURROW_CALLF0(on_free);
+}
+
+void burrow__tls_conn_set_on_free(TlsConn *c, Func f) {
+    c->on_free = f;
+}
+
+Func burrow__tls_conn_on_free(const TlsConn *c) {
+    return c->on_free;
 }
 
 NetAddr tls_conn_local_addr(TlsConn *c) {

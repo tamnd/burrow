@@ -1,8 +1,8 @@
 /* Derived from Go's src/net/http/serve_test.go and server_test.go.
  * Go source: go1.27.1.
  *
- * Server.ServeTLS, how Serve and ListenAndServeTLS turn HTTP/2 on, and the
- * TLS handshake timeout. Go's
+ * Server.ServeTLS, how Serve and ListenAndServeTLS turn HTTP/2 on, the TLS
+ * handshake timeout, and the caller's NextProtos left alone. Go's
  * CondSkipHTTP2 is left out, since HTTP/2 can't be built out of burrow, and so
  * is afterTest, which looks for goroutines Go's transports leave behind.
  *
@@ -18,6 +18,8 @@
 #include "burrow/burrow.h"
 #include "burrow/chan.h"
 #include "burrow/crypto/tls.h"
+#include "burrow/crypto/x509.h"
+#include "burrow/fmt.h"
 #include "burrow/iface.h"
 #include "burrow/map.h"
 #include "burrow/mem/arena.h"
@@ -125,7 +127,7 @@ static void check_negotiated_h2(TestingT *t, TlsConn *c) {
 
 /* ------------------------------------------------------------- ServeTLS */
 
-/* Not in Go: the goroutine of TestServeTLS. */
+/* Not in Go: the goroutine of TestServeTLS and TestServerTLSNextProtos. */
 typedef struct ServeTLSJob {
     HttpServer *s;
     NetListener ln;
@@ -511,6 +513,135 @@ static void TestServerTLSHandshakeTimeout(TestingT *t) {
     }
 }
 
+/* ------------------------------------------------ the server's NextProtos */
+
+/* Not in Go: the mode a subtest of TestServerTLSNextProtos runs in. */
+typedef enum { HTTPS1_MODE, HTTP2_MODE } TestMode;
+
+static void test_server_tls_next_protos(void *env, TestingT *t) {
+    TestMode mode = *(const TestMode *)env;
+    need_tcp(t);
+    set_parallel(t);
+
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    TlsCertificate cert = localhost_key_pair(a, &err);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        testing_t_fatal_v(t, err);
+    }
+    X509Certificate *leaf_cert =
+        x509_parse_certificate(a, *(const Slice *)slice_at(cert.certificate, 0), &err);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        testing_t_fatal_v(t, err);
+    }
+    X509CertPool *certpool = x509_new_cert_pool(a);
+    if (certpool == NULL) {
+        arena_free(&ar);
+        testing_t_fatal_v(t, "out of memory");
+    }
+    x509_cert_pool_add_cert(certpool, leaf_cert);
+
+    HttpProtocols protos = {0};
+    switch (mode) {
+    case HTTPS1_MODE:
+        http_protocols_set_http1(&protos, true);
+        break;
+    case HTTP2_MODE:
+        http_protocols_set_http2(&protos, true);
+        break;
+    default:
+        break;
+    }
+
+    Str want_next_protos[3] = {BURROW_S("http/1.1"), BURROW_S("h2"), BURROW_S("other")};
+    Str next_protos_array[3];
+    memcpy(next_protos_array, want_next_protos, sizeof want_next_protos);
+    Slice next_protos = slice_from(next_protos_array, 3, 3, TYPE_STRING);
+
+    /* We don't use httptest here because it overrides the tls.Config. */
+    TlsConfig srv_tls;
+    memset(&srv_tls, 0, sizeof srv_tls);
+    srv_tls.certificates = slice_from(&cert, 1, 1, TYPE_TLS_CERTIFICATE);
+    srv_tls.next_protos = next_protos;
+    HttpHandlerFunc handler = BURROW_FN(HttpHandlerFunc, handler_nothing, NULL);
+    HttpServer srv;
+    memset(&srv, 0, sizeof srv);
+    srv.tls_config = &srv_tls;
+    srv.handler = http_handler_func_as_handler(&handler);
+    srv.protocols = &protos;
+    TlsConfig client_tls;
+    memset(&client_tls, 0, sizeof client_tls);
+    client_tls.root_cas = certpool;
+    client_tls.next_protos = next_protos;
+    HttpTransport tr;
+    memset(&tr, 0, sizeof tr);
+    tr.tls_client_config = &client_tls;
+    tr.protocols = &protos;
+
+    NetListener listener = new_local_listener(t);
+    Chan *srvc = chan_make(heap_allocator(), TYPE_ERROR, 1);
+    if (srvc == NULL) {
+        net_listener_free(listener);
+        arena_free(&ar);
+        testing_t_fatal_v(t, "out of memory");
+    }
+    ServeTLSJob job = {&srv, listener, srvc};
+    SyncWaitGroup wg = {0};
+    sync_wait_group_go(&wg, BURROW_FN(Func, serve_tls_job, &job));
+
+    HttpClient client;
+    memset(&client, 0, sizeof client);
+    client.transport = http_transport_as_round_tripper(&tr);
+    Str url = fmt_sprintf_v(a, "https://%s", listener_addr(a, listener));
+    HttpResponse *resp = http_client_get(&client, url, &err);
+    /* Not in Go: a failure skips to the end rather than returning, so that
+     * what t.Cleanup does in Go happens first. */
+    if (BURROW_FAILED(err)) {
+        testing_t_error_v(t, err);
+        goto done;
+    }
+    (void)resp->body.vt->closer.close(resp->body.data);
+    http_response_free(resp);
+
+    bool equal = true;
+    for (Int i = 0; i < 3; i++)
+        equal = equal && str_eq(next_protos_array[i], want_next_protos[i]);
+    if (!equal)
+        testing_t_errorf_v(
+            t, "after running test: original NextProtos slice = %v, want %v",
+            next_protos, slice_from(want_next_protos, 3, 3, TYPE_STRING));
+
+done:
+    (void)http_server_close(&srv);
+    Error serve_err = BURROW_NO_ERROR;
+    (void)chan_recv(srvc, &serve_err);
+    sync_wait_group_wait(&wg);
+    http_transport_free(&tr);
+    http_server_free(&srv);
+    net_listener_free(listener);
+    tls_config_release(&client_tls);
+    tls_config_release(&srv_tls);
+    chan_free(srvc);
+    x509_cert_pool_free(certpool);
+    arena_free(&ar);
+}
+
+/* Issue #72100: Verify that we don't modify the caller's
+ * TLS.Config.NextProtos slice. */
+static void TestServerTLSNextProtos(TestingT *t) {
+    static const TestMode modes[2] = {HTTPS1_MODE, HTTP2_MODE};
+    testing_t_run(t, BURROW_S("https1"),
+                  BURROW_FN(TestingTFunc, test_server_tls_next_protos,
+                            (void *)(uintptr_t)&modes[0]));
+    testing_t_run(t, BURROW_S("h2"),
+                  BURROW_FN(TestingTFunc, test_server_tls_next_protos,
+                            (void *)(uintptr_t)&modes[1]));
+}
+
 #define TESTS(X)                                                                       \
     X(TestServeTLS)                                                                    \
     X(TestAutomaticHTTP2_Serve_NoTLSConfig)                                            \
@@ -520,5 +651,6 @@ static void TestServerTLSHandshakeTimeout(TestingT *t) {
     X(TestAutomaticHTTP2_ListenAndServe)                                               \
     X(TestAutomaticHTTP2_ListenAndServe_GetCertificate)                                \
     X(TestAutomaticHTTP2_ListenAndServe_GetConfigForClient)                            \
-    X(TestServerTLSHandshakeTimeout)
+    X(TestServerTLSHandshakeTimeout)                                                   \
+    X(TestServerTLSNextProtos)
 TESTING_MAIN(TESTS)

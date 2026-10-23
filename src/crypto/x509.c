@@ -4116,6 +4116,18 @@ bool burrow__x509_has_name_constraints(const X509Certificate *c) {
                                   c->extensions);
 }
 
+const X509Certificate *burrow__x509_certificate_copy(Alloc *a,
+                                                     const X509Certificate *c) {
+    if (c == NULL || c->raw.len == 0)
+        return c;
+    Slice der = bytes_clone(a, c->raw);
+    if (der.p == NULL)
+        return c;
+    Error err;
+    X509Certificate *copy = x509_parse_certificate(a, der, &err);
+    return copy != NULL ? copy : c;
+}
+
 const PkixExtension *burrow__x509_san_extension(const X509Certificate *c) {
     const PkixExtension *e = c->extensions.p;
     for (Int i = 0; i < c->extensions.len; i++)

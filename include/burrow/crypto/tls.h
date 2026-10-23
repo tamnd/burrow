@@ -1332,7 +1332,8 @@ BURROW_OWNS(ret) Error tls_record_header_error_as_error(const TlsRecordHeaderErr
  * during the handshake.
  *
  * Not in Go: unverified_certificates is a []*x509.Certificate, and the
- * certificates in it belong to the Conn that failed. */
+ * certificates in it belong to the Conn that failed. error_retain makes copies
+ * of them, so a retained error can outlive the Conn. */
 typedef struct TlsCertificateVerificationError {
     /* UnverifiedCertificates and its contents should not be modified. */
     Slice unverified_certificates;

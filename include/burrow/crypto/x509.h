@@ -768,7 +768,8 @@ enum {
 /* CertificateInvalidError: something about cert is wrong for the chain it
  * was in. detail is only in the messages of some reasons. errors_as with
  * TYPE_X509_CERTIFICATE_INVALID_ERROR gives a pointer to the struct, which
- * borrows cert. */
+ * borrows cert. Not in Go: error_retain makes a copy of cert, as it does for
+ * HostnameError and UnknownAuthorityError. */
 typedef struct X509CertificateInvalidError {
     const X509Certificate *cert;
     X509InvalidReason reason;

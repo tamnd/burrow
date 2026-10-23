@@ -124,6 +124,12 @@ bool burrow__x509_has_san_extension(const X509Certificate *c);
 bool burrow__x509_has_name_constraints(const X509Certificate *c);
 const PkixExtension *burrow__x509_san_extension(const X509Certificate *c);
 
+/* Not in Go: a copy of c from a, parsed again from a copy of c->raw, for an
+ * error that error_retain keeps after whatever c is in has gone. c itself
+ * when it has no raw bytes, or the copy cannot be made. */
+const X509Certificate *burrow__x509_certificate_copy(Alloc *a,
+                                                     const X509Certificate *c);
+
 /* checkChainConstraints over the n certificates of chain, leaf first, with
  * scratch memory from a. */
 Error burrow__x509_check_chain_constraints(Alloc *a,

@@ -311,6 +311,11 @@ EMBED_TEST_GEN := tests/embedtest/embed_test_embed.c
 $(BUILD)/tests/embed_test: TEST_EXTRA = $(EMBED_TEST_GEN)
 $(BUILD)/tests/embed_test: $(EMBED_TEST_GEN)
 
+# The same for the ACVP capabilities tests/fips140_acvp_test.c embeds.
+ACVP_TEST_GEN := tests/fips140test/fips140_acvp_test_embed.c
+$(BUILD)/tests/fips140_acvp_test: TEST_EXTRA = $(ACVP_TEST_GEN)
+$(BUILD)/tests/fips140_acvp_test: $(ACVP_TEST_GEN)
+
 -include $(DEPS)
 
 # One line for each binary, the way go test prints a package, and the whole of

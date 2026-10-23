@@ -42,6 +42,9 @@ jobs:
       - name: Nothing ignores a failed allocation
         run: tools/check-alloc.sh
 
+      - name: Every function that takes Error *err writes it on every return
+        run: tools/check-errout.py
+
       - name: Every mutable global is enumerated
         run: tools/check-globals.sh
 

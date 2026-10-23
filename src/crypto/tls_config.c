@@ -42,6 +42,7 @@
 #include "burrow/type.h"
 
 #include "tls_internal.h"
+#include "x509_internal.h"
 
 #include <stdbool.h>
 #include <stdint.h>
@@ -1198,9 +1199,22 @@ static Error tcfg_cve_unwrap(const void *self) {
     return ((const TcfgVerificationBox *)self)->e.err;
 }
 
+/* Not in Go: the copy has copies of the certificates, so that it can outlive
+ * the Conn they came from. */
 static Error tcfg_cve_clone(const void *self, Alloc *a) {
-    return tls_certificate_verification_error_as_error(
-        &((const TcfgVerificationBox *)self)->e, a);
+    TlsCertificateVerificationError e = ((const TcfgVerificationBox *)self)->e;
+    Slice certs = e.unverified_certificates;
+    if (certs.len > 0) {
+        e.unverified_certificates =
+            slice_make(a, TYPE_X509_CERTIFICATE_PTR, certs.len, certs.len);
+        if (e.unverified_certificates.p == NULL)
+            return burrow_err_out_of_memory;
+        const X509Certificate *const *in = certs.p;
+        const X509Certificate **out = e.unverified_certificates.p;
+        for (Int i = 0; i < certs.len; i++)
+            out[i] = burrow__x509_certificate_copy(a, in[i]);
+    }
+    return tls_certificate_verification_error_as_error(&e, a);
 }
 
 static const ErrorVT tcfg_cve_vt = {

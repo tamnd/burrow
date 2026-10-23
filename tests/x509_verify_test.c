@@ -6,7 +6,8 @@
  * of the case in each message. generatePEMCertWithRepeatSAN signs with a new
  * ECDSA P-256 key where Go makes a 4096 bit RSA one; the tests only look at
  * the names in it. TestSystemVerify only runs on Windows, as in Go,
- * and TestIssue51759 only on macOS.
+ * and TestIssue51759 only on macOS. TestErrorRetainCopiesCertificates is not
+ * in Go.
  *
  * Copyright 2011 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -1872,6 +1873,54 @@ static void TestSystemCertPool(TestingT *t) {
     arena_free(&ar);
 }
 
+/* Not in Go: error_retain gives a HostnameError, an UnknownAuthorityError and
+ * a CertificateInvalidError copies of their certificates, so the copy still
+ * works once the certificate it was made with is freed. Go has a garbage
+ * collector for this. */
+static void TestErrorRetainCopiesCertificates(TestingT *t) {
+    ARENA(a);
+    Arena src;
+    arena_init(&src, NULL, 0);
+    X509Certificate *leaf = must_cert(arena_allocator(&src), google_leaf);
+    Int dns_names = leaf->dns_names.len;
+    Str subject = str_clone(a, leaf->subject.common_name);
+    Error errs[3] = {
+        x509_certificate_verify_hostname(leaf, BURROW_S("www.example.com")),
+        x509_unknown_authority_error_as_error((X509UnknownAuthorityError){leaf},
+                                              arena_allocator(&src)),
+        x509_certificate_invalid_error_as_error(
+            (X509CertificateInvalidError){leaf, X509_EXPIRED, BURROW_S("detail")},
+            arena_allocator(&src)),
+    };
+    Error kept[3];
+    Str want[3];
+    for (Int i = 0; i < 3; i++) {
+        kept[i] = error_retain(a, errs[i]);
+        want[i] = str_clone(a, error_text(kept[i]));
+    }
+    arena_free(&src);
+
+    for (Int i = 0; i < 3; i++) {
+        Str got = error_text(error_retain(a, kept[i]));
+        if (!str_eq(got, want[i]))
+            testing_t_errorf_v(t, "error %d retained again: %q, want %q", i, got,
+                               want[i]);
+    }
+    const X509HostnameError *h = errors_as(kept[0], TYPE_X509_HOSTNAME_ERROR);
+    if (h == NULL || h->certificate == NULL ||
+        h->certificate->dns_names.len != dns_names)
+        testing_t_errorf_v(t, "HostnameError's certificate was not copied");
+    const X509UnknownAuthorityError *u =
+        errors_as(kept[1], TYPE_X509_UNKNOWN_AUTHORITY_ERROR);
+    if (u == NULL || u->cert == NULL || !str_eq(u->cert->subject.common_name, subject))
+        testing_t_errorf_v(t, "UnknownAuthorityError's certificate was not copied");
+    const X509CertificateInvalidError *v =
+        errors_as(kept[2], TYPE_X509_CERTIFICATE_INVALID_ERROR);
+    if (v == NULL || v->cert == NULL || !str_eq(v->cert->subject.common_name, subject))
+        testing_t_errorf_v(t, "CertificateInvalidError's certificate was not copied");
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestGoVerify)                                                                    \
     X(TestSystemVerify)                                                                \
@@ -1893,6 +1942,7 @@ static void TestSystemCertPool(TestingT *t) {
     X(TestMatchHostnames)                                                              \
     X(TestMatchIP)                                                                     \
     X(TestVerifyEmptyCertificate)                                                      \
-    X(TestSystemCertPool)
+    X(TestSystemCertPool)                                                              \
+    X(TestErrorRetainCopiesCertificates)
 
 TESTING_MAIN(TESTS)

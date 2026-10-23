@@ -649,8 +649,9 @@ static Str x509_invalid_text(const void *self) {
 }
 
 static Error x509_invalid_clone(const void *self, Alloc *a) {
-    return x509_certificate_invalid_error_as_error(((const X509InvalidBox *)self)->e,
-                                                   a);
+    X509CertificateInvalidError e = ((const X509InvalidBox *)self)->e;
+    e.cert = burrow__x509_certificate_copy(a, e.cert);
+    return x509_certificate_invalid_error_as_error(e, a);
 }
 
 static const ErrorVT x509_invalid_vt = {
@@ -838,7 +839,9 @@ static Str x509_hostname_text(const void *self) {
 }
 
 static Error x509_hostname_clone(const void *self, Alloc *a) {
-    return x509_hostname_error_as_error(((const X509HostnameBox *)self)->e, a);
+    X509HostnameError e = ((const X509HostnameBox *)self)->e;
+    e.certificate = burrow__x509_certificate_copy(a, e.certificate);
+    return x509_hostname_error_as_error(e, a);
 }
 
 static const ErrorVT x509_hostname_vt = {
@@ -900,7 +903,7 @@ static Error x509_unknown_new(const X509Certificate *cert, Str message, Alloc *a
 
 static Error x509_unknown_clone(const void *self, Alloc *a) {
     const X509UnknownBox *b = self;
-    return x509_unknown_new(b->e.cert, b->message, a);
+    return x509_unknown_new(burrow__x509_certificate_copy(a, b->e.cert), b->message, a);
 }
 
 static const ErrorVT x509_unknown_vt = {

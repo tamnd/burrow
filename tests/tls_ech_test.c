@@ -1,5 +1,7 @@
 /* Derived from Go's src/crypto/tls/ech_test.go.
  * Go source: go1.27.1.
+ * TestDecodeInnerClientHelloOuterExtensions came with go1.27.2 (GO-2026-6607,
+ * CL 847312).
  *
  * Copyright 2024 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -8,6 +10,7 @@
 
 #include "check.h"
 
+#include "../src/crypto/tls_builder.h"
 #include "../src/crypto/tls_internal.h"
 #include "burrow/burrow.h"
 #include "burrow/crypto/hpke.h"
@@ -145,6 +148,176 @@ static void TestPickECHConfigWithInvalidAEADID(TestingT *t) {
     arena_free(&ar);
 }
 
+/* Not in Go: the inner hellos are laid out with tls_builder.h, burrow's
+ * stand-in for cryptobyte.Builder, and each case's buildExts is a function
+ * taking the builder. */
+static Slice encode_outer_ext_inner(Alloc *a, void (*build_exts)(TlsBuilder *b),
+                                    Error *err) {
+    static const Byte zero_random[32] = {0};
+    TlsBuilder b;
+    tlsb_init(&b, a);
+    tlsb_u16(&b, TLS_VERSION_TLS12);
+    tlsb_bytes(&b, slice_from((Byte *)(uintptr_t)zero_random, 32, 32, TYPE_BYTE));
+    tlsb_u8(&b, 0);
+    tlsb_begin(&b, 2);
+    tlsb_u16(&b, TLS_TLS_AES_128_GCM_SHA256);
+    tlsb_end(&b);
+    tlsb_begin(&b, 1);
+    tlsb_u8(&b, TLS_COMPRESSION_NONE);
+    tlsb_end(&b);
+    tlsb_begin(&b, 2);
+    build_exts(&b);
+    tlsb_u16(&b, TLS_EXTENSION_ENCRYPTED_CLIENT_HELLO);
+    tlsb_begin(&b, 2);
+    tlsb_u8(&b, TLS_INNER_ECH_EXT);
+    tlsb_end(&b);
+    tlsb_u16(&b, TLS_EXTENSION_SUPPORTED_VERSIONS);
+    tlsb_begin(&b, 2);
+    tlsb_begin(&b, 1);
+    tlsb_u16(&b, TLS_VERSION_TLS13);
+    tlsb_end(&b);
+    tlsb_end(&b);
+    tlsb_end(&b);
+    return tlsb_finish(&b, err);
+}
+
+static void outer_exts(TlsBuilder *b, const uint16_t *ext_types, Int n) {
+    tlsb_u16(b, TLS_EXTENSION_ECH_OUTER_EXTENSIONS);
+    tlsb_begin(b, 2);
+    tlsb_begin(b, 1);
+    for (Int i = 0; i < n; i++)
+        tlsb_u16(b, ext_types[i]);
+    tlsb_end(b);
+    tlsb_end(b);
+}
+
+static void build_valid_order(TlsBuilder *b) {
+    static const uint16_t types[] = {TLS_EXTENSION_STATUS_REQUEST,
+                                     TLS_EXTENSION_SUPPORTED_CURVES};
+    outer_exts(b, types, 2);
+}
+
+static void build_duplicate_reference(TlsBuilder *b) {
+    static const uint16_t types[] = {TLS_EXTENSION_STATUS_REQUEST,
+                                     TLS_EXTENSION_STATUS_REQUEST};
+    outer_exts(b, types, 2);
+}
+
+static void build_references_ech(TlsBuilder *b) {
+    static const uint16_t types[] = {TLS_EXTENSION_ENCRYPTED_CLIENT_HELLO};
+    outer_exts(b, types, 1);
+}
+
+static void build_references_outer_exts(TlsBuilder *b) {
+    static const uint16_t types[] = {TLS_EXTENSION_ECH_OUTER_EXTENSIONS};
+    outer_exts(b, types, 1);
+}
+
+static void build_multiple_outer_exts(TlsBuilder *b) {
+    static const uint16_t first[] = {TLS_EXTENSION_STATUS_REQUEST};
+    static const uint16_t second[] = {TLS_EXTENSION_SUPPORTED_CURVES};
+    outer_exts(b, first, 1);
+    outer_exts(b, second, 1);
+}
+
+static void build_odd_length_list(TlsBuilder *b) {
+    tlsb_u16(b, TLS_EXTENSION_ECH_OUTER_EXTENSIONS);
+    tlsb_begin(b, 2);
+    tlsb_begin(b, 1);
+    tlsb_u8(b, 0);
+    tlsb_end(b);
+    tlsb_end(b);
+}
+
+static void build_empty_list(TlsBuilder *b) {
+    tlsb_u16(b, TLS_EXTENSION_ECH_OUTER_EXTENSIONS);
+    tlsb_begin(b, 2);
+    tlsb_u8(b, 0);
+    tlsb_end(b);
+}
+
+typedef struct OuterExtensionsCase {
+    const char *name;
+    void (*build_exts)(TlsBuilder *b);
+    const char *want_err;
+    const TlsClientHelloMsg *outer;
+} OuterExtensionsCase;
+
+static void decode_inner_outer_extensions(void *env, TestingT *t) {
+    const OuterExtensionsCase *tc = env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    Slice encoded = encode_outer_ext_inner(a, tc->build_exts, &err);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        testing_t_fatal_v(t, err);
+    }
+    (void)burrow__tls_decode_inner_client_hello(tc->outer, a, encoded, &err);
+    /* Not in Go: Errorf, then the arena is freed; Go's Fatalf ends the
+     * subtest at the same point. */
+    if (tc->want_err[0] == '\0') {
+        if (BURROW_FAILED(err))
+            testing_t_errorf_v(t, "decodeInnerClientHello returned %v, want nil", err);
+    } else if (!BURROW_FAILED(err) ||
+               !str_eq(error_text(err), str_from_cstr(tc->want_err))) {
+        testing_t_errorf_v(t, "decodeInnerClientHello returned %v, want %q", err,
+                           str_from_cstr(tc->want_err));
+    }
+    arena_free(&ar);
+}
+
+static void TestDecodeInnerClientHelloOuterExtensions(TestingT *t) {
+    static const Byte zero_random[32] = {0};
+    static const uint16_t cipher_suites[1] = {TLS_TLS_AES_128_GCM_SHA256};
+    static const Byte compression_methods[1] = {TLS_COMPRESSION_NONE};
+    static const uint16_t supported_curves[1] = {TLS_CURVE_P256};
+    static const Byte encrypted_client_hello[1] = {TLS_INNER_ECH_EXT};
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    TlsClientHelloMsg outer = burrow__tls_client_hello_msg_zero();
+    outer.vers = TLS_VERSION_TLS12;
+    outer.random = slice_from((Byte *)(uintptr_t)zero_random, 32, 32, TYPE_BYTE);
+    outer.cipher_suites =
+        slice_from((uint16_t *)(uintptr_t)cipher_suites, 1, 1, TYPE_UINT16);
+    outer.compression_methods =
+        slice_from((Byte *)(uintptr_t)compression_methods, 1, 1, TYPE_BYTE);
+    outer.ocsp_stapling = true;
+    outer.supported_curves =
+        slice_from((uint16_t *)(uintptr_t)supported_curves, 1, 1, TYPE_UINT16);
+    outer.encrypted_client_hello =
+        slice_from((Byte *)(uintptr_t)encrypted_client_hello, 1, 1, TYPE_BYTE);
+    Error err = BURROW_NO_ERROR;
+    outer.original = burrow__tls_client_hello_msg_marshal(&outer, a, &err);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        testing_t_fatal_v(t, err);
+    }
+
+    const OuterExtensionsCase cases[] = {
+        {"valid order", build_valid_order, "", &outer},
+        {"duplicate reference", build_duplicate_reference,
+         "tls: invalid outer extensions", &outer},
+        {"references encrypted_client_hello", build_references_ech,
+         "tls: invalid outer extensions", &outer},
+        {"references ech_outer_extensions", build_references_outer_exts,
+         "tls: invalid outer extensions", &outer},
+        {"multiple ech_outer_extensions", build_multiple_outer_exts,
+         "tls: invalid outer extensions", &outer},
+        {"odd-length reference list", build_odd_length_list,
+         "tls: invalid inner client hello", &outer},
+        {"empty reference list", build_empty_list, "tls: invalid inner client hello",
+         &outer},
+    };
+    for (size_t i = 0; i < NELEM(cases); i++)
+        testing_t_run(t, str_from_cstr(cases[i].name),
+                      BURROW_FN(TestingTFunc, decode_inner_outer_extensions,
+                                (void *)(uintptr_t)&cases[i]));
+    arena_free(&ar);
+}
+
 enum { MAX_NAME_LENGTH = 64 };
 
 /* The inner hello TestECHPadding encodes for server_name. */
@@ -248,6 +421,7 @@ static void TestECHPadding(TestingT *t) {
     X(TestDecodeECHConfigLists)                                                        \
     X(TestSkipBadConfigs)                                                              \
     X(TestPickECHConfigWithInvalidAEADID)                                              \
+    X(TestDecodeInnerClientHelloOuterExtensions)                                       \
     X(TestECHPadding)
 
 TESTING_MAIN(TESTS)

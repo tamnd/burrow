@@ -9,7 +9,9 @@
  * no package qualifier. TestMetaContentEscapeGODEBUG sets the setting through
  * burrow__ht_godebug_set where Go uses testenv.SetGODEBUG, and
  * TestEmptyTemplateHTML writes to io_discard where Go writes to os.Stdout,
- * which it never reaches.
+ * which it never reaches. TestIssue81821, TestIssue81823 and the last two
+ * TestEscapeText cases came with go1.27.2 (GO-2026-6599, CL 839866, and
+ * GO-2026-6600, CL 840925).
  *
  * Copyright 2011 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -182,6 +184,7 @@ typedef struct ErrorTest {
 static Int depth_0[] = {0};
 static Int depth_1[] = {1};
 static Int depth_2_0[] = {2, 0};
+static Int depth_0_0[] = {0, 0};
 
 typedef struct EscapeTextTest {
     Str input;
@@ -1897,6 +1900,17 @@ static const EscapeTextTest escape_text_tests[] = {
         S_("<script>`${ `}"),
         {.state = ST(JS_TMPL_LIT), .element = EL(SCRIPT), DEPTH(depth_0)},
     },
+    {
+        S_("<script>`${1}${"),
+        {.state = ST(JS), .element = EL(SCRIPT), .js_ctx = JC(REGEXP), DEPTH(depth_0)},
+    },
+    {
+        S_("<script>`${`${1}${"),
+        {.state = ST(JS),
+         .element = EL(SCRIPT),
+         .js_ctx = JC(REGEXP),
+         DEPTH(depth_0_0)},
+    },
 };
 
 static const PipelineTest pipeline_tests[] = {
@@ -2749,6 +2763,33 @@ done:
     burrow__ht_godebug_set(NULL);
 }
 
+static void TestIssue81821(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    StringsBuilder buf = STRINGS_BUILDER(a);
+    Error err = BURROW_NO_ERROR;
+    HtmlTemplate *tmpl = html_template_must(
+        html_template_parse(html_template_new(a, BURROW_S("test")),
+                            BURROW_S("<script>const s = `${1}${/{{.}}/g}`</script>"),
+                            &err),
+        err);
+    Str input = BURROW_S("x/.exec(alert(1))}");
+    err = html_template_execute(tmpl, strings_builder_as_io_writer(&buf),
+                                BURROW_ANY(TYPE_STRING, &input));
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "Execute: %v", err);
+        goto done;
+    }
+    Str want = BURROW_S(
+        "<script>const s = `${1}${/x\\/\\.exec\\(alert\\(1\\)\\)\\}/g}`</script>");
+    Str got = strings_builder_string(&buf);
+    if (!str_eq(got, want))
+        testing_t_errorf_v(t, "got:  %s\nwant: %s", got, want);
+done:
+    arena_free(&ar);
+}
+
 static void cve_case(void *env, TestingT *t) {
     const CveTest *tt = env;
     Arena ar;
@@ -2777,6 +2818,50 @@ static void TestCVE202656858(TestingT *t) {
         testing_t_run(
             t, cve_tests[i].name,
             BURROW_FN(TestingTFunc, cve_case, (void *)(uintptr_t)&cve_tests[i]));
+}
+
+static const CveTest issue81823_tests[] = {
+    {
+        S_("yield"),
+        S_("<script>function* rules(){yield /{{.}}/g}</script>"),
+        S_("/;alert(1)//"),
+        S_("<script>function* rules(){yield /\\/;alert\\(1\\)\\/\\//g}</script>"),
+    },
+    {
+        S_("property yield"),
+        S_("<script>const pct = bond.yield / 100;\nconst user = {{.}}; // "
+           "state\n</script>"),
+        S_("1;pwned=1;0"),
+        S_("<script>const pct = bond.yield / 100;\nconst user = \"1;pwned=1;0\"; "
+           "\n</script>"),
+    },
+    {
+        S_("private yield"),
+        S_("<script>class Bond { #yield = 4; pct() { return this.#yield / 100; } "
+           "}\nconst "
+           "user = {{.}}; // state\n</script>"),
+        S_("1;pwned=1;0"),
+        S_("<script>class Bond { #yield = 4; pct() { return this.#yield / 100; } "
+           "}\nconst "
+           "user = \"1;pwned=1;0\"; \n</script>"),
+    },
+    {
+        S_("property in"),
+        S_("<script>const kb = traffic.in / 1024;\nconst user = {{.}}; // "
+           "state\n</script>"),
+        S_("1;pwned=1;0"),
+        S_("<script>const kb = traffic.in / 1024;\nconst user = \"1;pwned=1;0\"; "
+           "\n</script>"),
+    },
+};
+
+/* Not in Go: the cases are CveTests, which have the same fields, and run
+ * through TestCVE202656858's cve_case, which is the same as Go's loop body. */
+static void TestIssue81823(TestingT *t) {
+    for (Int i = 0; i < NELEM(issue81823_tests); i++)
+        testing_t_run(
+            t, issue81823_tests[i].name,
+            BURROW_FN(TestingTFunc, cve_case, (void *)(uintptr_t)&issue81823_tests[i]));
 }
 
 /* ------------------------------------------ BenchmarkTemplateSpecialTags */
@@ -2836,7 +2921,9 @@ static void BenchmarkTemplateSpecialTags(TestingB *b) {
     X(TestOrphanedTemplate)                                                            \
     X(TestAliasedParseTreeDoesNotOverescape)                                           \
     X(TestMetaContentEscapeGODEBUG)                                                    \
+    X(TestIssue81821)                                                                  \
     X(TestCVE202656858)                                                                \
+    X(TestIssue81823)                                                                  \
     X(BenchmarkTemplateSpecialTags)
 
 TESTING_MAIN(TESTS)

@@ -8,7 +8,8 @@
  * *JsonErrType where Go says *template.jsonErrType, since burrow types have no
  * package qualifier. C has no empty struct, so JsonErrType has one unused
  * field. BenchmarkTemplateSpecialTags needs the whole template and comes with
- * it.
+ * it. The yield and property access cases of TestNextJsCtx came with go1.27.2
+ * (GO-2026-6600, CL 840925).
  *
  * Copyright 2011 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -486,6 +487,12 @@ static void TestNextJsCtx(TestingT *t) {
         {BURROW__HT_JS_CTX_REGEXP, S_("return\t")},
         {BURROW__HT_JS_CTX_REGEXP, S_("return\n")},
         {BURROW__HT_JS_CTX_REGEXP, S_("return\xe2\x80\xa8")},
+        {BURROW__HT_JS_CTX_REGEXP, S_("yield")},
+        /* A keyword after property access is a property name. */
+        {BURROW__HT_JS_CTX_DIV_OP, S_("x.yield")},
+        {BURROW__HT_JS_CTX_DIV_OP, S_("x?.yield")},
+        {BURROW__HT_JS_CTX_DIV_OP, S_("x.\nyield")},
+        {BURROW__HT_JS_CTX_DIV_OP, S_("x.in")},
         /* Identifiers can be divided and cannot validly be preceded by
          * a regular expressions. Semicolon insertion cannot happen
          * between an identifier and a regular expression on a new line

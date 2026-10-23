@@ -278,12 +278,13 @@ static const Str hte_js_whitespace =
        "\xe2\x80\x89\xe2\x80\x8a\xe2\x80\xa8\xe2\x80\xa9\xe2\x80\xaf\xe2\x81\x9f"
        "\xe3\x80\x80\xef\xbb\xbf");
 
-/* regexpPrecederKeywords is a set of reserved JS keywords that can precede a
- * regular expression in JS source. */
+/* regexpPrecederKeywords is a set of JS keywords that can precede a regular
+ * expression in JS source. It deliberately treats the context-sensitive
+ * keyword yield as a keyword. */
 static const Str hte_regexp_preceder_keywords[] = {
     S_("break"), S_("case"),    S_("continue"), S_("delete"),     S_("do"),
     S_("else"),  S_("finally"), S_("in"),       S_("instanceof"), S_("return"),
-    S_("throw"), S_("try"),     S_("typeof"),   S_("void"),
+    S_("throw"), S_("try"),     S_("typeof"),   S_("void"),       S_("yield"),
 };
 
 /* nextJSCtx returns the context that determines whether a slash after the
@@ -373,9 +374,15 @@ burrow__HtJsCtx burrow__ht_next_js_ctx(Str s, burrow__HtJsCtx preceding) {
         while (j > 0 && burrow__ht_is_js_ident_part(s.p[j - 1]))
             j--;
         Str word = burrow__ht_sub(s, j, s.len);
+        bool keyword = false;
         for (Int k = 0; k < NELEM(hte_regexp_preceder_keywords); k++)
-            if (str_eq(word, hte_regexp_preceder_keywords[k]))
-                return BURROW__HT_JS_CTX_REGEXP;
+            keyword = keyword || str_eq(word, hte_regexp_preceder_keywords[k]);
+        /* An IdentifierName after a property-access dot is a property name,
+         * which precedes a div op. */
+        if (keyword && !strings_has_suffix(strings_trim_right(burrow__ht_sub(s, 0, j),
+                                                              hte_js_whitespace),
+                                           BURROW_S(".")))
+            return BURROW__HT_JS_CTX_REGEXP;
         break;
     }
     }

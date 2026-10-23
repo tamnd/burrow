@@ -750,7 +750,13 @@ static burrow__HtContext htx_t_js(Alloc *a, burrow__HtContext c, Str s, Int *nre
         if (i + 1 < s.len && s.p[i + 1] == '!') {
             c.state = BURROW__HT_STATE_JS_LINE_CMT;
             i++;
+            break;
         }
+        /* A private identifier such as #yield is never a keyword, and
+         * precedes a div op. */
+        while (i + 1 < s.len && burrow__ht_is_js_ident_part(s.p[i + 1]))
+            i++;
+        c.js_ctx = BURROW__HT_JS_CTX_DIV_OP;
         break;
     case '{':
         /* We only care about tracking brace depth if we are inside of a
@@ -817,6 +823,7 @@ static burrow__HtContext htx_t_js_tmpl(Alloc *a, burrow__HtContext c, Str s,
                 if (c.js_brace_depth.p == NULL)
                     burrow__ht_oom();
                 c.state = BURROW__HT_STATE_JS;
+                c.js_ctx = BURROW__HT_JS_CTX_REGEXP;
                 *nread = i + 2;
                 return c;
             }

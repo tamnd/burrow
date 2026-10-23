@@ -245,6 +245,7 @@ Int burrow__tls_round_up(Int a, Int b) {
 
 Slice burrow__tls_half_conn_decrypt(TlsHalfConn *hc, Slice record, uint8_t *typ,
                                     Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice plaintext = slice_nil(TYPE_BYTE);
     Byte *r = (Byte *)record.p;
     *typ = r[0];
@@ -413,6 +414,7 @@ static Slice thc_oom(Error *err) {
 
 Slice burrow__tls_half_conn_encrypt(TlsHalfConn *hc, Alloc *a, Slice record,
                                     Slice payload, IoReader rand, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (burrow__tls_cipher_is_nil(hc->cipher)) {
         Slice out = slice_append_slice(a, record, payload);
         if (out.p == NULL && record.len + payload.len > 0)
@@ -1218,6 +1220,7 @@ static Int thc_write(TlsConn *c, Slice data, Error *err) {
 }
 
 Int burrow__tls_conn_flush(TlsConn *c, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (bytes_buffer_len(&c->send_buf) == 0)
         return 0;
 
@@ -1230,6 +1233,7 @@ Int burrow__tls_conn_flush(TlsConn *c, Error *err) {
 
 Int burrow__tls_conn_write_record_locked(TlsConn *c, uint8_t typ, Slice data,
                                          Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (c->quic != NULL) {
         if (typ != TLS_RECORD_TYPE_HANDSHAKE) {
             BURROW_OUT(err, thc_err_quic_non_handshake);
@@ -1322,6 +1326,7 @@ static void thc_transcript_write(IoWriter transcript, Slice data) {
 
 Int burrow__tls_conn_write_handshake_record(TlsConn *c, const TlsHandshakeMsg *msg,
                                             IoWriter transcript, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     sync_mutex_lock(&c->out.mu);
 
     ArenaMark mark = arena_mark(&c->out_bufs);
@@ -1482,6 +1487,7 @@ static Error thc_unmarshal_handshake_message(TlsConn *c, Slice data,
 }
 
 static Int thc_write_locked_app(TlsConn *c, Slice b, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (BURROW_FAILED(c->out.err)) {
         BURROW_OUT(err, c->out.err);
         return 0;
@@ -1531,6 +1537,7 @@ static Int thc_write_locked_app(TlsConn *c, Slice b, Error *err) {
 }
 
 Int tls_conn_write(TlsConn *c, Slice b, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     /* interlock with Close below */
     for (;;) {
         int32_t x = sync_atomic_int32_load(&c->active_call);
@@ -1830,6 +1837,7 @@ Error burrow__tls_conn_handle_post_handshake_message(TlsConn *c) {
 }
 
 Int tls_conn_read(TlsConn *c, Slice b, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Error e = tls_conn_handshake(c);
     if (BURROW_FAILED(e)) {
         BURROW_OUT(err, e);

@@ -73,6 +73,7 @@ static NetConn tls_listener_accept(void *self, Error *err) {
         return (NetConn){NULL, NULL};
     }
     tc->owns_conn = true;
+    BURROW_OUT(err, BURROW_NO_ERROR);
     return tls_conn_as_net_conn(tc);
 }
 
@@ -145,6 +146,7 @@ NetListener tls_listen(Alloc *a, Str network, Str laddr, TlsConfig *config,
         return tl;
     }
     ((TlsListener *)tl.data)->owns_inner = true;
+    BURROW_OUT(err, BURROW_NO_ERROR);
     return tl;
 }
 
@@ -282,6 +284,7 @@ static TlsConn *tls_dial_ctx(Alloc *a, Context ctx, const NetDialer *net_dialer,
         return NULL;
     }
     tls_dial_ctx_end(&dc);
+    BURROW_OUT(err, BURROW_NO_ERROR);
     return conn;
 }
 
@@ -306,6 +309,7 @@ NetConn tls_dialer_dial(const TlsDialer *d, Alloc *a, Str network, Str addr,
 
 NetConn tls_dialer_dial_context(const TlsDialer *d, Alloc *a, Context ctx, Str network,
                                 Str addr, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     NetDialer zero;
     memset(&zero, 0, sizeof zero);
     const NetDialer *net_dialer = &zero;

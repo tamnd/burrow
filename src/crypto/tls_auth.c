@@ -172,6 +172,7 @@ Slice burrow__tls_signed_message(Alloc *a, Str context, Hash transcript) {
 bool burrow__tls_legacy_type_and_hash_from_public_key(CryptoPublicKey pub,
                                                       uint8_t *sig_type,
                                                       CryptoHash *hash, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     BURROW_OUT(sig_type, 0);
     BURROW_OUT(hash, 0);
     if (pub.t == TYPE_RSA_PUBLIC_KEY) {
@@ -341,6 +342,7 @@ static bool tls_enabled_at(TlsSignatureScheme sig_alg, const void *env) {
 static TlsSignatureScheme tls_select_signature_scheme_in(Alloc *a, uint16_t vers,
                                                          const TlsCertificate *c,
                                                          Slice peer_algs, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Ed25519Signer es;
     CryptoSigner priv;
     if (!burrow__tls_private_key_signer(c->private_key, &es, &priv)) {

@@ -255,6 +255,7 @@ static Slice tls_prefix_nonce_seal(void *self, Alloc *a, Slice dst, Slice nonce,
 static Slice tls_prefix_nonce_open(void *self, Alloc *a, Slice dst, Slice nonce,
                                    Slice ciphertext, Slice additional_data,
                                    Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     TlsNonceAEAD *f = (TlsNonceAEAD *)self;
     tls_prefix_nonce_copy(f, nonce);
     return cipher_aead_open(f->aead, a, dst, tls_nonce_slice(f), ciphertext,

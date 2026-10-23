@@ -563,6 +563,7 @@ Error burrow__tls_server_handshake_state_pick_cipher_suite(
  * we support it too: the suite, or NULL. */
 static const TlsSuite *tsv_session_suite(TlsServerHandshakeState *hs,
                                          const TlsSessionState *ss, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     bool cipher_suite_ok = false;
     /* Check that the client is still offering the ciphersuite in the session. */
     const uint16_t *offered = hs->client_hello->cipher_suites.p;
@@ -589,6 +590,7 @@ static const TlsSuite *tsv_session_suite(TlsServerHandshakeState *hs,
  * it can be resumed, or the error that ends the handshake. */
 static bool tsv_can_resume(TlsServerHandshakeState *hs, const TlsSessionState *ss,
                            const TlsSuite **suite, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     TlsConn *c = hs->c;
     Time now = burrow__tls_config_time(c->config);
 
@@ -1175,6 +1177,7 @@ static Error tsv_read_finished(TlsServerHandshakeState *hs, Byte *out) {
 /* Not in Go. The ticket sendSessionTicket sends for state, from hs->a. */
 static Slice tsv_wrap_session(TlsServerHandshakeState *hs, TlsSessionState *state,
                               Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     TlsConn *c = hs->c;
     if (c->config->wrap_session.f != NULL) {
         TlsConnectionState cs = burrow__tls_conn_connection_state_locked(c);

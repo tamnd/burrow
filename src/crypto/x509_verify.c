@@ -11,6 +11,7 @@
 #include "burrow/bytes.h"
 #include "burrow/core.h"
 #include "burrow/crypto/sha256.h"
+#include "burrow/encoding/hex.h"
 #include "burrow/encoding/pem.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
@@ -1678,6 +1679,40 @@ bool burrow__x509_policies_valid(Alloc *a, Slice chain, const X509VerifyOptions 
     return x509_policies_valid(a, chain, opts);
 }
 
+/* distrustedSPKIHashes contains hashes of SPKIs from certificates which
+ * we don't consider to be trustworthy. We use these hashes to filter out
+ * chains returned by Verify */
+static const Str x509_distrusted_spki_hashes[] = {
+    BURROW_S_INIT("ebed6475c2c2d80fcb199f3fe8dd6e6b3ce60b77eb15d4e42c3dec0c6f5b5105"),
+    BURROW_S_INIT("49dd353dc2b919a3770645117d0e60c16115e7d1bc259eefe734b00ea434fe5f"),
+    BURROW_S_INIT("e0254c7fcdc265e2f0f8a428dabb75ab4ae039b4872d62f5ee57f0877d5a8a41"),
+    BURROW_S_INIT("5c0660a2b164910d8ff589c18e14552e9e0ec237dcefe2cb736d41a4811f81a0"),
+    BURROW_S_INIT("43bffa19d6ef651451f6841e019931e96f6f2eaeff28ab4b6f1ce4576de2717b"),
+    BURROW_S_INIT("63ecefee431d49523bc1136c4e72d0206a477086caf606cd5cf025686c109cf8"),
+    BURROW_S_INIT("ec4ffa1ad0ac88081314b7aaffef6a91f97cd57291bb5ba686c5415f5eb4f6b6"),
+    BURROW_S_INIT("92c063d67e8f14db71d288e11266ffdaf69cbf115f7bab14f3bc2f68d25e0e30"),
+};
+
+/* containsDistrustedSPKIHash checks if any of the certificates in the chain
+ * have an SPKI whose hash is present in the distrustedSPKIHashes map. */
+static bool x509_contains_distrusted_spki_hash(Slice chain) {
+    X509Certificate *const *certs = chain.p;
+    for (Int i = 0; i < chain.len; i++) {
+        Sha256Sum256Ret h = sha256_sum256(certs[i]->raw_subject_public_key_info);
+        Byte buf[2 * sizeof h.a];
+        Int n =
+            hex_encode(slice_from(buf, (Int)sizeof buf, (Int)sizeof buf, TYPE_BYTE),
+                       slice_from(h.a, (Int)sizeof h.a, (Int)sizeof h.a, TYPE_BYTE));
+        Str hs = str_from_bytes(buf, n);
+        for (size_t k = 0; k < sizeof x509_distrusted_spki_hashes /
+                                   sizeof x509_distrusted_spki_hashes[0];
+             k++)
+            if (str_eq(hs, x509_distrusted_spki_hashes[k]))
+                return true;
+    }
+    return false;
+}
+
 static Slice x509_verify(Alloc *s, const X509Certificate *c, X509VerifyOptions *opts,
                          Alloc *a, Error *err) {
     Slice none = slice_nil(TYPE_X509_CERTIFICATE_CHAIN);
@@ -1735,6 +1770,8 @@ static Slice x509_verify(Alloc *s, const X509Certificate *c, X509VerifyOptions *
                     c, X509_CA_NOT_AUTHORIZED_FOR_THIS_NAME, error_text(e));
             continue;
         }
+        if (x509_contains_distrusted_spki_hash(chain))
+            continue;
         chains[kept++] = chain;
     }
     candidates.len = kept;
@@ -2026,7 +2063,18 @@ static Slice x509_system_verify(const X509Certificate *c, const X509VerifyOption
         *err = x509_win_errno(pe);
         return none;
     }
+    Slice *chains = v.chains.p;
+    Int kept = 0;
+    for (Int i = 0; i < v.chains.len; i++)
+        if (!x509_contains_distrusted_spki_hash(chains[i]))
+            chains[kept++] = chains[i];
+    v.chains.len = kept;
+
     if (v.chains.len == 0) {
+        if (!BURROW_FAILED(v.top_err)) {
+            *err = x509_invalid(c, X509_NO_VALID_CHAINS, BURROW_STR_EMPTY);
+            return none;
+        }
         /* Return the error from the highest quality context. */
         *err = v.top_err;
         return none;
@@ -2213,6 +2261,11 @@ static Slice x509_system_verify(const X509Certificate *c, const X509VerifyOption
         *err =
             errors_new(error_allocator(),
                        BURROW_S("x509: macos certificate verification internal error"));
+        return none;
+    }
+
+    if (x509_contains_distrusted_spki_hash(v.chain)) {
+        *err = x509_invalid(c, X509_NO_VALID_CHAINS, BURROW_STR_EMPTY);
         return none;
     }
 

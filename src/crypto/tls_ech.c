@@ -191,6 +191,7 @@ Error burrow__tls_parse_ech_config(Alloc *a, Slice enc, bool *skip, TlsECHConfig
 }
 
 Slice burrow__tls_parse_ech_config_list(Alloc *a, Slice data, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice none = slice_nil(&burrow__tls_ech_config_type);
     CryptobyteString s = data;
     uint16_t length;
@@ -291,6 +292,7 @@ const TlsECHConfig *burrow__tls_pick_ech_config(Alloc *a, Slice list,
 
 Slice burrow__tls_encode_inner_client_hello(const TlsClientHelloMsg *inner, Alloc *a,
                                             Int max_name_length, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Error e = BURROW_NO_ERROR;
     Slice h = burrow__tls_client_hello_msg_marshal_msg(inner, a, true, &e);
     if (BURROW_FAILED(e)) {
@@ -434,6 +436,7 @@ static void tech_add_inner_extensions(TlsBuilder *recon, CryptobyteString extens
 TlsHandshakeMsg *burrow__tls_decode_inner_client_hello(const TlsClientHelloMsg *outer,
                                                        Alloc *a, Slice encoded,
                                                        Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     /* Reconstructing the inner client hello from its encoded form is somewhat
      * complicated. It is missing its header (message type and length), session
      * ID, and the extensions may be compressed. Since we need to put the
@@ -907,6 +910,7 @@ Error burrow__tls_conn_process_ech_client_hello(TlsConn *c, Alloc *a,
 }
 
 Slice burrow__tls_build_retry_config_list(Alloc *a, Slice keys, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const TlsEncryptedClientHelloKey *k = keys.p;
     bool at_least_one_retry_config = false;
     for (Int i = 0; i < keys.len; i++) {
@@ -934,6 +938,7 @@ Slice burrow__tls_build_retry_config_list(Alloc *a, Slice keys, Error *err) {
 Slice burrow__tls_ech_accept_confirmation(Alloc *a, const TlsSuiteTLS13 *suite,
                                           Slice random, Str label, Hash transcript,
                                           Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     HashNewFunc h = burrow__tls_suite13_hash_new(suite);
     Error e = BURROW_NO_ERROR;
     Slice prk = hkdf_extract(a, h, random, slice_nil(TYPE_BYTE), &e);

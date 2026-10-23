@@ -526,6 +526,7 @@ Error burrow__tls_conn_quic_set_transport_parameters(TlsConn *c, Slice params) {
 }
 
 Slice burrow__tls_conn_quic_get_transport_parameters(TlsConn *c, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     TlsQuicState *qs = c->quic;
     if (qs->transport_params.p == NULL) {
         Error e = tqc_push(qs, tqc_event(TLS_QUIC_TRANSPORT_PARAMETERS_REQUIRED),

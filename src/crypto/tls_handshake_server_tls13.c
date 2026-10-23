@@ -590,6 +590,7 @@ static Error ts13_check_psk_binder(TlsServerHandshakeStateTLS13 *hs,
  * ticket keys: NULL with no error when there is none to try. */
 static TlsSessionState *ts13_session_for(TlsServerHandshakeStateTLS13 *hs,
                                          Slice identity, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     TlsConn *c = hs->c;
     if (c->config->unwrap_session.f != NULL) {
         TlsConnectionState cs = burrow__tls_conn_connection_state_locked(c);
@@ -810,6 +811,7 @@ static const TlsKeyShare *ts13_check_second_hello(TlsServerHandshakeStateTLS13 *
                                                   const TlsClientHelloMsg *client_hello,
                                                   TlsCurveID selected_group,
                                                   Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     TlsConn *c = hs->c;
 
     if (client_hello->key_shares.len != 1) {
@@ -844,6 +846,7 @@ static const TlsKeyShare *ts13_check_second_hello(TlsServerHandshakeStateTLS13 *
  * the second ClientHello, and what comes back is the one to carry on with. */
 static TlsHandshakeMsg *ts13_second_ech_hello(TlsServerHandshakeStateTLS13 *hs,
                                               TlsHandshakeMsg *msg, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     TlsConn *c = hs->c;
     Alloc *a = hs->a;
     const TlsClientHelloMsg *client_hello = &msg->client_hello;
@@ -912,6 +915,7 @@ static TlsHandshakeMsg *ts13_second_ech_hello(TlsServerHandshakeStateTLS13 *hs,
 static const TlsKeyShare *ts13_do_hello_retry_request(TlsServerHandshakeStateTLS13 *hs,
                                                       TlsCurveID selected_group,
                                                       Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     TlsConn *c = hs->c;
     Alloc *a = hs->a;
 
@@ -1432,6 +1436,7 @@ static Error ts13_send_session_tickets(TlsServerHandshakeStateTLS13 *hs) {
 /* Not in Go. The ticket sendSessionTicket sends for state, from a. */
 static Slice ts13_wrap_session(TlsConn *c, Alloc *a, TlsSessionState *state,
                                Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (c->config->wrap_session.f != NULL) {
         TlsConnectionState cs = burrow__tls_conn_connection_state_locked(c);
         return BURROW_CALLF(c->config->wrap_session, a, &cs, state, err);

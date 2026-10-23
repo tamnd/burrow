@@ -64,6 +64,7 @@ const Type burrow__tls_psk_identity_type = {
 
 /* make([]byte, n) for the messages Go lays out by hand. */
 static Slice tls_make_bytes(Alloc *a, Int n, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice x = slice_make(a, TYPE_BYTE, n, n);
     if (x.p == NULL)
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -484,6 +485,7 @@ Slice burrow__tls_client_hello_msg_marshal(const TlsClientHelloMsg *m, Alloc *a,
 
 Slice burrow__tls_client_hello_msg_marshal_without_binders(const TlsClientHelloMsg *m,
                                                            Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Int binders_len = 2; /* uint16 length prefix */
     for (Int i = 0; i < m->psk_binders.len; i++) {
         binders_len += 1; /* uint8 length prefix */
@@ -506,6 +508,7 @@ Slice burrow__tls_client_hello_msg_marshal_without_binders(const TlsClientHelloM
 
 bool burrow__tls_client_hello_msg_update_binders(TlsClientHelloMsg *m,
                                                  Slice psk_binders, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     static const char mismatch[] = "tls: internal error: pskBinders length mismatch";
     if (psk_binders.len != m->psk_binders.len) {
         BURROW_OUT(err, errors_new(error_allocator(), str_from_cstr(mismatch)));
@@ -1172,6 +1175,7 @@ bool burrow__tls_encrypted_extensions_msg_unmarshal(TlsEncryptedExtensionsMsg *m
 /* --------------------------------------------------------- EndOfEarlyData */
 
 Slice burrow__tls_end_of_early_data_msg_marshal(Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice x = tls_make_bytes(a, 4, err);
     if (x.p != NULL)
         ((Byte *)x.p)[0] = TLS_TYPE_END_OF_EARLY_DATA;
@@ -1416,6 +1420,7 @@ static uint32_t tls_byte_at(Slice b, Int i) {
 
 Slice burrow__tls_certificate_msg_marshal(const TlsCertificateMsg *m, Alloc *a,
                                           Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const Slice *certs = (const Slice *)m->certificates.p;
     Int i = 0;
     for (Int k = 0; k < m->certificates.len; k++)
@@ -1638,6 +1643,7 @@ bool burrow__tls_certificate_msg_tls13_unmarshal(TlsCertificateMsgTLS13 *m, Allo
 /* A message that is a type, a uint24 length and then body, laid out by hand
  * the way Go does for serverKeyExchangeMsg and clientKeyExchangeMsg. */
 static Slice tls_marshal_body(Alloc *a, uint8_t typ, Slice body, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Int length = body.len;
     /* length is never negative, but gcc can't see that in the amalgamation. It
      * follows slice_make into the empty slice it makes for a length of zero
@@ -1703,6 +1709,7 @@ bool burrow__tls_certificate_status_msg_unmarshal(TlsCertificateStatusMsg *m,
 /* ---------------------------------------------------------- ServerHelloDone */
 
 Slice burrow__tls_server_hello_done_msg_marshal(Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice x = tls_make_bytes(a, 4, err);
     if (x.p != NULL)
         ((Byte *)x.p)[0] = TLS_TYPE_SERVER_HELLO_DONE;
@@ -1763,6 +1770,7 @@ TlsCertificateRequestMsg burrow__tls_certificate_request_msg_zero(void) {
 
 Slice burrow__tls_certificate_request_msg_marshal(const TlsCertificateRequestMsg *m,
                                                   Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     /* See RFC 4346, Section 7.4.4. */
     const Slice *cas = (const Slice *)m->certificate_authorities.p;
     Int length = 1 + m->certificate_types.len + 2;
@@ -1928,6 +1936,7 @@ bool burrow__tls_certificate_verify_msg_unmarshal(TlsCertificateVerifyMsg *m,
 
 Slice burrow__tls_new_session_ticket_msg_marshal(const TlsNewSessionTicketMsg *m,
                                                  Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     /* See RFC 5077, Section 3.3. */
     Int ticket_len = m->ticket.len;
     /* Never negative. See tls_marshal_body. */
@@ -1972,6 +1981,7 @@ bool burrow__tls_new_session_ticket_msg_unmarshal(TlsNewSessionTicketMsg *m,
 /* ------------------------------------------------------------- HelloRequest */
 
 Slice burrow__tls_hello_request_msg_marshal(Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice x = tls_make_bytes(a, 4, err);
     if (x.p != NULL)
         ((Byte *)x.p)[0] = TLS_TYPE_HELLO_REQUEST;
@@ -2037,6 +2047,7 @@ void burrow__tls_handshake_msg_init(TlsHandshakeMsg *m, TlsMsgKind kind) {
 
 Slice burrow__tls_handshake_msg_marshal(const TlsHandshakeMsg *m, Alloc *a,
                                         Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     switch (m->kind) {
     case TLS_MSG_HELLO_REQUEST:
         return burrow__tls_hello_request_msg_marshal(a, err);

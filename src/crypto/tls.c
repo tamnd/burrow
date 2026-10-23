@@ -717,6 +717,7 @@ bool burrow__tls_contains_u16(const uint16_t *list, Int n, uint16_t v) {
 bool burrow__tls_type_and_hash_from_signature_scheme(TlsSignatureScheme s,
                                                      uint8_t *sig_type,
                                                      CryptoHash *hash, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     uint8_t t;
     CryptoHash h;
     switch (s) {

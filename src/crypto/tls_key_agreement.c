@@ -94,6 +94,7 @@ static Slice tka_rsa_process_client_key_exchange(Alloc *a, const TlsConfig *conf
                                                  const TlsCertificate *cert,
                                                  const TlsClientKeyExchangeMsg *ckx,
                                                  Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const Byte *ct = ckx->ciphertext.p;
     if (ckx->ciphertext.len < 2) {
         BURROW_OUT(err, tka_err_client_key_exchange);
@@ -137,6 +138,7 @@ static Slice tka_rsa_generate_client_key_exchange(Alloc *a, const TlsConfig *con
                                                   const X509Certificate *cert,
                                                   TlsClientKeyExchangeMsg **out,
                                                   Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice pre_master_secret = slice_make(a, TYPE_BYTE, 48, 48);
     if (pre_master_secret.p == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -247,6 +249,7 @@ static Slice tka_concat(Alloc *a, Slice s1, Slice s2, Slice s3) {
 static TlsServerKeyExchangeMsg *tka_ecdhe_generate_server_key_exchange(
     TlsKeyAgreement *ka, Alloc *a, const TlsConfig *config, const TlsCertificate *cert,
     const TlsClientHelloMsg *client_hello, const TlsServerHelloMsg *hello, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const TlsCurveID *curves = client_hello->supported_curves.p;
     for (Int i = 0; i < client_hello->supported_curves.len; i++) {
         if (burrow__tls_config_supports_curve(config, ka->version, curves[i])) {
@@ -391,6 +394,7 @@ static TlsServerKeyExchangeMsg *tka_ecdhe_generate_server_key_exchange(
 static Slice tka_ecdhe_process_client_key_exchange(TlsKeyAgreement *ka, Alloc *a,
                                                    const TlsClientKeyExchangeMsg *ckx,
                                                    Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const Byte *ct = ckx->ciphertext.p;
     if (ckx->ciphertext.len == 0 || (Int)ct[0] != ckx->ciphertext.len - 1) {
         BURROW_OUT(err, tka_err_client_key_exchange);
@@ -555,6 +559,7 @@ static Error tka_ecdhe_process_server_key_exchange(
 TlsServerKeyExchangeMsg *burrow__tls_key_agreement_generate_server_key_exchange(
     TlsKeyAgreement *ka, Alloc *a, const TlsConfig *config, const TlsCertificate *cert,
     const TlsClientHelloMsg *client_hello, const TlsServerHelloMsg *hello, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (!ka->is_ecdhe)
         return NULL;
     return tka_ecdhe_generate_server_key_exchange(ka, a, config, cert, client_hello,
@@ -584,6 +589,7 @@ Slice burrow__tls_key_agreement_generate_client_key_exchange(
     TlsKeyAgreement *ka, Alloc *a, const TlsConfig *config,
     const TlsClientHelloMsg *client_hello, const struct X509Certificate *cert,
     TlsClientKeyExchangeMsg **ckx, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     *ckx = NULL;
     if (!ka->is_ecdhe)
         return tka_rsa_generate_client_key_exchange(a, config, client_hello, cert, ckx,

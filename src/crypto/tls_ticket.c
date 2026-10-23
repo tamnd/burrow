@@ -102,6 +102,7 @@ static bool tkt_clone(TlsSessionState *ss, Slice b, Slice *out) {
  * One the session already has is shared rather than parsed again. der has to
  * be in the session already. */
 static X509Certificate *tkt_new_cert(TlsSessionState *ss, Slice der, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     X509Certificate *const *certs = ss->peer_certificates.p;
     for (Int i = 0; i < ss->peer_certificates.len; i++)
         if (bytes_equal(certs[i]->raw, der))
@@ -315,6 +316,7 @@ static Error tkt_parse(TlsSessionState *ss, Slice data) {
 }
 
 TlsSessionState *tls_parse_session_state(Alloc *a, Slice data, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     TlsSessionState *ss = tkt_new_session(a);
     if (ss == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -338,6 +340,7 @@ TlsSessionState *tls_parse_session_state(Alloc *a, Slice data, Error *err) {
 }
 
 TlsSessionState *burrow__tls_conn_session_state(TlsConn *c, Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     TlsSessionState *ss = tkt_new_session(a);
     if (ss == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -433,6 +436,7 @@ fail:
 
 Slice tls_config_encrypt_ticket(TlsConfig *c, Alloc *a, const TlsConnectionState *cs,
                                 const TlsSessionState *ss, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     (void)cs;
     Error e = BURROW_NO_ERROR;
     TlsTicketKeys *ticket_keys = burrow__tls_config_ticket_keys(c, NULL, &e);
@@ -454,6 +458,7 @@ Slice tls_config_encrypt_ticket(TlsConfig *c, Alloc *a, const TlsConnectionState
 
 Slice burrow__tls_config_encrypt_ticket(TlsConfig *c, Alloc *a, Slice state,
                                         const TlsTicketKeys *ticket_keys, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (ticket_keys == NULL || ticket_keys->len == 0) {
         BURROW_OUT(err, tkt_err_keys_unavailable);
         return slice_nil(TYPE_BYTE);
@@ -512,6 +517,7 @@ Slice burrow__tls_config_encrypt_ticket(TlsConfig *c, Alloc *a, Slice state,
 
 TlsSessionState *tls_config_decrypt_ticket(TlsConfig *c, Slice identity,
                                            const TlsConnectionState *cs, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     (void)cs;
     Error e = BURROW_NO_ERROR;
     TlsTicketKeys *ticket_keys = burrow__tls_config_ticket_keys(c, NULL, &e);
@@ -586,6 +592,7 @@ Slice burrow__tls_config_decrypt_ticket(TlsConfig *c, Alloc *a, Slice encrypted,
 
 Slice tls_client_session_state_resumption_state(TlsClientSessionState *cs,
                                                 TlsSessionState **state, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     (void)err;
     if (cs == NULL || cs->session == NULL) {
         *state = NULL;
@@ -597,6 +604,7 @@ Slice tls_client_session_state_resumption_state(TlsClientSessionState *cs,
 
 TlsClientSessionState *tls_new_resumption_state(Slice ticket, TlsSessionState *state,
                                                 Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Alloc *sa = arena_allocator(&state->arena);
     TlsClientSessionState *cs = BURROW_NEW(sa, TlsClientSessionState);
     if (cs == NULL || !tkt_clone(state, ticket, &state->ticket)) {

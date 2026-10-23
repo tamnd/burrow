@@ -184,6 +184,7 @@ static Error tcl_short_read(Error err) {
 
 /* Not in Go. n random bytes from the config's reader into a new []byte. */
 static Slice tcl_random(Alloc *a, const TlsConfig *config, Int n, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice b = slice_make(a, TYPE_BYTE, n, n);
     if (b.p == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -1874,6 +1875,7 @@ tcl_certificate_request_info_from_msg(Alloc *a, Context ctx, uint16_t vers,
 TlsCertificate *burrow__tls_conn_get_client_certificate(TlsConn *c, Alloc *a,
                                                         TlsCertificateRequestInfo *cri,
                                                         Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (c->config->get_client_certificate.f != NULL) {
         Error e = BURROW_NO_ERROR;
         TlsCertificate *cert = BURROW_CALLF(c->config->get_client_certificate, cri, &e);

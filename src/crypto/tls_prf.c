@@ -313,6 +313,7 @@ CRYPTO_FIPS_TEXT bool burrow__tls_finished_hash_write(TlsFinishedHash *h, Slice 
 
 CRYPTO_FIPS_TEXT static Int tls_finished_hash_io_write(void *self, Slice p,
                                                        Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (!burrow__tls_finished_hash_write((TlsFinishedHash *)self, p)) {
         BURROW_OUT(err, burrow_err_out_of_memory);
         return 0;
@@ -390,6 +391,7 @@ CRYPTO_FIPS_TEXT Slice burrow__tls_ekm_from_master_secret(const TlsEkmMaster *m,
                                                           Alloc *a, Str label,
                                                           Slice context, Int length,
                                                           Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (str_eq(label, BURROW_S("client finished")) ||
         str_eq(label, BURROW_S("server finished")) ||
         str_eq(label, BURROW_S("master secret")) ||
@@ -443,6 +445,7 @@ CRYPTO_FIPS_TEXT Slice burrow__tls_ekm_from_master_secret(const TlsEkmMaster *m,
 
 CRYPTO_FIPS_TEXT static Slice tls_ekm_call(void *env, Alloc *a, Str label,
                                            Slice context, Int length, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     return burrow__tls_ekm_from_master_secret((const TlsEkmMaster *)env, a, label,
                                               context, length, err);
 }

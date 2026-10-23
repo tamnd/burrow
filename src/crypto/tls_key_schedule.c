@@ -318,6 +318,7 @@ CRYPTO_FIPS_TEXT Slice burrow__tls13_finished_hash(const TlsSuiteTLS13 *c, Alloc
 
 CRYPTO_FIPS_TEXT static Slice tls13_ekm_call(void *env, Alloc *a, Str label,
                                              Slice context, Int length, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice out = burrow__tls13_exporter_master_secret_exporter(
         (const Tls13ExporterMasterSecret *)env, a, label, context, length);
     if (out.p == NULL && length > 0)
@@ -478,6 +479,7 @@ CRYPTO_FIPS_TEXT static bool tke_ecdh_key_shares(const TkeEcdh *ke, Alloc *a,
                                                  IoReader rand,
                                                  TlsKeySharePrivateKeys *priv,
                                                  TlsKeyShare *share, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     EcdhPrivateKey *key = ecdh_curve_generate_key(ke->curve(), a, rand, err);
     if (key == NULL)
         return false;
@@ -644,6 +646,7 @@ CRYPTO_FIPS_TEXT bool burrow__tls_key_exchange_key_shares(const TlsKeyExchange *
                                                           Alloc *a, IoReader rand,
                                                           TlsKeySharePrivateKeys *priv,
                                                           Slice *shares, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     memset(priv, 0, sizeof *priv);
     Int n = ke->kind == TKE_HYBRID ? 2 : 1;
     *shares = slice_make(a, &burrow__tls_key_share_type, n, n);
@@ -707,6 +710,7 @@ CRYPTO_FIPS_TEXT bool burrow__tls_key_exchange_key_shares(const TlsKeyExchange *
 CRYPTO_FIPS_TEXT Slice burrow__tls_key_exchange_server_shared_secret(
     const TlsKeyExchange *ke, Alloc *a, IoReader rand, Slice client_key_share,
     TlsKeyShare *ks, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (ke->kind == TKE_ECDH)
         return tke_ecdh_server_shared_secret(&ke->ecdh, a, rand, client_key_share, ks,
                                              err);

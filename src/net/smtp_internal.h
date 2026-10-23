@@ -12,6 +12,7 @@
 #include "burrow/net/smtp.h"
 
 #include "burrow/core.h"
+#include "burrow/crypto/tls.h"
 #include "burrow/error.h"
 #include "burrow/mem.h"
 #include "burrow/net.h"
@@ -24,5 +25,10 @@ SmtpClient *burrow__smtp_client_make(Alloc *a, NetConn conn, Str host);
 /* Client.helo and Client.ehlo, which send HELO and EHLO. */
 Error burrow__smtp_client_helo(SmtpClient *c);
 Error burrow__smtp_client_ehlo(SmtpClient *c);
+
+/* testHookStartTLS, which SendMail calls with the config it gives StartTLS.
+ * nil, except for tests. */
+typedef void (*burrow__SmtpStartTLSHook)(TlsConfig *config);
+extern burrow__SmtpStartTLSHook burrow__smtp_test_hook_start_tls;
 
 #endif /* BURROW_SRC_NET_SMTP_INTERNAL_H */

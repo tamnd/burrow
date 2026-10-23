@@ -4,6 +4,7 @@
  *
  *     8BITMIME  RFC 1652
  *     AUTH      RFC 2554
+ *     STARTTLS  RFC 3207
  *
  * smtp_send_mail is the whole job in one call. For more control, dial with
  * smtp_dial and go through the commands one at a time:
@@ -16,12 +17,6 @@
  *         err = smtp_client_quit(c);
  *         smtp_client_free(c);
  *     }
- *
- * STARTTLS, RFC 3207, needs crypto/tls, which is not ported yet, so
- * smtp_client_start_tls and smtp_client_tls_connection_state are still to
- * come. Until then smtp_send_mail returns smtp_err_no_tls for a server that
- * offers STARTTLS, rather than send the mail in the clear where Go would have
- * encrypted it.
  *
  * Errors are made in the calling goroutine's error arena, as everywhere else
  * in burrow. A response with the wrong code is a TextprotoError.
@@ -40,6 +35,7 @@
 #define BURROW_NET_SMTP_H
 
 #include "burrow/core.h"
+#include "burrow/crypto/tls.h"
 #include "burrow/error.h"
 #include "burrow/io.h"
 #include "burrow/map.h"
@@ -114,10 +110,6 @@ void smtp_auth_free(Alloc *a, SmtpAuth auth);
 
 /* ----------------------------------------------------------------- Client */
 
-/* What smtp_send_mail gives when the server offers STARTTLS, which needs
- * crypto/tls. Not in Go. */
-extern const Error smtp_err_no_tls;
-
 /* smtp.Client, a client connection to an SMTP server.
  *
  * text is the TextprotoConn the client talks through. It is there to allow
@@ -134,6 +126,9 @@ typedef struct SmtpClient {
     Str local_name;    /* the name to use in HELO/EHLO */
     bool did_hello;    /* whether we've said HELO/EHLO */
     Error hello_error; /* the error from the hello */
+
+    /* The TLS connections smtp_client_start_tls made, which c frees. */
+    struct burrow__SmtpTLSLayer *tls_layers;
 
     IoReadWriteCloser rwc; /* conn, for text */
     IoWriteCloser dot;     /* the writer under the one smtp_client_data gives */
@@ -157,14 +152,25 @@ BURROW_OWNS(ret) SmtpClient *smtp_new_client(Alloc *a, NetConn conn, Str host,
 /* Client.Close, which closes the connection. It does not free c. */
 BURROW_BORROWS(ret) Error smtp_client_close(SmtpClient *c);
 
-/* Gives back c, and the connection too if smtp_dial made it, without closing
- * anything else. NULL is fine. */
+/* Gives back c, the TLS connections smtp_client_start_tls made, and the
+ * connection too if smtp_dial made it, without closing anything else. NULL is
+ * fine. */
 void smtp_client_free(SmtpClient *c);
 
 /* Client.Hello. Sends a HELO or EHLO to the server as local_name. Only needed
  * to control the name; the other functions send it themselves the first time,
  * as "localhost". If it is called, it has to be before any of the others. */
 BURROW_BORROWS(ret) Error smtp_client_hello(SmtpClient *c, Str local_name);
+
+/* Client.StartTLS. Sends the STARTTLS command and encrypts all further
+ * communication. Only servers that advertise the STARTTLS extension support
+ * this function. Not in Go: config has to outlive c, as with tls_client. */
+BURROW_BORROWS(ret) Error smtp_client_start_tls(SmtpClient *c, TlsConfig *config);
+
+/* Client.TLSConnectionState. Returns the client's TLS connection state in
+ * *state, and whether there is one. *state is the zero value, and the result
+ * false, if smtp_client_start_tls did not succeed. */
+bool smtp_client_tls_connection_state(SmtpClient *c, TlsConnectionState *state);
 
 /* Client.Verify. Checks the validity of an email address on the server. If it
  * gives no error, the address is valid. A refusal does not mean the address is
@@ -219,10 +225,7 @@ BURROW_BORROWS(ret) Error smtp_client_quit(SmtpClient *c);
  * style email with headers first, a blank line, and then the message body.
  * Its lines should be CRLF terminated. Its headers would usually include
  * fields such as "From", "To", "Subject", and "Cc". Sending "Bcc" messages is
- * done by including an address in to but not in the headers of msg.
- *
- * TLS is the part still to come, so a server that offers STARTTLS gets no
- * mail, and the error is smtp_err_no_tls. */
+ * done by including an address in to but not in the headers of msg. */
 BURROW_BORROWS(ret) Error smtp_send_mail(Str addr, SmtpAuth auth, Str from, Slice to,
                                          Slice msg);
 

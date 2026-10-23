@@ -586,6 +586,7 @@ static Error png_parse_trns(PngDecoder *d, uint32_t length) {
 /* Read: the pixel data, read out of as many IDAT chunks as it takes. The
  * decoder is the reader the zlib reader reads. */
 static Int png_idat_read(void *self, Slice p, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     PngDecoder *d = (PngDecoder *)self;
     if (p.len == 0)
         return 0;

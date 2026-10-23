@@ -220,6 +220,7 @@ static const Type multi_writer_desc = {
 };
 
 static Int multi_io_write(void *self, Slice p, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const MultiWriter *t = (const MultiWriter *)self;
     for (Int i = 0; i < t->n; i++) {
         Error e = BURROW_NO_ERROR;

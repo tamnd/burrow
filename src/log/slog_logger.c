@@ -314,6 +314,7 @@ static Int slogl_write_record(SlogHandler h, SlogLevel level, bool capture_site,
 }
 
 static Int slogl_log_write(void *self, Slice buf, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     (void)self;
     SlogLogger *l = sync_atomic_pointer_load(&slogl_log_target);
     if (l == NULL)

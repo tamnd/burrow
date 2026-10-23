@@ -140,7 +140,7 @@ static Int nop_transform(void *self, Slice dst, Slice src, bool at_eof, Int *n_s
 static Int nop_span(void *self, Slice src, bool at_eof, Error *err) {
     (void)self;
     (void)at_eof;
-    (void)err;
+    BURROW_OUT(err, BURROW_NO_ERROR);
     return src.len;
 }
 
@@ -157,7 +157,7 @@ static Int transform_discard_transform(void *self, Slice dst, Slice src, bool at
     (void)self;
     (void)dst;
     (void)at_eof;
-    (void)err;
+    BURROW_OUT(err, BURROW_NO_ERROR);
     *n_src = src.len;
     return 0;
 }
@@ -428,6 +428,7 @@ static const Type remove_f_desc = {
 
 static Int remove_f_transform(void *self, Slice dst, Slice src, bool at_eof, Int *n_src,
                               Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     RuneFunc t = ((RemoveF *)self)->f;
     Int n_dst = 0, ns = 0;
     const Byte *s = (const Byte *)src.p;

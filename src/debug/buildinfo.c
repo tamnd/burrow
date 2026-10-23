@@ -91,6 +91,7 @@ typedef struct BiFile {
 } BiFile;
 
 static bool bi_elf_reader(void *ctx, uint64_t addr, IoSectionReader *sr, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     ElfFile *f = (ElfFile *)ctx;
     for (Int i = 0; i < f->progs.len; i++) {
         ElfProg *p = ((ElfProg **)f->progs.p)[i];
@@ -128,6 +129,7 @@ static uint64_t bi_pe_image_base(const PeFile *f) {
 
 /* The section arithmetic is in 32 bits, as Go's is, and wraps as it does. */
 static bool bi_pe_reader(void *ctx, uint64_t addr, IoSectionReader *sr, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     PeFile *f = (PeFile *)ctx;
     addr -= bi_pe_image_base(f);
     for (Int i = 0; i < f->sections.len; i++) {
@@ -162,6 +164,7 @@ static void bi_pe_start(PeFile *f, uint64_t *addr, uint64_t *size) {
 }
 
 static bool bi_macho_reader(void *ctx, uint64_t addr, IoSectionReader *sr, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     MachoFile *f = (MachoFile *)ctx;
     for (Int i = 0; i < f->loads.len; i++) {
         MachoLoad l = ((MachoLoad *)f->loads.p)[i];
@@ -194,6 +197,7 @@ static void bi_macho_start(MachoFile *f, uint64_t *addr, uint64_t *size) {
 }
 
 static bool bi_xcoff_reader(void *ctx, uint64_t addr, IoSectionReader *sr, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     XcoffFile *f = (XcoffFile *)ctx;
     for (Int i = 0; i < f->sections.len; i++) {
         XcoffSection *s = ((XcoffSection **)f->sections.p)[i];
@@ -211,6 +215,7 @@ static bool bi_xcoff_reader(void *ctx, uint64_t addr, IoSectionReader *sr, Error
 
 /* The arithmetic is in 32 bits, as for PE. */
 static bool bi_plan9_reader(void *ctx, uint64_t addr, IoSectionReader *sr, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Plan9objFile *f = (Plan9objFile *)ctx;
     for (Int i = 0; i < f->sections.len; i++) {
         Plan9objSection *s = ((Plan9objSection **)f->sections.p)[i];

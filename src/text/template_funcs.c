@@ -426,6 +426,7 @@ BURROW_FUNC_TYPE_DEFINE_VARIADIC(burrow__TtfCallFn, ReflectValue, TTF_CALL_SIG);
 /* --------------------------------------------------------------- indexing */
 
 static ReflectValue ttf_index(void *env, ReflectValue item, Slice indexes, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     burrow__TtExec *x = (burrow__TtExec *)env;
     item = burrow__tt_indirect_interface(item);
     if (!reflect_value_is_valid(item)) {
@@ -475,6 +476,7 @@ static ReflectValue ttf_index(void *env, ReflectValue item, Slice indexes, Error
 /* ---------------------------------------------------------------- slicing */
 
 static ReflectValue ttf_slice(void *env, ReflectValue item, Slice indexes, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     burrow__TtExec *x = (burrow__TtExec *)env;
     item = burrow__tt_indirect_interface(item);
     if (!reflect_value_is_valid(item)) {
@@ -533,6 +535,7 @@ static ReflectValue ttf_slice(void *env, ReflectValue item, Slice indexes, Error
 /* ----------------------------------------------------------------- length */
 
 static Int ttf_length(void *env, ReflectValue item, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     (void)env;
     bool is_nil = false;
     item = burrow__tt_indirect(item, &is_nil);
@@ -777,6 +780,7 @@ static bool ttf_eq1(ReflectValue arg1, int k1, ReflectValue arg, bool *truth,
 
 /* eq: arg1 == arg2[0] || arg1 == arg2[1] || ... */
 static bool ttf_eq(void *env, ReflectValue arg1, Slice arg2, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     (void)env;
     arg1 = burrow__tt_indirect_interface(arg1);
     if (arg2.len == 0) {
@@ -803,6 +807,7 @@ static bool ttf_ne(void *env, ReflectValue arg1, ReflectValue arg2, Error *err) 
 }
 
 static bool ttf_lt(void *env, ReflectValue arg1, ReflectValue arg2, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     (void)env;
     arg1 = burrow__tt_indirect_interface(arg1);
     int k1 = ttf_basic_kind(arg1);

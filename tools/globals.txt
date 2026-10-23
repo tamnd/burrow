@@ -292,6 +292,7 @@ global	src/net/url.c	url_debug_flags	godebug	The urlstrictcolons and urlmaxquery
 global	src/net/url.c	url_debug_max	godebug	The urlmaxqueryparams number, stored atomically before url_debug_flags says it is there.
 global	src/net/http_cookie.c	hc_debug_flags	godebug	The httpcookiemaxnum, httplaxcontentlength and httpmuxgo121 settings, read from GODEBUG on first use. Atomic loads and stores only, and two racing first loads store the same value.
 global	src/net/http_cookie.c	hc_debug_max	godebug	The httpcookiemaxnum number, stored atomically before hc_debug_flags says it is there.
+global	src/net/http_cookie.c	hc_debug_max_ranges	godebug	The httpservecontentmaxranges number, stored atomically before hc_debug_flags says it is there.
 global	src/net/http_server.c	mx_default_serve_mux	package-vars	DefaultServeMux. Its zero value is ready, and its own RWMutex guards everything in it.
 global	src/net/http_serve.c	sv_test_hook_server_serve	package-vars	testHookServerServe, called as http_server_serve starts. Only tests set it, while no server is running, as Go's tests do.
 global	src/net/http_pprof.c	hpp_register_once	package-vars	Makes http_pprof_register put the handlers on the default mux once. A SyncOnce.

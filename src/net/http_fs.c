@@ -670,6 +670,10 @@ Int burrow__http_parse_range(Alloc *a, Str s, int64_t size, burrow__HttpRange **
     for (Int i = 0; i < s.len; i++)
         if (s.p[i] == ',')
             max++;
+    /* Go counts the non-default uses of httpservecontentmaxranges here for
+     * runtime/metrics, which burrow does not have. */
+    if (max > burrow__http_max_content_ranges())
+        return 0; /* ignore header with too many ranges */
     burrow__HttpRange *ranges = (burrow__HttpRange *)mem_alloc(
         a, (size_t)max * sizeof *ranges, _Alignof(burrow__HttpRange));
     if (ranges == NULL) {

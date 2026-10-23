@@ -76,8 +76,8 @@ static Error hc_error(const Str *text) {
  *
  * The settings net/http reads from GODEBUG: httpcookiemaxnum here,
  * httplaxcontentlength for http_transfer.c, httpmuxgo121 for the mux and
- * httpservecontentkeepheaders for http_fs.c, and http2server and http2client for
- * the HTTP/2 server and transport. */
+ * httpservecontentkeepheaders and httpservecontentmaxranges for http_fs.c, and
+ * http2server and http2client for the HTTP/2 server and transport. */
 
 enum {
     HC_DEBUG_KNOWN = 1 << 0,
@@ -87,10 +87,12 @@ enum {
     HC_DEBUG_KEEP_HEADERS = 1 << 4, /* httpservecontentkeepheaders=1 */
     HC_DEBUG_NO_H2_SERVER = 1 << 5, /* http2server=0 */
     HC_DEBUG_NO_H2_CLIENT = 1 << 6, /* http2client=0 */
+    HC_DEBUG_RANGES_SET = 1 << 7,   /* httpservecontentmaxranges is a number */
 };
 
 static uint32_t hc_debug_flags;
 static uint64_t hc_debug_max;
+static uint64_t hc_debug_max_ranges;
 
 /* The value of key in GODEBUG, the last one when it is there twice, as Go's
  * internal/godebug reads it. */
@@ -114,7 +116,7 @@ static bool hc_godebug(const char *env, const char *key, Str *val) {
 /* The settings from a GODEBUG value, or the defaults for NULL. */
 static uint32_t hc_debug_parse(const char *v) {
     uint32_t f = HC_DEBUG_KNOWN;
-    uint64_t max = 0;
+    uint64_t max = 0, max_ranges = 0;
     Str s;
     if (v != NULL && hc_godebug(v, "httpcookiemaxnum", &s) && s.len > 0) {
         /* strconv.Atoi, and a value that is not a number leaves the
@@ -134,11 +136,22 @@ static uint32_t hc_debug_parse(const char *v) {
     if (v != NULL && hc_godebug(v, "httpservecontentkeepheaders", &s) &&
         str_eq(s, BURROW_S("1")))
         f |= HC_DEBUG_KEEP_HEADERS;
+    if (v != NULL && hc_godebug(v, "httpservecontentmaxranges", &s)) {
+        /* Like httpcookiemaxnum, but a negative number leaves the default in
+         * place too. */
+        Error err;
+        Int n = strconv_atoi(s, &err);
+        if (BURROW_OK(err) && n >= 0) {
+            f |= HC_DEBUG_RANGES_SET;
+            max_ranges = (uint64_t)n;
+        }
+    }
     if (v != NULL && hc_godebug(v, "http2server", &s) && str_eq(s, BURROW_S("0")))
         f |= HC_DEBUG_NO_H2_SERVER;
     if (v != NULL && hc_godebug(v, "http2client", &s) && str_eq(s, BURROW_S("0")))
         f |= HC_DEBUG_NO_H2_CLIENT;
     burrow__atomic64_store(&hc_debug_max, max);
+    burrow__atomic64_store(&hc_debug_max_ranges, max_ranges);
     burrow__atomic_store_relaxed_u32(&hc_debug_flags, f);
     return f;
 }
@@ -174,6 +187,15 @@ bool burrow__http_godebug_mux121(void) {
 
 bool burrow__http_godebug_serve_content_keep_headers(void) {
     return (hc_debug_load() & HC_DEBUG_KEEP_HEADERS) != 0;
+}
+
+Int burrow__http_max_content_ranges(void) {
+    Int max_ranges = BURROW__HTTP_DEFAULT_MAX_CONTENT_RANGES;
+    if ((hc_debug_load() & HC_DEBUG_RANGES_SET) != 0) {
+        uint64_t n = burrow__atomic64_load(&hc_debug_max_ranges);
+        max_ranges = n == 0 ? BURROW_INT_MAX : (Int)n;
+    }
+    return max_ranges;
 }
 
 bool burrow__http_godebug_http2server_disabled(void) {

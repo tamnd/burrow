@@ -1844,8 +1844,7 @@ static HttpProtocols tp_protocols(const HttpTransport *t) {
          * by modifying their tls.Config. Issue 14275.
          * However, if ForceAttemptHTTP2 is true, it overrides the above
          * checks. */
-    } else if (burrow__http_godebug_http2client_disabled()) {
-    } else {
+    } else if (!burrow__http_godebug_http2client_disabled()) {
         http_protocols_set_http2(&p, true);
     }
     return p;
@@ -2074,6 +2073,9 @@ static Error tp_add_tls(tp_PConn *pc, Context ctx, Str name, bool only_h1, tp_Wa
             (void)time_timer_stop(timer);
         }
         if (timed_out) {
+            /* clang-analyzer finds a path where tp_dial gives an empty conn
+             * with no error, which it never does.
+             * NOLINTNEXTLINE(clang-analyzer-core.NullDereference) */
             (void)plain_conn.vt->closer.close(plain_conn.data);
             /* Now that we have closed the connection,
              * wait for the call to HandshakeContext to return. */

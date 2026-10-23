@@ -1,11 +1,9 @@
 /* Derived from Go's src/net/smtp/smtp_test.go.
  *
- * StartTLS waits for crypto/tls, so TestNewClientWithTLS, TestTLSClient and
- * TestTLSConnState are left for then, and so is the StartTLS case of
- * TestHello. TestSendMailRefusesSTARTTLS is new, for what smtp_send_mail does
- * meanwhile. Go's fake connection reads from a bufio.Reader and writes to a
- * bufio.Writer that it flushes at the end; here both are BytesBuffers, which
- * need no flush.
+ * Go's fake connection reads from a bufio.Reader and writes to a bufio.Writer
+ * that it flushes at the end; here both are BytesBuffers, which need no flush.
+ * The helpers for the TLS tests come before TestNewClientWithTLS, the first
+ * test that uses them, where Go has them at the end of the file.
  * Go source: go1.27.1.
  *
  * Copyright 2010 The Go Authors. All rights reserved.
@@ -17,8 +15,11 @@
 
 #include "../src/net/smtp_internal.h"
 
+#include "burrow/bufio.h"
 #include "burrow/bytes.h"
 #include "burrow/core.h"
+#include "burrow/crypto/tls.h"
+#include "burrow/crypto/x509.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
 #include "burrow/func.h"
@@ -34,6 +35,7 @@
 #include "burrow/slice.h"
 #include "burrow/strings.h"
 #include "burrow/sync.h"
+#include "burrow/time.h"
 #include "burrow/type.h"
 
 #include <stdint.h>
@@ -592,6 +594,323 @@ static void TestNewClient2(TestingT *t) {
     ARENA_END;
 }
 
+/* -------------------------------------------------------------------- TLS */
+
+#if defined(HAVE_SOCKETS)
+
+/* localhostCert is a PEM-encoded TLS cert generated from src/crypto/tls:
+ *
+ *	go run generate_cert.go --rsa-bits 2048 --host 127.0.0.1,::1,example.com \
+ *		--ca --start-date "Jan 1 00:00:00 1970" --duration=1000000h
+ *
+ * The actual expiry time of this cert should not matter since we set
+ * tls.Config.Time to be fixed in our tests. */
+static const char localhost_cert[] =
+    "\n"
+    "-----BEGIN CERTIFICATE-----\n"
+    "MIIDOjCCAiKgAwIBAgIRAM1/4MS0P4BXstjv50eeEsswDQYJKoZIhvcNAQELBQAw\n"
+    "EjEQMA4GA1UEChMHQWNtZSBDbzAgFw03MDAxMDEwMDAwMDBaGA8yMDg0MDEyOTE2\n"
+    "MDAwMFowEjEQMA4GA1UEChMHQWNtZSBDbzCCASIwDQYJKoZIhvcNAQEBBQADggEP\n"
+    "ADCCAQoCggEBAN5KVxPqz+h6hHC3QBg7ZwCZUql4Mbz7LvrYg+1CCRJnbWdK2MTP\n"
+    "s0Hi3CKzAEE6H52rPO1kqdcIo2D1Pw2PC7/TB6w8ASLumJQaZfBlbaZesbBfrtIu\n"
+    "iEtSKs/Iwxp57mn9RbjUkQgu3nSzjrgbFPrktz6lJ4LfC6azN62klkCTfspCDTjU\n"
+    "Sk58dlygIweYkIiWHAh5f+KvKT1aeheNMkLEx1KZ+Vz+Y/oEnEKjRxBcnUIwzIrZ\n"
+    "/fXbvRq8Fa9nLuDO8F0JDcM1Zg9gzPvFmdFy8fifC3H/uflcLVJp4ImtEWEoVPvt\n"
+    "OQLAwkulknsXACBVsCu/JgDU7Yda6Lk2Qq0CAwEAAaOBiDCBhTAOBgNVHQ8BAf8E\n"
+    "BAMCAqQwEwYDVR0lBAwwCgYIKwYBBQUHAwEwDwYDVR0TAQH/BAUwAwEB/zAdBgNV\n"
+    "HQ4EFgQU3YcFHBnqY6c03/Ydoy94fa59+F8wLgYDVR0RBCcwJYILZXhhbXBsZS5j\n"
+    "b22HBH8AAAGHEAAAAAAAAAAAAAAAAAAAAAEwDQYJKoZIhvcNAQELBQADggEBANI7\n"
+    "DKO8ub7SOwesjcnt4fCfHumink2ixo2nxW/DpnNWBaAhA529HCAa7BgAFzQi/ES1\n"
+    "ALEFEr0Phad4KA+9qrQXIJsMV/GTPPsTVuluU9Uhq6V2M8YelQuoMDbnjZDWcdZV\n"
+    "0arpMdVT8vU4eOE7XWlo83gA08+1mX4WbEI5XaHDeKE4ogifCGamroOTzJidfMg/\n"
+    "tz01iclVt7Fkri6PYcUS+8ySYrc2XH+h1P2xZCNP8VhAsrpnqQqGS85TTSUkOgZt\n"
+    "ITQpEVnLIDwZSX0zYrN5z8gChVhzzMR8XmsOpMUBJL5qcpWrqy/ZswmsMvjVXmeN\n"
+    "zQLoXduc3BgLtaXv7O0=\n"
+    "-----END CERTIFICATE-----";
+
+/* localhostKey is the private key for localhostCert. */
+static const char localhost_key[] =
+    "\n"
+    "-----BEGIN RSA TESTING KEY-----\n"
+    "MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDeSlcT6s/oeoRw\n"
+    "t0AYO2cAmVKpeDG8+y762IPtQgkSZ21nStjEz7NB4twiswBBOh+dqzztZKnXCKNg\n"
+    "9T8Njwu/0wesPAEi7piUGmXwZW2mXrGwX67SLohLUirPyMMaee5p/UW41JEILt50\n"
+    "s464GxT65Lc+pSeC3wumszetpJZAk37KQg041EpOfHZcoCMHmJCIlhwIeX/iryk9\n"
+    "WnoXjTJCxMdSmflc/mP6BJxCo0cQXJ1CMMyK2f31270avBWvZy7gzvBdCQ3DNWYP\n"
+    "YMz7xZnRcvH4nwtx/7n5XC1SaeCJrRFhKFT77TkCwMJLpZJ7FwAgVbArvyYA1O2H\n"
+    "Wui5NkKtAgMBAAECggEAG4ZS//lcYyoAikB2pEl+uJlDng5vAjqMF62FsHQz0V6T\n"
+    "Mm4XJ0+cn7TqkzVc+7apwYk5kx+a1DCSomfbtd8XklocIhyP+3ZV2EjohHrat/YT\n"
+    "xIYkjIwMfl8fQ/lVB0s/1UnyPy+7AatkCklNi8h2sZZuhkhG+zKJK8wXQd4WaMpf\n"
+    "lcIaDijMdu0UTxUO+rISbjVpfL6HswTDUan6LhhxSa9F3zesLqgClKZIqzR8HCtM\n"
+    "83QwK+kiW00D3pVZT4qHfFouoPrszP/qm/17wjxBmk83rKKsF2AnmipBaHR+MHou\n"
+    "tCarJV35//h6z6m0VnAdrYhREif34s8H0pYbKng8oQKBgQD2lCbQu7W/FDu+D4u2\n"
+    "F9wXdjZGplwUHaldfMUsMvawMSt86JYg9yVCHPFnWLhCBYT9Q1B1biqXu5YHwvyi\n"
+    "F/SCVDBaN1pLAkNF5i3McgA2Zw9TbFwinJFpZSa5hSdBiZgpaFZj0KhJqA2ayaSQ\n"
+    "wbTt1aN2oix1wdd9VU7cb5v6GQKBgQDmyJ5JUee6Vc6r/iucO4JkTijzwfPkSqOc\n"
+    "zC7YmcWAE8oTWZf5ozM4vtuUhAyrfiHBaT8uUbyb3+E6MqRrZJmaAPEk9ALOvmZC\n"
+    "vSZD5htzzUsLi7bR7e9PJjXoT+3V1EB3VyHnMv6LCbx/vSs/XI8VrahlDoJAW4rP\n"
+    "UgGE703HtQKBgQCeIaLG6CqFMQejOrsBe0m1biUep9+TMvaDstmMH97eXZojD9H/\n"
+    "sB+fx4n1GguIo5uHBB1cQdtk1XNA5QY5OZ2f2zfrE2Z/hiL4d8ZVP6LtQKiuemaX\n"
+    "98q1SZ5NCZyERiZkH7qPZqgWHIUlCD3Wa7OJdyHOmfBjUH3Ord/WNGlWOQKBgQCv\n"
+    "RLVRoa6HSRuIa6PbJybD3sgjN61uN3FCZ588SKxBtMXHJEfTAyqncet5Q0AMDeK8\n"
+    "7J1bJCBFkSWP+V39YY119Dkvg1GOifNHxDcHYf5/V+4iep0Bmd4hEjfmkq1hs6yx\n"
+    "9a5907CVD3Pk31m06SqRoC0/cmFhVyR4hyM4PjWn8QKBgFz97Xe4VlllQ4v1lY3g\n"
+    "1LXoF3oVBAcIiDOfnJuJKKUNJuQPfp7Z2/gisX/8RDPO+iBqKesUQxTKC2v6MOue\n"
+    "YMR7L8AAn1wBFU5dioARmfBcVWBOpMZIHzHUqsnTqGzuIPTfnaZWxz13PbBxEiGS\n"
+    "+NeMNAdZn3grwXTdcD3VBVHs\n"
+    "-----END RSA TESTING KEY-----";
+
+static Slice pem_of(const char *s) {
+    return bytes_of(str_from_cstr(s));
+}
+
+/* testingKey, from a. */
+static Slice testing_key(Alloc *a, const char *s) {
+    return bytes_of(
+        strings_replace_all(a, str_from_cstr(s), S("TESTING KEY"), S("PRIVATE KEY")));
+}
+
+static X509CertPool *test_root_cas;
+static SyncOnce test_init_once;
+
+static Time time_unix_zero(void *env) {
+    (void)env;
+    return time_from_unix(0, 0);
+}
+
+static void test_hook_start_tls(TlsConfig *config) {
+    config->root_cas = test_root_cas;
+    config->time = (TlsTimeFunc){time_unix_zero, NULL};
+}
+
+static void test_init_once_fn(void *env) {
+    (void)env;
+    test_root_cas = x509_new_cert_pool(heap_allocator());
+    if (test_root_cas != NULL)
+        (void)x509_cert_pool_append_certs_from_pem(test_root_cas,
+                                                   pem_of(localhost_cert));
+    burrow__smtp_test_hook_start_tls = test_hook_start_tls;
+}
+
+/* Go's init. Not in Go: the tests that need it call it first, and it runs
+ * once. The pool is never given back, as Go's is not. */
+static void test_init(void) {
+    sync_once_do(&test_init_once, BURROW_FN(Func, test_init_once_fn, NULL));
+}
+
+static NetListener new_local_listener(TestingT *t) {
+    Error err = BURROW_NO_ERROR;
+    NetListener ln = net_listen(heap_allocator(), S("tcp"), S("127.0.0.1:0"), &err);
+    if (BURROW_FAILED(err)) {
+        err = BURROW_NO_ERROR;
+        ln = net_listen(heap_allocator(), S("tcp6"), S("[::1]:0"), &err);
+    }
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    return ln;
+}
+
+/* Not in Go: ln.Addr().String(), made in a. */
+static Str listener_addr(Alloc *a, NetListener ln) {
+    NetAddr addr = ln.vt->addr(ln.data);
+    return addr.vt->string(addr.data, a);
+}
+
+/* smtpSender.send, which writes f and "\r\n" to c in one write. */
+static void send_line(NetConn c, const char *f) {
+    char buf[128];
+    size_t n = strlen(f);
+    if (n + 2 > sizeof buf)
+        return;
+    memcpy(buf, f, n);
+    memcpy(buf + n, "\r\n", 2);
+    Error err;
+    (void)c.vt->writer.write(
+        c.data, slice_from((Byte *)buf, (Int)(n + 2), (Int)(n + 2), TYPE_BYTE), &err);
+}
+
+/* What bufio.NewScanner reads, c as an IoReader. */
+static IoReader conn_reader(NetConn c) {
+    return (IoReader){&c.vt->reader, c.data};
+}
+
+/* The end of serverHandle and serverHandleTLS, s.Err(), retained in a before s
+ * goes. */
+static Error scanner_end(Alloc *a, BufioScanner *s) {
+    Error err = error_retain(a, bufio_scanner_err(s));
+    bufio_scanner_free(s);
+    return err;
+}
+
+/* Not in Go, for both: where Go calls t.Fatalf, these report the error, set
+ * *failed and return, so that the test can wait for the client before it
+ * ends. */
+static Error server_handle_tls(TestingT *t, Alloc *a, NetConn c, bool *failed) {
+    BufioScanner *s = bufio_new_scanner(a, conn_reader(c));
+    if (s == NULL)
+        return burrow_err_out_of_memory;
+    while (bufio_scanner_scan(s)) {
+        Str text = bufio_scanner_text(s);
+        if (str_eq(text, S("EHLO localhost"))) {
+            send_line(c, "250 Ok");
+        } else if (str_eq(text, S("MAIL FROM:<joe1@example.com>"))) {
+            send_line(c, "250 Ok");
+        } else if (str_eq(text, S("RCPT TO:<joe2@example.com>"))) {
+            send_line(c, "250 Ok");
+        } else if (str_eq(text, S("DATA"))) {
+            send_line(c, "354 send the mail data, end with .");
+            send_line(c, "250 Ok");
+        } else if (str_eq(text, S("Subject: test")) || str_eq(text, S("")) ||
+                   str_eq(text, S("howdy!")) || str_eq(text, S("."))) {
+        } else if (str_eq(text, S("QUIT"))) {
+            send_line(c, "221 127.0.0.1 Service closing transmission channel");
+            bufio_scanner_free(s);
+            return BURROW_NO_ERROR;
+        } else {
+            testing_t_errorf_v(t, "unrecognized command during TLS: %q", text);
+            *failed = true;
+            bufio_scanner_free(s);
+            return BURROW_NO_ERROR;
+        }
+    }
+    return scanner_end(a, s);
+}
+
+/* smtp server, finely tailored to deal with our own client only! */
+static Error server_handle(TestingT *t, Alloc *a, NetConn c, bool *failed) {
+    *failed = false;
+    send_line(c, "220 127.0.0.1 ESMTP service ready");
+    BufioScanner *s = bufio_new_scanner(a, conn_reader(c));
+    if (s == NULL)
+        return burrow_err_out_of_memory;
+    while (bufio_scanner_scan(s)) {
+        Str text = bufio_scanner_text(s);
+        if (str_eq(text, S("EHLO localhost"))) {
+            send_line(c, "250-127.0.0.1 ESMTP offers a warm hug of welcome");
+            send_line(c, "250-STARTTLS");
+            send_line(c, "250 Ok");
+        } else if (str_eq(text, S("STARTTLS"))) {
+            send_line(c, "220 Go ahead");
+            bufio_scanner_free(s);
+            Error err;
+            TlsCertificate keypair = tls_x509_key_pair(
+                a, pem_of(localhost_cert), testing_key(a, localhost_key), &err);
+            if (BURROW_FAILED(err))
+                return err;
+            TlsConfig config;
+            memset(&config, 0, sizeof config);
+            config.certificates = slice_from(&keypair, 1, 1, TYPE_TLS_CERTIFICATE);
+            TlsConn *tc = tls_server(heap_allocator(), c, &config);
+            if (tc == NULL) {
+                err = burrow_err_out_of_memory;
+            } else {
+                err = server_handle_tls(t, a, tls_conn_as_net_conn(tc), failed);
+                (void)tls_conn_close(tc);
+                tls_conn_free(tc);
+            }
+            tls_config_release(&config);
+            return err;
+        } else {
+            testing_t_errorf_v(t, "unrecognized command: %q", text);
+            *failed = true;
+            bufio_scanner_free(s);
+            return BURROW_NO_ERROR;
+        }
+    }
+    return scanner_end(a, s);
+}
+
+static Error send_mail(Str host_port) {
+    Str from = S("joe1@example.com");
+    Str to[] = {S("joe2@example.com")};
+    return smtp_send_mail(host_port, (SmtpAuth){NULL, NULL}, from,
+                          slice_from(to, 1, 1, TYPE_STRING),
+                          bytes_of(S("Subject: test\n\nhowdy!")));
+}
+
+/* The server goroutine of TestNewClientWithTLS. */
+typedef struct GreetServer {
+    TestingT *t;
+    NetListener ln;
+} GreetServer;
+
+static void greet_serve(void *env) {
+    GreetServer *g = (GreetServer *)env;
+    Error err;
+    NetConn conn = g->ln.vt->accept(g->ln.data, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(g->t, "server: accept: %v", err);
+        return;
+    }
+    (void)conn.vt->writer.write(conn.data, bytes_of(S("220 SIGNS\r\n")), &err);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(g->t, "server: write: %v", err);
+    (void)conn.vt->closer.close(conn.data);
+    tls_conn_free(tls_conn_from_net_conn(conn));
+}
+#endif
+
+static void TestNewClientWithTLS(TestingT *t) {
+#if !defined(HAVE_SOCKETS)
+    testing_t_skip_v(t, "sockets here need the readiness poll FD");
+#else
+    ARENA_BEGIN;
+    Error err;
+    TlsCertificate cert = tls_x509_key_pair(a, pem_of(localhost_cert),
+                                            testing_key(a, localhost_key), &err);
+    if (BURROW_FAILED(err))
+        FATALF("loadcert: %v", err);
+
+    TlsConfig config;
+    memset(&config, 0, sizeof config);
+    config.certificates = slice_from(&cert, 1, 1, TYPE_TLS_CERTIFICATE);
+    /* Not in Go: set here, before the server goroutine starts, rather than
+     * after, so that the write comes before anything that goroutine reads.
+     * Only a client looks at it. */
+    config.insecure_skip_verify = true;
+
+    NetListener ln =
+        tls_listen(heap_allocator(), S("tcp"), S("127.0.0.1:0"), &config, &err);
+    if (BURROW_FAILED(err)) {
+        ln = tls_listen(heap_allocator(), S("tcp"), S("[::1]:0"), &config, &err);
+        if (BURROW_FAILED(err))
+            FATALF("server: listen: %v", err);
+    }
+
+    GreetServer g = {t, ln};
+    SyncWaitGroup wg = {0};
+    if (!sync_wait_group_go(&wg, BURROW_FN(Func, greet_serve, &g))) {
+        tls_listener_free(ln);
+        FATALF("no goroutine for the server");
+    }
+
+    /* Not in Go: the failures below are errors that skip to the end rather
+     * than fatal ones, so that the server goroutine is waited for before what
+     * it uses goes away. */
+    Str addr = listener_addr(a, ln);
+    TlsConn *conn = tls_dial(heap_allocator(), S("tcp"), addr, &config, &err);
+    if (conn == NULL) {
+        testing_t_errorf_v(t, "client: dial: %v", err);
+    } else {
+        SmtpClient *client = smtp_new_client(a, tls_conn_as_net_conn(conn), addr, &err);
+        if (client == NULL) {
+            testing_t_errorf_v(t, "smtp: newclient: %v", err);
+        } else {
+            if (!client->tls)
+                testing_t_errorf_v(t, "client.tls Got: %t Expected: %t", client->tls,
+                                   (bool)true);
+            smtp_client_free(client);
+        }
+        (void)tls_conn_close(conn);
+        tls_conn_free(conn);
+    }
+    sync_wait_group_wait(&wg);
+    tls_listener_free(ln);
+    tls_config_release(&config);
+    ARENA_END;
+#endif
+}
+
 /* ------------------------------------------------------------------ Hello */
 
 static const char base_hello_server[] = "220 hello world\n"
@@ -631,8 +950,6 @@ static const char *const hello_client[] = {
 static void TestHello(TestingT *t) {
     ARENA_BEGIN;
     for (int i = 0; i < (int)(sizeof hello_server / sizeof hello_server[0]); i++) {
-        if (i == 1)
-            continue; /* StartTLS, which waits for crypto/tls */
         Str server = fmt_sprintf_v(a, "%s%s", str_from_cstr(base_hello_server),
                                    str_from_cstr(hello_server[i]));
         Str client = fmt_sprintf_v(a, "%s%s", str_from_cstr(base_hello_client),
@@ -659,6 +976,11 @@ static void TestHello(TestingT *t) {
                 testing_t_errorf_v(t, "Expected Hello to be rejected due to a message "
                                       "injection attempt");
             err = smtp_client_hello(c, S("customhost"));
+            break;
+        case 1:
+            err = smtp_client_start_tls(c, NULL);
+            if (str_eq(error_text(err), S("502 \"Not implemented\"")))
+                err = BURROW_NO_ERROR;
             break;
         case 2:
             err = smtp_client_verify(c, S("test@example.com"));
@@ -929,39 +1251,6 @@ static void TestSendMailWithAuth(TestingT *t) {
 #endif
 }
 
-/* Not Go's. Without crypto/tls, a server that offers STARTTLS gets an error
- * and no mail, where Go would have sent the mail over TLS. */
-static void TestSendMailRefusesSTARTTLS(TestingT *t) {
-#if !defined(HAVE_SOCKETS)
-    testing_t_skip_v(t, "sockets here need the readiness poll FD");
-#else
-    ARENA_BEGIN;
-    static const char *const data[] = {
-        "220 hello world",
-        "250-mx.google.com at your service",
-        "250 STARTTLS",
-    };
-    ScriptServer s;
-    Str addr = script_start(t, a, &s, data, (Int)(sizeof data / sizeof data[0]));
-    if (addr.len == 0) {
-        ARENA_END;
-        return;
-    }
-    Str to[] = {S("other@example.com")};
-    Error err = smtp_send_mail(addr, (SmtpAuth){NULL, NULL}, S("test@example.com"),
-                               slice_from(to, 1, 1, TYPE_STRING),
-                               bytes_of(S(SEND_MAIL_MESSAGE)));
-    if (!errors_is(err, smtp_err_no_tls))
-        testing_t_errorf_v(t, "SendMail = %v, want %v", err, smtp_err_no_tls);
-    Str cmds = script_end(&s, a);
-    if (BURROW_FAILED(s.err))
-        testing_t_errorf_v(t, "server error: %v", s.err);
-    if (!str_eq(cmds, S("EHLO localhost\r\n")))
-        testing_t_errorf_v(t, "server read %q; want %q", cmds, S("EHLO localhost\r\n"));
-    ARENA_END;
-#endif
-}
-
 static void TestAuthFailed(TestingT *t) {
     ARENA_BEGIN;
     Faker fake;
@@ -1002,6 +1291,153 @@ static void TestAuthFailed(TestingT *t) {
     ARENA_END;
 }
 
+#if defined(HAVE_SOCKETS)
+/* The client goroutine of TestTLSClient, with the arena its error is kept
+ * in. */
+typedef struct SendMailJob {
+    Str addr;
+    Arena ar;
+    Error err;
+} SendMailJob;
+
+static void send_mail_job(void *env) {
+    SendMailJob *j = (SendMailJob *)env;
+    j->err = error_retain(arena_allocator(&j->ar), send_mail(j->addr));
+}
+
+/* The two goroutines of TestTLSConnState. */
+typedef struct ConnStateTest {
+    TestingT *t;
+    NetListener ln;
+    Str addr;
+} ConnStateTest;
+
+static void conn_state_server(void *env) {
+    ConnStateTest *s = (ConnStateTest *)env;
+    Error err;
+    NetConn c = s->ln.vt->accept(s->ln.data, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(s->t, "Server accept: %v", err);
+        return;
+    }
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    bool failed;
+    err = server_handle(s->t, arena_allocator(&ar), c, &failed);
+    if (!failed && BURROW_FAILED(err))
+        testing_t_errorf_v(s->t, "server error: %v", err);
+    (void)c.vt->closer.close(c.data);
+    net_conn_free(c);
+    arena_free(&ar);
+}
+
+static void conn_state_client(void *env) {
+    ConnStateTest *s = (ConnStateTest *)env;
+    Error err;
+    SmtpClient *c = smtp_dial(heap_allocator(), s->addr, &err);
+    if (c == NULL) {
+        testing_t_errorf_v(s->t, "Client dial: %v", err);
+        return;
+    }
+    TlsConfig cfg;
+    memset(&cfg, 0, sizeof cfg);
+    cfg.server_name = S("example.com");
+    burrow__smtp_test_hook_start_tls(&cfg); /* set the RootCAs */
+    err = smtp_client_start_tls(c, &cfg);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(s->t, "StartTLS: %v", err);
+    } else {
+        TlsConnectionState cs;
+        if (!smtp_client_tls_connection_state(c, &cs)) {
+            testing_t_errorf_v(s->t,
+                               "TLSConnectionState returned ok == false; want true");
+        } else if (cs.version == 0 || !cs.handshake_complete) {
+            Any csv = BURROW_ANY(TYPE_TLS_CONNECTION_STATE, &cs);
+            testing_t_errorf_v(s->t,
+                               "ConnectionState = %#v; expect non-zero Version and "
+                               "HandshakeComplete",
+                               csv);
+        }
+    }
+    (void)smtp_client_quit(c);
+    smtp_client_free(c);
+    tls_config_release(&cfg);
+}
+#endif
+
+static void TestTLSClient(TestingT *t) {
+#if defined(BURROW_OS_FREEBSD) || defined(BURROW_OS_WASI)
+    /* testenv.SkipFlaky(t, 19229). Not in Go: there is no -flaky flag to run
+     * it anyway. */
+    testing_t_skip_v(t, "skipping known flaky test without the -flaky flag; see "
+                        "golang.org/issue/19229");
+#endif
+#if !defined(HAVE_SOCKETS)
+    testing_t_skip_v(t, "sockets here need the readiness poll FD");
+#else
+    test_init();
+    ARENA_BEGIN;
+    NetListener ln = new_local_listener(t);
+    SendMailJob job;
+    memset(&job, 0, sizeof job);
+    job.addr = listener_addr(a, ln);
+    arena_init(&job.ar, NULL, 0);
+    SyncWaitGroup wg = {0};
+    if (!sync_wait_group_go(&wg, BURROW_FN(Func, send_mail_job, &job))) {
+        net_listener_free(ln);
+        arena_free(&job.ar);
+        FATALF("no goroutine for the client");
+    }
+
+    /* Not in Go: the failures below are errors rather than fatal ones, and
+     * the test waits for the client before it ends. Go's fatal ones leave
+     * that to its deferred Closes. */
+    bool failed = false;
+    Error err;
+    NetConn conn = ln.vt->accept(ln.data, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "failed to accept connection: %v", err);
+        failed = true;
+        (void)ln.vt->closer.close(ln.data);
+    } else {
+        err = server_handle(t, a, conn, &failed);
+        if (!failed && BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "failed to handle connection: %v", err);
+            failed = true;
+        }
+        (void)conn.vt->closer.close(conn.data);
+        net_conn_free(conn);
+    }
+    sync_wait_group_wait(&wg);
+    if (!failed && BURROW_FAILED(job.err))
+        testing_t_errorf_v(t, "client error: %v", job.err);
+    net_listener_free(ln);
+    arena_free(&job.ar);
+    ARENA_END;
+#endif
+}
+
+static void TestTLSConnState(TestingT *t) {
+#if !defined(HAVE_SOCKETS)
+    testing_t_skip_v(t, "sockets here need the readiness poll FD");
+#else
+    test_init();
+    ARENA_BEGIN;
+    NetListener ln = new_local_listener(t);
+    ConnStateTest s = {t, ln, listener_addr(a, ln)};
+    SyncWaitGroup wg = {0};
+    if (!sync_wait_group_go(&wg, BURROW_FN(Func, conn_state_server, &s))) {
+        testing_t_errorf_v(t, "no goroutine for the server");
+    } else if (!sync_wait_group_go(&wg, BURROW_FN(Func, conn_state_client, &s))) {
+        testing_t_errorf_v(t, "no goroutine for the client");
+        (void)ln.vt->closer.close(ln.data);
+    }
+    sync_wait_group_wait(&wg);
+    net_listener_free(ln);
+    ARENA_END;
+#endif
+}
+
 #define TESTS(X)                                                                       \
     X(TestAuth)                                                                        \
     X(TestAuthPlain)                                                                   \
@@ -1011,10 +1447,12 @@ static void TestAuthFailed(TestingT *t) {
     X(TestExtensions)                                                                  \
     X(TestNewClient)                                                                   \
     X(TestNewClient2)                                                                  \
+    X(TestNewClientWithTLS)                                                            \
     X(TestHello)                                                                       \
     X(TestSendMail)                                                                    \
     X(TestSendMailWithAuth)                                                            \
-    X(TestSendMailRefusesSTARTTLS)                                                     \
-    X(TestAuthFailed)
+    X(TestAuthFailed)                                                                  \
+    X(TestTLSClient)                                                                   \
+    X(TestTLSConnState)
 
 TESTING_MAIN(TESTS)

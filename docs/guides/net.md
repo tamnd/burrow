@@ -1146,7 +1146,7 @@ C: QUIT
 sent: <nil>
 ```
 
-`smtp_plain_auth` and `smtp_crammd5_auth` make the two mechanisms Go has. PLAIN sends the password as it is, so, as in Go, it refuses unless the connection uses TLS or the server is on localhost. STARTTLS needs `crypto/tls`, which is not ported yet, so `smtp_client_start_tls` is still to come. Until then `smtp_send_mail` gives `smtp_err_no_tls` for a server that offers STARTTLS, where Go would have switched to TLS, rather than send the mail in the clear.
+`smtp_plain_auth` and `smtp_crammd5_auth` make the two mechanisms Go has. PLAIN sends the password as it is, so, as in Go, it refuses unless the connection uses TLS or the server is on localhost. `smtp_client_start_tls` sends STARTTLS and switches the connection to TLS with the `TlsConfig` you give it, which has to outlive the client. After that, `smtp_client_tls_connection_state` gives the state of the TLS connection. `smtp_send_mail` does this by itself when the server offers STARTTLS, as Go's SendMail does, with a config that names the host it dialled.
 
 ## HTTP headers and content types
 

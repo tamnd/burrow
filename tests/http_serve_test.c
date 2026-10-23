@@ -1,11 +1,15 @@
-/* The HTTP/1 server: what it sends back for a request, its errors, its hooks,
+/* Derived from Go's src/net/http/serve_test.go.
+ * Go source: go1.27.1.
+ *
+ * The HTTP/1 server: what it sends back for a request, its errors, its hooks,
  * hijacking, Shutdown and Close, and the handlers that wrap others.
  *
- * Most cases follow Go's src/net/http/serve_test.go, which feeds a request
- * through a connection that lives in memory and looks at the bytes that come
- * back. The responses here were made by Go 1.27.1 over net.Pipe with the same
- * handlers, with the Date lines taken out, since they change. The ones that
- * need a real socket skip where TCP is not here yet.
+ * The first tests are burrow's own. They follow serve_test.go, which feeds a
+ * request through a connection that lives in memory and looks at the bytes
+ * that come back. The responses here were made by Go 1.27.1 over net.Pipe with
+ * the same handlers, with the Date lines taken out, since they change. The
+ * tests after them are Go's, the ones that pin its fixes for request
+ * smuggling. The ones that need a real socket skip where TCP is not here yet.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -32,6 +36,7 @@
 #include "burrow/panic.h"
 #include "burrow/strings.h"
 #include "burrow/sync.h"
+#include "burrow/syscall.h"
 #include "burrow/time.h"
 
 #include <stdint.h>
@@ -41,6 +46,8 @@
 #if defined(BURROW_NETPOLL_READINESS) && !defined(BURROW_OS_WASI)
 #define HAVE_TCP 1
 #endif
+
+#define LEN(a) ((Int)(sizeof(a) / sizeof((a)[0])))
 
 static void need_tcp(TestingT *t) {
 #if !defined(HAVE_TCP)
@@ -969,6 +976,655 @@ static void TestShutdownGivesUpWhenTheContextIsDone(TestingT *t) {
     net_tcp_listener_free(l);
 }
 
+/* ------------------------------------------ requests that smuggle another
+ *
+ * The rest of the file is Go's, from serve_test.go, and each of these is the
+ * test that pins a request smuggling fix. Go's setParallel and afterTest are
+ * left out. Go starts Serve and waits for the connection to close. Not in Go:
+ * serve_one_conn then waits for Serve and for the connection's goroutine, so
+ * that the test can give the connection back. */
+
+typedef struct DummyAddr {
+    Str s;
+} DummyAddr;
+
+static Str dummy_addr_network(void *self) {
+    return ((const DummyAddr *)self)->s;
+}
+
+static Str dummy_addr_string(void *self, Alloc *a) {
+    (void)a;
+    return ((const DummyAddr *)self)->s;
+}
+
+static const NetAddrVT dummy_addr_vt = {NULL, dummy_addr_network, dummy_addr_string};
+static const DummyAddr local_addr = {BURROW_S_INIT("local-addr")};
+static const DummyAddr remote_addr = {BURROW_S_INIT("remote-addr")};
+
+/* noopConn. */
+static NetAddr noop_conn_local_addr(void *self) {
+    (void)self;
+    return (NetAddr){&dummy_addr_vt, (void *)(uintptr_t)&local_addr};
+}
+
+static NetAddr noop_conn_remote_addr(void *self) {
+    (void)self;
+    return (NetAddr){&dummy_addr_vt, (void *)(uintptr_t)&remote_addr};
+}
+
+static Error noop_conn_set_deadline(void *self, Time t) {
+    (void)self;
+    (void)t;
+    return BURROW_NO_ERROR;
+}
+
+typedef struct TestConn {
+    SyncMutex read_mu; /* for TestHandlerBodyClose */
+    BytesBuffer read_buf;
+    BytesBuffer write_buf;
+    Chan *closec; /* 1-buffered; receives true when Close is called */
+} TestConn;
+
+static Int test_conn_read(void *self, Slice b, Error *err) {
+    TestConn *c = (TestConn *)self;
+    sync_mutex_lock(&c->read_mu);
+    Int n = bytes_buffer_read(&c->read_buf, b, err);
+    sync_mutex_unlock(&c->read_mu);
+    return n;
+}
+
+static Int test_conn_write(void *self, Slice b, Error *err) {
+    TestConn *c = (TestConn *)self;
+    return bytes_buffer_write(&c->write_buf, b, err);
+}
+
+static Error test_conn_close(void *self) {
+    TestConn *c = (TestConn *)self;
+    bool v = true;
+    (void)chan_try_send(c->closec, &v);
+    return BURROW_NO_ERROR;
+}
+
+static const NetConnVT test_conn_vt = {
+    {NULL, test_conn_read}, {NULL, test_conn_write}, {NULL, test_conn_close},
+    noop_conn_local_addr,   noop_conn_remote_addr,   noop_conn_set_deadline,
+    noop_conn_set_deadline, noop_conn_set_deadline,
+};
+
+/* newTestConn. Not in Go: the connection comes from a, with a channel from the
+ * heap that test_conn_free gives back. */
+static TestConn *new_test_conn(TestingT *t, Alloc *a) {
+    TestConn *c = BURROW_NEW(a, TestConn);
+    if (c == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    c->read_buf = BYTES_BUFFER(a);
+    c->write_buf = BYTES_BUFFER(a);
+    c->closec = chan_make(heap_allocator(), TYPE_BOOL, 1);
+    if (c->closec == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    return c;
+}
+
+static void test_conn_free(TestConn *c) {
+    bytes_buffer_free(&c->read_buf);
+    bytes_buffer_free(&c->write_buf);
+    chan_free(c->closec);
+}
+
+/* Not in Go: go srv.Serve(ln) with a oneConnListener for conn, and
+ * <-closec, and then the wait for Serve and the connection to be done with
+ * that comes before the test gives the connection back. */
+static void serve_one_conn(HttpServer *srv, NetConn conn, Chan *closec) {
+    OneConnListener ol = {conn, false};
+    ServeJob sj = {srv, {&one_vt, &ol}, BURROW_NO_ERROR};
+    SyncWaitGroup wg = {0};
+    sync_wait_group_go(&wg, BURROW_FN(Func, serve_job, &sj));
+    bool v;
+    (void)chan_recv(closec, &v);
+    sync_wait_group_wait(&wg);
+    http_server_free(srv);
+}
+
+/* testHandlerBodyConsumer represents a function injected into a test handler to
+ * vary work done on a request Body. */
+typedef struct TestHandlerBodyConsumer {
+    const char *name;
+    void (*f)(IoReadCloser r);
+} TestHandlerBodyConsumer;
+
+static void consume_nil(IoReadCloser r) {
+    (void)r;
+}
+
+static void consume_close(IoReadCloser r) {
+    (void)r.vt->closer.close(r.data);
+}
+
+static void consume_discard(IoReadCloser r) {
+    Error err = BURROW_NO_ERROR;
+    (void)io_copy(heap_allocator(), io_discard, io_read_closer_as_io_reader(r), &err);
+}
+
+static const TestHandlerBodyConsumer test_handler_body_consumers[] = {
+    {"nil", consume_nil},
+    {"close", consume_close},
+    {"discard", consume_discard},
+};
+
+/* What the handlers below need, which Go's closures capture. */
+typedef struct SecretTest {
+    TestingT *t;
+    const TestHandlerBodyConsumer *handler;
+    int num_reqs;
+} SecretTest;
+
+static void serve_no_secret(void *env, HttpResponseWriter w, HttpRequest *req) {
+    (void)w;
+    SecretTest *st = (SecretTest *)env;
+    st->num_reqs++;
+    if (strings_contains(req->url->path, BURROW_S("secret")))
+        testing_t_error_v(st->t,
+                          "Request for /secret encountered, should not have happened.");
+    st->handler->f(req->body);
+}
+
+static void serve_no_secret_named(void *env, HttpResponseWriter w, HttpRequest *req) {
+    (void)w;
+    SecretTest *st = (SecretTest *)env;
+    st->num_reqs++;
+    if (strings_contains(req->url->path, BURROW_S("secret")))
+        testing_t_errorf_v(
+            st->t,
+            "Handler %s, Request for /secret encountered, should not have "
+            "happened.",
+            cs(st->handler->name));
+    st->handler->f(req->body);
+}
+
+static void TestRequestBodyReadErrorClosesConnection(TestingT *t) {
+    for (Int i = 0; i < LEN(test_handler_body_consumers); i++) {
+        const TestHandlerBodyConsumer *handler = &test_handler_body_consumers[i];
+        Arena ar;
+        arena_init(&ar, heap_allocator(), 0);
+        TestConn *conn = new_test_conn(t, arena_allocator(&ar));
+        (void)bytes_buffer_write_string(
+            &conn->read_buf,
+            BURROW_S("POST /public HTTP/1.1\r\n"
+                     "Host: test\r\n"
+                     "Transfer-Encoding: chunked\r\n"
+                     "\r\n"
+                     "hax\r\n" /* Invalid chunked encoding */
+                     "GET /secret HTTP/1.1\r\n"
+                     "Host: test\r\n"
+                     "\r\n"),
+            NULL);
+
+        SecretTest st = {t, handler, 0};
+        HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_no_secret, &st);
+        HttpServer srv = {.handler = http_handler_func_as_handler(&f)};
+        serve_one_conn(&srv, (NetConn){&test_conn_vt, conn}, conn->closec);
+        if (st.num_reqs != 1)
+            testing_t_errorf_v(t, "Handler %v: got %d reqs; want 1", cs(handler->name),
+                               st.num_reqs);
+        test_conn_free(conn);
+        arena_free(&ar);
+    }
+}
+
+static void TestInvalidTrailerClosesConnection(TestingT *t) {
+    for (Int i = 0; i < LEN(test_handler_body_consumers); i++) {
+        const TestHandlerBodyConsumer *handler = &test_handler_body_consumers[i];
+        Arena ar;
+        arena_init(&ar, heap_allocator(), 0);
+        TestConn *conn = new_test_conn(t, arena_allocator(&ar));
+        (void)bytes_buffer_write_string(&conn->read_buf,
+                                        BURROW_S("POST /public HTTP/1.1\r\n"
+                                                 "Host: test\r\n"
+                                                 "Trailer: hack\r\n"
+                                                 "Transfer-Encoding: chunked\r\n"
+                                                 "\r\n"
+                                                 "3\r\n"
+                                                 "hax\r\n"
+                                                 "0\r\n"
+                                                 "I'm not a valid trailer\r\n"
+                                                 "GET /secret HTTP/1.1\r\n"
+                                                 "Host: test\r\n"
+                                                 "\r\n"),
+                                        NULL);
+
+        SecretTest st = {t, handler, 0};
+        HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_no_secret_named, &st);
+        HttpServer srv = {.handler = http_handler_func_as_handler(&f)};
+        serve_one_conn(&srv, (NetConn){&test_conn_vt, conn}, conn->closec);
+        if (st.num_reqs != 1)
+            testing_t_errorf_v(t, "Handler %s: got %d reqs; want 1", cs(handler->name),
+                               st.num_reqs);
+        test_conn_free(conn);
+        arena_free(&ar);
+    }
+}
+
+/* One cue of a slowTestConn's script: a time.Duration to sleep when sleep is
+ * set, and a string to read when it is not. */
+typedef struct SlowCue {
+    bool sleep;
+    Duration d;
+    Str s;
+} SlowCue;
+
+/* slowTestConn is a net.Conn that provides a means to simulate parts of a
+ * request being received piecemeal. Deadlines can be set and enforced in both
+ * Read and Write. */
+typedef struct SlowTestConn {
+    /* over multiple calls to Read, time.Durations are slept, strings are read. */
+    SlowCue script[4];
+    Int pos, n;
+    Chan *closec;
+
+    SyncMutex mu; /* guards rd/wd */
+    Time rd, wd;  /* read, write deadline */
+
+    /* Not in Go: syscall.ETIMEDOUT as an Error. */
+    Error timedout;
+} SlowTestConn;
+
+static Error slow_test_conn_set_read_deadline(void *self, Time t) {
+    SlowTestConn *c = (SlowTestConn *)self;
+    sync_mutex_lock(&c->mu);
+    c->rd = t;
+    sync_mutex_unlock(&c->mu);
+    return BURROW_NO_ERROR;
+}
+
+static Error slow_test_conn_set_write_deadline(void *self, Time t) {
+    SlowTestConn *c = (SlowTestConn *)self;
+    sync_mutex_lock(&c->mu);
+    c->wd = t;
+    sync_mutex_unlock(&c->mu);
+    return BURROW_NO_ERROR;
+}
+
+static Error slow_test_conn_set_deadline(void *self, Time t) {
+    (void)slow_test_conn_set_read_deadline(self, t);
+    (void)slow_test_conn_set_write_deadline(self, t);
+    return BURROW_NO_ERROR;
+}
+
+static Int slow_test_conn_read(void *self, Slice b, Error *err) {
+    SlowTestConn *c = (SlowTestConn *)self;
+    Int n = 0;
+    *err = BURROW_NO_ERROR;
+    sync_mutex_lock(&c->mu);
+    for (;;) {
+        if (!time_is_zero(c->rd) && time_after(time_now(), c->rd)) {
+            *err = c->timedout;
+            break;
+        }
+        if (c->pos == c->n) {
+            *err = io_eof;
+            break;
+        }
+
+        SlowCue *cue = &c->script[c->pos];
+        if (cue->sleep) {
+            if (!time_is_zero(c->rd)) {
+                /* If the deadline falls in the middle of our sleep window,
+                 * deduct part of the sleep, then return a timeout. */
+                Duration remaining = time_until(c->rd);
+                if (remaining < cue->d) {
+                    cue->d -= remaining;
+                    time_sleep(remaining);
+                    *err = c->timedout;
+                    break;
+                }
+            }
+            c->pos++;
+            time_sleep(cue->d);
+            continue;
+        }
+
+        n = cue->s.len < b.len ? cue->s.len : b.len;
+        memcpy(b.p, cue->s.p, (size_t)n);
+        /* If cue is too big for the buffer, leave the end for the next Read. */
+        if (cue->s.len > n)
+            cue->s = str_from_bytes(cue->s.p + n, cue->s.len - n);
+        else
+            c->pos++;
+        break;
+    }
+    sync_mutex_unlock(&c->mu);
+    return n;
+}
+
+static Error slow_test_conn_close(void *self) {
+    SlowTestConn *c = (SlowTestConn *)self;
+    bool v = true;
+    (void)chan_try_send(c->closec, &v);
+    return BURROW_NO_ERROR;
+}
+
+static Int slow_test_conn_write(void *self, Slice b, Error *err) {
+    SlowTestConn *c = (SlowTestConn *)self;
+    *err = BURROW_NO_ERROR;
+    if (!time_is_zero(c->wd) && time_after(time_now(), c->wd)) {
+        *err = c->timedout;
+        return 0;
+    }
+    return b.len;
+}
+
+static const NetConnVT slow_test_conn_vt = {
+    {NULL, slow_test_conn_read},
+    {NULL, slow_test_conn_write},
+    {NULL, slow_test_conn_close},
+    noop_conn_local_addr,
+    noop_conn_remote_addr,
+    slow_test_conn_set_deadline,
+    slow_test_conn_set_read_deadline,
+    slow_test_conn_set_write_deadline,
+};
+
+static void TestRequestBodyTimeoutClosesConnection(TestingT *t) {
+    if (testing_short())
+        testing_t_skip_v(t, "skipping in -short mode");
+    for (Int i = 0; i < LEN(test_handler_body_consumers); i++) {
+        const TestHandlerBodyConsumer *handler = &test_handler_body_consumers[i];
+        Arena ar;
+        arena_init(&ar, heap_allocator(), 0);
+        SlowTestConn conn = {
+            .script =
+                {
+                    {false, 0,
+                     BURROW_S("POST /public HTTP/1.1\r\n"
+                              "Host: test\r\n"
+                              "Content-Length: 10000\r\n"
+                              "\r\n")},
+                    {false, 0, BURROW_S("foo bar baz")},
+                    {true, 600 * TIME_MILLISECOND,
+                     BURROW_STR_EMPTY}, /* Request deadline should hit here */
+                    {false, 0,
+                     BURROW_S("GET /secret HTTP/1.1\r\n"
+                              "Host: test\r\n"
+                              "\r\n")},
+                },
+            .n = 4,
+            .closec = chan_make(heap_allocator(), TYPE_BOOL, 1),
+            .timedout = syscall_errno_as_error(SYSCALL_ETIMEDOUT, arena_allocator(&ar)),
+        };
+        if (conn.closec == NULL)
+            testing_t_fatal_v(t, "out of memory");
+
+        SecretTest st = {t, handler, 0};
+        HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_no_secret, &st);
+        HttpServer s = {
+            .handler = http_handler_func_as_handler(&f),
+            .read_timeout = 400 * TIME_MILLISECOND,
+        };
+        serve_one_conn(&s, (NetConn){&slow_test_conn_vt, &conn}, conn.closec);
+
+        if (st.num_reqs != 1)
+            testing_t_errorf_v(t, "Handler %v: got %d reqs; want 1", cs(handler->name),
+                               st.num_reqs);
+        chan_free(conn.closec);
+        arena_free(&ar);
+    }
+}
+
+static void serve_nothing(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)w;
+    (void)r;
+}
+
+static void TestServerValidatesHeaders(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    Str too_large =
+        fmt_sprintf_v(a, "Foo: %s\r\n", strings_repeat(a, BURROW_S("x"), 1 << 21));
+    const struct {
+        Str header;
+        Int want;
+    } tests[] = {
+        {BURROW_S(""), 200},
+        {BURROW_S("Foo: bar\r\n"), 200},
+        {BURROW_S("X-Foo: bar\r\n"), 200},
+        {BURROW_S("Foo: a space\r\n"), 200},
+
+        {BURROW_S("A space: foo\r\n"), 400},    /* space in header */
+        {BURROW_S("foo\377bar: foo\r\n"), 400}, /* binary in header */
+        {BURROW_S("foo\000bar: foo\r\n"), 400}, /* binary in header */
+        {too_large, 431},                       /* header too large */
+        /* Spaces between the header key and colon are not allowed.
+         * See RFC 7230, Section 3.2.4. */
+        {BURROW_S("Foo : bar\r\n"), 400},
+        {BURROW_S("Foo\t: bar\r\n"), 400},
+
+        /* Empty header keys are invalid.
+         * See RFC 7230, Section 3.2. */
+        {BURROW_S(": empty key\r\n"), 400},
+
+        /* Requests with invalid Content-Length headers should be rejected
+         * regardless of the presence of a Transfer-Encoding header.
+         * Check out RFC 9110, Section 8.6 and RFC 9112, Section 6.3.3. */
+        {BURROW_S("Content-Length: notdigits\r\n"), 400},
+        {BURROW_S("Content-Length: notdigits\r\nTransfer-Encoding: "
+                  "chunked\r\n\r\n0\r\n\r\n"),
+         400},
+
+        {BURROW_S("foo: foo foo\r\n"), 200},    /* LWS space is okay */
+        {BURROW_S("foo: foo\tfoo\r\n"), 200},   /* LWS tab is okay */
+        {BURROW_S("foo: foo\000foo\r\n"), 400}, /* CTL 0x00 in value is bad */
+        {BURROW_S("foo: foo\177foo\r\n"), 400}, /* CTL 0x7f in value is bad */
+        {BURROW_S("foo: foo\377foo\r\n"),
+         200}, /* non-ASCII high octets in value are fine */
+    };
+    LogLogger *quiet_log = log_new(a, io_discard, BURROW_S(""), 0);
+    for (Int i = 0; i < LEN(tests); i++) {
+        TestConn *conn = new_test_conn(t, a);
+        (void)bytes_buffer_write_string(
+            &conn->read_buf, BURROW_S("GET / HTTP/1.1\r\nHost: foo\r\n"), NULL);
+        (void)bytes_buffer_write_string(&conn->read_buf, tests[i].header, NULL);
+        (void)bytes_buffer_write_string(&conn->read_buf, BURROW_S("\r\n"), NULL);
+
+        HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_nothing, NULL);
+        HttpServer srv = {
+            .error_log = quiet_log,
+            .handler = http_handler_func_as_handler(&f),
+        };
+        serve_one_conn(&srv, (NetConn){&test_conn_vt, conn}, conn->closec);
+        Error err = BURROW_NO_ERROR;
+        BufioReader *br =
+            bufio_new_reader(a, bytes_buffer_as_io_reader(&conn->write_buf));
+        HttpResponse *res = br == NULL ? NULL : http_read_response(a, br, NULL, &err);
+        if (res == NULL) {
+            /* Go prints res here, which is nil when ReadResponse fails. */
+            testing_t_errorf_v(t, "For %q, ReadResponse: %v", tests[i].header,
+                               BURROW_S("<nil>"));
+        } else {
+            if (res->status_code != tests[i].want)
+                testing_t_errorf_v(t, "For %q, Status = %d; want %d", tests[i].header,
+                                   res->status_code, tests[i].want);
+            http_response_free(res);
+        }
+        test_conn_free(conn);
+    }
+    log_logger_free(a, quiet_log);
+    arena_free(&ar);
+}
+
+/* What TestInvalidChunkedBodies's handler sends on reqc. Not in Go: it sends
+ * whether io.ReadAll failed rather than the error, which belongs to the
+ * server's connection and may be gone by the time the test looks at it. */
+typedef struct ChunkedBodyTest {
+    TestingT *t;
+    Chan *reqc;
+} ChunkedBodyTest;
+
+static void serve_read_all_body(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)w;
+    ChunkedBodyTest *ct = (ChunkedBodyTest *)env;
+    Error err = BURROW_NO_ERROR;
+    Slice got =
+        io_read_all(heap_allocator(), io_read_closer_as_io_reader(r->body), &err);
+    if (!BURROW_FAILED(err))
+        testing_t_logf_v(ct->t, "read body: %q", got);
+    mem_free(heap_allocator(), got.p, (size_t)got.cap, 1);
+    bool failed = BURROW_FAILED(err);
+    chan_send(ct->reqc, &failed);
+}
+
+typedef struct ChunkedBodyCase {
+    const char *name;
+    const char *b;
+} ChunkedBodyCase;
+
+static void invalid_chunked_body(void *env, TestingT *t) {
+    need_tcp(t);
+    const ChunkedBodyCase *test = (const ChunkedBodyCase *)env;
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    ChunkedBodyTest ct = {t, chan_make(heap_allocator(), TYPE_BOOL, 0)};
+    if (ct.reqc == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_read_all_body, &ct);
+    HttptestServer *ts = httptest_new_server(NULL, http_handler_func_as_handler(&f));
+
+    Error err = BURROW_NO_ERROR;
+    Url *server_url = url_parse(a, ts->url, &err);
+    NetConn conn = {NULL, NULL};
+    if (server_url != NULL)
+        conn = net_dial(a, BURROW_S("tcp"), server_url->host, &err);
+    if (!BURROW_FAILED(err)) {
+        Str req = fmt_sprintf_v(a,
+                                "POST / HTTP/1.1\r\n"
+                                "Host: localhost\r\n"
+                                "Transfer-Encoding: chunked\r\n"
+                                "Connection: close\r\n"
+                                "\r\n"
+                                "%s",
+                                cs(test->b));
+        (void)conn.vt->writer.write(conn.data, bytes_of((const char *)req.p, req.len),
+                                    &err);
+    }
+    if (!BURROW_FAILED(err)) {
+        (void)net_tcp_conn_close_write(net_conn_as_tcp_conn(conn));
+
+        bool failed = false;
+        (void)chan_recv(ct.reqc, &failed);
+        if (!failed)
+            testing_t_errorf_v(
+                t, "server handler: io.ReadAll(r.Body) succeeded, want error");
+    } else {
+        /* Not in Go: t.Fatal, after the cleanup below. */
+        testing_t_error_v(t, err);
+    }
+    if (conn.vt != NULL) {
+        (void)conn.vt->closer.close(conn.data);
+        net_conn_free(conn);
+    }
+    httptest_server_free(ts);
+    chan_free(ct.reqc);
+    arena_free(&ar);
+}
+
+static void TestInvalidChunkedBodies(TestingT *t) {
+    static const ChunkedBodyCase tests[] = {
+        {"bare LF in chunk size", "1\na\r\n0\r\n\r\n"},
+        {"bare LF at body end", "1\r\na\r\n0\r\n\n"},
+    };
+    for (Int i = 0; i < LEN(tests); i++)
+        (void)testing_t_run(t, cs(tests[i].name),
+                            BURROW_FN(TestingTFunc, invalid_chunked_body,
+                                      (void *)(uintptr_t)&tests[i]));
+}
+
+/* fetchWireResponse is a helper for dialing to host,
+ * sending http1ReqBody as the payload and retrieving
+ * the response as it was sent on the wire. */
+static Slice fetch_wire_response(Alloc *a, Str host, Str http1_req_body, Error *err) {
+    NetConn conn = net_dial(a, BURROW_S("tcp"), host, err);
+    if (BURROW_FAILED(*err))
+        return slice_nil(TYPE_BYTE);
+
+    Slice out = slice_nil(TYPE_BYTE);
+    (void)conn.vt->writer.write(
+        conn.data, bytes_of((const char *)http1_req_body.p, http1_req_body.len), err);
+    if (!BURROW_FAILED(*err))
+        out = io_read_all(a, (IoReader){&conn.vt->reader, conn.data}, err);
+    (void)conn.vt->closer.close(conn.data);
+    net_conn_free(conn);
+    return out;
+}
+
+static void serve_hello_world(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)r;
+    write_str(w, "Hello, World!");
+}
+
+static void unsupported_transfer_encodings_return_501(void *env, TestingT *t) {
+    (void)env;
+    need_tcp(t);
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_hello_world, NULL);
+    HttptestServer *cst = httptest_new_server(NULL, http_handler_func_as_handler(&f));
+
+    Error err = BURROW_NO_ERROR;
+    Url *server_url = url_parse(a, cst->url, &err);
+    if (server_url == NULL) {
+        /* Not in Go: t.Fatalf, as an error, so that the cleanup can run. */
+        testing_t_errorf_v(t, "Failed to parse server URL: %v", err);
+        httptest_server_free(cst);
+        arena_free(&ar);
+        return;
+    }
+
+    static const char *const unsupported_tes[] = {
+        "fugazi",
+        "foo-bar",
+        "unknown",
+        "\" chunked\"",
+    };
+
+    for (Int i = 0; i < LEN(unsupported_tes); i++) {
+        Str bad_te = cs(unsupported_tes[i]);
+        Str http1_req_body =
+            fmt_sprintf_v(a,
+                          ""
+                          "POST / HTTP/1.1\r\nConnection: close\r\n"
+                          "Host: localhost\r\nTransfer-Encoding: %s\r\n\r\n",
+                          bad_te);
+
+        Slice got_body = fetch_wire_response(a, server_url->host, http1_req_body, &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "%q. unexpected error: %v", bad_te, err);
+            continue;
+        }
+
+        Str want_body =
+            BURROW_S(""
+                     "HTTP/1.1 501 Not Implemented\r\nContent-Type: text/plain; "
+                     "charset=utf-8\r\n"
+                     "Connection: close\r\n\r\nUnsupported transfer encoding");
+
+        if (!str_eq(str_from_bytes(got_body.p, got_body.len), want_body))
+            testing_t_errorf_v(t, "%q. body\ngot\n%q\nwant\n%q", bad_te, got_body,
+                               want_body);
+    }
+    httptest_server_free(cst);
+    arena_free(&ar);
+}
+
+static void TestUnsupportedTransferEncodingsReturn501(TestingT *t) {
+    (void)testing_t_run(
+        t, BURROW_S("h1"),
+        BURROW_FN(TestingTFunc, unsupported_transfer_encodings_return_501, NULL));
+}
+
 #define TESTS(X)                                                                       \
     X(TestServerResponsesMatchGo)                                                      \
     X(TestConnStateHookSeesEachState)                                                  \
@@ -980,6 +1636,12 @@ static void TestShutdownGivesUpWhenTheContextIsDone(TestingT *t) {
     X(TestListenAndServeSaysWhatIsWrongWithTheAddress)                                 \
     X(TestServeAfterCloseIsServerClosed)                                               \
     X(TestShutdownClosesIdleConnectionsAndStopsServe)                                  \
-    X(TestShutdownGivesUpWhenTheContextIsDone)
+    X(TestShutdownGivesUpWhenTheContextIsDone)                                         \
+    X(TestRequestBodyReadErrorClosesConnection)                                        \
+    X(TestInvalidTrailerClosesConnection)                                              \
+    X(TestRequestBodyTimeoutClosesConnection)                                          \
+    X(TestServerValidatesHeaders)                                                      \
+    X(TestInvalidChunkedBodies)                                                        \
+    X(TestUnsupportedTransferEncodingsReturn501)
 
 TESTING_MAIN(TESTS)

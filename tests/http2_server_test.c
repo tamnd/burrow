@@ -4320,7 +4320,12 @@ static void h2t_unread_unstarted_handler(void *env, TestingT *t) {
              * stream 1 is still executing. */
             h2t_write_headers(&st, 3, h2t_encode_header(&st, h2t_post, 2), false,
                               true) &&
-            h2t_unread_data_rst(&st, 3) && h2t_want_idle(&st)) {
+            h2t_unread_data_rst(&st, 3) &&
+            /* Not in Go: wantIdle waits for the server to go quiet first, and
+             * h2t_want_idle only waits 50ms for a frame. Without the sync, a
+             * server that hasn't read the RST_STREAM yet starts the handler
+             * for stream 3 when stream 1's exits. */
+            h2t_sync(&st) && h2t_want_idle(&st)) {
             /* Stream 1 handler exits. Stream 3 is removed from
              * unstartedHandlers and its flow control is returned. */
             h2t_call_exit(&c);

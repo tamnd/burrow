@@ -85,6 +85,7 @@ BURROW_FIPS140ONLY_ERROR(hkdf_err_hash_fips140only,
 
 CRYPTO_FIPS_TEXT static bool hkdf_check_fips140_only(HashNewFunc h, Slice key,
                                                      Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (!burrow__fips140only_enforced())
         return true;
     if (key.len < 112 / 8) {
@@ -109,6 +110,7 @@ CRYPTO_FIPS_TEXT Slice hkdf_extract(Alloc *a, HashNewFunc h, Slice secret, Slice
  * before the FIPS module that does the work ever sees it. */
 CRYPTO_FIPS_TEXT static bool hkdf_too_long(Alloc *a, HashNewFunc h, Int key_length,
                                            Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Hash probe = h(a);
     if (probe.vt == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);

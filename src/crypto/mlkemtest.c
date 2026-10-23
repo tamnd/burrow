@@ -38,6 +38,7 @@ BURROW_FIPS140ONLY_ERROR(mlkemtest_err_fips140only,
 
 static bool mlkemtest_check(Slice random, const char *msg, Slice *ciphertext,
                             Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (random.len == 32)
         return true;
     BURROW_OUT(err, errors_new(error_allocator(), str_from_cstr(msg)));

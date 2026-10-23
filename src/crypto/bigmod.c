@@ -292,6 +292,7 @@ CRYPTO_FIPS_TEXT static Uint limbs_sub(BigmodNat *x, const BigmodNat *y) {
 
 CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_set_bytes(BigmodNat *x, Slice b,
                                                  const BigmodModulus *m, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     bigmod_nat_reset_for(x, m);
     if (!limbs_set_bytes(x, b))
         return bigmod_error(err, "input overflows the modulus size");
@@ -315,6 +316,7 @@ CRYPTO_FIPS_TEXT static Int bit_len(Uint n) {
 CRYPTO_FIPS_TEXT BigmodNat *bigmod_nat_set_overflowing_bytes(BigmodNat *x, Slice b,
                                                              const BigmodModulus *m,
                                                              Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     bigmod_nat_reset_for(x, m);
     if (!limbs_set_bytes(x, b))
         return bigmod_error(err, "input overflows the modulus size");
@@ -494,6 +496,7 @@ CRYPTO_FIPS_TEXT static Uint minus_inverse_mod_w(Uint x) {
 
 /* newModulus: the struct around n, which it takes, from a. */
 CRYPTO_FIPS_TEXT static BigmodModulus *new_modulus(Alloc *a, BigmodNat *n, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (bigmod_nat_is_zero(n) == 1 || bigmod_nat_is_one(n) == 1) {
         bigmod_nat_free(n);
         return bigmod_error(err, "modulus must be > 1");

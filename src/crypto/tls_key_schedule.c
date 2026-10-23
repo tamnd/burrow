@@ -404,6 +404,7 @@ static const TlsKeyExchange tke_exchanges[] = {
 
 CRYPTO_FIPS_TEXT const TlsKeyExchange *
 burrow__tls_key_exchange_for_curve_id(TlsCurveID id, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     for (size_t i = 0; i < sizeof(tke_exchanges) / sizeof(tke_exchanges[0]); i++) {
         if (tke_exchanges[i].id == id)
             return &tke_exchanges[i];
@@ -581,6 +582,7 @@ CRYPTO_FIPS_TEXT static Slice
 tke_hybrid_server_shared_secret(const TlsKeyExchange *ke, Alloc *a, Alloc *s,
                                 IoReader rand, Slice ecdh_share_data,
                                 Slice mlkem_share_data, TlsKeyShare *ks, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     TlsKeyShare ecdh_ks = {0};
     TkeEcdhCall c = {.op = TKE_ECDH_SERVER,
                      .ke = &ke->ecdh,
@@ -618,6 +620,7 @@ tke_hybrid_server_shared_secret(const TlsKeyExchange *ke, Alloc *a, Alloc *s,
 CRYPTO_FIPS_TEXT static Slice tke_hybrid_client_shared_secret(
     const TlsKeyExchange *ke, Alloc *a, Alloc *s, const TlsKeySharePrivateKeys *priv,
     Slice ecdh_share_data, Slice mlkem_share_data, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     TkeEcdhCall c = {.op = TKE_ECDH_CLIENT,
                      .ke = &ke->ecdh,
                      .a = s,

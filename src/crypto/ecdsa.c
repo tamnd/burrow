@@ -108,6 +108,7 @@ CRYPTO_FIPS_TEXT static Slice ecdsa_bytes(const uint8_t *p, Int n) {
 /* A copy of the n bytes at p, from a. */
 CRYPTO_FIPS_TEXT static Slice ecdsa_clone(Alloc *a, const uint8_t *p, Int n,
                                           Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice s = slice_make(ecdsa_alloc(a), TYPE_BYTE, n, n);
     if (s.p == NULL && n > 0) {
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -125,6 +126,7 @@ CRYPTO_FIPS_TEXT static bool ecdsa_same_curve(EllipticCurve x, EllipticCurve y) 
 /* drbg.ReadWithReader: the system generator for the default reader, which is
  * what drbg.Read is outside FIPS mode, and io.ReadFull for anything else. */
 CRYPTO_FIPS_TEXT static bool ecdsa_read(IoReader r, Slice b, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (burrow__crypto_rand_is_default_reader(r)) {
         burrow__crypto_rand_system(b);
         return true;
@@ -1012,6 +1014,7 @@ CRYPTO_FIPS_TEXT static Error ecdsa_pct(void *arg) {
 
 CRYPTO_FIPS_TEXT static EcdsaPublicBlock *
 ecdsa_new_public_block(Alloc *a, EllipticCurve curve, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     a = ecdsa_alloc(a);
     EcdsaPublicBlock *b = BURROW_NEW(a, EcdsaPublicBlock);
     if (b == NULL) {
@@ -1029,6 +1032,7 @@ ecdsa_new_public_block(Alloc *a, EllipticCurve curve, Error *err) {
 
 CRYPTO_FIPS_TEXT static EcdsaPrivateBlock *
 ecdsa_new_private_block(Alloc *a, EllipticCurve curve, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     a = ecdsa_alloc(a);
     EcdsaPrivateBlock *b = BURROW_NEW(a, EcdsaPrivateBlock);
     if (b == NULL) {
@@ -1072,6 +1076,7 @@ CRYPTO_FIPS_TEXT void ecdsa_private_key_free(EcdsaPrivateKey *k) {
 /* pointToAffine, into x and y. */
 CRYPTO_FIPS_TEXT static bool ecdsa_point_to_affine(EllipticCurve curve, Slice p,
                                                    BigInt *x, BigInt *y, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const uint8_t *q = p.p;
     if (p.len == 1 && q[0] == 0) {
         /* This is not a valid point, but it is what was always returned. */
@@ -1090,6 +1095,7 @@ CRYPTO_FIPS_TEXT static bool ecdsa_point_to_affine(EllipticCurve curve, Slice p,
 CRYPTO_FIPS_TEXT static Int ecdsa_point_from_affine(EllipticCurve curve,
                                                     const BigInt *x, const BigInt *y,
                                                     uint8_t *buf, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Int bit_size = elliptic_curve_params(curve)->bit_size;
     /* Reject values that would not get correctly encoded. */
     if (big_int_sign(x) < 0 || big_int_sign(y) < 0) {
@@ -1256,6 +1262,7 @@ CRYPTO_FIPS_TEXT static bool ecdsa_rand_field_element(Alloc *tmp,
                                                       const EllipticCurveParams *params,
                                                       IoReader rand, BigInt *k,
                                                       Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const BigInt *n = params->n;
     Int bits = big_int_bit_len(n);
     Int len = (bits + 7) / 8;

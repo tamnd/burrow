@@ -706,6 +706,7 @@ CRYPTO_FIPS_TEXT static CipherAEAD gcm_fail(Error *err, const char *msg) {
  * up to the allocation. */
 CRYPTO_FIPS_TEXT static bool gcm_check(CipherBlock b, Int nonce_size, Int tag_size,
                                        Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (tag_size < GCM_MINIMUM_TAG_SIZE || tag_size > GCM_BLOCK_SIZE) {
         gcm_fail(err, "cipher: incorrect tag size given to GCM");
         return false;

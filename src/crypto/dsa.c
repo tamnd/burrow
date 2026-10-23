@@ -82,6 +82,7 @@ static IoReader dsa_reader(IoReader r) {
 }
 
 static bool dsa_read(IoReader r, Slice b, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Error e = BURROW_NO_ERROR;
     (void)io_read_full(r, b, &e);
     if (BURROW_FAILED(e)) {
@@ -263,6 +264,7 @@ static void dsa_fermat_inverse(BigInt *z, const BigInt *k, const BigInt *p) {
 
 BigInt *dsa_sign(Alloc *a, IoReader rand, const DsaPrivateKey *priv, Slice hash,
                  BigInt **s, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     *s = NULL;
     if (burrow__fips140only_enforced()) {
         BURROW_OUT(err, dsa_err_fips140only);

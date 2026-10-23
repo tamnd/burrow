@@ -412,6 +412,7 @@ static Slice x509_cstr_list(Alloc *a, const char *const *list) {
 static X509CertPool *x509_load_on_disk_roots(Alloc *a, Str cert_file, Str cert_dir,
                                              Slice cert_files, Slice cert_directories,
                                              Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Arena scratch;
     arena_init(&scratch, a, 0);
     Alloc *s = arena_allocator(&scratch);
@@ -432,6 +433,7 @@ static X509CertPool *x509_load_on_disk_roots(Alloc *a, Str cert_file, Str cert_d
 
 X509CertPool *burrow__x509_load_system_roots(Alloc *a, Slice cert_files,
                                              Slice cert_directories, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Str cert_file = os_getenv(a, BURROW_S("SSL_CERT_FILE"));
     Str cert_dir = os_getenv(a, BURROW_S("SSL_CERT_DIR"));
 #if defined(BURROW_OS_WINDOWS) || defined(BURROW_OS_DARWIN) || defined(BURROW_OS_IOS)
@@ -507,6 +509,7 @@ X509CertPool *burrow__x509_swap_system_roots(X509CertPool *p) {
 }
 
 X509CertPool *x509_system_cert_pool(Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     X509CertPool *sys_roots = burrow__x509_system_roots_pool();
     if (sys_roots != NULL)
         return x509_cert_pool_clone(sys_roots, a);
@@ -1649,6 +1652,7 @@ static bool x509_policies_valid(Alloc *a, Slice chain, const X509VerifyOptions *
 
 /* The chains in from, copied into a. */
 static Slice x509_copy_chains(Alloc *a, Slice from, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice out = slice_make(a, TYPE_X509_CERTIFICATE_CHAIN, from.len, from.len);
     if (out.p == NULL && from.len > 0) {
         *err = burrow_err_out_of_memory;
@@ -1976,6 +1980,7 @@ static void x509_win_chain(void *env, const PalCertChain *chain) {
  * for no usage in particular. */
 static Slice x509_system_verify(const X509Certificate *c, const X509VerifyOptions *opts,
                                 Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice none = slice_nil(TYPE_X509_CERTIFICATE_CHAIN);
     Arena scratch;
     arena_init(&scratch, heap_allocator(), 0);
@@ -2195,6 +2200,7 @@ static void x509_mac_cert(void *env, int64_t i, const uint8_t *der, int64_t len)
 
 static Slice x509_system_verify(const X509Certificate *c, const X509VerifyOptions *opts,
                                 Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice none = slice_nil(TYPE_X509_CERTIFICATE_CHAIN);
     Arena scratch;
     arena_init(&scratch, heap_allocator(), 0);

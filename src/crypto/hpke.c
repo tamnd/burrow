@@ -65,6 +65,7 @@ static HpkePart hpke_label(const char *s) {
 
 /* The parts one after the other, in a new slice from a. */
 static Slice hpke_concat(Alloc *a, const HpkePart *parts, size_t n, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Int total = 0;
     for (size_t i = 0; i < n; i++)
         total += parts[i].len;
@@ -215,6 +216,7 @@ static Slice hpke_labeled_expand(Alloc *a, const HpkeKDF *kdf, Slice suite_id,
 static Slice hpke_labeled_derive(Alloc *a, const HpkeKDF *kdf, Slice suite_id,
                                  Slice ikm, const char *label, Slice context,
                                  uint16_t length, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Sha3 h;
     if (kdf->id == 0x0010)
         burrow__shake128_init(&h);
@@ -310,6 +312,7 @@ uint16_t hpke_aead_id(const HpkeAEAD *aead) {
  * NewGCMForHPKE, which only differs from the plain GCM in FIPS 140 mode. */
 static CipherAEAD hpke_aead_cipher(Alloc *a, const HpkeAEAD *aead, Slice key,
                                    Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     CipherAEAD none = {NULL, NULL};
     if (aead->kind == HPKE_AEAD_EXPORT_ONLY)
         return none;
@@ -579,6 +582,7 @@ struct HpkePublicKey {
 };
 
 static HpkePublicKey *hpke_public_key_alloc(Alloc *a, const HpkeKEM *kem, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     HpkePublicKey *pk = BURROW_NEW(a, HpkePublicKey);
     if (pk == NULL) {
         *err = burrow_err_out_of_memory;
@@ -861,6 +865,7 @@ struct HpkePrivateKey {
 static HpkePrivateKey *hpke_private_key_alloc(Alloc *a, const HpkeKEM *kem,
                                               EcdhKeyExchanger t, CryptoDecapsulator pq,
                                               Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     HpkePrivateKey *k = BURROW_NEW(a, HpkePrivateKey);
     if (k == NULL) {
         *err = burrow_err_out_of_memory;
@@ -1271,6 +1276,7 @@ static Slice hpke_dh_extract_and_expand(Alloc *s, const HpkeKEM *kem, Slice dh,
  * label. */
 static Slice hpke_hybrid_shared_secret(Alloc *s, const HpkeKEM *kem, Slice ss_pq,
                                        Slice ss_t, Slice ct_t, Slice ek_t, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Sha3 h;
     burrow__sha3_init256(&h);
     burrow__sha3_write(&h, ss_pq.p, ss_pq.len);
@@ -1294,6 +1300,7 @@ static Slice hpke_hybrid_shared_secret(Alloc *s, const HpkeKEM *kem, Slice ss_pq
 static const EcdhPrivateKey *hpke_ephemeral(Alloc *s, const EcdhPublicKey *pub,
                                             const HpkeEncapRandomness *r, bool hybrid,
                                             EcdhPrivateKey **made, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     *made = NULL;
     if (r != NULL && r->ephemeral != NULL)
         return r->ephemeral;
@@ -1321,6 +1328,7 @@ static Slice hpke_pq_encapsulate(Alloc *s, CryptoEncapsulator pq,
 /* PublicKey.encap: the shared secret, and the encapsulated key into *enc. */
 static Slice hpke_encap(Alloc *s, const HpkePublicKey *pk, const HpkeEncapRandomness *r,
                         Slice *enc, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const HpkeKEM *kem = pk->kem;
     *enc = slice_nil(TYPE_BYTE);
     switch (kem->kind) {

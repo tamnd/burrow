@@ -115,6 +115,7 @@ CRYPTO_FIPS_TEXT static int p384_is_zero(const NistecP384Element *e) {
  * takes a slice of the wrong length, which nothing here passes it. */
 CRYPTO_FIPS_TEXT static NistecP384Element *
 p384_set_bytes(NistecP384Element *e, const uint8_t *v, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     /* Check for non-canonical encodings (p + k, 2p + k, etc.) by comparing to
      * the encoding of -1 mod p, so p - 1, the highest canonical encoding. */
     NistecP384Element zero, one, minus_one;
@@ -375,6 +376,7 @@ CRYPTO_FIPS_TEXT static NistecP384Element *p384_polynomial(NistecP384Element *y2
 CRYPTO_FIPS_TEXT static int p384_check_on_curve(const NistecP384Element *x,
                                                 const NistecP384Element *y,
                                                 Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     /* y^2 = x^3 - 3x + b */
     NistecP384Element rhs, lhs;
     p384_polynomial(&rhs, x);
@@ -393,6 +395,7 @@ CRYPTO_FIPS_TEXT static int p384_check_on_curve(const NistecP384Element *x,
  * Otherwise, it returns p. */
 CRYPTO_FIPS_TEXT static NistecP384Point *p384_point_set_bytes(NistecP384Point *p,
                                                               Slice b, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const uint8_t *bb = b.p;
     NistecP384Element x, y;
 
@@ -476,6 +479,7 @@ CRYPTO_FIPS_TEXT static Int p384_point_bytes(const NistecP384Point *p, uint8_t *
  * infinity. */
 CRYPTO_FIPS_TEXT static uint8_t *p384_point_bytes_x(const NistecP384Point *p,
                                                     uint8_t *out, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (p384_is_zero(&p->z) == 1) {
         BURROW_OUT(err, errors_new(error_allocator(),
                                    BURROW_S("P384 point is the point at infinity")));
@@ -666,7 +670,7 @@ CRYPTO_FIPS_TEXT static void p384_table_select(const P384Table *table,
 CRYPTO_FIPS_TEXT static NistecP384Point *
 p384_point_scalar_mult(NistecP384Point *p, const NistecP384Point *q, Slice scalar,
                        Error *err) {
-    (void)err;
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const uint8_t *s = scalar.p;
 
     /* Compute a table for the base point q. */
@@ -734,6 +738,7 @@ CRYPTO_FIPS_TEXT static void p384_generator_table_init(void *env) {
 /* Sets p = scalar * B, where B is the canonical generator, and returns p. */
 CRYPTO_FIPS_TEXT static NistecP384Point *
 p384_point_scalar_base_mult(NistecP384Point *p, Slice scalar, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (scalar.len != p384_element_length) {
         BURROW_OUT(err,
                    errors_new(error_allocator(), BURROW_S("invalid scalar length")));

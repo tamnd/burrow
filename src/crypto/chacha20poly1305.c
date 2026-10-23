@@ -814,6 +814,7 @@ static void chacha20poly1305_check_seal(Slice nonce, Int nonce_size, Slice plain
 
 static bool chacha20poly1305_check_open(Slice nonce, Int nonce_size, Slice ciphertext,
                                         Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (nonce.len != nonce_size)
         panic_str(BURROW_S("chacha20poly1305: bad nonce length passed to Open"));
     if (ciphertext.len < 16) {

@@ -249,6 +249,7 @@ CRYPTO_FIPS_TEXT static Slice rsa_make(Alloc *a, Int n) {
 
 /* A copy of s from a, for what a function gives back. */
 CRYPTO_FIPS_TEXT static Slice rsa_clone(Alloc *a, Slice s, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice c = slice_make(rsa_alloc(a), TYPE_BYTE, s.len, s.len);
     if (c.p == NULL && s.len > 0) {
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -269,6 +270,7 @@ CRYPTO_FIPS_TEXT static void rsa_slice_free(Alloc *a, Slice s) {
 /* drbg.ReadWithReader: the system generator for the default reader, which is
  * what drbg.Read is outside FIPS mode, and io.ReadFull for anything else. */
 CRYPTO_FIPS_TEXT static bool rsa_read(IoReader r, Slice b, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (burrow__crypto_rand_is_default_reader(r)) {
         burrow__crypto_rand_system(b);
         return true;
@@ -893,6 +895,7 @@ CRYPTO_FIPS_TEXT static bool rsa_fips_decrypt(const RsaFipsKey *k, Slice ciphert
 CRYPTO_FIPS_TEXT static bool rsa_pkcs1_v15_construct_em(Int k, Str hash, Slice hashed,
                                                         Alloc *tmp, Slice *out,
                                                         Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     /* Special case: crypto.Hash(0) is used to indicate that the data is
      * signed directly. */
     Slice prefix = slice_nil(TYPE_BYTE);
@@ -1261,6 +1264,7 @@ CRYPTO_FIPS_TEXT static Slice rsa_pss_hash(Hash hash, Slice m_hash, Slice salt,
 CRYPTO_FIPS_TEXT static bool rsa_emsa_pss_encode(Slice m_hash, Int em_bits, Slice salt,
                                                  Hash hash, Alloc *tmp, Slice *out,
                                                  Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Int h_len = hash_size(hash);
     Int s_len = salt.len;
     Int em_len = (em_bits + 7) / 8;
@@ -2099,6 +2103,7 @@ CRYPTO_FIPS_TEXT RsaMillerRabin *burrow__rsa_miller_rabin_setup(Alloc *a, Slice 
 CRYPTO_FIPS_TEXT static int rsa_miller_rabin_iteration(const RsaMillerRabin *mr,
                                                        Slice bb, Alloc *tmp,
                                                        const char **msg, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     /* Reject b ≤ 1 or b ≥ w − 1. */
     if (bb.len != (bigmod_modulus_bit_len(mr->w) + 7) / 8) {
         *msg = "incorrect length";
@@ -2498,6 +2503,7 @@ CRYPTO_FIPS_TEXT static Error rsa_check_public_key_size(const RsaPublicKey *k) {
 }
 
 CRYPTO_FIPS_TEXT static bool rsa_fail(Error *err, Error e) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (BURROW_FAILED(e)) {
         BURROW_OUT(err, e);
         return true;
@@ -2743,6 +2749,7 @@ CRYPTO_FIPS_TEXT static bool rsa_precomputed_is_consistent(const RsaPrivateKey *
 /* fipsPrivateKey: the cached key, or one worked out into tmp. */
 CRYPTO_FIPS_TEXT static const RsaFipsKey *
 rsa_fips_private_key(const RsaPrivateKey *priv, Alloc *tmp, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (priv->precomputed.fips != NULL)
         return priv->precomputed.fips;
     RsaPrecomputedValues pv;
@@ -2962,6 +2969,7 @@ CRYPTO_FIPS_TEXT RsaPrivateKey *rsa_generate_key(Alloc *a, IoReader random, Int 
 CRYPTO_FIPS_TEXT RsaPrivateKey *rsa_generate_multi_prime_key(Alloc *a, IoReader random,
                                                              Int nprimes, Int bits,
                                                              Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (nprimes == 2)
         return rsa_generate_key(a, random, bits, err);
     if (burrow__fips140only_enforced()) {
@@ -3591,6 +3599,7 @@ CRYPTO_FIPS_TEXT Slice rsa_private_key_sign(const RsaPrivateKey *priv, Alloc *a,
 CRYPTO_FIPS_TEXT Slice rsa_private_key_decrypt(const RsaPrivateKey *priv, Alloc *a,
                                                IoReader rand, Slice ciphertext,
                                                CryptoDecrypterOpts opts, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (opts.t == NULL)
         return rsa_decrypt_pkcs1_v15(a, rand, priv, ciphertext, err);
 

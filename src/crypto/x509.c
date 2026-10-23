@@ -1261,6 +1261,7 @@ Slice x509_marshal_ec_private_key(Alloc *a, const EcdsaPrivateKey *key, Error *e
 
 /* key in an Any made from a. */
 static Any x509_any(Alloc *a, const Type *t, void *key, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     (void)a;
     if (key == NULL)
         return (Any){NULL, NULL};
@@ -1429,6 +1430,7 @@ Any x509_parse_pkcs8_private_key(Alloc *a, Slice der, Error *err) {
 /* The parameters of an EC key: the DER of its curve's OID. */
 static bool x509_curve_params(Alloc *a, Asn1ObjectIdentifier oid, Asn1RawValue *params,
                               Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Error e = BURROW_NO_ERROR;
     Slice b = asn1_marshal(a, BURROW_ANY(TYPE_ASN1_OBJECT_IDENTIFIER, &oid), &e);
     if (BURROW_FAILED(e)) {
@@ -1709,6 +1711,7 @@ Any x509_parse_pkix_public_key(Alloc *a, Slice der, Error *err) {
 /* marshalPublicKey: the bytes that go in the bit string, and the algorithm. */
 static bool x509_marshal_public_key(Alloc *a, Any pub, Slice *bytes,
                                     PkixAlgorithmIdentifier *algo, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     memset(algo, 0, sizeof *algo);
     Error e = BURROW_NO_ERROR;
     if (pub.t == TYPE_RSA_PUBLIC_KEY && pub.data != NULL) {

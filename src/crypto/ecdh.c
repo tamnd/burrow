@@ -356,6 +356,7 @@ ecdh_nist_new_private(const EcdhCurve *c, Alloc *a, Slice key, Error *err) {
  * encoded point q into out, without the checks on the keys around it. */
 CRYPTO_FIPS_TEXT static bool ecdh_nist_shared(const NistecCurve *nc, Slice d, Slice q,
                                               uint8_t *out, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     /* SetBytes checks that (x, y) are reduced modulo p, and that they are on
      * the curve, performing Steps 2-3 of Section 5.6.2.3.4. */
     NistecPoint p;
@@ -449,6 +450,7 @@ CRYPTO_FIPS_TEXT static Error ecdh_pct(void *arg) {
 /* drbg.ReadWithReader: the system generator for the default reader, which is
  * what drbg.Read is outside FIPS mode, and io.ReadFull for anything else. */
 CRYPTO_FIPS_TEXT static int ecdh_read(IoReader r, uint8_t *p, Int n, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice s = slice_from(p, n, n, TYPE_BYTE);
     if (burrow__crypto_rand_is_default_reader(r)) {
         burrow__crypto_rand_system(s);

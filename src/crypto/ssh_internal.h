@@ -7,6 +7,8 @@
 #ifndef BURROW_SRC_CRYPTO_SSH_INTERNAL_H
 #define BURROW_SRC_CRYPTO_SSH_INTERNAL_H
 
+#include "burrow/crypto/fips140.h"
+
 #include "burrow/core.h"
 #include "burrow/error.h"
 #include "burrow/hash.h"

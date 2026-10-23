@@ -1983,8 +1983,9 @@ static void sv_tls_handshake_failed(sv_Conn *c, Error err) {
                          "to an HTTPS server.\n"),
                 &werr);
             (void)re->conn.vt->closer.close(re->conn.data);
+            Str why = BURROW_S("client sent an HTTP request to an HTTPS server");
             sv_logf(c->server, "http: TLS handshake error from %s: %v", c->remote_addr,
-                    BURROW_S("client sent an HTTP request to an HTTPS server"));
+                    why);
             return;
         }
     }

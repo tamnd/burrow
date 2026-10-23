@@ -3,9 +3,8 @@
  *
  * Derived from Go's src/net/http/httptest/server.go. Go source: go1.27.1.
  *
- * Left out until crypto/tls is here: StartTLS, NewTLSServer, Certificate and
- * NewTestServer, which serves on a network in memory and needs TLS as well.
- * The -httptest.serve flag is left out too.
+ * NewTestServer, which serves on a network in memory, is left out, and so is
+ * the -httptest.serve flag.
  *
  * Copyright 2011 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -14,8 +13,12 @@
 
 #include "burrow/net/http/httptest.h"
 
+#include "http_internal.h"
+
 #include "burrow/context.h"
 #include "burrow/core.h"
+#include "burrow/crypto/tls.h"
+#include "burrow/crypto/x509.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
 #include "burrow/func.h"
@@ -27,11 +30,13 @@
 #include "burrow/net/http.h"
 #include "burrow/panic.h"
 #include "burrow/proc.h"
+#include "burrow/slice.h"
 #include "burrow/strings.h"
 #include "burrow/sync.h"
 #include "burrow/time.h"
 
 #include <stdbool.h>
+#include <stdint.h>
 #include <string.h>
 
 /* A connection the server has and the state it is in, one of new, active and
@@ -168,8 +173,9 @@ static NetConn ts_dial(void *env, Context ctx, Str network, Str addr, Error *err
         return BURROW_CALLF(s->transport.dial, network, addr, err);
     Arena ar;
     arena_init(&ar, heap_allocator(), 0);
-    if (str_eq(addr, BURROW_S("example.com:80")) ||
-        strings_has_suffix(addr, BURROW_S(".example.com:80"))) {
+    Str host = s->use_tls ? BURROW_S("example.com:443") : BURROW_S("example.com:80");
+    Str sub = s->use_tls ? BURROW_S(".example.com:443") : BURROW_S(".example.com:80");
+    if (str_eq(addr, host) || strings_has_suffix(addr, sub)) {
         NetAddr la = s->listener.vt->addr(s->listener.data);
         addr = la.vt->string(la.data, arena_allocator(&ar));
     }
@@ -201,8 +207,8 @@ static void ts_serve(void *env) {
     sync_wait_group_done(&s->wg);
 }
 
-void httptest_server_start(HttptestServer *s) {
-    /* startCommon. */
+/* startCommon. */
+static void ts_start_common(HttptestServer *s) {
     sync_mutex_lock(&s->mu);
     if (s->started) {
         sync_mutex_unlock(&s->mu);
@@ -217,21 +223,21 @@ void httptest_server_start(HttptestServer *s) {
     s->old_hook = s->config.conn_state;
     s->config.conn_state = BURROW_FN(HttpConnStateFunc, ts_conn_state, s);
     sync_mutex_unlock(&s->mu);
+}
 
-    s->transport.a = s->a;
-    s->transport.dial_context = BURROW_FN(HttpDialContextFunc, ts_dial, s);
-    s->client.transport = http_transport_as_round_tripper(&s->transport);
-    s->client.a = s->a;
-
+/* Sets url to scheme, "://" and the address the listener is on. */
+static void ts_set_url(HttptestServer *s, Str scheme) {
     Alloc *ua = arena_allocator(&s->arena);
     NetAddr la = s->listener.vt->addr(s->listener.data);
     Str addr = la.vt->string(la.data, ua);
-    Str url = fmt_sprintf_v(ua, "http://%s", addr);
+    Str url = fmt_sprintf_v(ua, "%s://%s", scheme, addr);
     if (addr.len == 0 || url.len == 0)
         panic_str(BURROW_S("httptest: out of memory"));
     s->url = url;
+}
 
-    /* goServe. */
+/* goServe. */
+static void ts_go_serve(HttptestServer *s) {
     sync_wait_group_add(&s->wg, 1);
     if (!go(BURROW_FN(Func, ts_serve, s))) {
         sync_wait_group_done(&s->wg);
@@ -239,10 +245,128 @@ void httptest_server_start(HttptestServer *s) {
     }
 }
 
+void httptest_server_start(HttptestServer *s) {
+    ts_start_common(s);
+
+    s->transport.a = s->a;
+    s->transport.dial_context = BURROW_FN(HttpDialContextFunc, ts_dial, s);
+    s->client.transport = http_transport_as_round_tripper(&s->transport);
+    s->client.a = s->a;
+
+    ts_set_url(s, BURROW_S("http"));
+    ts_go_serve(s);
+}
+
+/* Not in Go: a Str as the []byte Go would convert it to. */
+static Slice ts_bytes_of(Str s) {
+    return slice_from((void *)(uintptr_t)s.p, s.len, s.len, TYPE_BYTE);
+}
+
+/* initTLS. The client's config, or NULL with *err set. What it makes is made
+ * in the server's arena. */
+static TlsConfig *ts_init_tls(HttptestServer *s, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    Alloc *a = arena_allocator(&s->arena);
+    TlsCertificate cert =
+        tls_x509_key_pair(a, ts_bytes_of(burrow__http_testcert_localhost_cert),
+                          ts_bytes_of(burrow__http_testcert_localhost_key), err);
+    if (BURROW_FAILED(*err))
+        return NULL;
+
+    TlsConfig *existing_config = s->tls;
+    TlsConfig *config;
+    if (existing_config != NULL) {
+        config = tls_config_clone(existing_config, a);
+    } else {
+        config = (TlsConfig *)mem_alloc(a, sizeof *config, _Alignof(TlsConfig));
+        if (config != NULL)
+            memset(config, 0, sizeof *config);
+    }
+    if (config == NULL) {
+        *err = burrow_err_out_of_memory;
+        return NULL;
+    }
+    s->tls = config;
+    s->own_tls = config;
+    if (s->tls->next_protos.p == NULL) {
+        Str *next_protos = (Str *)mem_alloc(a, sizeof *next_protos, _Alignof(Str));
+        if (next_protos == NULL) {
+            *err = burrow_err_out_of_memory;
+            return NULL;
+        }
+        *next_protos = BURROW_S("http/1.1");
+        if (s->enable_http2)
+            *next_protos = BURROW_S("h2");
+        s->tls->next_protos = slice_from(next_protos, 1, 1, TYPE_STRING);
+    }
+    if (s->tls->certificates.len == 0) {
+        TlsCertificate *certs =
+            (TlsCertificate *)mem_alloc(a, sizeof *certs, _Alignof(TlsCertificate));
+        if (certs == NULL) {
+            *err = burrow_err_out_of_memory;
+            return NULL;
+        }
+        *certs = cert;
+        s->tls->certificates = slice_from(certs, 1, 1, TYPE_TLS_CERTIFICATE);
+    }
+    const TlsCertificate *c0 =
+        (const TlsCertificate *)slice_at(s->tls->certificates, 0);
+    s->certificate =
+        x509_parse_certificate(a, *(const Slice *)slice_at(c0->certificate, 0), err);
+    if (BURROW_FAILED(*err))
+        return NULL;
+    X509CertPool *certpool = x509_new_cert_pool(a);
+    TlsConfig *client = (TlsConfig *)mem_alloc(a, sizeof *client, _Alignof(TlsConfig));
+    if (certpool == NULL || client == NULL) {
+        x509_cert_pool_free(certpool);
+        *err = burrow_err_out_of_memory;
+        return NULL;
+    }
+    s->certpool = certpool;
+    x509_cert_pool_add_cert(certpool, s->certificate);
+    memset(client, 0, sizeof *client);
+    client->root_cas = certpool;
+    s->client_tls = client;
+    return client;
+}
+
+void httptest_server_start_tls(HttptestServer *s) {
+    ts_start_common(s);
+
+    Error err = BURROW_NO_ERROR;
+    TlsConfig *tls_client_config = ts_init_tls(s, &err);
+    if (BURROW_FAILED(err)) {
+        Str msg = fmt_sprintf_v(heap_allocator(), "httptest: NewTLSServer: %v", err);
+        panic_str(msg);
+    }
+
+    s->transport.a = s->a;
+    s->transport.tls_client_config = tls_client_config;
+    s->transport.force_attempt_http2 = s->enable_http2;
+    s->client.transport = http_transport_as_round_tripper(&s->transport);
+    s->client.a = s->a;
+
+    s->use_tls = true;
+    s->transport.dial_context = BURROW_FN(HttpDialContextFunc, ts_dial, s);
+    NetListener l = tls_new_listener(ts_alloc(s), s->listener, s->tls);
+    if (l.vt == NULL)
+        panic_str(BURROW_S("httptest: out of memory"));
+    s->inner = s->listener;
+    s->listener = l;
+    ts_set_url(s, BURROW_S("https"));
+    ts_go_serve(s);
+}
+
 HttptestServer *httptest_new_server(Alloc *a, HttpHandler handler) {
     HttptestServer *s = httptest_new_unstarted_server(a, handler);
     httptest_server_start(s);
     return s;
+}
+
+HttptestServer *httptest_new_tls_server(Alloc *a, HttpHandler handler) {
+    HttptestServer *ts = httptest_new_unstarted_server(a, handler);
+    httptest_server_start_tls(ts);
+    return ts;
 }
 
 /* logCloseHangDebugInfo, and what Close needs to know it is over. */
@@ -319,6 +443,10 @@ void httptest_server_close_client_connections(HttptestServer *s) {
     sync_mutex_unlock(&s->mu);
 }
 
+X509Certificate *httptest_server_certificate(HttptestServer *s) {
+    return s->certificate;
+}
+
 HttpClient *httptest_server_client(HttptestServer *s) {
     return &s->client;
 }
@@ -330,7 +458,17 @@ void httptest_server_free(HttptestServer *s) {
     Alloc *a = ts_alloc(s);
     http_server_free(&s->config);
     http_transport_free(&s->transport);
-    net_listener_free(s->listener);
+    if (s->use_tls) {
+        tls_listener_free(s->listener);
+        net_listener_free(s->inner);
+    } else {
+        net_listener_free(s->listener);
+    }
+    x509_cert_pool_free(s->certpool);
+    if (s->client_tls != NULL)
+        tls_config_release(s->client_tls);
+    if (s->own_tls != NULL)
+        tls_config_release(s->own_tls);
     if (s->conns != NULL)
         mem_free(a, s->conns, (size_t)s->cap_conns * sizeof *s->conns,
                  _Alignof(ts_Conn));

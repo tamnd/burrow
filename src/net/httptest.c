@@ -14,6 +14,7 @@
 #include "burrow/bytes.h"
 #include "burrow/context.h"
 #include "burrow/core.h"
+#include "burrow/crypto/tls.h"
 #include "burrow/declare.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
@@ -118,6 +119,18 @@ HttpRequest *httptest_new_request_with_context(Alloc *a, Context ctx, Str method
 
     if (req->host.len == 0)
         req->host = BURROW_S("example.com");
+
+    if (strings_has_prefix(target, BURROW_S("https://"))) {
+        TlsConnectionState *cs = (TlsConnectionState *)mem_alloc(
+            arena_allocator(&req->arena), sizeof *cs, _Alignof(TlsConnectionState));
+        if (cs == NULL)
+            hh_out_of_memory();
+        memset(cs, 0, sizeof *cs);
+        cs->version = TLS_VERSION_TLS12;
+        cs->handshake_complete = true;
+        cs->server_name = req->host;
+        req->tls = cs;
+    }
     return req;
 }
 

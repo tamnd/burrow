@@ -1,10 +1,7 @@
 /* Derived from Go's src/net/http/httptest/httptest_test.go, recorder_test.go
- * and server_test.go. The Server tests are the HTTP ones, since there is no
- * TLS yet, and NewTestServer is not here either.
+ * and server_test.go. NewTestServer is not here, so neither are its variants
+ * of the Server tests nor the tests that need it.
  * Go source: go1.27.1.
- *
- * Go's request in the https case of TestNewRequestWithContext also has TLS
- * state, which needs crypto/tls, so that one field is not checked here.
  *
  * Copyright 2016 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -18,6 +15,7 @@
 #include "burrow/burrow.h"
 #include "burrow/bytes.h"
 #include "burrow/context.h"
+#include "burrow/crypto/tls.h"
 #include "burrow/fmt.h"
 #include "burrow/iface.h"
 #include "burrow/io.h"
@@ -32,6 +30,9 @@
 #include "burrow/proc.h"
 #include "burrow/strings.h"
 #include "burrow/time.h"
+
+#include <stdint.h>
+#include <string.h>
 
 #if defined(BURROW_NETPOLL_READINESS) && !defined(BURROW_OS_WASI)
 #define HAVE_TCP 1
@@ -542,6 +543,7 @@ typedef struct WantRequest {
     const char *url_raw_path;
     int64_t content_length;
     const char *request_uri;
+    bool tls; /* TLS: &tls.ConnectionState{...} with ServerName host */
 } WantRequest;
 
 enum { BODY_NIL, BODY_STRINGS_READER, BODY_PLAIN, BODY_NO_BODY };
@@ -560,44 +562,45 @@ static const NewRequestTest new_request_tests[] = {
      "",
      "/",
      BODY_NIL,
-     {"GET", "example.com", "", "", "/", "", 0, "/"},
+     {"GET", "example.com", "", "", "/", "", 0, "/", false},
      ""},
     {"GET with full URL",
      "GET",
      "http://foo.com/path/%2f/bar/",
      BODY_NIL,
      {"GET", "foo.com", "http", "foo.com", "/path///bar/", "/path/%2f/bar/", 0,
-      "http://foo.com/path/%2f/bar/"},
+      "http://foo.com/path/%2f/bar/", false},
      ""},
     {"GET with full https URL",
      "GET",
      "https://foo.com/path/",
      BODY_NIL,
-     {"GET", "foo.com", "https", "foo.com", "/path/", "", 0, "https://foo.com/path/"},
+     {"GET", "foo.com", "https", "foo.com", "/path/", "", 0, "https://foo.com/path/",
+      true},
      ""},
     {"Post with known length",
      "POST",
      "/",
      BODY_STRINGS_READER,
-     {"POST", "example.com", "", "", "/", "", 3, "/"},
+     {"POST", "example.com", "", "", "/", "", 3, "/", false},
      "foo"},
     {"Post with unknown length",
      "POST",
      "/",
      BODY_PLAIN,
-     {"POST", "example.com", "", "", "/", "", -1, "/"},
+     {"POST", "example.com", "", "", "/", "", -1, "/", false},
      "foo"},
     {"Post with NoBody",
      "POST",
      "/",
      BODY_NO_BODY,
-     {"POST", "example.com", "", "", "/", "", 0, "/"},
+     {"POST", "example.com", "", "", "/", "", 0, "/", false},
      ""},
     {"OPTIONS *",
      "OPTIONS",
      "*",
      BODY_NIL,
-     {"OPTIONS", "example.com", "", "", "*", "", 0, "*"},
+     {"OPTIONS", "example.com", "", "", "*", "", 0, "*", false},
      ""},
 };
 
@@ -642,6 +645,21 @@ static void check_request(TestingT *t, const HttpRequest *got, const WantRequest
         testing_t_errorf_v(t, "Request.Trailer has keys; want none");
     check_str(t, "RemoteAddr", got->remote_addr, "192.0.2.1:1234");
     check_str(t, "RequestURI", got->request_uri, w->request_uri);
+    if (w->tls) {
+        const TlsConnectionState *cs = got->tls;
+        if (cs == NULL) {
+            testing_t_errorf_v(t, "Request.TLS = nil; want a ConnectionState");
+        } else {
+            if (cs->version != TLS_VERSION_TLS12)
+                testing_t_errorf_v(t, "Request.TLS.Version = %#x; want %#x",
+                                   cs->version, TLS_VERSION_TLS12);
+            if (!cs->handshake_complete)
+                testing_t_errorf_v(t, "Request.TLS.HandshakeComplete = false");
+            check_str(t, "TLS.ServerName", cs->server_name, w->host);
+        }
+    } else if (got->tls != NULL) {
+        testing_t_errorf_v(t, "Request.TLS is set; want nil");
+    }
     if (got->ctx.vt != context_background().vt ||
         got->ctx.data != context_background().data)
         testing_t_errorf_v(t, "Request.Context() is not context.Background()");
@@ -650,7 +668,8 @@ static void check_request(TestingT *t, const HttpRequest *got, const WantRequest
 static void TestNewRequest(TestingT *t) {
     HttpRequest *got =
         httptest_new_request(heap_allocator(), S("GET"), S("/"), (IoReader){0});
-    static const WantRequest want = {"GET", "example.com", "", "", "/", "", 0, "/"};
+    static const WantRequest want = {"GET", "example.com", "",   "", "/", "",
+                                     0,     "/",           false};
     check_request(t, got, &want);
     http_request_free(got);
 }
@@ -751,7 +770,17 @@ static void serve_nothing(void *env, HttpResponseWriter w, HttpRequest *r) {
     (void)r;
 }
 
-/* newServers, the two that need no TLS. */
+/* A client's read and write loops finish on their own after a connection
+ * closes, in Go and here. A C test binary frees what they hold when it exits,
+ * though, and one still on its way out then looks like a leak to ASAN, so the
+ * tests that leave one wait up to five seconds for the count to come back. */
+static void wait_for_goroutines(int want) {
+    http_transport_close_idle_connections(http_default_transport);
+    for (int i = 0; i < 5000 && runtime_numgoroutine() > want; i++)
+        time_sleep(TIME_MILLISECOND);
+}
+
+/* newServers, without NewTestServer's. */
 typedef HttptestServer *(*NewServerFunc)(HttpHandler h);
 
 static HttptestServer *new_server(HttpHandler h) {
@@ -905,12 +934,128 @@ static void server_variant(void *env, TestingT *t) {
                         BURROW_FN(TestingTFunc, server_client_transport_type, env));
 }
 
+static HttptestServer *new_tls_server(HttpHandler h) {
+    return httptest_new_tls_server(NULL, h);
+}
+
+/* Not in Go: NewTLSServerManual fills in only the exported fields of a
+ * Server, and here the server is made by httptest_new_unstarted_server, as
+ * for NewUnstartedServer above, and then started with TLS. */
+static HttptestServer *new_tls_server_manual(HttpHandler h) {
+    HttptestServer *ts = httptest_new_unstarted_server(NULL, h);
+    httptest_server_start_tls(ts);
+    return ts;
+}
+
+static void server_client(void *env, TestingT *t) {
+    need_tcp(t);
+    int ng = runtime_numgoroutine();
+    HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_hello, NULL);
+    HttptestServer *ts = (*(NewServerFunc *)env)(http_handler_func_as_handler(&f));
+    HttpClient *client = httptest_server_client(ts);
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *res = http_client_get(client, ts->url, &err);
+    if (res == NULL) {
+        httptest_server_free(ts);
+        wait_for_goroutines(ng);
+        testing_t_fatal_v(t, err);
+    }
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Slice got =
+        io_read_all(arena_allocator(&ar), io_read_closer_as_io_reader(res->body), &err);
+    (void)res->body.vt->closer.close(res->body.data);
+    http_response_free(res);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        httptest_server_free(ts);
+        wait_for_goroutines(ng);
+        testing_t_fatal_v(t, err);
+    }
+    Str g = str_from_bytes(got.p, got.len);
+    if (!str_eq(g, S("hello")))
+        testing_t_errorf_v(t, "got %q, want hello", g);
+    arena_free(&ar);
+    httptest_server_free(ts);
+    wait_for_goroutines(ng);
+}
+
+static void tls_server_variant(void *env, TestingT *t) {
+    (void)testing_t_run(t, S("ServerClient"),
+                        BURROW_FN(TestingTFunc, server_client, env));
+    /* testTLSServerClientTransportType is testServerClientTransportType, with
+     * a TLS server. */
+    (void)testing_t_run(t, S("TLSServerClientTransportType"),
+                        BURROW_FN(TestingTFunc, server_client_transport_type, env));
+}
+
 static void TestServer(TestingT *t) {
     static NewServerFunc news[2] = {new_server, new_server_unstarted};
     (void)testing_t_run(t, S("NewServer"),
                         BURROW_FN(TestingTFunc, server_variant, &news[0]));
     (void)testing_t_run(t, S("NewUnstartedServer"),
                         BURROW_FN(TestingTFunc, server_variant, &news[1]));
+    static NewServerFunc tls_news[2] = {new_tls_server, new_tls_server_manual};
+    (void)testing_t_run(t, S("NewTLSServer"),
+                        BURROW_FN(TestingTFunc, tls_server_variant, &tls_news[0]));
+    (void)testing_t_run(t, S("NewTLSServerManual"),
+                        BURROW_FN(TestingTFunc, tls_server_variant, &tls_news[1]));
+}
+
+typedef struct TLSServerMode {
+    const char *name;
+    const char *want_proto;
+} TLSServerMode;
+
+static void serve_x_proto(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    HttpHeader h = http_response_writer_header(w);
+    (void)http_header_set(h, S("X-Proto"),
+                          str_clone(burrow__map_allocator(h), r->proto));
+}
+
+static void tls_server_with_http2(void *env, TestingT *t) {
+    need_tcp(t);
+    int ng = runtime_numgoroutine();
+    const TLSServerMode *tt = (const TLSServerMode *)env;
+    HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_x_proto, NULL);
+    HttptestServer *cst =
+        httptest_new_unstarted_server(NULL, http_handler_func_as_handler(&f));
+
+    if (strcmp(tt->name, "http2") == 0) {
+        cst->enable_http2 = true;
+        httptest_server_start_tls(cst);
+    } else {
+        httptest_server_start(cst);
+    }
+
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *res = http_client_get(httptest_server_client(cst), cst->url, &err);
+    if (res == NULL) {
+        testing_t_errorf_v(t, "Failed to make request: %v", err);
+    } else {
+        Str g = http_header_get(res->header, S("X-Proto"));
+        Str w = cs(tt->want_proto);
+        if (!str_eq(g, w))
+            testing_t_errorf_v(t, "X-Proto header mismatch:\n\tgot:  %q\n\twant: %q", g,
+                               w);
+        (void)res->body.vt->closer.close(res->body.data);
+        http_response_free(res);
+    }
+    httptest_server_free(cst);
+    wait_for_goroutines(ng);
+}
+
+static void TestTLSServerWithHTTP2(TestingT *t) {
+    static const TLSServerMode modes[2] = {
+        {"http1", "HTTP/1.1"},
+        {"http2", "HTTP/2.0"},
+    };
+
+    for (int i = 0; i < 2; i++)
+        (void)testing_t_run(t, cs(modes[i].name),
+                            BURROW_FN(TestingTFunc, tls_server_with_http2,
+                                      (void *)(uintptr_t)&modes[i]));
 }
 
 static void serve_requested_hostname(void *env, HttpResponseWriter w, HttpRequest *r) {
@@ -920,30 +1065,32 @@ static void serve_requested_hostname(void *env, HttpResponseWriter w, HttpReques
                           str_clone(burrow__map_allocator(h), r->host));
 }
 
-/* A client's read and write loops finish on their own after a connection
- * closes, in Go and here. A C test binary frees what they hold when it exits,
- * though, and one still on its way out then looks like a leak to ASAN, so the
- * tests that leave one wait up to five seconds for the count to come back. */
-static void wait_for_goroutines(int want) {
-    http_transport_close_idle_connections(http_default_transport);
-    for (int i = 0; i < 5000 && runtime_numgoroutine() > want; i++)
-        time_sleep(TIME_MILLISECOND);
-}
+typedef struct ExampleComMode {
+    const char *proto;
+    const char *host;
+} ExampleComMode;
 
 static void client_example_com(void *env, TestingT *t) {
     need_tcp(t);
     int ng = runtime_numgoroutine();
-    Str host = *(const Str *)env;
+    const ExampleComMode *tt = (const ExampleComMode *)env;
+    Str host = cs(tt->host);
     HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_requested_hostname, NULL);
     HttptestServer *cst =
         httptest_new_unstarted_server(NULL, http_handler_func_as_handler(&f));
-    httptest_server_start(cst);
+    if (strcmp(tt->proto, "https") == 0) {
+        cst->enable_http2 = true;
+        httptest_server_start_tls(cst);
+    } else {
+        httptest_server_start(cst);
+    }
+
     Arena ar;
     arena_init(&ar, NULL, 0);
     Error err = BURROW_NO_ERROR;
-    HttpResponse *res =
-        http_client_get(httptest_server_client(cst),
-                        fmt_sprintf_v(arena_allocator(&ar), "http://%s", host), &err);
+    HttpResponse *res = http_client_get(
+        httptest_server_client(cst),
+        fmt_sprintf_v(arena_allocator(&ar), "%s://%s", cs(tt->proto), host), &err);
     if (res == NULL) {
         testing_t_errorf_v(t, "Failed to make request: %v", err);
     } else {
@@ -960,12 +1107,22 @@ static void client_example_com(void *env, TestingT *t) {
 }
 
 static void TestClientExampleCom(TestingT *t) {
-    static Str example_hosts[2] = {BURROW_S_INIT("example.com"),
-                                   BURROW_S_INIT("foo.example.com")};
-    (void)testing_t_run(t, S("http example.com"),
-                        BURROW_FN(TestingTFunc, client_example_com, &example_hosts[0]));
-    (void)testing_t_run(t, S("http foo.example.com"),
-                        BURROW_FN(TestingTFunc, client_example_com, &example_hosts[1]));
+    static const ExampleComMode modes[4] = {
+        {"http", "example.com"},
+        {"http", "foo.example.com"},
+        {"https", "example.com"},
+        {"https", "foo.example.com"},
+    };
+
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    for (int i = 0; i < 4; i++)
+        (void)testing_t_run(
+            t,
+            fmt_sprintf_v(arena_allocator(&ar), "%s %s", cs(modes[i].proto),
+                          cs(modes[i].host)),
+            BURROW_FN(TestingTFunc, client_example_com, (void *)(uintptr_t)&modes[i]));
+    arena_free(&ar);
 }
 
 /* A listener that can only be closed, for a Server that was never started. */
@@ -1091,6 +1248,7 @@ static void TestCloseHijackedConnection(TestingT *t) {
     X(TestNewRequestWithContext)                                                       \
     X(TestNewRequestPanics)                                                            \
     X(TestServer)                                                                      \
+    X(TestTLSServerWithHTTP2)                                                          \
     X(TestClientExampleCom) X(TestServerZeroValueClose) X(TestCloseHijackedConnection)
 
 TESTING_MAIN(TESTS)

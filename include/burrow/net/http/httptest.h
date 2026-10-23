@@ -36,6 +36,8 @@
 #include "burrow/bytes.h"
 #include "burrow/context.h"
 #include "burrow/core.h"
+#include "burrow/crypto/tls.h"
+#include "burrow/crypto/x509.h"
 #include "burrow/error.h"
 #include "burrow/io.h"
 #include "burrow/mem.h"
@@ -71,8 +73,9 @@ extern "C" {
  * IoReader cannot say whether it can be closed as well, so set body yourself
  * when the handler has to close something. A nil body is http_no_body.
  *
- * Go's request also has TLS state when target starts with "https://". There is
- * no crypto/tls here yet, so it does not.
+ * When target starts with "https://" the request's tls is a dummy state, as
+ * Go's is: TLS 1.2, a finished handshake and the host as the server name, made
+ * in the request's arena.
  *
  * Panics with "invalid NewRequest arguments; " and the reason when method and
  * target do not make a request line, as Go's does. The request is made in a
@@ -178,21 +181,30 @@ httptest_response_recorder_result(HttptestResponseRecorder *rw);
 /* httptest.Server, an HTTP server on a port of the loopback address, for
  * tests that need a real one.
  *
- * url is "http://" and the address it is listening on, such as
- * "http://127.0.0.1:41721". listener is what it listens on, and config is the
- * server, whose fields can be set between httptest_new_unstarted_server and
- * httptest_server_start. transport is what httptest_server_client's client
- * sends with, which takes a dial to example.com or a subdomain of it, on port
- * 80, to the server instead, as Go's does.
+ * url is "http://", or "https://" after httptest_server_start_tls, and the
+ * address it is listening on, such as "http://127.0.0.1:41721". listener is
+ * what it listens on, which is a TLS listener over the first one once TLS is
+ * started. config is the server, whose fields can be set between
+ * httptest_new_unstarted_server and the start. transport is what
+ * httptest_server_client's client sends with, which takes a dial to
+ * example.com or a subdomain of it, on port 80, or 443 with TLS, to the
+ * server instead, as Go's does.
  *
- * Go's TLS server, NewTLSServer and StartTLS with the certificate, waits for
- * crypto/tls, and so does NewTestServer, which serves on a network in memory
- * with TLS as well. The -httptest.serve flag is not here either.
+ * enable_http2 controls whether HTTP/2 is enabled on the server. It must be
+ * set before the start. tls is the optional TLS configuration, populated with
+ * a new config after TLS is started. If set on an unstarted server before
+ * httptest_server_start_tls is called, existing fields are copied into the new
+ * config, which is made in the server's arena and goes with the server.
+ *
+ * NewTestServer, which serves on a network in memory, is not here, and
+ * neither is the -httptest.serve flag.
  *
  * The rest is the server's own. */
 typedef struct HttptestServer {
     Str url;
     NetListener listener;
+    bool enable_http2;
+    TlsConfig *tls;
     HttpServer config;
     HttpTransport transport;
     HttpClient client;
@@ -207,6 +219,12 @@ typedef struct HttptestServer {
     Int nconns, cap_conns;
     HttpConnStateFunc old_hook;
     SyncWaitGroup wg;
+    bool use_tls;
+    NetListener inner;            /* the listener under the TLS one */
+    X509Certificate *certificate; /* parsed from tls's first certificate */
+    X509CertPool *certpool;       /* the client's roots */
+    TlsConfig *own_tls;           /* the clone or new config tls points to */
+    TlsConfig *client_tls;        /* the client's */
 } HttptestServer;
 
 /* httptest.NewServer. A server for handler, started, which is
@@ -232,6 +250,23 @@ BURROW_OWNS(ret) HttptestServer *httptest_new_unstarted_server(Alloc *a,
  * httptest_server_close. */
 void httptest_server_start(HttptestServer *s);
 
+/* Server.StartTLS. Starts TLS on a server on a local loopback network
+ * interface, with the certificate from net/http/internal/testcert unless tls
+ * has certificates of its own. Panics as httptest_server_start does, and with
+ * "httptest: NewTLSServer: " and the reason when the certificate cannot be
+ * loaded or parsed. */
+void httptest_server_start_tls(HttptestServer *s);
+
+/* httptest.NewTLSServer. Starts and returns a new Server using TLS and
+ * listening on a local network loopback interface. This is equivalent to
+ * calling httptest_new_unstarted_server followed by
+ * httptest_server_start_tls. Give it back with httptest_server_free. */
+BURROW_OWNS(ret) HttptestServer *httptest_new_tls_server(Alloc *a, HttpHandler handler);
+
+/* Server.Certificate. Returns the certificate used by the server, or nil if
+ * the server doesn't use TLS. It goes with the server. */
+BURROW_BORROWS(ret, s) X509Certificate *httptest_server_certificate(HttptestServer *s);
+
 /* Server.Close. Stops listening, closes the connections that are idle, and
  * waits for the requests still going to be over and their connections
  * closed. Closing again does nothing. */
@@ -239,8 +274,8 @@ void httptest_server_close(HttptestServer *s);
 
 /* Server.CloseClientConnections. Closes every connection to the server, idle
  * or not. Go closes them on goroutines of their own, since closing a TLS
- * connection can block, and waits five seconds at most. Closing one that is
- * not TLS does not block, and here they are closed one after the other. */
+ * connection can block, and waits five seconds at most. Here they are closed
+ * one after the other, with the server's lock held. */
 void httptest_server_close_client_connections(HttptestServer *s);
 
 /* Server.Client. A client set up to talk to the server, which can be changed,

@@ -499,6 +499,7 @@ global	src/crypto/x509_verify.c	x509_fallbacks_set	package-vars	fallbacksSet, wh
 global	src/crypto/x509_verify.c	x509_use_fallback_roots	package-vars	useFallbackRoots, the x509usefallbackroots setting when the fallbacks were set. Written under x509_roots_mu only.
 global	src/log/log.c	log_std	package-vars	The standard logger, log.std in Go. Its flags are atomic and its prefix and output each have a lock inside the logger, as in Go, so any thread may use it and change it.
 global	src/net/http_transport.c	tp_default_transport	package-vars	DefaultTransport. Its own mutexes guard the pool and the calls, and the settings are only read.
+global	src/net/smtp.c	burrow__smtp_test_hook_start_tls	package-vars	testHookStartTLS, called by SendMail with the config it gives StartTLS. Only tests set it, before they send, as Go's init in smtp_test.go does.
 global	src/net/http_transport.c	tp_env_proxy_cache	package-vars	envProxyFunc's cache of the proxy settings in the environment. Go keeps it behind a sync.Once, and here it is loaded on first use under its own mutex.
 global	src/net/http_client.c	cl_default_client	package-vars	DefaultClient. Its fields are only read, and the default transport guards itself.
 global	src/net/rpc.c	rs_default_server	package-vars	DefaultServer. Its service map is read and written only under its own RWMutex, and each method counts its calls under its own mutex.

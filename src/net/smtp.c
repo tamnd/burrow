@@ -7,7 +7,6 @@
  * client, the extensions the server sent and the error from the hello, is in
  * the client's own arena.
  *
- * StartTLS and TLSConnectionState wait for crypto/tls.
  * Go source: go1.27.1.
  *
  * Copyright 2010 The Go Authors. All rights reserved.
@@ -20,6 +19,7 @@
 #include "smtp_internal.h"
 
 #include "burrow/core.h"
+#include "burrow/crypto/tls.h"
 #include "burrow/encoding/base64.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
@@ -36,9 +36,14 @@
 
 #include <stdint.h>
 
-BURROW_SENTINEL_ERROR(smtp_err_no_tls,
-                      "smtp: server offers STARTTLS, which needs crypto/tls, not "
-                      "ported yet");
+/* Not in Go: a TLS connection smtp_client_start_tls put over the one under
+ * it, kept so that smtp_client_free can give both back. */
+struct burrow__SmtpTLSLayer {
+    TlsConn *conn;
+    NetConn under;
+    struct burrow__SmtpTLSLayer *next;
+};
+
 BURROW_SENTINEL_ERROR(smc_err_line, "smtp: A line must not contain CR or LF");
 BURROW_SENTINEL_ERROR(smc_err_hello_after, "smtp: Hello called after other methods");
 BURROW_SENTINEL_ERROR(smc_err_no_auth, "smtp: server doesn't support AUTH");
@@ -126,7 +131,7 @@ SmtpClient *smtp_new_client(Alloc *a, NetConn conn, Str host, Error *err) {
         return NULL;
     }
     arena_reset(&c->scratch);
-    /* Go's c.tls says whether conn is a *tls.Conn, which it cannot be yet. */
+    c->tls = tls_conn_from_net_conn(conn) != NULL;
     BURROW_OUT(err, BURROW_NO_ERROR);
     return c;
 }
@@ -139,8 +144,13 @@ void smtp_client_free(SmtpClient *c) {
     if (c == NULL)
         return;
     textproto_conn_free(c->text);
+    NetConn conn = c->conn;
+    for (struct burrow__SmtpTLSLayer *l = c->tls_layers; l != NULL; l = l->next) {
+        tls_conn_free(l->conn);
+        conn = l->under;
+    }
     if (c->owns_conn)
-        net_conn_free(c->conn);
+        net_conn_free(conn);
     arena_free(&c->scratch);
     arena_free(&c->arena);
     mem_free(c->a, c, sizeof *c, _Alignof(SmtpClient));
@@ -257,6 +267,44 @@ Error smtp_client_hello(SmtpClient *c, Str local_name) {
     if (c->local_name.len != local_name.len)
         return burrow_err_out_of_memory;
     return smc_hello(c);
+}
+
+Error smtp_client_start_tls(SmtpClient *c, TlsConfig *config) {
+    Error err = smc_hello(c);
+    if (BURROW_FAILED(err))
+        return err;
+    err = smc_simple_v(c, 220, "STARTTLS");
+    if (BURROW_FAILED(err))
+        return err;
+    struct burrow__SmtpTLSLayer *l =
+        BURROW_NEW(arena_allocator(&c->arena), struct burrow__SmtpTLSLayer);
+    TlsConn *tc = l == NULL ? NULL : tls_client(c->a, c->conn, config);
+    TextprotoConn *text = tc == NULL ? NULL : textproto_new_conn(c->a, c->rwc);
+    if (text == NULL) {
+        tls_conn_free(tc);
+        return burrow_err_out_of_memory;
+    }
+    l->conn = tc;
+    l->under = c->conn;
+    l->next = c->tls_layers;
+    c->tls_layers = l;
+    c->conn = tls_conn_as_net_conn(tc);
+    /* Not in Go: the old Conn goes back without closing anything, as Go
+     * leaves it to the collector. */
+    textproto_conn_free(c->text);
+    c->text = text;
+    c->tls = true;
+    return burrow__smtp_client_ehlo(c);
+}
+
+bool smtp_client_tls_connection_state(SmtpClient *c, TlsConnectionState *state) {
+    TlsConn *tc = tls_conn_from_net_conn(c->conn);
+    if (tc == NULL) {
+        BURROW_OUT(state, (TlsConnectionState){0});
+        return false;
+    }
+    BURROW_OUT(state, tls_conn_connection_state(tc));
+    return true;
 }
 
 Error smtp_client_verify(SmtpClient *c, Str addr) {
@@ -432,14 +480,24 @@ Error smtp_client_quit(SmtpClient *c) {
     return textproto_conn_close(c->text);
 }
 
+burrow__SmtpStartTLSHook burrow__smtp_test_hook_start_tls; /* nil, except for tests */
+
 /* The body of smtp_send_mail once the client is there, so that it has one
- * place to close and free it. */
-static Error smc_send(SmtpClient *c, SmtpAuth a, Str from, Slice to, Slice msg) {
+ * place to close and free it. Not in Go: config is the one for STARTTLS, which
+ * has to outlive c. */
+static Error smc_send(SmtpClient *c, TlsConfig *config, SmtpAuth a, Str from, Slice to,
+                      Slice msg) {
     Error err = smc_hello(c);
     if (BURROW_FAILED(err))
         return err;
-    if (smtp_client_extension(c, BURROW_S("STARTTLS"), NULL))
-        return smtp_err_no_tls;
+    if (smtp_client_extension(c, BURROW_S("STARTTLS"), NULL)) {
+        config->server_name = c->server_name;
+        if (burrow__smtp_test_hook_start_tls != NULL)
+            burrow__smtp_test_hook_start_tls(config);
+        err = smtp_client_start_tls(c, config);
+        if (BURROW_FAILED(err))
+            return err;
+    }
     if (a.vt != NULL && c->ext != NULL) {
         Str auth_key = BURROW_S("AUTH");
         if (map_get(c->ext, &auth_key) == NULL)
@@ -480,8 +538,10 @@ Error smtp_send_mail(Str addr, SmtpAuth a, Str from, Slice to, Slice msg) {
     SmtpClient *c = smtp_dial(heap_allocator(), addr, &err);
     if (c == NULL)
         return err;
-    err = smc_send(c, a, from, to, msg);
+    TlsConfig config = {0};
+    err = smc_send(c, &config, a, from, to, msg);
     (void)smtp_client_close(c);
     smtp_client_free(c);
+    tls_config_release(&config);
     return err;
 }

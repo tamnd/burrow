@@ -1427,10 +1427,11 @@ static void h2s_send_window_update(h2s_Conn *sc, h2s_Stream *st, Int n) {
         h2s_wr_make(burrow__http2_write_window_update(id, (uint32_t)send), st, NULL));
 }
 
-/* noteBodyRead. */
+/* noteBodyRead. st is NULL for conn-level flow control only. */
 static void h2s_note_body_read(h2s_Conn *sc, h2s_Stream *st, Int n) {
     h2s_send_window_update(sc, NULL, n); /* conn-level */
-    if (st->state != H2S_STATE_HALF_CLOSED_REMOTE && st->state != H2S_STATE_CLOSED) {
+    if (st != NULL && st->state != H2S_STATE_HALF_CLOSED_REMOTE &&
+        st->state != H2S_STATE_CLOSED) {
         /* Don't send this WINDOW_UPDATE if the stream is closed remotely. */
         h2s_send_window_update(sc, st, n);
     }
@@ -1599,12 +1600,8 @@ static void h2s_close_stream(h2s_Conn *sc, h2s_Stream *st, Error err) {
         if (!burrow__http_server_do_keep_alives(sc->srv))
             h2s_go_away(sc, HTTP2_ERR_CODE_NO);
     }
-    if (st->has_body) {
-        /* Return any buffered unread bytes worth of conn-level flow control.
-         * See golang.org/issue/16481 */
-        h2s_send_window_update(sc, NULL, burrow__http2_pipe_len(&st->pipe));
+    if (st->has_body)
         burrow__http2_pipe_close_with_error(&st->pipe, err);
-    }
     Http2StreamError se;
     if (burrow__http2_error_stream(err, &se))
         err = BURROW_OK(se.cause) ? burrow__http2_err_stream_closed : se.cause;
@@ -2462,20 +2459,21 @@ static bool h2s_is_eof(Error err) {
     return err.vt == io_eof.vt && err.data == io_eof.data;
 }
 
-/* noteBodyReadFromHandler. The message holds st. */
-static void h2s_note_body_read_from_handler(h2s_Stream *st, Int n) {
+/* noteBodyReadFromHandler. The message holds st, which is NULL for
+ * conn-level flow control only. */
+static void h2s_note_body_read_from_handler(h2s_Conn *sc, h2s_Stream *st, Int n) {
     if (n <= 0)
         return;
-    h2s_Conn *sc = st->sc;
     h2s_BodyReadMsg m;
     m.st = st;
     m.n = n;
-    h2s_stream_ref(st);
+    if (st != NULL)
+        h2s_stream_ref(st);
     SelectCase cases[] = {
         BURROW_SEND(sc->body_read_ch, &m),
         BURROW_RECV(sc->done_serving, NULL),
     };
-    if (chan_select(cases, 2) == 1)
+    if (chan_select(cases, 2) == 1 && st != NULL)
         h2s_stream_unref(st);
 }
 
@@ -2500,16 +2498,20 @@ static Int h2s_rb_read(void *self, Slice p, Error *err) {
     Int n = burrow__http2_pipe_read(&b->stream->pipe, p, err);
     if (h2s_is_eof(*err))
         b->saw_eof = true;
-    h2s_note_body_read_from_handler(b->stream, n);
+    h2s_note_body_read_from_handler(b->stream->sc, b->stream, n);
     return n;
 }
 
 /* requestBody.Close. */
 static Error h2s_rb_close(void *self) {
     h2s_ReqBody *b = (h2s_ReqBody *)self;
-    if (!sync_atomic_bool_swap(&b->closed, true) && b->has_pipe)
+    if (!sync_atomic_bool_swap(&b->closed, true) && b->has_pipe) {
         burrow__http2_pipe_break_with_error(&b->stream->pipe,
                                             burrow__http2_err_closed_body);
+        Int unread = burrow__http2_pipe_len(&b->stream->pipe);
+        if (unread > 0)
+            h2s_note_body_read_from_handler(b->stream->sc, NULL, unread);
+    }
     return BURROW_NO_ERROR;
 }
 
@@ -3190,10 +3192,22 @@ static bool h2s_go_handler(h2s_Conn *sc, h2s_Stream *st) {
     return false;
 }
 
+/* The body of a stream whose handler never runs: what handlerDone does for a
+ * stream reset before its handler started. */
+static void h2s_drop_unstarted_body(h2s_Conn *sc, h2s_Stream *st) {
+    if (st->has_body) {
+        burrow__http2_pipe_break_with_error(&st->pipe, burrow__http2_err_closed_body);
+        h2s_send_window_update(sc, NULL, burrow__http2_pipe_len(&st->pipe));
+    }
+}
+
 /* A handler that could not be started: the stream is reset as a handler
  * panic would. */
 static void h2s_handler_not_started(h2s_Conn *sc, h2s_Stream *st) {
     sc->cur_handlers--;
+    /* Not in Go, where starting the handler's goroutine can't fail: the
+     * body's flow control comes back here, since its Close never runs. */
+    h2s_drop_unstarted_body(sc, st);
     h2s_write_frame(
         sc, h2s_wr_make(burrow__http2_write_handler_panic_rst(st->base.id), st, NULL));
     h2s_stream_unref(st);
@@ -3242,6 +3256,7 @@ static void h2s_handler_done(h2s_Conn *sc) {
         if (h2s_stream_lookup(sc, st->base.id) != st) {
             /* This stream was reset before its goroutine had a chance to
              * start. */
+            h2s_drop_unstarted_body(sc, st);
             h2s_stream_unref(st);
             continue;
         }
@@ -3353,6 +3368,10 @@ static void h2s_run_handler(void *env) {
     memset(&e, 0, sizeof e);
     bool did_panic = h2s_call_handler(st, &storage, &e);
     BURROW_CALLF0(st->cancel_ctx);
+    /* Closing the body refunds flow control credit for any unconsumed data.
+     * (reqBody is nil for Upgrade: h2c requests, but those do not use flow
+     * control for the request body.) */
+    (void)h2s_rb_close(&st->body);
     if (st->req->multipart_form != NULL)
         (void)multipart_form_remove_all(st->req->multipart_form);
     if (did_panic) {
@@ -3505,7 +3524,8 @@ static bool h2s_serve_once(h2s_Conn *sc, bool *settings_timer_live) {
     }
     case 3:
         h2s_note_body_read(sc, brm.st, brm.n);
-        h2s_stream_unref(brm.st);
+        if (brm.st != NULL)
+            h2s_stream_unref(brm.st);
         break;
     default:
         h2s_serve_msg(sc, msg, &stop);

@@ -232,10 +232,13 @@ static void bc_write(StringsBuilder *b, ConstraintExpr x, Error *err);
  * the parentheses NotExpr.String puts around either kind. */
 static void bc_write_arg(StringsBuilder *b, ConstraintExpr x, int paren, Error *err) {
     bool p = x != NULL && (int)x->kind == paren;
-    if (p)
+    if (p) {
         strings_builder_write_string(b, BURROW_S("("), err);
+        if (BURROW_FAILED(*err))
+            return;
+    }
     bc_write(b, x, err);
-    if (p)
+    if (p && BURROW_OK(*err))
         strings_builder_write_string(b, BURROW_S(")"), err);
 }
 
@@ -250,6 +253,8 @@ static void bc_write(StringsBuilder *b, ConstraintExpr x, Error *err) {
     case CONSTRAINT_KIND_NOT: {
         ConstraintExpr y = ((ConstraintNotExpr *)x)->x;
         strings_builder_write_string(b, BURROW_S("!"), err);
+        if (BURROW_FAILED(*err))
+            break;
         if (y != NULL && (int)y->kind == CONSTRAINT_KIND_AND)
             bc_write_arg(b, y, CONSTRAINT_KIND_AND, err);
         else
@@ -258,13 +263,17 @@ static void bc_write(StringsBuilder *b, ConstraintExpr x, Error *err) {
     }
     case CONSTRAINT_KIND_AND:
         bc_write_arg(b, ((ConstraintAndExpr *)x)->x, CONSTRAINT_KIND_OR, err);
-        strings_builder_write_string(b, BURROW_S(" && "), err);
-        bc_write_arg(b, ((ConstraintAndExpr *)x)->y, CONSTRAINT_KIND_OR, err);
+        if (BURROW_OK(*err))
+            strings_builder_write_string(b, BURROW_S(" && "), err);
+        if (BURROW_OK(*err))
+            bc_write_arg(b, ((ConstraintAndExpr *)x)->y, CONSTRAINT_KIND_OR, err);
         break;
     case CONSTRAINT_KIND_OR:
         bc_write_arg(b, ((ConstraintOrExpr *)x)->x, CONSTRAINT_KIND_AND, err);
-        strings_builder_write_string(b, BURROW_S(" || "), err);
-        bc_write_arg(b, ((ConstraintOrExpr *)x)->y, CONSTRAINT_KIND_AND, err);
+        if (BURROW_OK(*err))
+            strings_builder_write_string(b, BURROW_S(" || "), err);
+        if (BURROW_OK(*err))
+            bc_write_arg(b, ((ConstraintOrExpr *)x)->y, CONSTRAINT_KIND_AND, err);
         break;
     default:
         break;
@@ -786,8 +795,10 @@ static bool bc_is_lit(ConstraintExpr x) {
 static void bc_write_and(StringsBuilder *b, ConstraintExpr and, Error *err) {
     if ((int)and->kind == CONSTRAINT_KIND_AND) {
         bc_write_and(b, ((ConstraintAndExpr *) and)->x, err);
-        strings_builder_write_string(b, BURROW_S(","), err);
-        bc_write_and(b, ((ConstraintAndExpr *) and)->y, err);
+        if (BURROW_OK(*err))
+            strings_builder_write_string(b, BURROW_S(","), err);
+        if (BURROW_OK(*err))
+            bc_write_and(b, ((ConstraintAndExpr *) and)->y, err);
         return;
     }
     bc_write(b, and, err);
@@ -841,7 +852,8 @@ Slice constraint_plus_build_lines(Alloc *a, ConstraintExpr x, Error *err) {
     if (max_or == 1) {
         StringsBuilder b = STRINGS_BUILDER(a);
         strings_builder_write_string(&b, BURROW_S("// +build "), err);
-        bc_write_and(&b, x, err);
+        if (BURROW_OK(*err))
+            bc_write_and(&b, x, err);
         if (!BURROW_OK(*err))
             goto oom;
         Str line = strings_builder_string(&b);
@@ -856,9 +868,10 @@ Slice constraint_plus_build_lines(Alloc *a, ConstraintExpr x, Error *err) {
         strings_builder_write_string(&b, BURROW_S("// +build"), err);
         Int nands = 0;
         bc_split(ands, &nands, ors[i], CONSTRAINT_KIND_OR);
-        for (Int j = 0; j < nands; j++) {
+        for (Int j = 0; j < nands && BURROW_OK(*err); j++) {
             strings_builder_write_string(&b, BURROW_S(" "), err);
-            bc_write_and(&b, ands[j], err);
+            if (BURROW_OK(*err))
+                bc_write_and(&b, ands[j], err);
         }
         if (!BURROW_OK(*err))
             goto oom;

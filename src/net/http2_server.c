@@ -343,7 +343,6 @@ struct burrow__Http2ServeConn {
     NetConn conn;
     Str remote_addr;
     TlsConnectionState tls_state; /* shared by all handlers, like net/http */
-    bool has_tls_state;
     Context base_ctx;
     ContextCancelFunc cancel_ctx;
     h2s_Config conf;
@@ -360,6 +359,7 @@ struct burrow__Http2ServeConn {
     Chan *preface_ch;          /* of Error */
     Http2Outflow flow;
     Http2Inflow inflow;
+    bool has_tls_state;
     bool saw_client_preface;
     Http2WriteScheduler write_sched;
 

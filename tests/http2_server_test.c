@@ -10,6 +10,10 @@
  * started. Go's tests that look inside the server's state, or move a fake
  * clock along, are not here.
  *
+ * TestServerResetStreamUnreadBody, and the end of
+ * TestServerWindowUpdateOnBodyClose, came with go1.27.2 (GO-2026-6612, CL
+ * 847310).
+ *
  * Copyright 2014 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -3417,6 +3421,62 @@ static void TestServerInitialFlowControlWindow(TestingT *t) {
             BURROW_FN(TestingTFunc, h2t_initial_window, (void *)(uintptr_t)&cases[i]));
 }
 
+/* Go's wantUnorderedFrames, for the frames these tests want: each frame read
+ * goes to the first want of its kind not yet seen, and is seen when it
+ * matches. A frame of a kind not wanted fails the test. value is the increment
+ * of a WINDOW_UPDATE, the error code of a RST_STREAM, and whether a HEADERS
+ * frame ends the stream. */
+typedef struct H2tWant {
+    Http2FrameKind kind;
+    uint32_t stream_id;
+    uint32_t value;
+} H2tWant;
+
+static bool h2t_want_matches(const H2tWant *w, const Http2Frame *f) {
+    uint32_t v = 0;
+    if (f->kind == HTTP2_WINDOW_UPDATE_FRAME)
+        v = f->u.window_update.increment;
+    else if (f->kind == HTTP2_RST_STREAM_FRAME)
+        v = (uint32_t)f->u.rst_stream.err_code;
+    else if (f->kind == HTTP2_META_HEADERS_FRAME)
+        v = (f->header.flags & HTTP2_FLAG_HEADERS_END_STREAM) != 0 ? 1U : 0U;
+    return f->header.stream_id == w->stream_id && v == w->value;
+}
+
+static bool h2t_want_unordered_frames(H2tTester *st, const H2tWant *want, size_t n) {
+    bool seen[4] = {false, false, false, false};
+    size_t nseen = 0;
+    if (n > sizeof seen / sizeof seen[0]) {
+        testing_t_errorf_v(st->t, "too many frames wanted: %d", (Int)n);
+        return false;
+    }
+    while (nseen < n && !testing_t_failed(st->t)) {
+        Http2Frame *f = h2t_read_frame(st);
+        if (f == NULL)
+            break;
+        size_t i = 0;
+        while (i < n && (seen[i] || want[i].kind != f->kind))
+            i++;
+        if (i == n) {
+            testing_t_errorf_v(st->t, "got unexpected frame type %d",
+                               (int)f->header.type);
+        } else if (h2t_want_matches(&want[i], f)) {
+            seen[i] = true;
+            nseen++;
+        }
+        burrow__http2_frame_free(f);
+    }
+    if (nseen < n) {
+        for (size_t i = 0; i < n; i++)
+            if (!seen[i])
+                testing_t_errorf_v(st->t, "did not see expected frame: kind %d",
+                                   (int)want[i].kind);
+        testing_t_errorf_v(st->t, "did not see %d expected frame types",
+                           (Int)(n - nseen));
+    }
+    return nseen == n;
+}
+
 typedef struct H2tBodyClose {
     TestingT *t;
     Chan *errc;
@@ -3473,9 +3533,15 @@ static void TestServerWindowUpdateOnBodyClose(TestingT *t) {
                     increments -= (Int)f->u.window_update.increment;
                 burrow__http2_frame_free(f);
             }
-            if (increments == 0 &&
+            /* Writing data after the stream is reset immediately returns flow
+             * control credit. */
+            static const H2tWant want[] = {
+                {HTTP2_WINDOW_UPDATE_FRAME, 0, HALF},
+                {HTTP2_RST_STREAM_FRAME, 1, HTTP2_ERR_CODE_STREAM_CLOSED},
+            };
+            if (increments == 0 && h2t_want_headers(&st, 1, true, NULL, 0) &&
                 h2t_write_data(&st, 1, false, (const char *)content + HALF, HALF))
-                (void)h2t_want_window_update(&st, 0, HALF);
+                (void)h2t_want_unordered_frames(&st, want, 2);
         }
         h2t_close(&st);
     }
@@ -3979,6 +4045,245 @@ static void TestServerSendDataAfterRequestBodyClose(TestingT *t) {
     chan_free(s.done);
 }
 
+/* Go's serverHandlerCall for TestServerResetStreamUnreadBody: the handler
+ * says it has started, then runs each step the test sends it until the test
+ * closes step, which is call.exit. */
+typedef struct H2tCall {
+    Chan *started;
+    Chan *step;
+    Chan *done;
+    bool exited;
+} H2tCall;
+
+enum { H2T_CALL_READ_ALL = 1, H2T_CALL_WRAP_BODY };
+
+static void h2t_call_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    H2tCall *c = (H2tCall *)env;
+    bool v = true;
+    chan_send(c->started, &v);
+    Int step = 0;
+    while (chan_recv(c->step, &step)) {
+        if (step == H2T_CALL_READ_ALL) {
+            Error err = BURROW_NO_ERROR;
+            (void)io_read_all(arena_allocator(&r->arena),
+                              io_read_closer_as_io_reader(r->body), &err);
+        } else if (step == H2T_CALL_WRAP_BODY) {
+            /* Wrap r.Body like some middleware might. */
+            r->body =
+                http_max_bytes_reader(arena_allocator(&r->arena), w, r->body, 1000);
+        }
+        chan_send(c->done, &v);
+    }
+}
+
+static bool h2t_call_make(TestingT *t, H2tCall *c) {
+    c->started = chan_make(heap_allocator(), TYPE_BOOL, 2);
+    c->step = chan_make(heap_allocator(), TYPE_INT, 0);
+    c->done = chan_make(heap_allocator(), TYPE_BOOL, 1);
+    c->exited = false;
+    if (c->started != NULL && c->step != NULL && c->done != NULL)
+        return true;
+    testing_t_errorf_v(t, "no memory");
+    return false;
+}
+
+/* nextHandlerCall. */
+static bool h2t_call_next(H2tCall *c) {
+    bool v;
+    return chan_recv(c->started, &v);
+}
+
+/* call.do, with one of the steps above. */
+static bool h2t_call_do(H2tCall *c, Int step) {
+    bool v;
+    chan_send(c->step, &step);
+    return chan_recv(c->done, &v);
+}
+
+static void h2t_call_exit(H2tCall *c) {
+    if (!c->exited && c->step != NULL)
+        chan_close(c->step);
+    c->exited = true;
+}
+
+static void h2t_call_free(H2tCall *c) {
+    chan_free(c->started);
+    chan_free(c->step);
+    chan_free(c->done);
+}
+
+static bool h2t_write_rst(H2tTester *st, uint32_t id, Http2ErrCode code) {
+    return !h2t_failed(st, "WriteRSTStream",
+                       burrow__http2_framer_write_rst_stream(st->fr, id, code));
+}
+
+/* Not in Go: st.sync and synctest.Wait wait for the server to go quiet. Here a
+ * PING and its ACK say the server has handled every frame sent before it. */
+static bool h2t_sync(H2tTester *st) {
+    static const Byte data[8] = {'s', 'y', 'n', 'c', 0, 0, 0, 0};
+    if (h2t_failed(st, "WritePing",
+                   burrow__http2_framer_write_ping(st->fr, false, data)))
+        return false;
+    Http2Frame *f = h2t_read_kind(st, HTTP2_PING_FRAME);
+    if (f == NULL)
+        return false;
+    bool ok = (f->header.flags & HTTP2_FLAG_PING_ACK) != 0 &&
+              memcmp(f->u.ping.data, data, 8) == 0;
+    if (!ok)
+        testing_t_errorf_v(st->t, "got PING %q, want the ACK of %q",
+                           str_from_bytes(f->u.ping.data, 8), str_from_bytes(data, 8));
+    burrow__http2_frame_free(f);
+    return ok;
+}
+
+enum { H2T_UNREAD_SIZE = HTTP2_INFLOW_MIN_REFRESH };
+static const char h2t_unread_body[H2T_UNREAD_SIZE];
+
+static bool h2t_unread_post(H2tTester *st, H2tCall *c) {
+    return h2t_greet(st) &&
+           h2t_write_headers(st, 1, h2t_encode_header(st, h2t_post, 2), false, true) &&
+           h2t_call_next(c);
+}
+
+static bool h2t_unread_data_rst(H2tTester *st, uint32_t id) {
+    return h2t_write_data(st, id, false, h2t_unread_body, H2T_UNREAD_SIZE) &&
+           h2t_write_rst(st, id, HTTP2_ERR_CODE_CANCEL);
+}
+
+static void h2t_unread_read_after_reset(void *env, TestingT *t) {
+    (void)env;
+    H2tCall c;
+    if (h2t_call_make(t, &c)) {
+        H2tTester st;
+        if (h2t_start(&st, t, h2t_call_handler, &c) && h2t_unread_post(&st, &c) &&
+            h2t_unread_data_rst(&st, 1) && h2t_sync(&st) &&
+            /* The handler reads the body after the stream has been reset. */
+            h2t_call_do(&c, H2T_CALL_READ_ALL) &&
+            h2t_want_window_update(&st, 0, H2T_UNREAD_SIZE)) {
+            /* Handler exits; no second refund. */
+            h2t_call_exit(&c);
+            (void)h2t_want_idle(&st);
+        }
+        h2t_call_exit(&c);
+        h2t_close(&st);
+    }
+    h2t_call_free(&c);
+}
+
+static void h2t_unread_exit_without_reading(void *env, TestingT *t) {
+    (void)env;
+    H2tCall c;
+    if (h2t_call_make(t, &c)) {
+        H2tTester st;
+        if (h2t_start(&st, t, h2t_call_handler, &c) && h2t_unread_post(&st, &c) &&
+            h2t_unread_data_rst(&st, 1) && h2t_sync(&st)) {
+            /* The handler exits without reading the body. Flow control is
+             * returned on exit. */
+            h2t_call_exit(&c);
+            if (h2t_want_window_update(&st, 0, H2T_UNREAD_SIZE))
+                (void)h2t_want_idle(&st);
+        }
+        h2t_call_exit(&c);
+        h2t_close(&st);
+    }
+    h2t_call_free(&c);
+}
+
+/* Go then reads the body after the handler has exited, to check that this
+ * doesn't refund the credit again. Here the request goes with its stream once
+ * the handler is done, so that part is left out. */
+static void h2t_unread_read_after_handler_exit(void *env, TestingT *t) {
+    (void)env;
+    static const H2tWant want[] = {
+        {HTTP2_WINDOW_UPDATE_FRAME, 0, H2T_UNREAD_SIZE},
+        {HTTP2_META_HEADERS_FRAME, 1, 1},
+        {HTTP2_RST_STREAM_FRAME, 1, HTTP2_ERR_CODE_NO},
+    };
+    H2tCall c;
+    if (h2t_call_make(t, &c)) {
+        H2tTester st;
+        if (h2t_start(&st, t, h2t_call_handler, &c) && h2t_unread_post(&st, &c) &&
+            h2t_write_data(&st, 1, false, h2t_unread_body, H2T_UNREAD_SIZE) &&
+            h2t_sync(&st)) {
+            /* The handler exits without reading the body. */
+            h2t_call_exit(&c);
+
+            /* Flow control is returned when the handler exits. */
+            if (h2t_want_unordered_frames(&st, want, 3))
+                (void)h2t_want_idle(&st);
+        }
+        h2t_call_exit(&c);
+        h2t_close(&st);
+    }
+    h2t_call_free(&c);
+}
+
+static void h2t_unread_unstarted_handler(void *env, TestingT *t) {
+    (void)env;
+    H2tCall c;
+    if (h2t_call_make(t, &c)) {
+        HttpHTTP2Config h2;
+        memset(&h2, 0, sizeof h2);
+        h2.max_concurrent_streams = 1;
+        H2tTester st;
+        if (h2t_start_config(&st, t, h2t_call_handler, &c, &h2) && h2t_greet(&st) &&
+            /* Stream 1 uses the single handler slot. */
+            h2t_write_headers(&st, 1, h2t_encode_header(&st, NULL, 0), true, true) &&
+            h2t_call_next(&c) &&
+            /* Reset stream 1 so the client can open another stream without
+             * exceeding the concurrent stream limit. */
+            h2t_write_rst(&st, 1, HTTP2_ERR_CODE_CANCEL) &&
+            /* Stream 3 is queued in unstartedHandlers because the handler for
+             * stream 1 is still executing. */
+            h2t_write_headers(&st, 3, h2t_encode_header(&st, h2t_post, 2), false,
+                              true) &&
+            h2t_unread_data_rst(&st, 3) && h2t_want_idle(&st)) {
+            /* Stream 1 handler exits. Stream 3 is removed from
+             * unstartedHandlers and its flow control is returned. */
+            h2t_call_exit(&c);
+            if (h2t_want_window_update(&st, 0, H2T_UNREAD_SIZE))
+                (void)h2t_want_idle(&st);
+        }
+        h2t_call_exit(&c);
+        h2t_close(&st);
+    }
+    h2t_call_free(&c);
+}
+
+/* Same thing as exit_without_reading, but some imaginary middleware replaced
+ * Request.Body first. */
+static void h2t_unread_middleware_replaces_body(void *env, TestingT *t) {
+    (void)env;
+    H2tCall c;
+    if (h2t_call_make(t, &c)) {
+        H2tTester st;
+        if (h2t_start(&st, t, h2t_call_handler, &c) && h2t_unread_post(&st, &c) &&
+            h2t_call_do(&c, H2T_CALL_WRAP_BODY) && h2t_unread_data_rst(&st, 1) &&
+            h2t_sync(&st)) {
+            h2t_call_exit(&c);
+            if (h2t_want_window_update(&st, 0, H2T_UNREAD_SIZE))
+                (void)h2t_want_idle(&st);
+        }
+        h2t_call_exit(&c);
+        h2t_close(&st);
+    }
+    h2t_call_free(&c);
+}
+
+static void TestServerResetStreamUnreadBody(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    testing_t_run(t, BURROW_S("read_after_reset"),
+                  BURROW_FN(TestingTFunc, h2t_unread_read_after_reset, NULL));
+    testing_t_run(t, BURROW_S("exit_without_reading"),
+                  BURROW_FN(TestingTFunc, h2t_unread_exit_without_reading, NULL));
+    testing_t_run(t, BURROW_S("read_after_handler_exit"),
+                  BURROW_FN(TestingTFunc, h2t_unread_read_after_handler_exit, NULL));
+    testing_t_run(t, BURROW_S("unstarted_handler"),
+                  BURROW_FN(TestingTFunc, h2t_unread_unstarted_handler, NULL));
+    testing_t_run(t, BURROW_S("middleware_replaces_body"),
+                  BURROW_FN(TestingTFunc, h2t_unread_middleware_replaces_body, NULL));
+}
+
 static void TestServerIdleTimeout(TestingT *t) {
     SKIP_WITHOUT_THREADS(t);
     if (testing_short())
@@ -4476,6 +4781,7 @@ static void TestServer_Headers_HalfCloseRemote(TestingT *t) {
     X(TestServerRFC9218PriorityAware)                                                  \
     X(TestProtocolErrorAfterGoAway)                                                    \
     X(TestServerSendDataAfterRequestBodyClose)                                         \
+    X(TestServerResetStreamUnreadBody)                                                 \
     X(TestServerIdleTimeout)                                                           \
     X(TestServerIdleTimeout_AfterRequest)                                              \
     X(TestServerPingSent)                                                              \

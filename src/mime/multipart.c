@@ -983,6 +983,8 @@ MultipartForm *multipart_reader_read_form(MultipartReader *r, int64_t max_memory
     }
 
     /* Reserve an additional 10 MB for non-file parts. */
+    if (max_memory < 0)
+        max_memory = 0;
     int64_t max_file_memory_bytes = max_memory;
     if (max_file_memory_bytes == INT64_MAX)
         max_file_memory_bytes--;
@@ -991,12 +993,8 @@ MultipartForm *multipart_reader_read_form(MultipartReader *r, int64_t max_memory
         max_memory_bytes = INT64_MAX;
     else
         max_memory_bytes = max_memory + (int64_t)(10 << 20);
-    if (max_memory_bytes <= 0) {
-        if (max_memory < 0)
-            max_memory_bytes = 0;
-        else
-            max_memory_bytes = INT64_MAX;
-    }
+    if (max_memory_bytes <= 0)
+        max_memory_bytes = INT64_MAX;
     for (;;) {
         MultipartPart *p = mp_next_part(r, false, max_memory_bytes, max_headers, &e);
         if (mp_same_error(e, io_eof)) {

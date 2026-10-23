@@ -789,11 +789,11 @@ static bool is_digit(char c) {
 
 static const char *const machine_lines[] = {"goos: ", "goarch: "};
 
-/* The output with every "(1.23s)" made "(0.00s)", every line number after a
- * file name made N and every \r dropped, which is what Windows adds. For
- * benchmarks, every ns/op figure is made N, the goos and goarch lines lose
- * what comes after the colon and the cpu line goes, since not every machine
- * has a name to give it. */
+/* The output with every "(1.23s)" made "(0.00s)" and every "(1s)" made
+ * "(0s)", every line number after a file name made N and every \r dropped,
+ * which is what Windows adds. For benchmarks, every ns/op figure is made N,
+ * the goos and goarch lines lose what comes after the colon and the cpu line
+ * goes, since not every machine has a name to give it. */
 static void normalise(Buf *out, const char *s) {
     static const char file[] = "testing_test.c:";
     static const char lib[] = "testing.c:";
@@ -865,6 +865,11 @@ static void normalise(Buf *out, const char *s) {
                 s = e + 5;
                 continue;
             }
+            if (*e == 's' && e[1] == ')') {
+                put(out, "(0s)", 4);
+                s = e + 2;
+                continue;
+            }
         }
         put(out, s, 1);
         s++;
@@ -929,13 +934,20 @@ static int spawn(const char *flags, const char *scenario, Buf *out) {
 #ifndef _WIN32
 /* spawn, with Ctrl-C pressed once a second until the child is gone. More than
  * once because the shell starts a background job with SIGINT ignored, so one
- * that lands before the child has a handler of its own does nothing. */
-static int spawn_interrupted(const char *flags, const char *scenario, Buf *out) {
+ * that lands before the child has a handler of its own does nothing. The
+ * first press waits, for up to two minutes, until the child has written
+ * after, since on a loaded machine it can take seconds to get there. */
+static int spawn_interrupted(const char *flags, const char *scenario, const char *after,
+                             Buf *out) {
     char cmd[4096];
     snprintf(cmd, sizeof cmd,
-             "'%s' %s child %s 2>&1 & p=$!; for i in 1 2 3 4 5 6 7 8 9 10; do "
-             "sleep 1; kill -INT $p 2>/dev/null || break; done; wait $p",
-             self_path, flags, scenario);
+             "f='%s.int'; '%s' %s child %s > \"$f\" 2>&1 & p=$!; i=0; "
+             "while [ $i -lt 120 ] && ! grep -q '%s' \"$f\"; do "
+             "kill -0 $p 2>/dev/null || break; sleep 1; i=$((i + 1)); done; "
+             "for i in 1 2 3 4 5 6 7 8 9 10; do "
+             "sleep 1; kill -INT $p 2>/dev/null || break; done; wait $p; s=$?; "
+             "cat \"$f\"; rm -f \"$f\"; exit $s",
+             self_path, self_path, flags, scenario, after);
     return run_cmd(cmd, out);
 }
 #endif
@@ -1566,7 +1578,7 @@ static void TestFuzzing(TestingT *t) {
     snprintf(flags, sizeof flags, "-test.fuzz=FuzzFine -test.fuzzcachedir=\"%s\"",
              cache);
     out = (Buf){0};
-    code = spawn_interrupted(flags, "fuzzgen", &out);
+    code = spawn_interrupted(flags, "fuzzgen", "now fuzzing with ", &out);
     if (code != 0 || !has(&out, "now fuzzing with ") || !has(&out, "\nPASS\n"))
         testing_t_errorf_v(t, "FuzzFine interrupted: exit status %d, output\n%s", code,
                            out.p);

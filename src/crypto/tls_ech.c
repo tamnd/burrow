@@ -387,6 +387,7 @@ static Error tech_extract_raw_extensions(const TlsClientHelloMsg *hello, Alloc *
 static void tech_add_inner_extensions(TlsBuilder *recon, CryptobyteString extensions,
                                       Slice raw_outer_exts) {
     const tech_RawExtension *raw = raw_outer_exts.p;
+    bool outer_extensions_seen = false;
     while (!cryptobyte_string_empty(extensions)) {
         uint16_t extension;
         CryptobyteString ext_data;
@@ -396,18 +397,32 @@ static void tech_add_inner_extensions(TlsBuilder *recon, CryptobyteString extens
             return;
         }
         if (extension == TLS_EXTENSION_ECH_OUTER_EXTENSIONS) {
-            if (!cryptobyte_string_read_uint8_length_prefixed(&ext_data, &ext_data)) {
+            if (outer_extensions_seen) {
+                tlsb_fail(recon, tech_err_invalid_outer_extensions);
+                return;
+            }
+            outer_extensions_seen = true;
+            CryptobyteString outer_extensions;
+            if (!cryptobyte_string_read_uint8_length_prefixed(&ext_data,
+                                                              &outer_extensions) ||
+                !cryptobyte_string_empty(ext_data) ||
+                cryptobyte_string_empty(outer_extensions)) {
                 tlsb_fail(recon, tech_err_invalid_inner);
                 return;
             }
+            /* OuterExtensions reconstruction per RFC 9849, Appendix A.
+             * i scans the outer extensions in order and never rewinds,
+             * so a referenced type that is out of order or duplicated
+             * cannot be found again and is rejected. */
             Int i = 0;
-            while (!cryptobyte_string_empty(ext_data)) {
+            while (!cryptobyte_string_empty(outer_extensions)) {
                 uint16_t ext_type;
-                if (!cryptobyte_string_read_uint16(&ext_data, &ext_type)) {
+                if (!cryptobyte_string_read_uint16(&outer_extensions, &ext_type)) {
                     tlsb_fail(recon, tech_err_invalid_inner);
                     return;
                 }
-                if (ext_type == TLS_EXTENSION_ENCRYPTED_CLIENT_HELLO) {
+                if (ext_type == TLS_EXTENSION_ENCRYPTED_CLIENT_HELLO ||
+                    ext_type == TLS_EXTENSION_ECH_OUTER_EXTENSIONS) {
                     tlsb_fail(recon, tech_err_invalid_outer_extensions);
                     return;
                 }
@@ -423,6 +438,7 @@ static void tech_add_inner_extensions(TlsBuilder *recon, CryptobyteString extens
                 tlsb_begin(recon, 2);
                 tlsb_bytes(recon, raw[i].data);
                 tlsb_end(recon);
+                i++;
             }
         } else {
             tlsb_u16(recon, extension);

@@ -239,6 +239,10 @@ textproto_reader_read_mime_header(TextprotoReader *r, Alloc *a, Error *err);
 BURROW_OWNS(ret) TextprotoMIMEHeader burrow__textproto_read_mime_header(
     TextprotoReader *r, Alloc *a, int64_t max_memory, int64_t max_headers, Error *err);
 
+/* errMessageTooLarge, the "message too large" error of the limit above, for
+ * the tests. */
+extern const Error burrow__textproto_err_message_too_large;
+
 /* For the tests, which Go runs inside the package: how many header lines are
  * already buffered, and the i'th entry of the common header table, or "" past
  * its end. */

@@ -830,8 +830,10 @@ static bool tp_read_continued_line_slice(TextprotoReader *r, int64_t lim, bool c
             return false;
         }
         Error e = BURROW_NO_ERROR;
-        if (!tp_read_line_slice(r, lim - r->buf_len, &line, &len, &e))
-            break;
+        if (!tp_read_line_slice(r, lim - r->buf_len, &line, &len, &e)) {
+            *err = e;
+            return false;
+        }
         tp_trim(&line, &len);
         if (!tp_grow(a, &r->buf, &r->buf_len, &r->buf_cap, len)) {
             *err = burrow_err_out_of_memory;
@@ -1158,6 +1160,10 @@ TextprotoMIMEHeader burrow__textproto_read_mime_header(TextprotoReader *r, Alloc
                                                        int64_t max_headers,
                                                        Error *err) {
     Error e = BURROW_NO_ERROR;
+    if (max_memory < 0) {
+        BURROW_OUT(err, burrow__textproto_err_message_too_large);
+        return NULL;
+    }
 
     /* Most headers have one value, so the values come from one block and each
      * key's slice starts out as one entry of it. */
@@ -1179,9 +1185,6 @@ TextprotoMIMEHeader burrow__textproto_read_mime_header(TextprotoReader *r, Alloc
     }
 
     /* The first line cannot be a continuation. */
-    max_memory -= 400;
-    const int64_t map_entry_overhead = 200;
-
     {
         Slice pk = bufio_reader_peek(r->r, 1, &e);
         if (BURROW_OK(e) && pk.len > 0 &&
@@ -1244,6 +1247,10 @@ TextprotoMIMEHeader burrow__textproto_read_mime_header(TextprotoReader *r, Alloc
 
         Slice *vv = (Slice *)map_get(m, &key);
         if (vv == NULL) {
+            /* Account for per-entry overhead.
+             * 200 bytes is based on benchmarks circa Go 1.20. */
+            const int64_t map_entry_overhead = 200;
+
             max_memory -= key.len;
             max_memory -= map_entry_overhead;
         }

@@ -8,6 +8,8 @@
  * bytes with runtime.MemStats and here counts them with a Track allocator
  * over the test's arena, which frees what the headers hold.
  * TestConn and TestPipeline are new, since Go tests those through net/smtp.
+ * TestReadMIMEHeaderShortLimitLongLine is newer than go1.27.1: it comes with
+ * the go1.27.2 fix for GO-2026-6608, CL 847307.
  *
  * Copyright 2010 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -474,6 +476,33 @@ static void TestReadMIMEHeaderTrimContinued(TestingT *t) {
     Str got = header_text(a, m);
     if (!str_is(got, "map[A:[0] B:[1] C:[2 3 4]]"))
         testing_t_errorf_v(t, "ReadMIMEHeader mismatch.\n got: %s", got);
+    ARENA_END;
+}
+
+/* testReader, whose reads fill p with spaces and never end. */
+static Int spaces_read(void *self, Slice p, Error *err) {
+    (void)self;
+    memset(p.p, ' ', (size_t)p.len);
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return p.len;
+}
+
+static const IoReaderVT spaces_vt = {NULL, spaces_read};
+
+static void TestReadMIMEHeaderShortLimitLongLine(TestingT *t) {
+    ARENA_BEGIN;
+    /* Small limit, long first line. */
+    IoReader parts[2] = {
+        strings_reader_as_io_reader(strings_new_reader(a, S("K:"))),
+        {&spaces_vt, NULL},
+    };
+    TextprotoReader *r =
+        textproto_new_reader(a, bufio_new_reader(a, io_multi_reader(a, parts, 2)));
+    Error err;
+    (void)burrow__textproto_read_mime_header(r, a, 1, 1, &err);
+    if (!same_error(err, burrow__textproto_err_message_too_large))
+        testing_t_fatalf_v(t, "readMIMEHeader = %q, want errMessageTooLarge",
+                           error_text(err));
     ARENA_END;
 }
 
@@ -960,6 +989,7 @@ static void TestTrim(TestingT *t) {
     X(TestReadMIMEHeaderErrorText)                                                     \
     X(TestReadMIMEHeaderBytes)                                                         \
     X(TestReadMIMEHeaderTrimContinued)                                                 \
+    X(TestReadMIMEHeaderShortLimitLongLine)                                            \
     X(TestReadMIMEHeaderAllocations)                                                   \
     X(TestRFC959Lines)                                                                 \
     X(TestReadMultiLineError)                                                          \

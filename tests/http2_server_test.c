@@ -14,6 +14,9 @@
  * TestServerWindowUpdateOnBodyClose, came with go1.27.2 (GO-2026-6612, CL
  * 847310).
  *
+ * TestServer_HeaderTableSizeDuringWrite came with go1.27.2 (GO-2026-6617, CL
+ * 847313).
+ *
  * Copyright 2014 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -3284,6 +3287,90 @@ static void TestServerContinuationAfterInvalidHeader(TestingT *t) {
     h2t_close(&st);
 }
 
+/* How long the handlers get to queue their first writes, where Go waits for
+ * its bubble to go quiet. */
+#define H2T_SETTLE (100 * TIME_MILLISECOND)
+
+/* TestServer_HeaderTableSizeDuringWrite tests that a
+ * SETTINGS_HEADER_TABLE_SIZE change from the client is not applied to the
+ * server's HPACK encoder while a frame write, which may be using the encoder
+ * on another goroutine, is in progress.
+ *
+ * Not in Go: the server's writes block here because the client doesn't read
+ * from the pipe, and the test sleeps where Go waits for its bubble to go
+ * quiet. Go also checks the size the server's encoder has during and after
+ * the write, which the tester can't see; the header block for stream 3 is
+ * checked as Go checks it. */
+static void TestServer_HeaderTableSizeDuringWrite(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    H2tTester st;
+    if (!h2t_start(&st, t, h2t_nop_handler, NULL) || !h2t_greet(&st)) {
+        h2t_close(&st);
+        return;
+    }
+
+    /* Leave the response HEADERS write for stream 1 in progress while the
+     * client changes SETTINGS_HEADER_TABLE_SIZE twice. */
+    if (!h2t_bodyless_req1(&st, NULL, 0)) {
+        h2t_close(&st);
+        return;
+    }
+    time_sleep(H2T_SETTLE);
+    Http2Setting s0 = {HTTP2_SETTING_HEADER_TABLE_SIZE, 0};
+    Http2Setting s1 = {HTTP2_SETTING_HEADER_TABLE_SIZE, 2048};
+    if (h2t_failed(&st, "WriteSettings",
+                   burrow__http2_framer_write_settings(st.fr, &s0, 1)) ||
+        h2t_failed(&st, "WriteSettings",
+                   burrow__http2_framer_write_settings(st.fr, &s1, 1))) {
+        h2t_close(&st);
+        return;
+    }
+    time_sleep(H2T_SETTLE);
+    if (!h2t_want_headers(&st, 1, true, NULL, 0) || !h2t_want_settings_ack(&st) ||
+        !h2t_write_headers(&st, 3, h2t_encode_header(&st, NULL, 0), true, true)) {
+        h2t_close(&st);
+        return;
+    }
+    st.fr->read_meta_headers = NULL;
+    Http2Frame *hf = h2t_read_kind(&st, HTTP2_HEADERS_FRAME);
+    if (hf == NULL) {
+        h2t_close(&st);
+        return;
+    }
+    if (hf->header.stream_id != 3) {
+        testing_t_errorf_v(t, "got HEADERS for stream %d, want stream 3",
+                           (int)hf->header.stream_id);
+        burrow__http2_frame_free(hf);
+        h2t_close(&st);
+        return;
+    }
+    /* The response must signal both the smallest (0) and the final (2048)
+     * table size (RFC 7541, Section 4.2), just like an encoder that saw both
+     * size changes directly. */
+    BytesBuffer want;
+    memset(&want, 0, sizeof want);
+    HpackEncoder *want_enc =
+        burrow__hpack_new_encoder(heap_allocator(), bytes_buffer_as_io_writer(&want));
+    if (want_enc == NULL) {
+        testing_t_errorf_v(t, "hpack.NewEncoder: out of memory");
+    } else {
+        burrow__hpack_encoder_set_max_dynamic_table_size(want_enc, 0);
+        burrow__hpack_encoder_set_max_dynamic_table_size(want_enc, 2048);
+        HpackHeaderField f = {BURROW_S(":status"), BURROW_S("200"), false};
+        (void)burrow__hpack_encoder_write_field(want_enc, f);
+        Slice got = burrow__http2_headers_frame_header_block_fragment(hf);
+        Slice wb = bytes_buffer_bytes(&want);
+        if (!bytes_has_prefix(got, wb))
+            testing_t_errorf_v(t, "stream 3 header block = %x, want prefix %x",
+                               str_from_bytes(got.p, got.len),
+                               str_from_bytes(wb.p, wb.len));
+        burrow__hpack_encoder_free(want_enc);
+    }
+    bytes_buffer_free(&want);
+    burrow__http2_frame_free(hf);
+    h2t_close(&st);
+}
+
 static char h2t_cookie[4058];
 
 /* A cookie of about 4K, then a megabyte of CONTINUATION frames that repeat it
@@ -3835,10 +3922,6 @@ static void h2t_print_order(TestingT *t, const char *what, const uint32_t *order
                        str_from_bytes(bytes_buffer_bytes(&b).p, bytes_buffer_len(&b)));
     bytes_buffer_free(&b);
 }
-
-/* How long the handlers get to queue their first writes, where Go waits for
- * its bubble to go quiet. */
-#define H2T_SETTLE (100 * TIME_MILLISECOND)
 
 static void TestServerRFC9218Priority(TestingT *t) {
     SKIP_WITHOUT_THREADS(t);
@@ -4771,6 +4854,7 @@ static void TestServer_Headers_HalfCloseRemote(TestingT *t) {
     X(TestServer_NoCrash_HandlerClose_Then_ClientClose)                                \
     X(TestServerContinuationFlood)                                                     \
     X(TestServerContinuationAfterInvalidHeader)                                        \
+    X(TestServer_HeaderTableSizeDuringWrite)                                           \
     X(TestServerDoS_MaxHeaderListSize)                                                 \
     X(TestServerInitialFlowControlWindow)                                              \
     X(TestServerWindowUpdateOnBodyClose)                                               \

@@ -329,23 +329,41 @@ static void TestProfBuf(TestingT *t) {
 
 static burrow__ProfBuf *wake_buf;
 
+/* Not in Go: the writer says here that it is done with wake_buf. The reader
+ * sees eof as soon as the close has marked the buffer, which is before the
+ * close has woken it and returned, so the buffer can only be freed after this.
+ * Go's garbage collector keeps b for as long as the writer has it. */
+static Chan *double_wakeup_done;
+
 static void double_wakeup_writer(void *arg) {
     (void)arg;
     for (int i = 0; i < 1000; i++)
         burrow__prof_buf_write(wake_buf, NULL, 1, WORDS(5, 6), PCS(7, 8));
     burrow__prof_buf_close(wake_buf);
+    Int one = 1;
+    chan_send(double_wakeup_done, &one);
 }
 
 static void double_wakeup_body(void *arg) {
     (void)arg;
-    if (!go(BURROW_FN(Func, double_wakeup_writer, NULL)))
+    double_wakeup_done = chan_make(heap_allocator(), TYPE_INT, 1);
+    if (double_wakeup_done == NULL)
         return;
+    if (!go(BURROW_FN(Func, double_wakeup_writer, NULL))) {
+        chan_free(double_wakeup_done);
+        double_wakeup_done = NULL;
+        return;
+    }
     for (;;) {
         burrow__ProfBufRead got =
             burrow__prof_buf_read(wake_buf, BURROW_PROF_BUF_BLOCKING);
         if (got.eof)
-            return;
+            break;
     }
+    Int v;
+    (void)chan_recv(double_wakeup_done, &v);
+    chan_free(double_wakeup_done);
+    double_wakeup_done = NULL;
 }
 
 static void TestProfBufDoubleWakeup(TestingT *t) {

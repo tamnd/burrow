@@ -58,6 +58,8 @@ BURROW_SENTINEL_ERROR(rp_err_director_rewrite,
 BURROW_SENTINEL_ERROR(rp_err_not_writable, "internal error: 101 switching protocols "
                                            "response with non-writable body");
 BURROW_SENTINEL_ERROR(rp_err_copy_done, "hijacked connection copy complete");
+/* The errors.New of ServeHTTP's CONNECT check, made once here. */
+BURROW_SENTINEL_ERROR(rp_err_connect, "client sent unsupported CONNECT request");
 
 static bool rp_same(Error a, Error b) {
     return a.vt == b.vt && a.data == b.data;
@@ -892,6 +894,21 @@ void httputil_reverse_proxy_serve_http(HttputilReverseProxy *p, HttpResponseWrit
                 (void)http_header_set(outreq->header, BURROW_S("X-Forwarded-For"),
                                       client_ip);
         }
+    }
+
+    if (str_eq(outreq->method, BURROW_S("CONNECT"))) {
+        /* We cannot handle CONNECT requests.
+         * (Perhaps we should just send a 405 and never call ErrorHandler?
+         * More consistent to always call ErrorHandler or ModifyResponse,
+         * so we do that for now.) */
+        if (!BURROW_FUNC_IS_NIL(p->error_handler)) {
+            BURROW_CALLF(p->error_handler, rw, outreq, rp_err_connect);
+        } else {
+            RP_LOGF(p, "http: proxy error: %v", rp_err_connect);
+            http_response_writer_write_header(rw, HTTP_STATUS_METHOD_NOT_ALLOWED);
+        }
+        rp_serve_end(&s);
+        return;
     }
 
     if (!burrow__http_header_has(outreq->header, BURROW_S("User-Agent"))) {

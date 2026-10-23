@@ -16,6 +16,7 @@
 
 #include "../src/net/http_internal.h"
 
+#include "burrow/bufio.h"
 #include "burrow/burrow.h"
 #include "burrow/chan.h"
 #include "burrow/compress/gzip.h"
@@ -799,6 +800,166 @@ static void TestTransportRejectsAlphaPort(TestingT *t) {
                            cs("invalid port \":123foo\" after host"));
 }
 
+/* ------------------------------------------------------------- CONNECT */
+
+/* TestTransportCONNECTRejected is newer than go1.27.1: it came with the
+ * go1.27.2 fix for GO-2026-6605, CL 847306. Go runs it under synctest with
+ * newHTTP1TransportTest, which fakes the dial and the connection. That is not
+ * here. Not in Go: a loopback listener plays the proxy, connect_dial notes
+ * what the transport dials and dials the listener, and connect_proxy does the
+ * proxy's side in a goroutine. The connection was closed when connect_proxy's
+ * read after the response stops on io_eof. */
+
+typedef struct ConnectProxy {
+    NetListener ln;
+    Str ln_addr;
+    char network[16]; /* what the transport dialed */
+    char addr[64];
+    Error accept_err;
+    Error read_err;
+    Str path;
+    bool got_request;
+    Error end; /* the error the read after the response stopped on */
+    Arena ar;  /* connect_proxy's */
+} ConnectProxy;
+
+static void copy_cstr(char *dst, size_t cap, Str s) {
+    size_t n = (size_t)s.len < cap - 1 ? (size_t)s.len : cap - 1;
+    if (n > 0)
+        memcpy(dst, s.p, n);
+    dst[n] = '\0';
+}
+
+static NetConn connect_dial(void *env, Context ctx, Str network, Str addr, Error *err) {
+    ConnectProxy *p = (ConnectProxy *)env;
+    copy_cstr(p->network, sizeof p->network, network);
+    copy_cstr(p->addr, sizeof p->addr, addr);
+    NetDialer d;
+    memset(&d, 0, sizeof d);
+    return net_dialer_dial_context(&d, heap_allocator(), ctx, BURROW_S("tcp"),
+                                   p->ln_addr, err);
+}
+
+static void connect_proxy(void *env) {
+    ConnectProxy *p = (ConnectProxy *)env;
+    Alloc *a = arena_allocator(&p->ar);
+    Error err = BURROW_NO_ERROR;
+    NetConn conn = p->ln.vt->accept(p->ln.data, &err);
+    if (BURROW_FAILED(err)) {
+        p->accept_err = err;
+        return;
+    }
+    (void)conn.vt->set_deadline(conn.data, time_add(time_now(), 10 * TIME_SECOND));
+    BufioReader *br = bufio_new_reader(a, net_conn_as_io_reader(conn));
+    HttpRequest *req = br == NULL ? NULL : http_read_request(a, br, &err);
+    if (req == NULL) {
+        p->read_err = err;
+        net_conn_free(conn);
+        return;
+    }
+    p->got_request = true;
+    p->path = str_clone(a, req->url->path);
+    http_request_free(req);
+
+    /* conn.writeMessage. */
+    static const char msg[] = "HTTP/1.1 405 We Have No Connections Today\r\n"
+                              "Content-Length: 0\r\n"
+                              "\r\n";
+    (void)conn.vt->writer.write(
+        conn.data,
+        slice_from((void *)(uintptr_t)msg, sizeof msg - 1, sizeof msg - 1, TYPE_BYTE),
+        &err);
+
+    /* conn.wantClosed. */
+    Byte b[1];
+    for (;;) {
+        Error rerr = BURROW_NO_ERROR;
+        (void)bufio_reader_read(br, slice_from(b, 1, 1, TYPE_BYTE), &rerr);
+        if (BURROW_FAILED(rerr)) {
+            p->end = rerr;
+            break;
+        }
+    }
+    net_conn_free(conn);
+}
+
+static void TestTransportCONNECTRejected(TestingT *t) {
+    need_tcp(t);
+    ConnectProxy p;
+    memset(&p, 0, sizeof p);
+    arena_init(&p.ar, heap_allocator(), 0);
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    p.ln = net_listen(heap_allocator(), BURROW_S("tcp"), BURROW_S("127.0.0.1:0"), &err);
+    if (BURROW_FAILED(err)) {
+        err = BURROW_NO_ERROR;
+        p.ln =
+            net_listen(heap_allocator(), BURROW_S("tcp6"), BURROW_S("[::1]:0"), &err);
+    }
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        arena_free(&p.ar);
+        testing_t_fatal_v(t, err);
+    }
+    NetAddr laddr = p.ln.vt->addr(p.ln.data);
+    p.ln_addr = laddr.vt->string(laddr.data, a);
+    SyncWaitGroup wg = {0};
+    sync_wait_group_go(&wg, BURROW_FN(Func, connect_proxy, &p));
+
+    HttpTransport tr;
+    memset(&tr, 0, sizeof tr);
+    tr.dial_context = BURROW_FN(HttpDialContextFunc, connect_dial, &p);
+
+    /* Not in Go: the Request literal, with its URL. */
+    Url u;
+    memset(&u, 0, sizeof u);
+    u.scheme = cs("http");
+    u.opaque = cs("backend.example.tld:80");
+    u.host = cs("proxy.example.tld");
+    HttpRequest sent_req;
+    memset(&sent_req, 0, sizeof sent_req);
+    sent_req.method = cs("CONNECT");
+    sent_req.url = &u;
+    sent_req.host = cs("proxy.example.tld");
+    sent_req.header = http_header_make(a);
+    HttpResponse *res = http_round_tripper_round_trip(
+        http_transport_as_round_tripper(&tr), &sent_req, &err);
+
+    /* rt.wantStatus(405). */
+    if (res == NULL) {
+        testing_t_errorf_v(t, "RoundTrip: %v", err);
+    } else {
+        if (res->status_code != 405)
+            testing_t_errorf_v(t, "got response status %v, want %v", res->status_code,
+                               405);
+        close_body(res);
+        http_response_free(res);
+    }
+
+    /* Once the response is in, the transport should close the connection, and
+     * the proxy's read ends. Not in Go: should it not, the deadline on the
+     * proxy's side ends it. */
+    sync_wait_group_wait(&wg);
+    if (BURROW_FAILED(p.accept_err))
+        testing_t_errorf_v(t, "accept: %v", p.accept_err);
+    if (!str_eq(cs(p.network), cs("tcp")) ||
+        !str_eq(cs(p.addr), cs("proxy.example.tld:80")))
+        testing_t_errorf_v(t, "dialed %q %q, want %q %q", cs(p.network), cs(p.addr),
+                           cs("tcp"), cs("proxy.example.tld:80"));
+    if (!p.got_request && BURROW_OK(p.accept_err))
+        testing_t_errorf_v(t, "reading the request: %v", p.read_err);
+    if (p.got_request && !str_eq(p.path, u.path))
+        testing_t_errorf_v(t, "read request path %q, want %q", p.path, u.path);
+    if (p.got_request && !errors_is(p.end, io_eof))
+        testing_t_errorf_v(t, "conn.Read = %v, want io.EOF", p.end);
+    http_transport_free(&tr);
+    net_listener_free(p.ln);
+    arena_free(&p.ar);
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestTransportKeepAlives)                                                         \
     X(TestTransportConnectionCloseOnResponse)                                          \
@@ -813,5 +974,6 @@ static void TestTransportRejectsAlphaPort(TestingT *t) {
     X(TestTransportAltProto)                                                           \
     X(TestTransportNoHost)                                                             \
     X(TestTransportResponseHeaderLength)                                               \
-    X(TestTransportRejectsAlphaPort)
+    X(TestTransportRejectsAlphaPort)                                                   \
+    X(TestTransportCONNECTRejected)
 TESTING_MAIN(TESTS)

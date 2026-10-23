@@ -9,7 +9,8 @@
  * that come back. The responses here were made by Go 1.27.1 over net.Pipe with
  * the same handlers, with the Date lines taken out, since they change. The
  * tests after them are Go's, the ones that pin its fixes for request
- * smuggling. The ones that need a real socket skip where TCP is not here yet.
+ * smuggling, and then the CONNECT tests that came with go1.27.2. The ones that
+ * need a real socket skip where TCP is not here yet.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -127,6 +128,10 @@ static void write_job(void *env) {
                                 &err);
 }
 
+/* The error the last read_job stopped on, io_eof when the server closed the
+ * connection. */
+static Error last_read_end;
+
 /* Reads to the end, which is when the server closes its end, and then closes
  * this one so that a write still waiting gives up. */
 static void read_job(void *env) {
@@ -141,8 +146,10 @@ static void read_job(void *env) {
         else
             break;
         j->n += (size_t)n;
-        if (BURROW_FAILED(err))
+        if (BURROW_FAILED(err)) {
+            last_read_end = err;
             break;
+        }
     }
     j->got[j->n] = '\0';
     (void)j->c.vt->closer.close(j->c.data);
@@ -978,11 +985,11 @@ static void TestShutdownGivesUpWhenTheContextIsDone(TestingT *t) {
 
 /* ------------------------------------------ requests that smuggle another
  *
- * The rest of the file is Go's, from serve_test.go, and each of these is the
- * test that pins a request smuggling fix. Go's setParallel and afterTest are
- * left out. Go starts Serve and waits for the connection to close. Not in Go:
- * serve_one_conn then waits for Serve and for the connection's goroutine, so
- * that the test can give the connection back. */
+ * The tests from here to the CONNECT ones are Go's, from serve_test.go, and
+ * each of these is the test that pins a request smuggling fix. Go's
+ * setParallel and afterTest are left out. Go starts Serve and waits for the
+ * connection to close. Not in Go: serve_one_conn then waits for Serve and for
+ * the connection's goroutine, so that the test can give the connection back. */
 
 typedef struct DummyAddr {
     Str s;
@@ -1625,6 +1632,125 @@ static void TestUnsupportedTransferEncodingsReturn501(TestingT *t) {
         BURROW_FN(TestingTFunc, unsupported_transfer_encodings_return_501, NULL));
 }
 
+/* ------------------------------------------------------------- CONNECT */
+
+/* TestServerCONNECTSuccess and TestServerCONNECTFailure are newer than
+ * go1.27.1: they came with the go1.27.2 fix for GO-2026-6613, CL 847311. Go
+ * runs them under synctest with its newHTTP1ServerTest and newTestHandler,
+ * which are not here. Not in Go: the handler's steps are in serve_connect_*,
+ * the request goes through exchange, and the response is read back from what
+ * came out. The connection was closed when exchange's read stopped on
+ * io_eof. */
+
+static void serve_connect_success(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)r;
+    http_response_writer_write_header(w, 200);
+    write_str(w, "body");
+    HttpResponseController rc = http_new_response_controller(w);
+    (void)http_response_controller_flush(&rc);
+}
+
+static void serve_connect_failure(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)r;
+    (void)http_header_set(http_response_writer_header(w), BURROW_S("Content-Length"),
+                          BURROW_S("4"));
+    http_response_writer_write_header(w, 409);
+    write_str(w, "body");
+}
+
+/* Serves a CONNECT with fn, and reads the response that came back. NULL when
+ * there was none, after saying so. */
+static HttpResponse *connect_exchange(TestingT *t, Alloc *a, StringsReader *sr,
+                                      void (*fn)(void *, HttpResponseWriter,
+                                                 HttpRequest *),
+                                      char *got, size_t cap) {
+    char log_line[256];
+    HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, fn, NULL);
+    HttpServer srv = {.handler = http_handler_func_as_handler(&f)};
+    last_read_end = BURROW_NO_ERROR;
+    exchange(t, &srv,
+             "CONNECT backend.example.tld:80 HTTP/1.1\r\n"
+             "Host: example.tld\r\n"
+             "\r\n",
+             got, cap, log_line, sizeof log_line);
+    strings_reader_reset(sr, cs(got));
+    BufioReader *br = bufio_new_reader(a, strings_reader_as_io_reader(sr));
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *resp = br == NULL ? NULL : http_read_response(a, br, NULL, &err);
+    if (resp == NULL)
+        testing_t_errorf_v(t, "reading the response %q: %v", cs(got), err);
+    return resp;
+}
+
+/* conn.wantBytes(body) and conn.wantClosed(). */
+static void want_body_closed(TestingT *t, Alloc *a, HttpResponse *resp,
+                             const char *body) {
+    Error err = BURROW_NO_ERROR;
+    Slice got = io_read_all(a, io_read_closer_as_io_reader(resp->body), &err);
+    if (BURROW_FAILED(err) || !str_eq(str_from_bytes(got.p, got.len), cs(body)))
+        testing_t_errorf_v(t, "read body %q, %v; want %q",
+                           str_from_bytes(got.p, got.len), err, cs(body));
+    if (!errors_is(last_read_end, io_eof))
+        testing_t_errorf_v(t, "the read ended with %v; want the connection closed",
+                           last_read_end);
+}
+
+static void TestServerCONNECTSuccess(TestingT *t) {
+    enum { cap = 4096 };
+    static char got[cap];
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    StringsReader sr;
+    HttpResponse *resp = connect_exchange(t, a, &sr, serve_connect_success, got, cap);
+    if (resp != NULL) {
+        const Int code = 200;
+        if (resp->status_code != code)
+            testing_t_errorf_v(t, "response status = %v, want %v", resp->status_code,
+                               code);
+        if (resp->content_length != -1)
+            testing_t_errorf_v(t, "Content-Length: %v; want absent",
+                               resp->content_length);
+        if (resp->transfer_encoding.len > 0)
+            testing_t_errorf_v(t, "Transfer-Encoding: %q; want absent",
+                               resp->transfer_encoding);
+        const Str hs[] = {BURROW_S_INIT("Content-Length"),
+                          BURROW_S_INIT("Transfer-Encoding")};
+        for (Int i = 0; i < 2; i++) {
+            Slice *v = BURROW_MAP_GET(Str, Slice, resp->header, hs[i]);
+            if (v != NULL)
+                testing_t_errorf_v(t, "response header %q = %q; want absent", hs[i],
+                                   *v);
+        }
+        want_body_closed(t, a, resp, "body");
+        http_response_free(resp);
+    }
+    arena_free(&ar);
+}
+
+static void TestServerCONNECTFailure(TestingT *t) {
+    enum { cap = 4096 };
+    static char got[cap];
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    StringsReader sr;
+    HttpResponse *resp = connect_exchange(t, a, &sr, serve_connect_failure, got, cap);
+    if (resp != NULL) {
+        const Int code = 409;
+        if (resp->status_code != code)
+            testing_t_errorf_v(t, "response status = %v, want %v", resp->status_code,
+                               code);
+        if (!resp->close)
+            testing_t_errorf_v(t, "Connection: close not set; want it to be");
+        want_body_closed(t, a, resp, "body");
+        http_response_free(resp);
+    }
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestServerResponsesMatchGo)                                                      \
     X(TestConnStateHookSeesEachState)                                                  \
@@ -1642,6 +1768,8 @@ static void TestUnsupportedTransferEncodingsReturn501(TestingT *t) {
     X(TestRequestBodyTimeoutClosesConnection)                                          \
     X(TestServerValidatesHeaders)                                                      \
     X(TestInvalidChunkedBodies)                                                        \
-    X(TestUnsupportedTransferEncodingsReturn501)
+    X(TestUnsupportedTransferEncodingsReturn501)                                       \
+    X(TestServerCONNECTSuccess)                                                        \
+    X(TestServerCONNECTFailure)
 
 TESTING_MAIN(TESTS)

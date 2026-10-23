@@ -3364,6 +3364,44 @@ static void TestReverseProxyHijackCopyError(TestingT *t) {
     httptest_server_free(backend);
 }
 
+/* ---------------------------------------------------------------- CONNECT */
+
+/* TestReverseProxyCONNECT is newer than go1.27.1: it came with the go1.27.2
+ * fix for GO-2026-6605, CL 847306. */
+static void TestReverseProxyCONNECT(TestingT *t) {
+    need_tcp(t);
+    Error err = BURROW_NO_ERROR;
+    Url *backend_url = url_parse(heap_allocator(), cs("http://backend.tld/"), &err);
+    if (backend_url == NULL)
+        FATALF("%v", err);
+    HttputilReverseProxy proxy = set_url_proxy(backend_url);
+    HttptestServer *frontend = serve_proxy(&proxy);
+
+    StringsReader body;
+    strings_reader_reset(&body, cs("body"));
+    HttpRequest *req = http_new_request(heap_allocator(), cs("CONNECT"), frontend->url,
+                                        strings_reader_as_io_reader(&body), &err);
+    HttpResponse *resp = NULL;
+    if (req != NULL)
+        resp = http_client_do(httptest_server_client(frontend), req, &err);
+    if (resp == NULL) {
+        http_request_free(req);
+        httptest_server_free(frontend);
+        url_free(heap_allocator(), backend_url);
+        FATALF("%v", err);
+    }
+
+    Int got = resp->status_code;
+    Int want = HTTP_STATUS_METHOD_NOT_ALLOWED;
+    if (got != want)
+        testing_t_errorf_v(t, "on response to CONNECT: got status %v, want %v", got,
+                           want);
+    http_response_free(resp);
+    http_request_free(req);
+    httptest_server_free(frontend);
+    url_free(heap_allocator(), backend_url);
+}
+
 #define TESTS(X)                                                                       \
     X(TestReverseProxy)                                                                \
     X(TestReverseProxyStripHeadersPresentInConnection)                                 \
@@ -3406,6 +3444,7 @@ static void TestReverseProxyHijackCopyError(TestingT *t) {
     X(TestReverseProxyQueryParameterSmugglingDirectorParsesForm)                       \
     X(TestReverseProxyQueryParameterSmugglingRewrite)                                  \
     X(TestReverseProxyQueryParameterSmugglingRewritePreservesRawQuery)                 \
-    X(TestReverseProxyHijackCopyError)
+    X(TestReverseProxyHijackCopyError)                                                 \
+    X(TestReverseProxyCONNECT)
 
 TESTING_MAIN(TESTS)

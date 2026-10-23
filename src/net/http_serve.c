@@ -238,7 +238,11 @@ struct burrow__HttpServeConn {
     sv_ConnReader r;
     BufioReader *bufr;
     BufioWriter *bufw;
+    /* lastMethod, the method of the most recent request on this connection,
+     * kept as the three methods it is compared with. */
     bool last_was_post;
+    bool last_was_head;
+    bool last_was_connect;
     SyncAtomicPointer cur_req;  /* sv_Response */
     SyncAtomicUint64 cur_state; /* unix seconds << 8 | ConnState */
     SyncMutex mu;               /* guards hijackedv */
@@ -939,7 +943,11 @@ static void sv_cw_write_header(sv_ChunkWriter *cw, Slice p) {
     Alloc *a = sv_wa(w);
     HttpServer *s = w->conn->server;
     bool keep_alives_enabled = sv_do_keep_alives(s);
-    bool is_head = str_eq(w->req->method, BURROW_S("HEAD"));
+
+    /* Consult w.conn.lastMethod instead of w.req.Method,
+     * just in case a middleware layer modified w.req. */
+    bool is_head = w->conn->last_was_head;
+    bool is_connect = w->conn->last_was_connect;
 
     /* header is written to only when it is a copy, and the keys to leave out
      * of the handler's own go into exclude instead. */
@@ -1016,6 +1024,11 @@ static void sv_cw_write_header(sv_ChunkWriter *cw, Slice p) {
     if (w->ec_reader != NULL && burrow__http_body_remains(w->req_body))
         w->close_after_reply = true;
 
+    if (is_connect) {
+        /* Don't reuse a connection after a CONNECT, even if we reject it. */
+        w->close_after_reply = true;
+    }
+
     /* Read what is left of a small body so the connection can be used again,
      * or close it when there is too much of it. */
     if (w->req->content_length != 0 && w->req_body != NULL && !w->close_after_reply &&
@@ -1077,8 +1090,14 @@ static void sv_cw_write_header(sv_ChunkWriter *cw, Slice p) {
         has_cl = false;
     }
 
-    if (is_head || !burrow__http_body_allowed_for_status(code) ||
-        code == HTTP_STATUS_NO_CONTENT || has_cl) {
+    bool is_successful_connect = is_connect && code >= 200 && code < 300;
+    if (is_successful_connect) {
+        /* Tunnel established, connection is no longer HTTP. */
+        sv_del_header(header, owned, &exclude, a, BURROW_S("Transfer-Encoding"));
+        sv_del_header(header, owned, &exclude, a, BURROW_S("Content-Length"));
+        set_header.content_length = slice_nil(TYPE_BYTE);
+    } else if (is_head || !burrow__http_body_allowed_for_status(code) ||
+               code == HTTP_STATUS_NO_CONTENT || has_cl) {
         /* No body, so no framing for one, or a length that frames it. */
         sv_del_header(header, owned, &exclude, a, BURROW_S("Transfer-Encoding"));
     } else if (http_request_proto_at_least(w->req, 1, 1)) {
@@ -1114,8 +1133,14 @@ static void sv_cw_write_header(sv_ChunkWriter *cw, Slice p) {
         !sv_is_protocol_switch_response(w->status, header);
     if (del_connection_header) {
         sv_del_header(header, owned, &exclude, a, BURROW_S("Connection"));
-        if (http_request_proto_at_least(w->req, 1, 1))
+        /* Don't set Connection: close on a 2xx CONNECT response,
+         * even though we will close the connection if the handler doesn't hijack
+         * it. If the handler does hijack the connection, the Connection: close is
+         * confusing. */
+        if (http_request_proto_at_least(w->req, 1, 1) && !is_successful_connect)
             set_header.connection = BURROW_S("close");
+        else
+            set_header.connection = BURROW_S("");
     }
 
     BufioWriter *bw = w->conn->bufw;
@@ -1572,6 +1597,8 @@ static sv_Response *sv_read_request(sv_Conn *c, Context ctx, sv_ReadError *e) {
     }
 
     c->last_was_post = str_eq(req->method, BURROW_S("POST"));
+    c->last_was_head = str_eq(req->method, BURROW_S("HEAD"));
+    c->last_was_connect = str_eq(req->method, BURROW_S("CONNECT"));
     c->r.remain = INT64_MAX;
     bool is_h2_upgrade = sv_is_h2_upgrade(req);
     http_header_del(req->header, BURROW_S("Host"));

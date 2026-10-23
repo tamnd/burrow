@@ -2938,11 +2938,18 @@ static void tp_read_loop(void *env) {
         sync_mutex_unlock(&pc->mu);
 
         bool writable = resp->body.vt == &tp_rwc_vt;
+        bool is_connect = str_eq(tr->req->method, BURROW_S("CONNECT"));
         bool has_body =
             !str_eq(tr->req->method, BURROW_S("HEAD")) && resp->content_length != 0;
-        if (resp->close || tr->req->close || resp->status_code <= 199 || writable) {
+        if (resp->close || tr->req->close || resp->status_code <= 199 || writable ||
+            is_connect) {
             /* No keep-alive when either side asked to close, or after an
-             * unexpected 1xx. */
+             * unexpected 1xx.
+             *
+             * Don't do keep-alive after sending a CONNECT request.
+             * Only a 2xx response converts the connection into a tunnel,
+             * but for safety we'll drop the connection even after getting a
+             * non-2xx. */
             alive = false;
         }
 

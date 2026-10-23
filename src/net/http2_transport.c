@@ -39,6 +39,7 @@
 #include "burrow/compress/gzip.h"
 #include "burrow/context.h"
 #include "burrow/crypto/rand.h"
+#include "burrow/crypto/tls.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
 #include "burrow/io.h"
@@ -731,6 +732,8 @@ struct burrow__Http2ClientConn {
     h2c_Conn *all_next;
     Str key; /* in a */
     NetConn tconn;
+    const TlsConnectionState *tls_state; /* NULL, or &tls_state_v */
+    TlsConnectionState tls_state_v;
     h2c_Config conf;
     SyncAtomicInt32 refs;
     SyncAtomicUint32 atomic_reused;
@@ -1301,6 +1304,11 @@ static h2c_Conn *h2c_new_client_conn(Http2Transport *t, NetConn c, bool single_u
     cc->ping_timeout = cc->conf.ping_timeout;
     cc->last_active = time_now();
     cc->cond = SYNC_COND(sync_mutex_locker(&cc->mu));
+    TlsConn *tc = tls_conn_from_net_conn(c);
+    if (tc != NULL) {
+        cc->tls_state_v = tls_conn_connection_state(tc);
+        cc->tls_state = &cc->tls_state_v;
+    }
     arena_init(&cc->earena, a, 0);
     cc->hbuf = BYTES_BUFFER(a);
 
@@ -3632,6 +3640,7 @@ static HttpResponse *h2c_handle_response_headers(h2c_Stream *cs, Error *err) {
          * avoid adding knobs to Transport. Hopefully we can keep it. */
         h2c_abort_request_body_write(cs);
     }
+    res->tls = cs->cc->tls_state;
     if (res->body.vt == http_no_body.vt && cs->req_body_content_length == 0) {
         /* If there isn't a request or response body still being written,
          * then wait for the stream to be closed before RoundTrip returns. */

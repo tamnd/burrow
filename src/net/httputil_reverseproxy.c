@@ -149,8 +149,10 @@ void httputil_proxy_request_set_x_forwarded(HttputilProxyRequest *r) {
         http_header_del(h, BURROW_S("X-Forwarded-For"));
     }
     (void)http_header_set(h, BURROW_S("X-Forwarded-Host"), r->in->host);
-    /* There is no TLS here yet, so a request never came in as "https". */
-    (void)http_header_set(h, BURROW_S("X-Forwarded-Proto"), BURROW_S("http"));
+    if (r->in->tls == NULL)
+        (void)http_header_set(h, BURROW_S("X-Forwarded-Proto"), BURROW_S("http"));
+    else
+        (void)http_header_set(h, BURROW_S("X-Forwarded-Proto"), BURROW_S("https"));
 }
 
 /* -------------------------------------------------------------- the proxy */

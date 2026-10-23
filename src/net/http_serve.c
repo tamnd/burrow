@@ -2612,42 +2612,6 @@ Error http_server_listen_and_serve(HttpServer *s) {
 
 /* ------------------------------------------------------------- ServeTLS */
 
-/* adjustNextProtos adds or removes "http/1.1" and "h2" entries from
- * a tls.Config.NextProtos list, according to the set of protocols in protos.
- * Not in Go: the list is made in a, and is nil when a is out of memory. */
-static Slice sv_adjust_next_protos(Alloc *a, Slice next_protos, HttpProtocols protos) {
-    /* Make a copy of NextProtos since it might be shared with some other
-     * tls.Config. (tls.Config.Clone doesn't do a deep copy.)
-     *
-     * We could avoid an allocation in the common case by checking to see if
-     * the slice is already in order, but this is just one small allocation
-     * per connection. */
-    Int cap = next_protos.len + 2;
-    Str *out = (Str *)mem_alloc(a, (size_t)cap * sizeof(Str), _Alignof(Str));
-    if (out == NULL)
-        return (Slice){0};
-    const Str *in = (const Str *)next_protos.p;
-    Int n = 0;
-    HttpProtocols have = {0};
-    for (Int i = 0; i < next_protos.len; i++) {
-        if (str_eq(in[i], BURROW_S("http/1.1"))) {
-            if (!http_protocols_http1(protos))
-                continue;
-            http_protocols_set_http1(&have, true);
-        } else if (str_eq(in[i], BURROW_S("h2"))) {
-            if (!http_protocols_http2(protos))
-                continue;
-            http_protocols_set_http2(&have, true);
-        }
-        out[n++] = in[i];
-    }
-    if (http_protocols_http2(protos) && !http_protocols_http2(have))
-        out[n++] = BURROW_S("h2");
-    if (http_protocols_http1(protos) && !http_protocols_http1(have))
-        out[n++] = BURROW_S("http/1.1");
-    return slice_from(out, n, cap, TYPE_STRING);
-}
-
 /* setupTLSConfig. The config is made in a, and is NULL with *err set when
  * that or loading the files fails. */
 static TlsConfig *sv_setup_tls_config(HttpServer *s, Alloc *a, Str cert_file,
@@ -2709,7 +2673,7 @@ Error http_server_serve_tls(HttpServer *s, NetListener l, Str cert_file, Str key
     Alloc *ta = arena_allocator(&st->arena);
     st->config = sv_setup_tls_config(
         s, ta, cert_file, key_file,
-        sv_adjust_next_protos(ta, next_protos, sv_protocols(s)), &err);
+        burrow__http_adjust_next_protos(ta, next_protos, sv_protocols(s)), &err);
     NetListener tls_listener = {NULL, NULL};
     if (st->config != NULL) {
         tls_listener = tls_new_listener(sa, l, st->config);

@@ -8,9 +8,7 @@
  * them until the response it gives back is freed, and frees them then, which
  * is what the response's on_free is for.
  *
- * What is left out: Request.Cancel, which this port has no field for, and
- * the look at a TLS record header that gives ErrSchemeMismatch, until
- * crypto/tls is here.
+ * What is left out: Request.Cancel, which this port has no field for.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -24,6 +22,7 @@
 
 #include "burrow/context.h"
 #include "burrow/core.h"
+#include "burrow/crypto/tls.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
 #include "burrow/func.h"
@@ -364,6 +363,14 @@ static HttpResponse *cl_send_request(cl_Do *d, HttpRequest *req, int64_t deadlin
         if (resp != NULL) {
             log_printf_v("RoundTripper returned a response & error; ignoring response");
             http_response_free(resp);
+        }
+        if (e.vt->self_type == TYPE_TLS_RECORD_HEADER_ERROR) {
+            /* If we get a bad TLS record header, check to see if the
+             * response looks like HTTP and give a more helpful error.
+             * See golang.org/issue/11111. */
+            const TlsRecordHeaderError *tls_err = (const TlsRecordHeaderError *)e.data;
+            if (memcmp(tls_err->record_header, "HTTP/", 5) == 0)
+                e = http_err_scheme_mismatch;
         }
         *timed_out = s != NULL && cl_send_did_timeout(s);
         BURROW_OUT(err, e);

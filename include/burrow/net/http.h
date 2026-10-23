@@ -636,7 +636,9 @@ extern const Error http_err_no_location;
  * status line after the protocol, such as "200 OK", and status_code is its
  * number. The rest is as in HttpRequest. request is the request this is the
  * response to, which is borrowed, and uncompressed says the transport took
- * gzip off the body.
+ * gzip off the body. tls is the state of the TLS connection the response came
+ * on, NULL for one that was not encrypted, which the connection owns and
+ * which lasts as long as the response.
  *
  * body_writer writes to whatever body reads from, for a body that is a
  * connection, as the body of a 101 Switching Protocols response from
@@ -664,6 +666,7 @@ typedef struct HttpResponse {
     Slice transfer_encoding;
     HttpHeader trailer;
     HttpRequest *request;
+    const TlsConnectionState *tls;
     bool close;
     bool uncompressed;
     IoWriter body_writer;
@@ -1598,9 +1601,9 @@ extern const Error http_err_skip_alt_protocol;
  * each host when max_idle_conns_per_host is zero. */
 #define HTTP_DEFAULT_MAX_IDLE_CONNS_PER_HOST ((Int)2)
 
-/* Transport.Proxy. The proxy for req, made in a, or NULL for none. Only an
- * "http" proxy can be used so far, and "https" and "socks5" ones give an
- * error when a request goes to them. */
+/* Transport.Proxy. The proxy for req, made in a, or NULL for none. An "http"
+ * or "https" proxy can be used, and a "socks5" one gives an error when a
+ * request goes to it. */
 BURROW_FUNC(HttpProxyFunc, Url *, HttpRequest *req, Alloc *a, Error *err);
 
 /* Transport.DialContext, DialTLSContext, Dial and DialTLS. The connection is
@@ -1623,8 +1626,22 @@ BURROW_FUNC(HttpGetProxyConnectHeaderFunc, HttpHeader, Context ctx, Alloc *a,
 /* What gives back a connection the transport is done with, after closing it. */
 BURROW_FUNC(HttpFreeConnFunc, void, NetConn c);
 
-/* http.Transport, an HTTP/1 round tripper that keeps connections open for
- * more requests and reuses them. Fill in the fields wanted and leave the rest
+/* The functions of Transport.TLSNextProto, each of which takes over a TLS
+ * connection whose ALPN protocol is its key, and gives the round tripper that
+ * sends the request on it. authority is the request's host and port, such as
+ * "example.com:443", and is only good during the call. c is the function's
+ * from then on, to close and to free with tls_conn_free before the transport
+ * is freed. When the transport made c, that gives back the connection under it
+ * too. The round tripper has to last as long as the transport. */
+BURROW_FUNC(HttpTransportTLSNextProtoFunc, HttpRoundTripper, Str authority, TlsConn *c);
+
+/* The type of an HttpTransportTLSNextProtoFunc, for the values of a
+ * tls_next_proto map. */
+extern const Type *const TYPE_HTTP_TRANSPORT_TLS_NEXT_PROTO_FUNC;
+
+/* http.Transport, a round tripper for HTTP and HTTPS, and through HTTP proxies
+ * for either, that keeps connections open for more requests and reuses them.
+ * Fill in the fields wanted and leave the rest
  * zero, as with Go's &http.Transport{...}, and free it with
  * http_transport_free. It may be used from any number of goroutines at once,
  * and is not to be copied once it has been used.
@@ -1636,10 +1653,17 @@ BURROW_FUNC(HttpFreeConnFunc, void, NetConn c);
  *
  * dial_context makes the TCP connections, and dial when that is nil, and
  * net_dialer_dial_context with a zero NetDialer when both are. dial_tls_context
- * and dial_tls make the connections for an "https" request without a proxy,
- * and the transport does nothing more with them, so they are where TLS comes
- * from until crypto/tls is here. Without them an "https" request fails.
- * free_conn gives back each connection, and is net_conn_free when it is nil.
+ * and dial_tls make the connections for an "https" request without a proxy
+ * instead, and then dial, dial_context, tls_client_config and
+ * tls_handshake_timeout are not used for it. Their connections are taken to be
+ * past the TLS handshake already, though one from tls_conn_as_net_conn has
+ * its handshake run here in case it is not. free_conn gives back each
+ * connection the transport dialed, and is net_conn_free when it is nil.
+ *
+ * tls_client_config is the configuration of the TLS connections the transport
+ * makes itself, each of which gets a clone of it, and the default
+ * configuration is used when it is NULL. tls_handshake_timeout is the most a
+ * TLS handshake may take, and zero is no limit.
  *
  * disable_keep_alives sends each request on a new connection, and closes it
  * after. disable_compression stops the transport asking for gzip. When it asks
@@ -1659,11 +1683,24 @@ BURROW_FUNC(HttpFreeConnFunc, void, NetConn c);
  *
  * max_response_header_bytes is the most a response's header may have, and 10
  * MiB when it is zero. write_buffer_size and read_buffer_size are the sizes of
- * the buffers on each connection, 4 KiB when they are zero. protocols is the
- * set of protocols to use, and NULL is HTTP/1. There is no TLS yet, so HTTP/2 here
- * means unencrypted HTTP/2 with prior knowledge: a set with it and without
- * HTTP/1 speaks HTTP/2 on each "http" connection, with http2 as its settings,
- * and HTTP/1 is used otherwise.
+ * the buffers on each connection, 4 KiB when they are zero.
+ *
+ * protocols is the set of protocols to use. When it is NULL the set is HTTP/1,
+ * and HTTP/2 as well unless tls_next_proto is set without an "h2" in it, or
+ * one of tls_client_config, dial, dial_context, dial_tls_context and dial_tls
+ * is set and force_attempt_http2 is not, or GODEBUG has http2client=0. HTTP/2
+ * is spoken on an "https" connection whose TLS handshake picks "h2", and, for
+ * a set with unencrypted HTTP/2 and without HTTP/1, on each "http" connection,
+ * with prior knowledge. http2 is its settings.
+ *
+ * tls_next_proto is a Map of Str to HttpTransportTLSNextProtoFunc, for the
+ * ALPN protocols whose connections go to another round tripper. One that is
+ * not NULL and has no "h2" turns HTTP/2 off, as protocols can more simply.
+ * When HTTP/2 is on and tls_client_config or tls_next_proto is NULL, the
+ * transport makes one and sets it, as Go does, and frees it with itself. Go
+ * also sets "h2" and "http/1.1" in the next_protos of tls_client_config then,
+ * while the transport here leaves the config alone and sets them in the clone
+ * each connection gets.
  *
  * a is where the transport makes its connections and the responses, the heap
  * when it is NULL, and has to be one any goroutine can use at once. The rest is
@@ -1675,6 +1712,8 @@ typedef struct HttpTransport {
     HttpDialFunc dial;
     HttpDialContextFunc dial_tls_context;
     HttpDialFunc dial_tls;
+    TlsConfig *tls_client_config;
+    Duration tls_handshake_timeout;
     HttpFreeConnFunc free_conn;
     bool disable_keep_alives;
     bool disable_compression;
@@ -1684,11 +1723,13 @@ typedef struct HttpTransport {
     Duration idle_conn_timeout;
     Duration response_header_timeout;
     Duration expect_continue_timeout;
+    Map *tls_next_proto;
     HttpHeader proxy_connect_header;
     HttpGetProxyConnectHeaderFunc get_proxy_connect_header;
     int64_t max_response_header_bytes;
     Int write_buffer_size;
     Int read_buffer_size;
+    bool force_attempt_http2;
     const HttpProtocols *protocols;
     const HttpHTTP2Config *http2;
     Alloc *a;
@@ -1703,8 +1744,15 @@ typedef struct HttpTransport {
     struct burrow__HttpCall *calls;
     SyncMutex alt_mu;
     struct burrow__HttpAltProto *alt;
-    struct burrow__Http2Transport *h2; /* under alt_mu, made on first use */
-    bool h2_tried;
+    SyncOnce next_proto_once;
+    bool
+        tls_next_proto_was_nil; /* whether tls_next_proto was nil when the once fired */
+    bool h2_configured;
+    HttpProtocols h2_protocols;
+    TlsConfig
+        *own_tls_client_config; /* the tls_client_config configureHTTP2 or Clone made */
+    Map *own_tls_next_proto;    /* the tls_next_proto it made, or Clone did */
+    struct burrow__Http2Transport *h2; /* under alt_mu */
     SyncMutex conns_per_host_mu;
     struct burrow__HttpHostBucket *conns_per_host;
     struct burrow__HttpWantQueue {
@@ -1715,7 +1763,7 @@ typedef struct HttpTransport {
 } HttpTransport;
 
 /* Transport.RoundTrip. Sends req and gives back its response, as an
- * HttpRoundTripper does. Only HTTP/1 is spoken. A request on a connection
+ * HttpRoundTripper does. A request on a connection
  * that turns out to have been closed by the server is sent again on another
  * one when that is safe, which it is for a request with no body or one
  * get_body can make again, and an idempotent method. */
@@ -1745,8 +1793,11 @@ bool http_transport_register_protocol(HttpTransport *t, Str scheme,
 
 /* Transport.Clone. A transport with the same settings as t and none of its
  * connections, with proxy_connect_header copied into a. Its proxy_connect_header
- * is nil when a says no. */
-HttpTransport http_transport_clone(const HttpTransport *t, Alloc *a);
+ * is nil when a says no. tls_client_config is cloned and tls_next_proto copied
+ * into the allocator of t, and the clone frees them with itself. Like Go's,
+ * this sets up HTTP/2 on t first, if it is to have it, so that the clone's
+ * tls_next_proto has the "h2" t has. */
+HttpTransport http_transport_clone(HttpTransport *t, Alloc *a);
 
 /* Closes the idle connections and waits for every connection, dial and
  * goroutine the transport has going to end. A response that is not freed yet
@@ -1754,9 +1805,10 @@ HttpTransport http_transport_clone(const HttpTransport *t, Alloc *a);
 void http_transport_free(HttpTransport *t);
 
 /* http.DefaultTransport, which has proxy set to http_proxy_from_environment,
- * a dialer with a 30 second timeout and keep-alive, max_idle_conns of 100, an
- * idle_conn_timeout of 90 seconds and an expect_continue_timeout of 1 second.
- * It lives as long as the program. */
+ * a dialer with a 30 second timeout and keep-alive, force_attempt_http2 set,
+ * max_idle_conns of 100, an idle_conn_timeout of 90 seconds, a
+ * tls_handshake_timeout of 10 seconds and an expect_continue_timeout of 1
+ * second. It lives as long as the program. */
 extern HttpTransport *const http_default_transport;
 
 /* http.ProxyFromEnvironment. The proxy for req from the environment:

@@ -28,12 +28,10 @@
  * here it keeps a pointer to the older trace rather than rewriting its own
  * hook fields, so the hooks run through the httptrace_client_trace_* functions
  * below and not by calling a field. And the hooks for a dial the transport
- * starts for the request (dns_start, dns_done, connect_start and connect_done)
- * stop when the request gets its connection. In Go a dial that loses the race
- * to an idle connection goes on calling them, but here nothing says the trace
- * is still there by then.
- *
- * The TLS hooks are not here yet, as burrow has no crypto/tls.
+ * starts for the request (dns_start, dns_done, connect_start, connect_done,
+ * tls_handshake_start and tls_handshake_done) stop when the request gets its
+ * connection. In Go a dial that loses the race to an idle connection goes on
+ * calling them, but here nothing says the trace is still there by then.
  *
  * Copyright 2016 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -47,6 +45,7 @@
 
 #include "burrow/context.h"
 #include "burrow/core.h"
+#include "burrow/crypto/tls.h"
 #include "burrow/error.h"
 #include "burrow/func.h"
 #include "burrow/mem.h"
@@ -99,6 +98,7 @@ BURROW_FUNC(HttptraceDNSStartFunc, void, HttptraceDNSStartInfo info);
 BURROW_FUNC(HttptraceDNSDoneFunc, void, HttptraceDNSDoneInfo info);
 BURROW_FUNC(HttptraceConnectStartFunc, void, Str network, Str addr);
 BURROW_FUNC(HttptraceConnectDoneFunc, void, Str network, Str addr, Error err);
+BURROW_FUNC(HttptraceTLSHandshakeDoneFunc, void, TlsConnectionState state, Error err);
 BURROW_FUNC(HttptraceWroteHeaderFieldFunc, void, Str key, Slice values);
 BURROW_FUNC(HttptraceWroteRequestFunc, void, HttptraceWroteRequestInfo info);
 
@@ -137,6 +137,14 @@ typedef struct HttptraceClientTrace {
      * more than one address these can come more than once. */
     HttptraceConnectStartFunc connect_start;
     HttptraceConnectDoneFunc connect_done;
+
+    /* When a TLS handshake starts. For an "https" request through an HTTP
+     * proxy, that is after the proxy has answered the CONNECT request. */
+    Func tls_handshake_start;
+
+    /* After a TLS handshake, with the state of the connection when it worked,
+     * or a zero state and the error when it failed. */
+    HttptraceTLSHandshakeDoneFunc tls_handshake_done;
 
     /* After each header of the request is written, with its values as a
      * Slice of Str. They may still be in a buffer at the time. */
@@ -195,6 +203,9 @@ void httptrace_client_trace_connect_start(const HttptraceClientTrace *t, Str net
                                           Str addr);
 void httptrace_client_trace_connect_done(const HttptraceClientTrace *t, Str network,
                                          Str addr, Error err);
+void httptrace_client_trace_tls_handshake_start(const HttptraceClientTrace *t);
+void httptrace_client_trace_tls_handshake_done(const HttptraceClientTrace *t,
+                                               TlsConnectionState state, Error err);
 void httptrace_client_trace_wrote_header_field(const HttptraceClientTrace *t, Str key,
                                                Slice values);
 void httptrace_client_trace_wrote_headers(const HttptraceClientTrace *t);

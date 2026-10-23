@@ -38,6 +38,7 @@ static Error exec_pal_err(PalErrno pe) {
 /* s as a C string in a. NULL with EINVAL in *err if s has a NUL in it, as
  * BytePtrFromString does. */
 static char *exec_cstring(Alloc *a, Str s, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (s.len > 0 && memchr(s.p, 0, (size_t)s.len) != NULL) {
         BURROW_OUT(err, exec_errno(SYSCALL_EINVAL));
         return NULL;
@@ -56,6 +57,7 @@ static char *exec_cstring(Alloc *a, Str s, Error *err) {
 /* A slice of Str as an array of C strings with a NULL after the last, in a,
  * which is SlicePtrFromStrings. */
 static const char **exec_cstrings(Alloc *a, Slice strs, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const char **v = BURROW_NEW_N(a, const char *, (size_t)strs.len + 1);
     if (v == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);
@@ -90,6 +92,7 @@ static void exec_put_int(char **at, Int v) {
 /* Go's formatIDMappings: one "container host size" line for each map, or
  * NULL for a nil slice, which is different from an empty one. */
 static const char *exec_id_map(Alloc *a, Slice maps, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (maps.p == NULL)
         return NULL;
     const SyscallSysProcIDMap *m = (const SyscallSysProcIDMap *)maps.p;

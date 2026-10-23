@@ -46,7 +46,7 @@ static Slice scan_sub(Slice data, Int lo, Int hi) {
 /* ---------------------------------------------------------- split functions */
 
 Int bufio_scan_bytes(Slice data, bool at_eof, Slice *token, Error *err) {
-    (void)err;
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (at_eof && data.len == 0) {
         *token = slice_nil(TYPE_BYTE);
         return 0;
@@ -59,7 +59,7 @@ Int bufio_scan_bytes(Slice data, bool at_eof, Slice *token, Error *err) {
 static const Byte scan_error_rune[3] = {0xEF, 0xBF, 0xBD};
 
 Int bufio_scan_runes(Slice data, bool at_eof, Slice *token, Error *err) {
-    (void)err;
+    BURROW_OUT(err, BURROW_NO_ERROR);
     *token = slice_nil(TYPE_BYTE);
     if (at_eof && data.len == 0)
         return 0;
@@ -104,7 +104,7 @@ static Slice scan_drop_cr(Slice data) {
 }
 
 Int bufio_scan_lines(Slice data, bool at_eof, Slice *token, Error *err) {
-    (void)err;
+    BURROW_OUT(err, BURROW_NO_ERROR);
     *token = slice_nil(TYPE_BYTE);
     if (at_eof && data.len == 0)
         return 0;
@@ -161,7 +161,7 @@ bool burrow__bufio_is_space(Rune r) {
 }
 
 Int bufio_scan_words(Slice data, bool at_eof, Slice *token, Error *err) {
-    (void)err;
+    BURROW_OUT(err, BURROW_NO_ERROR);
     *token = slice_nil(TYPE_BYTE);
     /* Skip leading spaces. */
     Int start = 0;

@@ -89,6 +89,7 @@ const Type *const TYPE_OS_FILE = &burrow__os_file_desc;
 /* ------------------------------------------------------------------ paths */
 
 bool burrow__os_cpath(OsCPath *c, Str s, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (s.len > 0 && memchr(s.p, 0, (size_t)s.len) != NULL) {
         BURROW_OUT(err, burrow__os_errno_value(SYSCALL_EINVAL));
         c->p = NULL;

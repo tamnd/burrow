@@ -4,10 +4,6 @@
 # add to it, other than for a function the check gets wrong, with a comment
 # saying why. See #597.
 
-src/bufio/scan.c bufio_scan_bytes
-src/bufio/scan.c bufio_scan_runes
-src/bufio/scan.c bufio_scan_lines
-src/bufio/scan.c bufio_scan_words
 src/compress/bzip2.c bzip2_read_byte
 src/compress/flate.c flate_read_byte
 src/compress/flate.c flate_huff_sym
@@ -126,9 +122,6 @@ src/html/template.c htt_lookup_and_escape
 src/html/template.c htt_parse_files
 src/html/template.c htt_parse_fs
 src/image/png.c png_idat_write
-src/io/io.c burrow__io_try_write_to
-src/io/io.c burrow__io_try_read_from
-src/io/io.c burrow__io_try_write_string
 src/log/slog_logger.c slogl_write_record
 src/mime/encodedword.c mw_from_hex
 src/mime/encodedword.c mw_q_decode
@@ -162,45 +155,7 @@ src/net/textproto.c tp_parse_code_line
 src/net/url.c url_unescape_step
 src/net/url.c url_parse_host
 src/net/url.c url_parse_into
-src/os/cmd.c cmd_dedup_env
-src/os/cmd.c cmd_child_stdin
-src/os/cmd.c cmd_writer_descriptor
-src/os/dir.c os_join_cpath
-src/os/dirfs.c os_dir_fs_join
-src/os/exec.c os_state_new
-src/os/file.c burrow__os_cpath
-src/os/lookpath.c lp_keep
-src/os/lookpath.c lp_look_path
-src/os/proc.c os_getwd_walk
-src/os/proc.c os_getwd_in
-src/os/proc.c os_env_dir
-src/os/proc.c os_xdg_dir
-src/os/root.c os_root_file
-src/os/root.c os_root_from_fd
-src/os/root.c os_root_open_file_nolog
-src/os/root.c os_root_fs_valid
-src/os/tempfile.c os_temp_prefix
-src/os/user.c user_match_line
-src/os/user.c user_append_str
-src/os/user.c user_impl_lookup_uid
-src/os/user.c user_impl_lookup
-src/os/user.c user_impl_lookup_group
-src/os/user.c user_impl_lookup_group_id
-src/os/user.c user_impl_list_groups
-src/os/user.c user_win_call
-src/os/user.c user_win_cstr
-src/os/user.c user_impl_current
-src/path/filepath_os.c fpo_cstr
-src/path/filepath_os.c fpo_walk_symlinks
-src/path/filepath_os.c fpo_to_norm
 src/reflect/value.c rf_field_by_index
-src/syscall/exec_unix.c exec_cstring
-src/syscall/exec_unix.c exec_cstrings
-src/syscall/exec_unix.c exec_id_map
-src/syscall/exec_windows.c exw_make_cmd_line
-src/syscall/exec_windows.c exw_env_block
-src/syscall/exec_windows.c exw_concat
-src/syscall/route.c route_new_sockaddrs
 src/text/template.c text_template_clone
 src/text/template.c text_template_add_parse_tree
 src/text/template.c text_template_parse

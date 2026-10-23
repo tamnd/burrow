@@ -537,6 +537,7 @@ Str exec_cmd_string(const ExecCmd *c, Alloc *a) {
 
 /* dedupEnvCase: the last of each key wins, in the order the keys first came. */
 static Slice cmd_dedup_env(Alloc *a, bool case_insensitive, Slice env, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice out = slice_make(a, TYPE_STRING, 0, env.len);
     Slice keys = slice_make(a, TYPE_STRING, 0, env.len);
     for (Int n = env.len; n > 0; n--) {
@@ -939,6 +940,7 @@ static CmdCopier *cmd_add_copier(burrow__ExecState *st) {
 }
 
 static OsFile *cmd_child_stdin(ExecCmd *c, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     burrow__ExecState *st = c->st;
     if (c->stdin_.vt == NULL) {
         OsFile *f = os_open(c->alloc, CMD_LIT(OS_DEV_NULL), err);
@@ -967,6 +969,7 @@ static OsFile *cmd_child_stdin(ExecCmd *c, Error *err) {
 }
 
 static OsFile *cmd_writer_descriptor(ExecCmd *c, IoWriter w, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     burrow__ExecState *st = c->st;
     if (w.vt == NULL) {
         OsFile *f = os_open_file(c->alloc, CMD_LIT(OS_DEV_NULL), OS_O_WRONLY, 0, err);

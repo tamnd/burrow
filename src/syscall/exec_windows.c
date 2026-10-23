@@ -123,6 +123,7 @@ Str syscall_escape_arg(Alloc *a, Str s) {
 /* Go's makeCmdLine: the arguments, a slice of Str, escaped and joined with
  * spaces, from a. */
 static Str exw_make_cmd_line(Alloc *a, Slice args, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const Str *v = (const Str *)args.p;
     Int n = 0;
     for (Int i = 0; i < args.len; i++)
@@ -183,6 +184,7 @@ static int exw_cmp_env(Str a, Str b) {
  * wants them, each as UTF-16 with a 0 after it and another 0 after them all,
  * from a. A string with a NUL in it is EINVAL. */
 static uint16_t *exw_env_block(Alloc *a, Slice envv, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (envv.len == 0) {
         uint16_t *b = BURROW_NEW_N(a, uint16_t, 2);
         if (b == NULL)
@@ -287,6 +289,7 @@ static bool exw_is_slash(Byte c) {
 
 /* a and b joined, from al. */
 static Str exw_concat(Alloc *al, Str a, Str b, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Byte *p = mem_alloc_nozero(al, (size_t)(a.len + b.len) + 1, 1);
     if (p == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);

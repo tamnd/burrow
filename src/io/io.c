@@ -338,6 +338,7 @@ static const Method *io_method(const Type *t, Str name, const Type *in0,
 }
 
 bool burrow__io_try_write_to(IoReader src, IoWriter dst, int64_t *n, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (src.vt == NULL)
         return false;
     const Method *m = io_method(src.vt->self_type, io_name_write_to,
@@ -356,6 +357,7 @@ bool burrow__io_try_write_to(IoReader src, IoWriter dst, int64_t *n, Error *err)
 }
 
 bool burrow__io_try_read_from(IoWriter dst, IoReader src, int64_t *n, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (dst.vt == NULL)
         return false;
     const Method *m = io_method(dst.vt->self_type, io_name_read_from,
@@ -374,6 +376,7 @@ bool burrow__io_try_read_from(IoWriter dst, IoReader src, int64_t *n, Error *err
 }
 
 bool burrow__io_try_write_string(IoWriter w, Str s, Int *n, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (w.vt == NULL)
         return false;
     const Method *m =

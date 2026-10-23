@@ -44,6 +44,7 @@ static Error lp_validate(Str s) {
 
 /* A copy of s in a, so the answer does not point into the scratch arena. */
 static Str lp_keep(Alloc *a, Str s, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Str out = str_clone(a, s);
     if (out.len != s.len)
         *err = burrow_err_out_of_memory;
@@ -81,6 +82,7 @@ static Error lp_find_executable(Alloc *a, Str file) {
 }
 
 static Str lp_look_path(Alloc *a, Arena *scratch, Str file, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Alloc *s = arena_allocator(scratch);
     Error e = lp_validate(file);
     if (BURROW_FAILED(e)) {
@@ -258,6 +260,7 @@ static Str lp_look_path_exts(Alloc *s, Str file, Slice exts, Error *err) {
 }
 
 static Str lp_look_path(Alloc *a, Arena *scratch, Str file, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Alloc *s = arena_allocator(scratch);
     Error e = lp_validate(file);
     if (BURROW_FAILED(e)) {

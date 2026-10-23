@@ -252,6 +252,7 @@ Error os_process_with_handle(OsProcess *p, OsHandleFunc f) {
 
 static OsProcessState *os_state_new(OsProcess *p, Int pid, SyscallWaitStatus st,
                                     const PalRusage *ru, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     OsProcessState *ps =
         (OsProcessState *)mem_alloc(p->alloc, sizeof *ps, _Alignof(OsProcessState));
     if (ps == NULL) {

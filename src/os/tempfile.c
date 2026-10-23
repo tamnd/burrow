@@ -101,6 +101,7 @@ static Str os_join_path(Alloc *a, Str dir, Str name) {
  * the pattern will not do. */
 static bool os_temp_prefix(Alloc *t, Str *dir, Str pattern, Str op, Str *prefix,
                            Str *suffix, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (dir->len == 0)
         *dir = os_temp_dir(t);
     Str pre;

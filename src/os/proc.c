@@ -285,6 +285,7 @@ static bool os_same_as(Alloc *a, Str name, OsFileInfo dot, bool follow) {
  * by comparing what is there against where we came from. */
 static Str os_getwd_walk(Alloc *a, Alloc *sa, OsFileInfo dot, OsFileInfo root,
                          Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Str dir = (Str){NULL, 0};
     Str parent = OS_LIT("..");
     for (;;) {
@@ -339,6 +340,7 @@ static Str os_getwd_walk(Alloc *a, Alloc *sa, OsFileInfo dot, OsFileInfo root,
 }
 
 static Str os_getwd_in(Alloc *a, Alloc *sa, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Error e = BURROW_NO_ERROR;
 
     /* $PWD when it names this directory, because it keeps the symbolic links
@@ -413,6 +415,7 @@ Error os_chdir(Str dir) {
 /* -------------------------------------------------------- user directories */
 
 static Str os_env_dir(Alloc *a, Str name, Str suffix, Str missing, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Str dir = os_getenv(a, name);
     if (dir.len == 0) {
         BURROW_OUT(err, errors_new(error_allocator(), missing));
@@ -431,6 +434,7 @@ static Str os_env_dir(Alloc *a, Str name, Str suffix, Str missing, Error *err) {
  * not set, and an error when it is relative. */
 static Str os_xdg_dir(Alloc *a, Str var, Str fallback, Str missing, Str relative,
                       Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Str dir = os_getenv(a, var);
     if (dir.len == 0)
         return os_env_dir(a, OS_LIT("HOME"), fallback, missing, err);

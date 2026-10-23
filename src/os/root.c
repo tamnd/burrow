@@ -670,6 +670,7 @@ static uint32_t os_root_syscall_mode(OsFileMode m) {
 
 /* An OsFile for fd, named for the root and name. Closes fd when it cannot. */
 static OsFile *os_root_file(OsRoot *r, Alloc *a, int64_t fd, Str name, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Str full = os_root_join(heap_allocator(), r->name, name);
     OsFile *f = full.p == NULL ? NULL : os_new_file(a, (Uintptr)fd, full);
     os_root_str_free(full);
@@ -683,6 +684,7 @@ static OsFile *os_root_file(OsRoot *r, Alloc *a, int64_t fd, Str name, Error *er
 /* ---------------------------------------------------------------- open */
 
 static OsRoot *os_root_from_fd(Alloc *a, int64_t fd, Str name, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     PalStat st;
     if (pal_fstat(fd, &st, NULL) && (st.mode & PAL_S_IFMT) != PAL_S_IFDIR) {
         pal_close(fd, NULL);
@@ -779,6 +781,7 @@ static Error os_root_open_file_fn(OsRootWalk *w, void *env, int64_t parent, Str 
 
 static OsFile *os_root_open_file_nolog(OsRoot *r, Alloc *a, Str name, Int flag,
                                        OsFileMode perm, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     OsRootOpenEnv o = {(uint32_t)flag, (uint32_t)perm, PAL_INVALID_HANDLE};
     Error e = os_root_do(r, name, 0, NULL, os_root_open_file_fn, &o);
     if (BURROW_FAILED(e)) {
@@ -1496,6 +1499,7 @@ OsRoot *os_root_open_root(OsRoot *r, Alloc *a, Str name, Error *err) {
 
 static OsFile *os_root_open_file_nolog(OsRoot *r, Alloc *a, Str name, Int flag,
                                        OsFileMode perm, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Str full;
     Error e = os_root_check_escapes_to(r, name, false, &full);
     if (BURROW_FAILED(e)) {
@@ -1866,6 +1870,7 @@ static const Type os_root_fs_desc = {
 
 /* isValidRootFSPath: an io/fs name, and on Windows one with no backslash. */
 static bool os_root_fs_valid(Str name, Str op, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     bool ok = fs_valid_path(name);
 #if defined(BURROW_OS_WINDOWS)
     if (ok && memchr(name.p, '\\', (size_t)name.len) != NULL)

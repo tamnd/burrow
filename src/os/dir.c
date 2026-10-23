@@ -106,6 +106,7 @@ static const Type os_dirent_desc = {
 
 /* parent, a separator and name as a path, on the stack when it fits. */
 static bool os_join_cpath(OsCPath *c, Str parent, Str name, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Int len = parent.len + 1 + name.len;
     if (len < OS_CPATH_SMALL) {
         c->p = c->small;

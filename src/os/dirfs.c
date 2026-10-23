@@ -47,6 +47,7 @@ static const Type os_dir_fs_desc = {
 
 /* dirFS.join: name, which has to be a valid io/fs name, under dir, in t. */
 static Str os_dir_fs_join(Alloc *t, Str dir, Str name, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (dir.len == 0) {
         *err = burrow__os_err_dir_fs_empty_root;
         return (Str){NULL, 0};

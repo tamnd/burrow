@@ -350,6 +350,7 @@ static bool user_is_int(Str s) {
 /* matchGroupIndexValue and matchUserIndexValue. NULL to go on to the next
  * row. */
 static void *user_match_line(UserMatch *m, Str line, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Str colon = USER_LIT(":");
     if (!strings_contains(line, m->substr) ||
         strings_count(line, colon) < (m->group ? 3 : 6))
@@ -507,6 +508,7 @@ User *burrow__user_find_username(Alloc *a, Str name, IoReader r, Error *err) {
 }
 
 static Slice user_append_str(Alloc *a, Slice s, Str v, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Str c = str_clone(a, v);
     if (c.len != v.len) {
         *err = burrow_err_out_of_memory;
@@ -640,18 +642,21 @@ static void *user_find_user_id_in(Alloc *a, Str v, IoReader r, Error *err) {
 }
 
 static UserGroup *user_impl_lookup_group(Alloc *a, Str name, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     return (UserGroup *)user_find_in(a, user_group_file, name, err,
                                      user_find_group_name_in);
 }
 
 static UserGroup *user_impl_lookup_group_id(Alloc *a, Str gid, int64_t buf,
                                             Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     (void)buf;
     return (UserGroup *)user_find_in(a, user_group_file, gid, err,
                                      user_find_group_id_in);
 }
 
 static User *user_impl_lookup(Alloc *a, Str username, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     return (User *)user_find_in(a, user_passwd_file, username, err,
                                 user_find_username_in);
 }
@@ -661,6 +666,7 @@ static User *user_impl_lookup_id(Alloc *a, Str uid, Error *err) {
 }
 
 static Slice user_impl_list_groups(const User *u, Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     *err = BURROW_NO_ERROR;
     OsFile *f = os_open(a, user_group_file, err);
     if (BURROW_FAILED(*err))
@@ -673,6 +679,7 @@ static Slice user_impl_list_groups(const User *u, Alloc *a, Error *err) {
 /* lookup_stubs.go's current: /etc/passwd when it has the user, and $USER and
  * $HOME when it does not. */
 static User *user_impl_current(Alloc *a, int64_t buf, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     (void)buf;
     Arena scratch;
     arena_init(&scratch, NULL, 0);
@@ -798,6 +805,7 @@ static UserGroup *user_build_group(Alloc *a, Alloc *sa, const PalGroup *gr) {
 }
 
 static User *user_impl_lookup_uid(Alloc *a, Int uid, int64_t buf, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Arena scratch;
     arena_init(&scratch, NULL, 0);
     UserCall c = {1, NULL, (uint32_t)uid, {0}, {0}, false};
@@ -819,10 +827,12 @@ static User *user_impl_lookup_uid(Alloc *a, Int uid, int64_t buf, Error *err) {
 }
 
 static User *user_impl_current(Alloc *a, int64_t buf, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     return user_impl_lookup_uid(a, os_getuid(), buf, err);
 }
 
 static User *user_impl_lookup(Alloc *a, Str username, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Arena scratch;
     arena_init(&scratch, NULL, 0);
     Alloc *sa = arena_allocator(&scratch);
@@ -856,6 +866,7 @@ static User *user_impl_lookup_id(Alloc *a, Str uid, Error *err) {
 }
 
 static UserGroup *user_impl_lookup_group(Alloc *a, Str name, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Arena scratch;
     arena_init(&scratch, NULL, 0);
     Alloc *sa = arena_allocator(&scratch);
@@ -880,6 +891,7 @@ static UserGroup *user_impl_lookup_group(Alloc *a, Str name, Error *err) {
 
 static UserGroup *user_impl_lookup_group_id(Alloc *a, Str gid, int64_t buf,
                                             Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Error e = BURROW_NO_ERROR;
     Int i = strconv_atoi(gid, &e);
     if (BURROW_FAILED(e)) {
@@ -909,6 +921,7 @@ static UserGroup *user_impl_lookup_group_id(Alloc *a, Str gid, int64_t buf,
 
 /* cgo_listgroups_unix.go's listGroups. */
 static Slice user_impl_list_groups(const User *u, Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice out = slice_nil(TYPE_STRING);
     Error e = BURROW_NO_ERROR;
     Int ug = strconv_atoi(u->gid, &e);
@@ -1017,6 +1030,7 @@ static PalErrno user_win_do(UserWinCall *c, char *buf, int64_t cap) {
 /* c, with twice the room each time the answer does not fit. The answer is in
  * a buffer from sa, and NULL with *err set means the call failed. */
 static const char *user_win_call(Alloc *sa, UserWinCall *c, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     for (int64_t size = 256;; size *= 2) {
         char *buf = (char *)mem_alloc_nozero(sa, (size_t)size, 1);
         if (buf == NULL) {
@@ -1044,6 +1058,7 @@ static Str user_win_next(const char **p) {
 /* s with a NUL on the end, or EINVAL when s has a NUL in it, as Go's
  * UTF16PtrFromString says. */
 static const char *user_win_cstr(Alloc *sa, Str s, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (s.len > 0 && memchr(s.p, 0, (size_t)s.len) != NULL) {
         *err = syscall_errno_as_error(SYSCALL_EINVAL, error_allocator());
         return NULL;
@@ -1205,6 +1220,7 @@ static User *user_win_from_sid(Alloc *a, Alloc *sa, const char *sid, Error *err)
 }
 
 static User *user_impl_current(Alloc *a, int64_t buf, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     (void)buf;
     Arena scratch;
     arena_init(&scratch, NULL, 0);
@@ -1230,6 +1246,7 @@ static User *user_impl_current(Alloc *a, int64_t buf, Error *err) {
 
 /* lookupUser. */
 static User *user_impl_lookup(Alloc *a, Str username, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Arena scratch;
     arena_init(&scratch, NULL, 0);
     Alloc *sa = arena_allocator(&scratch);
@@ -1264,6 +1281,7 @@ static User *user_impl_lookup_id(Alloc *a, Str uid, Error *err) {
 
 /* lookupGroup. */
 static UserGroup *user_impl_lookup_group(Alloc *a, Str name, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Arena scratch;
     arena_init(&scratch, NULL, 0);
     UserGroup *g = NULL;
@@ -1277,6 +1295,7 @@ static UserGroup *user_impl_lookup_group(Alloc *a, Str name, Error *err) {
 /* lookupGroupId. */
 static UserGroup *user_impl_lookup_group_id(Alloc *a, Str gid, int64_t buf,
                                             Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     (void)buf;
     Arena scratch;
     arena_init(&scratch, NULL, 0);
@@ -1303,6 +1322,7 @@ done:
  * NetUserGetLocalGroups for anyone else, with the primary group on the end
  * when neither had it. */
 static Slice user_impl_list_groups(const User *u, Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice sids = slice_nil(TYPE_STRING);
     Arena scratch;
     arena_init(&scratch, NULL, 0);

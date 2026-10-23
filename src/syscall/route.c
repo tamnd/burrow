@@ -369,6 +369,7 @@ static Slice route_nil_sockaddrs(void) {
 
 /* A Slice of RTAX_MAX zero Sockaddrs from a. */
 static Slice route_new_sockaddrs(Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     void *p = mem_alloc(a, (size_t)SYSCALL_RTAX_MAX * sizeof(SyscallSockaddr),
                         _Alignof(SyscallSockaddr));
     if (p == NULL) {

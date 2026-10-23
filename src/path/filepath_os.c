@@ -330,6 +330,7 @@ Slice filepath_glob(Alloc *a, Str pattern, Error *err) {
 /* What the PAL calls below need: path as a C string, or EINVAL for one with
  * a NUL in it, which is what Go's UTF16PtrFromString says. */
 static char *fpo_cstr(Alloc *a, Str path, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (path.len > 0 && memchr(path.p, 0, (size_t)path.len) != NULL) {
         *err = syscall_errno_as_error(SYSCALL_EINVAL, error_allocator());
         return NULL;
@@ -438,6 +439,7 @@ static Str fpo_buf_str(const FpoBuf *b) {
 
 /* Go's walkSymlinks. Everything it builds is in s, the result included. */
 static Str fpo_walk_symlinks(Alloc *s, Str path, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const Str sep = FPO_LIT(FPO_SEP);
     Int vol_len = burrow__filepath_volume_name_len(path, FPO_WIN);
     if (vol_len < path.len && filepath_is_path_separator(path.p[vol_len]))
@@ -578,6 +580,7 @@ oom:
  * same for every spelling of one file. path is clean, so its separators are
  * backslashes. */
 static Str fpo_to_norm(Alloc *s, Str path, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (path.len == 0)
         return path;
 

@@ -129,6 +129,10 @@ CRYPTO_FIPS_TEXT static void gcm_put_be64(Byte *p, uint64_t v) {
     gcm_put_be32(p + 4, (uint32_t)v);
 }
 
+CRYPTO_FIPS_TEXT static uint64_t gcm_be64(const Byte *p) {
+    return (uint64_t)gcm_be32(p) << 32 | gcm_be32(p + 4);
+}
+
 /* ------------------------------------------------------------ GHASH in C */
 
 /* Go's ghashMul: the carryless product of x and y. Each operand is cut into
@@ -508,13 +512,10 @@ CRYPTO_FIPS_TEXT static Int gcm_overhead(void *self) {
     return ((const CipherGcm *)self)->tag_size;
 }
 
-CRYPTO_FIPS_TEXT static Slice gcm_seal(void *self, Alloc *a, Slice dst, Slice nonce,
-                                       Slice plaintext, Slice additional_data) {
-    const CipherGcm *g = (const CipherGcm *)self;
-    /* Not in Go: Go's GCM for other blocks is a type of its own, which records
-     * nothing. */
-    if (g->aes != NULL)
-        burrow__fips140_record_non_approved();
+CRYPTO_FIPS_TEXT static Slice gcm_seal_after_indicator(const CipherGcm *g, Alloc *a,
+                                                       Slice dst, Slice nonce,
+                                                       Slice plaintext,
+                                                       Slice additional_data) {
     if (nonce.len != g->nonce_size)
         panic_str(BURROW_S("crypto/cipher: incorrect nonce length given to GCM"));
     if (g->nonce_size == 0)
@@ -535,6 +536,16 @@ CRYPTO_FIPS_TEXT static Slice gcm_seal(void *self, Alloc *a, Slice dst, Slice no
     gcm_seal_into(g, out, (const Byte *)nonce.p, nonce.len, (const Byte *)plaintext.p,
                   plaintext.len, (const Byte *)additional_data.p, additional_data.len);
     return ret;
+}
+
+CRYPTO_FIPS_TEXT static Slice gcm_seal(void *self, Alloc *a, Slice dst, Slice nonce,
+                                       Slice plaintext, Slice additional_data) {
+    const CipherGcm *g = (const CipherGcm *)self;
+    /* Not in Go: Go's GCM for other blocks is a type of its own, which records
+     * nothing. */
+    if (g->aes != NULL)
+        burrow__fips140_record_non_approved();
+    return gcm_seal_after_indicator(g, a, dst, nonce, plaintext, additional_data);
 }
 
 CRYPTO_FIPS_TEXT static Slice gcm_open(void *self, Alloc *a, Slice dst, Slice nonce,
@@ -707,24 +718,33 @@ CRYPTO_FIPS_TEXT static CipherAEAD gcm_fail(Error *err, const char *msg) {
     return (CipherAEAD){NULL, NULL};
 }
 
-/* newGCM and newGCMFallback, which check the same things in the same order. */
-CRYPTO_FIPS_TEXT static CipherAEAD gcm_new(Alloc *a, CipherBlock b, Int nonce_size,
-                                           Int tag_size, const CipherAEADVT *vt,
-                                           Error *err) {
-    if (tag_size < GCM_MINIMUM_TAG_SIZE || tag_size > GCM_BLOCK_SIZE)
-        return gcm_fail(err, "cipher: incorrect tag size given to GCM");
-    if (nonce_size <= 0)
-        return gcm_fail(err, "cipher: the nonce can't have zero length");
-    if (burrow__aes_block_of(b) == NULL && burrow__fips140only_enforced())
-        return gcm_fail(err, "crypto/cipher: use of GCM with non-AES ciphers is not "
-                             "allowed in FIPS 140-only mode");
-    if (cipher_block_block_size(b) != GCM_BLOCK_SIZE)
-        return gcm_fail(err, "cipher: NewGCM requires 128-bit block cipher");
-    CipherGcm *g = BURROW_NEW(a, CipherGcm);
-    if (g == NULL) {
-        BURROW_OUT(err, burrow_err_out_of_memory);
-        return (CipherAEAD){NULL, NULL};
+/* newGCM and newGCMFallback, which check the same things in the same order,
+ * up to the allocation. */
+CRYPTO_FIPS_TEXT static bool gcm_check(CipherBlock b, Int nonce_size, Int tag_size,
+                                       Error *err) {
+    if (tag_size < GCM_MINIMUM_TAG_SIZE || tag_size > GCM_BLOCK_SIZE) {
+        gcm_fail(err, "cipher: incorrect tag size given to GCM");
+        return false;
     }
+    if (nonce_size <= 0) {
+        gcm_fail(err, "cipher: the nonce can't have zero length");
+        return false;
+    }
+    if (burrow__aes_block_of(b) == NULL && burrow__fips140only_enforced()) {
+        gcm_fail(err, "crypto/cipher: use of GCM with non-AES ciphers is not allowed "
+                      "in FIPS 140-only mode");
+        return false;
+    }
+    if (cipher_block_block_size(b) != GCM_BLOCK_SIZE) {
+        gcm_fail(err, "cipher: NewGCM requires 128-bit block cipher");
+        return false;
+    }
+    return true;
+}
+
+/* The rest of newGCM, and initGCM, on a GCM that passed gcm_check. */
+CRYPTO_FIPS_TEXT static void gcm_init(CipherGcm *g, CipherBlock b, Int nonce_size,
+                                      Int tag_size) {
     g->b = b;
     g->aes = burrow__aes_block_of(b);
     g->nonce_size = nonce_size;
@@ -733,12 +753,21 @@ CRYPTO_FIPS_TEXT static CipherAEAD gcm_new(Alloc *a, CipherBlock b, Int nonce_si
     memset(g->h, 0, sizeof g->h);
     if (g->aes != NULL)
         burrow__aes_encrypt_blocks(g->aes, g->h, g->h, 1);
-    BURROW_OUT(err, BURROW_NO_ERROR);
-    return (CipherAEAD){vt, g};
 }
 
-CRYPTO_FIPS_TEXT CipherAEAD burrow__gcm_new(Alloc *a, CipherBlock b, Error *err) {
-    return gcm_new(a, b, GCM_STANDARD_NONCE_SIZE, GCM_TAG_SIZE, &gcm_vt, err);
+CRYPTO_FIPS_TEXT static CipherAEAD gcm_new(Alloc *a, CipherBlock b, Int nonce_size,
+                                           Int tag_size, const CipherAEADVT *vt,
+                                           Error *err) {
+    if (!gcm_check(b, nonce_size, tag_size, err))
+        return (CipherAEAD){NULL, NULL};
+    CipherGcm *g = BURROW_NEW(a, CipherGcm);
+    if (g == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return (CipherAEAD){NULL, NULL};
+    }
+    gcm_init(g, b, nonce_size, tag_size);
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return (CipherAEAD){vt, g};
 }
 
 #define GCM_ERR_FIPS140ONLY                                                            \
@@ -770,4 +799,251 @@ CRYPTO_FIPS_TEXT CipherAEAD cipher_new_gcm_with_random_nonce(Alloc *a, CipherBlo
     if (burrow__aes_block_of(b) == NULL)
         return gcm_fail(err, "cipher: NewGCMWithRandomNonce requires aes.Block");
     return gcm_new(a, b, GCM_STANDARD_NONCE_SIZE, GCM_TAG_SIZE, &gcm_random_vt, err);
+}
+
+/* ----------------------------------------------------- the counter nonces */
+
+typedef struct GcmWithCounterNonce {
+    CipherGcm g;
+    bool prefix_ready;
+    uint32_t prefix;
+    bool start_ready;
+    uint64_t start;
+    uint64_t next;
+} GcmWithCounterNonce;
+
+typedef struct GcmWithXorCounterNonce {
+    CipherGcm g;
+    bool ready;
+    uint32_t prefix;
+    uint64_t mask;
+    uint64_t next;
+} GcmWithXorCounterNonce;
+
+CRYPTO_FIPS_TEXT static Int gcm_counter_nonce_size(void *self) {
+    (void)self;
+    return GCM_STANDARD_NONCE_SIZE;
+}
+
+CRYPTO_FIPS_TEXT static Int gcm_counter_overhead(void *self) {
+    (void)self;
+    return GCM_TAG_SIZE;
+}
+
+/* Seal implements the [cipher.AEAD] interface, checking that the nonce prefix
+ * is stable and that the counter is strictly increasing.
+ *
+ * It is not safe for concurrent use. */
+CRYPTO_FIPS_TEXT static Slice gcm_counter_seal(void *self, Alloc *a, Slice dst,
+                                               Slice nonce, Slice plaintext,
+                                               Slice additional_data) {
+    GcmWithCounterNonce *g = (GcmWithCounterNonce *)self;
+    if (nonce.len != GCM_STANDARD_NONCE_SIZE)
+        panic_str(BURROW_S("crypto/cipher: incorrect nonce length given to GCM"));
+
+    if (burrow__fips140_enabled()) {
+        const Byte *n = (const Byte *)nonce.p;
+        if (!g->prefix_ready) {
+            /* The first invocation sets the fixed prefix. */
+            g->prefix_ready = true;
+            g->prefix = gcm_be32(n);
+        }
+        if (g->prefix != gcm_be32(n))
+            panic_str(BURROW_S("crypto/cipher: GCM nonce prefix changed"));
+
+        uint64_t counter = gcm_be64(n + nonce.len - 8);
+        if (!g->start_ready) {
+            /* The first invocation sets the starting counter, if not fixed. */
+            g->start_ready = true;
+            g->start = counter;
+        }
+        counter -= g->start;
+
+        /* Ensure the counter is strictly increasing. */
+        if (counter == UINT64_MAX)
+            panic_str(BURROW_S("crypto/cipher: counter exhausted"));
+        if (counter < g->next)
+            panic_str(
+                BURROW_S("crypto/cipher: counter decreased or remained the same"));
+        g->next = counter + 1;
+    }
+
+    burrow__fips140_record_approved();
+    return gcm_seal_after_indicator(&g->g, a, dst, nonce, plaintext, additional_data);
+}
+
+CRYPTO_FIPS_TEXT static Slice gcm_counter_open(void *self, Alloc *a, Slice dst,
+                                               Slice nonce, Slice ciphertext,
+                                               Slice additional_data, Error *err) {
+    GcmWithCounterNonce *g = (GcmWithCounterNonce *)self;
+    burrow__fips140_record_approved();
+    return gcm_open(&g->g, a, dst, nonce, ciphertext, additional_data, err);
+}
+
+static const CipherAEADVT gcm_counter_vt = {NULL, gcm_counter_nonce_size,
+                                            gcm_counter_overhead, gcm_counter_seal,
+                                            gcm_counter_open};
+
+/* Seal implements the [cipher.AEAD] interface, checking that the nonce prefix
+ * is stable and that the counter is strictly increasing.
+ *
+ * It is not safe for concurrent use. */
+CRYPTO_FIPS_TEXT static Slice gcm_xor_counter_seal(void *self, Alloc *a, Slice dst,
+                                                   Slice nonce, Slice plaintext,
+                                                   Slice additional_data) {
+    GcmWithXorCounterNonce *g = (GcmWithXorCounterNonce *)self;
+    if (nonce.len != GCM_STANDARD_NONCE_SIZE)
+        panic_str(BURROW_S("crypto/cipher: incorrect nonce length given to GCM"));
+
+    if (burrow__fips140_enabled()) {
+        const Byte *n = (const Byte *)nonce.p;
+        uint64_t counter = gcm_be64(n + nonce.len - 8);
+        if (!g->ready) {
+            /* In the first call, if [GCMWithXORCounterNonce.SetNoncePrefixAndMask]
+             * wasn't used, we assume the counter is zero to learn the XOR mask and
+             * fixed prefix. */
+            g->ready = true;
+            g->mask = counter;
+            g->prefix = gcm_be32(n);
+        }
+        if (g->prefix != gcm_be32(n))
+            panic_str(BURROW_S("crypto/cipher: GCM nonce prefix changed"));
+        counter ^= g->mask;
+
+        /* Ensure the counter is strictly increasing. */
+        if (counter == UINT64_MAX)
+            panic_str(BURROW_S("crypto/cipher: counter exhausted"));
+        if (counter < g->next)
+            panic_str(
+                BURROW_S("crypto/cipher: counter decreased or remained the same"));
+        g->next = counter + 1;
+    }
+
+    burrow__fips140_record_approved();
+    return gcm_seal_after_indicator(&g->g, a, dst, nonce, plaintext, additional_data);
+}
+
+CRYPTO_FIPS_TEXT static Slice gcm_xor_counter_open(void *self, Alloc *a, Slice dst,
+                                                   Slice nonce, Slice ciphertext,
+                                                   Slice additional_data, Error *err) {
+    GcmWithXorCounterNonce *g = (GcmWithXorCounterNonce *)self;
+    burrow__fips140_record_approved();
+    return gcm_open(&g->g, a, dst, nonce, ciphertext, additional_data, err);
+}
+
+static const CipherAEADVT gcm_xor_counter_vt = {
+    NULL, gcm_counter_nonce_size, gcm_counter_overhead, gcm_xor_counter_seal,
+    gcm_xor_counter_open};
+
+/* Not in Go: Go's constructors take an *aes.Block, so there is nothing to
+ * check. Here any block can be passed, and one that is not AES is a mistake in
+ * the caller, like a failed type assertion. */
+CRYPTO_FIPS_TEXT static void gcm_require_aes(CipherBlock b) {
+    if (burrow__aes_block_of(b) == NULL)
+        panic_str(
+            BURROW_S("crypto/cipher: GCM with counter nonces requires aes.Block"));
+}
+
+/* newGCM into a GcmWithCounterNonce or GcmWithXorCounterNonce of size bytes,
+ * zero apart from the GCM. */
+CRYPTO_FIPS_TEXT static void *gcm_new_counter(Alloc *a, CipherBlock b, size_t size,
+                                              size_t align, Error *err) {
+    gcm_require_aes(b);
+    if (!gcm_check(b, GCM_STANDARD_NONCE_SIZE, GCM_TAG_SIZE, err))
+        return NULL;
+    CipherGcm *g = mem_alloc(a, size, align);
+    if (g == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    memset(g, 0, size);
+    gcm_init(g, b, GCM_STANDARD_NONCE_SIZE, GCM_TAG_SIZE);
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return g;
+}
+
+CRYPTO_FIPS_TEXT static CipherAEAD gcm_counter_aead(Alloc *a, CipherBlock b,
+                                                    bool start_ready, Error *err) {
+    GcmWithCounterNonce *g = gcm_new_counter(a, b, sizeof(GcmWithCounterNonce),
+                                             _Alignof(GcmWithCounterNonce), err);
+    if (g == NULL)
+        return (CipherAEAD){NULL, NULL};
+    g->start_ready = start_ready;
+    return (CipherAEAD){&gcm_counter_vt, g};
+}
+
+CRYPTO_FIPS_TEXT static CipherAEAD gcm_xor_counter_aead(Alloc *a, CipherBlock b,
+                                                        Error *err) {
+    GcmWithXorCounterNonce *g = gcm_new_counter(a, b, sizeof(GcmWithXorCounterNonce),
+                                                _Alignof(GcmWithXorCounterNonce), err);
+    if (g == NULL)
+        return (CipherAEAD){NULL, NULL};
+    return (CipherAEAD){&gcm_xor_counter_vt, g};
+}
+
+CRYPTO_FIPS_TEXT CipherAEAD burrow__gcm_new_with_counter_nonce(Alloc *a, CipherBlock b,
+                                                               Error *err) {
+    return gcm_counter_aead(a, b, false, err);
+}
+
+CRYPTO_FIPS_TEXT CipherAEAD burrow__gcm_new_for_tls12(Alloc *a, CipherBlock b,
+                                                      Error *err) {
+    /* TLS 1.2 counters always start at zero. */
+    return gcm_counter_aead(a, b, true, err);
+}
+
+CRYPTO_FIPS_TEXT CipherAEAD burrow__gcm_new_for_ssh(Alloc *a, CipherBlock b,
+                                                    Error *err) {
+    return gcm_counter_aead(a, b, false, err);
+}
+
+CRYPTO_FIPS_TEXT CipherAEAD burrow__gcm_new_with_xor_counter_nonce(Alloc *a,
+                                                                   CipherBlock b,
+                                                                   Error *err) {
+    return gcm_xor_counter_aead(a, b, err);
+}
+
+CRYPTO_FIPS_TEXT CipherAEAD burrow__gcm_new_for_tls13(Alloc *a, CipherBlock b,
+                                                      Error *err) {
+    return gcm_xor_counter_aead(a, b, err);
+}
+
+CRYPTO_FIPS_TEXT CipherAEAD burrow__gcm_new_for_hpke(Alloc *a, CipherBlock b,
+                                                     Error *err) {
+    return gcm_xor_counter_aead(a, b, err);
+}
+
+CRYPTO_FIPS_TEXT CipherAEAD burrow__gcm_new_for_quic(Alloc *a, CipherBlock b, Slice iv,
+                                                     Error *err) {
+    CipherAEAD gcm = gcm_xor_counter_aead(a, b, err);
+    if (gcm.vt == NULL)
+        return gcm;
+    Error e = burrow__gcm_set_nonce_prefix_and_mask(gcm, iv);
+    if (BURROW_FAILED(e)) {
+        BURROW_OUT(err, e);
+        return (CipherAEAD){NULL, NULL};
+    }
+    return gcm;
+}
+
+CRYPTO_FIPS_TEXT Error burrow__gcm_set_nonce_prefix_and_mask(CipherAEAD aead,
+                                                             Slice nonce) {
+    /* Not in Go, where the method is only on the type. */
+    if (aead.vt != &gcm_xor_counter_vt)
+        panic_str(BURROW_S("crypto/cipher: SetNoncePrefixAndMask called on an AEAD "
+                           "that is not a GCMWithXORCounterNonce"));
+    GcmWithXorCounterNonce *g = (GcmWithXorCounterNonce *)aead.data;
+    if (nonce.len != GCM_STANDARD_NONCE_SIZE)
+        return errors_new(error_allocator(),
+                          BURROW_S("crypto/cipher: incorrect nonce length given to "
+                                   "SetNoncePrefixAndMask"));
+    if (g->ready)
+        return errors_new(error_allocator(),
+                          BURROW_S("crypto/cipher: SetNoncePrefixAndMask called twice "
+                                   "or after first Seal"));
+    const Byte *n = (const Byte *)nonce.p;
+    g->prefix = gcm_be32(n);
+    g->mask = gcm_be64(n + 4);
+    g->ready = true;
+    return BURROW_NO_ERROR;
 }

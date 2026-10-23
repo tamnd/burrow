@@ -322,7 +322,7 @@ static CipherAEAD hpke_aead_cipher(Alloc *a, const HpkeAEAD *aead, Slice key,
         CipherBlock b = aes_new_cipher(a, key, err);
         if (BURROW_FAILED(*err))
             return none;
-        c = burrow__gcm_new(a, b, err);
+        c = burrow__gcm_new_for_hpke(a, b, err);
     } else {
         c = chacha20poly1305_new(a, key, err);
     }

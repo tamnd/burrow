@@ -101,10 +101,83 @@ void burrow__counter_kdf_derive_key(CounterKdf *kdf, Byte out[32], Byte label,
  * export either. */
 extern const Error burrow__gcm_err_open;
 
-/* AES-GCM with the standard nonce and tag sizes, from the module rather than
- * through cipher.NewGCM, which fips140=only does not allow. Go's crypto/tls
- * and crypto/hpke get theirs this way, with gcm.NewGCMForTLS12, NewGCMForTLS13
- * and NewGCMForHPKE. */
-CipherAEAD burrow__gcm_new(Alloc *a, CipherBlock b, Error *err);
+/* Go's crypto/internal/fips140/aes/gcm constructors from gcm_nonces.go, which
+ * crypto/tls and crypto/hpke use rather than cipher.NewGCM, which fips140=only
+ * does not allow. Not in Go: b is a CipherBlock rather than an *aes.Block, and
+ * they panic when it is not AES. */
+
+/* NewGCMWithCounterNonce returns a new AEAD that works like GCM, but enforces
+ * the construction of deterministic nonces. The nonce must be 96 bits, the
+ * first 32 bits must be an encoding of the module name, and the last 64 bits
+ * must be a counter. The starting value of the counter is set on the first call
+ * to Seal, and each subsequent call must increment it as a big-endian uint64.
+ * If the counter reaches the starting value minus one, Seal will panic.
+ *
+ * This complies with FIPS 140-3 IG C.H Scenario 3. */
+CipherAEAD burrow__gcm_new_with_counter_nonce(Alloc *a, CipherBlock b, Error *err);
+
+/* NewGCMForTLS12 returns a new AEAD that works like GCM, but enforces the
+ * construction of nonces as specified in RFC 5288, Section 3 and RFC 9325,
+ * Section 7.2.1.
+ *
+ * This complies with FIPS 140-3 IG C.H Scenario 1.a. */
+CipherAEAD burrow__gcm_new_for_tls12(Alloc *a, CipherBlock b, Error *err);
+
+/* NewGCMForSSH returns a new AEAD that works like GCM, but enforces the
+ * construction of nonces as specified in RFC 5647.
+ *
+ * This complies with FIPS 140-3 IG C.H Scenario 1.d. */
+CipherAEAD burrow__gcm_new_for_ssh(Alloc *a, CipherBlock b, Error *err);
+
+/* NewGCMWithXORCounterNonce returns a new AEAD that works like GCM, but
+ * enforces the construction of deterministic nonces. The nonce must be 96 bits,
+ * the first 32 bits must be an encoding of the module name, and the last 64
+ * bits must be a counter XOR'd with a fixed value. The module name and XOR mask
+ * can be set with [GCMWithCounterNonce.SetNoncePrefixAndMask], or they are set
+ * on the first call to Seal, assuming the counter starts at zero. Each
+ * subsequent call must increment the counter as a big-endian uint64. If the
+ * counter reaches 2⁶⁴ minus one, Seal will panic.
+ *
+ * This complies with FIPS 140-3 IG C.H Scenario 3. */
+CipherAEAD burrow__gcm_new_with_xor_counter_nonce(Alloc *a, CipherBlock b, Error *err);
+
+/* NewGCMForTLS13 returns a new AEAD that works like GCM, but enforces the
+ * construction of nonces as specified in RFC 8446, Section 5.3.
+ *
+ * This complies with FIPS 140-3 IG C.H Scenario 1.a. */
+CipherAEAD burrow__gcm_new_for_tls13(Alloc *a, CipherBlock b, Error *err);
+
+/* NewGCMForHPKE returns a new AEAD that works like GCM, but enforces the
+ * construction of nonces as specified in RFC 9180, Section 5.2.
+ *
+ * This complies with FIPS 140-3 IG C.H Scenario 5. */
+CipherAEAD burrow__gcm_new_for_hpke(Alloc *a, CipherBlock b, Error *err);
+
+/* NewGCMForQUIC returns a new AEAD that works like GCM, but enforces the
+ * construction of nonces as specified in RFC 9001, Section 5.3.
+ *
+ * Unlike in TLS 1.3, the QUIC nonce counter does not always start at zero, as
+ * the packet number does not reset on key updates, so the XOR mask must be
+ * provided explicitly instead of being learned on the first Seal call. Note
+ * that the nonce passed to Seal must already be XOR'd with the IV, the IV is
+ * provided here only to allow Seal to enforce that the counter is strictly
+ * increasing.
+ *
+ * This complies with FIPS 140-3 IG C.H Scenario 5. */
+CipherAEAD burrow__gcm_new_for_quic(Alloc *a, CipherBlock b, Slice iv, Error *err);
+
+/* SetNoncePrefixAndMask sets the fixed prefix and XOR mask for the nonces used
+ * in Seal. It must be called before the first call to Seal.
+ *
+ * The first 32 bits of nonce are used as the fixed prefix, and the last 64 bits
+ * are used as the XOR mask.
+ *
+ * Note that Seal expects the nonce to be already XOR'd with the mask. The mask
+ * is provided here only to allow Seal to enforce that the counter is strictly
+ * increasing.
+ *
+ * Not in Go: aead must be from one of the XOR counter constructors above, and
+ * anything else panics. */
+Error burrow__gcm_set_nonce_prefix_and_mask(CipherAEAD aead, Slice nonce);
 
 #endif /* BURROW_CRYPTO_AES_INTERNAL_H */

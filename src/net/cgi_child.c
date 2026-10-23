@@ -14,6 +14,7 @@
 #include "burrow/bufio.h"
 #include "burrow/context.h"
 #include "burrow/core.h"
+#include "burrow/crypto/tls.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
 #include "burrow/io.h"
@@ -184,16 +185,21 @@ HttpRequest *cgi_request_from_map(Alloc *a, Map *params, Error *err) {
     }
 
     /* There's apparently a de-facto standard for this.
-     * https://web.archive.org/web/20170105004655/http://docstore.mik.ua/orelly/linux/cgi/ch03_02.htm#ch03-35636
-     * Go sets r.TLS here, and there is no TLS field yet. */
+     * https://web.archive.org/web/20170105004655/http://docstore.mik.ua/orelly/linux/cgi/ch03_02.htm#ch03-35636 */
     Str https = cc_get(params, "HTTPS");
-    bool tls = str_eq(https, BURROW_S("on")) || str_eq(https, BURROW_S("ON")) ||
-               str_eq(https, BURROW_S("1"));
+    if (str_eq(https, BURROW_S("on")) || str_eq(https, BURROW_S("ON")) ||
+        str_eq(https, BURROW_S("1"))) {
+        TlsConnectionState *state = BURROW_NEW(ra, TlsConnectionState);
+        if (state == NULL)
+            goto oom;
+        state->handshake_complete = true;
+        r->tls = state;
+    }
 
     if (r->host.len > 0) {
         /* Hostname is provided, so we can reasonably construct a URL. */
-        Str rawurl =
-            fmt_sprintf_v(ra, "%s%s%s", tls ? "https://" : "http://", r->host, uri_str);
+        Str rawurl = fmt_sprintf_v(
+            ra, "%s%s%s", r->tls == NULL ? "http://" : "https://", r->host, uri_str);
         Error ue = BURROW_NO_ERROR;
         r->url = url_parse(ra, rawurl, &ue);
         if (r->url == NULL) {

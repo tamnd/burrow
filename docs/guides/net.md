@@ -1914,7 +1914,7 @@ User-Agent curl/8.5.0
 
 `cgi_serve` does the rest of a program's work: it reads the request with `cgi_request`, serves it with a handler and writes what the handler writes to standard output, with a `Status` line and the header in front. The other side is `CgiHandler`, for a web server. It runs the program at `path` for each request, with `root` as the part of the URL path in front of the program's `PATH_INFO`, and copies back what the program prints. A program that answers with a `Location` and no `Status` sends the client a 302 Found to it. When the location starts with `/` and `path_location_handler` is set, that handler serves a GET for the path instead, in the same response.
 
-Go's request has a TLS field, which `cgi.Request` fills in when `HTTPS` is on. There's no `crypto/tls` here yet, so for now that shows only in the URL, whose scheme is `https`.
+When `HTTPS` is on, `cgi_request` gives the request a `tls` state with only `handshake_complete` set, as Go does, and the URL's scheme is `https`. Going the other way, `CgiHandler` sets `HTTPS=on` and a default `SERVER_PORT` of 443 for a request that came in over TLS.
 
 ## FastCGI
 

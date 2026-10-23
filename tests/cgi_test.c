@@ -6,9 +6,8 @@
  * tests: as Go's Perl-like testCGI for the host tests, and through cgi_serve,
  * as a CGI-in-CGI, for the integration tests.
  *
- * There is no TLS field on a request yet, so TestRequestWithTLS checks only
- * the URL's scheme. TestCopyError counts running handlers itself, where Go
- * looks for ServeHTTP in a dump of every goroutine's stack.
+ * TestCopyError counts running handlers itself, where Go looks for ServeHTTP in
+ * a dump of every goroutine's stack.
  * Go source: go1.27.1.
  *
  * Copyright 2011 The Go Authors. All rights reserved.
@@ -397,7 +396,8 @@ static void TestRequest(TestingT *t) {
     expect_str(t, "FormValue(a)", S("b"), http_request_form_value(req, S("a")));
     if (req->trailer == NULL)
         testing_t_errorf_v(t, "unexpected nil Trailer");
-    /* Go checks that req.TLS is nil here. There is no TLS field yet. */
+    if (req->tls != NULL)
+        testing_t_errorf_v(t, "expected nil TLS");
     Str e = S("5.6.7.8:54321"), g = req->remote_addr;
     if (!str_eq(e, g))
         testing_t_errorf_v(t, "RemoteAddr: got %q; want %q", g, e);
@@ -427,7 +427,8 @@ static void TestRequestWithTLS(TestingT *t) {
     Str g = url_string(req->url, a), e = S("https://example.com/path?a=b");
     if (!str_eq(e, g))
         testing_t_errorf_v(t, "expected URL %q; got %q", e, g);
-    /* Go checks that req.TLS is set here. There is no TLS field yet. */
+    if (req->tls == NULL)
+        testing_t_errorf_v(t, "expected non-nil TLS");
     http_request_free(req);
     ARENA_END;
 }

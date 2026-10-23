@@ -177,6 +177,7 @@ static void ch_handle_internal_redirect(CgiHandler *h, HttpResponseWriter rw,
     nr->header = http_header_make(ra);
     nr->host = url->host;
     nr->remote_addr = str_clone(ra, req->remote_addr);
+    nr->tls = req->tls;
     nr->transfer_encoding = slice_from(NULL, 0, 0, TYPE_STRING);
     nr->body = http_no_body;
     if (nr->header == NULL) {
@@ -283,7 +284,9 @@ static bool ch_read_header(CgiHandler *h, HttpResponseWriter rw, BufioReader *li
 static bool ch_build_env(CgiHandler *h, HttpRequest *req, Str root, ChEnv *env) {
     Alloc *a = env->a;
     Str path_info = strings_trim_prefix(req->url->path, root);
-    Str port = BURROW_S("80"); /* "443" with TLS, which there isn't yet */
+    Str port = BURROW_S("80");
+    if (req->tls != NULL)
+        port = BURROW_S("443");
     Str m = {0};
     if (ch_trailing_port(req->host, &m))
         port = m;
@@ -317,6 +320,9 @@ static bool ch_build_env(CgiHandler *h, HttpRequest *req, Str root, ChEnv *env) 
     err = BURROW_NO_ERROR;
     Str host_domain = net_split_host_port(req->host, NULL, &err);
     ch_push_kv(env, "SERVER_NAME=", BURROW_FAILED(err) ? req->host : host_domain);
+
+    if (req->tls != NULL)
+        ch_push(env, BURROW_S("HTTPS=on"));
 
     const void *kp;
     void *vp;

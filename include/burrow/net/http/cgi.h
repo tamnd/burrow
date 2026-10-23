@@ -17,11 +17,6 @@
  *         ...
  *     }
  *
- * Go's request has a TLS field, which cgi.Request sets when HTTPS is "on".
- * There is no crypto/tls here yet and so no TLS field, and HTTPS shows only in
- * the URL's scheme, which is https. A CgiHandler always runs the program as
- * if the request came without TLS.
- *
  * Copyright 2011 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found

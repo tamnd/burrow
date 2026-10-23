@@ -653,6 +653,16 @@ worth having. A caller who wants only the first result should not have to
 declare a variable to throw away, and a rule with holes in it gets looked up
 every time instead of learned once.
 
+The other half is that a function writes `*err` on every return, with
+`BURROW_NO_ERROR` when nothing went wrong. Go's caller reads the error it gets
+back without setting it first, and the C caller does the same with an `Error` it
+never initialised, so a success path that returns early without writing it hands
+back whatever was on the stack. `BURROW_OUT(err, BURROW_NO_ERROR)` at the top of
+the function is the easy way to get this right. `tools/check-errout.py` follows
+every return in `src/` back to a write and fails `make check` on one that has
+none. The functions that broke the rule before the check existed are listed in
+`tools/errout-baseline.txt` until they are fixed (#597).
+
 **Variadics.** Go's `...T` is a slice. The C form takes a `Slice`, and a
 `va_list` convenience variant is generated for the handful of cases where
 call-site brevity matters (`fmt.*`, `log.*`, `errors.Join`, `append`):

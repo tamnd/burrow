@@ -346,6 +346,7 @@ check:
 	@tools/check-headers.sh
 	@tools/check-annotations.sh
 	@tools/check-alloc.sh
+	@tools/check-errout.py
 	@tools/check-globals.sh
 	@tools/check-statics.sh
 	@tools/check-fips-module.sh

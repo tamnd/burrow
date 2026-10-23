@@ -396,10 +396,12 @@ struct burrow__Http2ServeConn {
     Byte sent_ping_data[8];
     Duration read_idle_timeout;
     Time last_frame_time;
-    /* A HEADER_TABLE_SIZE that came while the encoder was busy on another
-     * goroutine, for when it is done. */
-    bool pending_table_size;
-    uint32_t pending_table_size_v;
+    /* peer changed SETTINGS_HEADER_TABLE_SIZE; apply to hpackEncoder before
+     * the next frame write */
+    bool pending_encoder_table_size;
+    /* smallest SETTINGS_HEADER_TABLE_SIZE since the last apply */
+    uint32_t encoder_table_size_min;
+    uint32_t encoder_table_size; /* latest SETTINGS_HEADER_TABLE_SIZE */
     BytesBuffer header_write_buf;
     HpackEncoder *hpack_encoder;
     Http2Setting settings[8];
@@ -1198,6 +1200,18 @@ static void h2s_start_frame_write(h2s_Conn *sc, Http2FrameWriteRequest wr) {
 
     sc->writing_frame = true;
     sc->needs_frame_flush = true;
+    if (sc->pending_encoder_table_size) {
+        /* hpackEncoder may be in use by writeFrameAsync, so SETTINGS
+         * changes to it are deferred until no frame is being written.
+         * Replaying the smallest size before the latest one keeps the
+         * encoder's view identical to having applied every change
+         * (RFC 7541, Section 4.2). */
+        sc->pending_encoder_table_size = false;
+        burrow__hpack_encoder_set_max_dynamic_table_size(sc->hpack_encoder,
+                                                         sc->encoder_table_size_min);
+        burrow__hpack_encoder_set_max_dynamic_table_size(sc->hpack_encoder,
+                                                         sc->encoder_table_size);
+    }
     if (burrow__http2_write_stays_within_buffer(&wr.write, h2s_bw_available(&sc->bw))) {
         sc->writing_frame_async = false;
         ArenaMark m = error_mark();
@@ -1302,18 +1316,8 @@ static void h2s_wrote_frame(h2s_Conn *sc, h2s_FrameWriteResult res) {
                          burrow__http2_err_handler_panicked);
     }
 
-    /* Reply to the writer before the table size change below, which needs
-     * nothing from it. */
     h2s_wr_reply(sc, &wr, res.err);
     h2s_wr_release(sc, &wr);
-
-    if (sc->pending_table_size && !sc->writing_frame) {
-        /* SETTINGS_HEADER_TABLE_SIZE from the peer, held back until no
-         * HEADERS frame is being encoded on another goroutine. */
-        sc->pending_table_size = false;
-        burrow__hpack_encoder_set_max_dynamic_table_size(sc->hpack_encoder,
-                                                         sc->pending_table_size_v);
-    }
 
     h2s_schedule_frame_write(sc);
 }
@@ -1627,15 +1631,11 @@ static Error h2s_process_setting(void *env, Http2Setting s) {
     }
     switch (s.id) {
     case HTTP2_SETTING_HEADER_TABLE_SIZE:
-        if (sc->writing_frame_async) {
-            /* A HEADERS frame may be being encoded on the writer goroutine.
-             * Go changes the table under it; here it waits for wroteFrame. */
-            sc->pending_table_size = true;
-            sc->pending_table_size_v = s.val;
-        } else {
-            sc->pending_table_size = false;
-            burrow__hpack_encoder_set_max_dynamic_table_size(sc->hpack_encoder, s.val);
-        }
+        /* Applied by startFrameWrite; see comment there. */
+        if (!sc->pending_encoder_table_size || s.val < sc->encoder_table_size_min)
+            sc->encoder_table_size_min = s.val;
+        sc->encoder_table_size = s.val;
+        sc->pending_encoder_table_size = true;
         break;
     case HTTP2_SETTING_ENABLE_PUSH:
         sc->push_enabled = s.val != 0;

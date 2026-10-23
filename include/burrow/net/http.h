@@ -1084,7 +1084,11 @@ BURROW_OWNS(ret) HttpHandler http_file_server_fs(Alloc *a, Fs root);
  * same bytes. When serving fails, such as on a range that does not fit,
  * Cache-Control, Content-Encoding, Etag and Last-Modified come out of w's
  * header before the error is written, unless GODEBUG has
- * httpservecontentkeepheaders=1. */
+ * httpservecontentkeepheaders=1.
+ *
+ * A Range header with more than 200 ranges is ignored, and the whole content
+ * is served. GODEBUG=httpservecontentmaxranges=N sets another limit, and 0
+ * takes it away. This is the go1.27.2 fix for GO-2026-6609. */
 void http_serve_content(HttpResponseWriter w, HttpRequest *r, Str name, Time modtime,
                         IoReadSeeker content);
 

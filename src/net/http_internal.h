@@ -437,6 +437,14 @@ BURROW_BORROWS(ret, h) Str burrow__http_strip_host_port(Str h);
 
 /* httpservecontentkeepheaders=1 in GODEBUG. */
 bool burrow__http_godebug_serve_content_keep_headers(void);
+/* GODEBUG=httpservecontentmaxranges=<limit> controls the maximum number of ranges
+ * that will be processed in a Range header. Setting httpservecontentmaxranges=0
+ * disables the limit.
+ *
+ * defaultMaxContentRanges and maxContentRanges, from the go1.27.2 fix for
+ * GO-2026-6609. */
+#define BURROW__HTTP_DEFAULT_MAX_CONTENT_RANGES 200
+Int burrow__http_max_content_ranges(void);
 
 /* httpRange, one range of a Range header. */
 typedef struct burrow__HttpRange {

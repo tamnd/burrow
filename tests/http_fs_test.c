@@ -8,6 +8,8 @@
  * adds, such as the Content-Length of an error page, is not checked. The ones
  * at the end, which need a server for what they test, use httptest's.
  * TestLinuxSendfile, which runs the test binary under strace, isn't ported.
+ * TestParseRangeLimit is newer than go1.27.1: it comes with the go1.27.2 fix
+ * for GO-2026-6609, CL 847309.
  *
  * Copyright 2010 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -382,6 +384,107 @@ static void TestParseRange(TestingT *t) {
                                    ranges[j].length, r->length);
         }
     }
+}
+
+/* ------------------------------------------------------- TestParseRangeLimit */
+
+typedef struct ParseRangeLimitTest {
+    const char *name;
+    const char *godebug;
+    Int num_ranges;
+    Int want;
+    /* Not checked: Go reads the non-default count from runtime/metrics,
+     * which burrow does not have. */
+    bool want_non_def;
+} ParseRangeLimitTest;
+
+static ParseRangeLimitTest parse_range_limit_tests[] = {
+    {
+        .name = "default limit not exceeded",
+        .num_ranges = BURROW__HTTP_DEFAULT_MAX_CONTENT_RANGES,
+        .want = BURROW__HTTP_DEFAULT_MAX_CONTENT_RANGES,
+    },
+    {
+        .name = "default limit exceeded",
+        .num_ranges = BURROW__HTTP_DEFAULT_MAX_CONTENT_RANGES + 1,
+        .want = 0,
+    },
+    {
+        .name = "small limit exceeded",
+        .godebug = "httpservecontentmaxranges=10",
+        .num_ranges = 11,
+        .want = 0,
+        .want_non_def = true,
+    },
+    {
+        .name = "small limit not exceeded",
+        .godebug = "httpservecontentmaxranges=10",
+        .num_ranges = 10,
+        .want = 10,
+    },
+    {
+        .name = "disabled limit",
+        .godebug = "httpservecontentmaxranges=0",
+        .num_ranges = 2 * BURROW__HTTP_DEFAULT_MAX_CONTENT_RANGES,
+        .want = 2 * BURROW__HTTP_DEFAULT_MAX_CONTENT_RANGES,
+        .want_non_def = true,
+    },
+    {
+        .name = "large limit exceeded",
+        .godebug = "httpservecontentmaxranges=300",
+        .num_ranges = 301,
+        .want = 0,
+    },
+    {
+        .name = "large limit not exceeded",
+        .godebug = "httpservecontentmaxranges=300",
+        .num_ranges = 300,
+        .want = 300,
+        .want_non_def = true,
+    },
+    {
+        .name = "large limit not exceeded by small input",
+        .godebug = "httpservecontentmaxranges=300",
+        .num_ranges = 10,
+        .want = 10,
+    },
+    {
+        .name = "invalid limit negative",
+        .godebug = "httpservecontentmaxranges=-5",
+        .num_ranges = BURROW__HTTP_DEFAULT_MAX_CONTENT_RANGES + 1,
+        .want = 0,
+    },
+    {
+        .name = "invalid limit non-numeric",
+        .godebug = "httpservecontentmaxranges=abc",
+        .num_ranges = BURROW__HTTP_DEFAULT_MAX_CONTENT_RANGES + 1,
+        .want = 0,
+    },
+};
+
+static void parse_range_limit(void *env, TestingT *t) {
+    const ParseRangeLimitTest *tc = env;
+    /* t.Setenv("GODEBUG", tc.godebug), with the setting put back below. */
+    burrow__http_godebug_set(tc->godebug != NULL ? tc->godebug : "");
+
+    Str range_header = fmt_sprintf_v(a, "bytes=%s0-0",
+                                     strings_repeat(a, S("0-0,"), tc->num_ranges - 1));
+    burrow__HttpRange *ranges;
+    Error err = BURROW_NO_ERROR;
+    Int got = burrow__http_parse_range(a, range_header, 10000000, &ranges, &err);
+    burrow__http_godebug_set(NULL);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "parseRange(%q): %s", range_header, error_text(err));
+    if (got != tc->want)
+        testing_t_errorf_v(t, "len(ranges) = %d, want %d", got, tc->want);
+}
+
+static void TestParseRangeLimit(TestingT *t) {
+    for (size_t i = 0;
+         i < sizeof parse_range_limit_tests / sizeof parse_range_limit_tests[0]; i++)
+        testing_t_run(t, cs(parse_range_limit_tests[i].name),
+                      BURROW_FN(TestingTFunc, parse_range_limit,
+                                (void *)&parse_range_limit_tests[i]));
 }
 
 /* ------------------------------------------------------------- TestServeFile */
@@ -1926,6 +2029,7 @@ static bool setup(void) {
 
 #define TESTS(X)                                                                       \
     X(TestParseRange)                                                                  \
+    X(TestParseRangeLimit)                                                             \
     X(TestServeFile)                                                                   \
     X(TestServeFile_DotDot)                                                            \
     X(TestServeFileDirPanicEmptyPath)                                                  \

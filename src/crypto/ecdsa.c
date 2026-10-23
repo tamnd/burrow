@@ -154,6 +154,7 @@ CRYPTO_FIPS_TEXT static IoReader ecdsa_reader(IoReader r) {
 
 struct EcdsaFipsCurve {
     const NistecCurve *nist;
+    void (*ord_inverse)(uint64_t k[4]);
     const uint8_t *order;
     Int size;    /* N.Size() */
     Int bit_len; /* N.BitLen() */
@@ -232,6 +233,7 @@ CRYPTO_FIPS_TEXT static void ecdsa_init(void *env) {
     (void)env;
     ecdsa_precompute(&ecdsa_curves[0], &burrow__nistec_p224, ecdsa_p224_order,
                      (Int)sizeof ecdsa_p224_order);
+    ecdsa_curves[1].ord_inverse = burrow__p256_ord_inverse;
     ecdsa_precompute(&ecdsa_curves[1], &burrow__nistec_p256, ecdsa_p256_order,
                      (Int)sizeof ecdsa_p256_order);
     ecdsa_precompute(&ecdsa_curves[2], &burrow__nistec_p384, ecdsa_p384_order,
@@ -333,11 +335,21 @@ CRYPTO_FIPS_TEXT void burrow__ecdsa_bits2octets(const EcdsaFipsCurve *c, Slice h
     bigmod_nat_free(&e);
 }
 
-/* inverse: kInv = k^(N-2) mod N, which is k⁻¹ since N is prime. Go has an
- * assembly inversion for P-256 on 64 bit machines, which gives the same
- * number. */
+/* inverse sets kInv to the inverse of k modulo the order of the curve. */
 CRYPTO_FIPS_TEXT static void ecdsa_inverse(const EcdsaFipsCurve *c, BigmodNat *k_inv,
                                            const BigmodNat *k) {
+#if BURROW_INT_BITS == 64
+    if (c->ord_inverse != NULL && k->len == 4) {
+        uint64_t k64[4] = {k->limbs[0], k->limbs[1], k->limbs[2], k->limbs[3]};
+        c->ord_inverse(k64);
+        Uint kb[4] = {k64[0], k64[1], k64[2], k64[3]};
+        bigmod_nat_set_bits(k_inv, slice_from(kb, 4, 4, TYPE_UINT));
+        return;
+    }
+#endif
+
+    /* Calculate the inverse of s in GF(N) using Fermat's method
+     * (exponentiation modulo P - 2, per Euler's theorem) */
     bigmod_nat_exp(k_inv, k, ecdsa_bytes(c->n_minus2, c->size), c->n);
 }
 

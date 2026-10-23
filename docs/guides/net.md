@@ -1671,6 +1671,8 @@ The client follows up to ten redirects, and `check_redirect` decides otherwise: 
 
 `timeout` covers the whole exchange, the redirects and the reading of the body included. When it runs out the error is a `UrlError` that is a timeout to `net_error_timeout`, and `errors_is` finds `context_deadline_exceeded` in it. A request's context can cancel it too. Every error from the client is a `UrlError` with the method and the URL, with any password in the URL shown as `***`. A status like 404 is not an error. The response it comes with has to be freed with `http_response_free`, and so does the one that comes back with an error from `check_redirect`.
 
+For a test over TLS, `httptest_new_tls_server` starts the server with a certificate for 127.0.0.1, ::1, example.com and its subdomains, and its `httptest_server_client` trusts that certificate and nothing else. To serve HTTP/2, make it with `httptest_new_unstarted_server`, set `enable_http2` and then call `httptest_server_start_tls`. `httptest_server_certificate` gives the certificate, for a client of your own.
+
 ## Limits
 
 The server and the client put the same limits on what they read as Go does, and they are on without anything being set. A peer that sends a header without end, or a body of nothing but chunk extensions, runs into one of these rather than into the allocator.

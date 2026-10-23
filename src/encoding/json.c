@@ -1199,6 +1199,7 @@ static bool jx_only_separators(Slice s) {
 /* A copy of the n bytes at p in d's allocator, as the data of an Any. */
 static JsonToken jx_token_copy(JsonDecoder *d, const Type *t, const void *p, size_t n,
                                size_t align, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     JsonToken tok = {NULL, NULL};
     void *q = mem_alloc(d->a, n, align);
     if (q == NULL) {

@@ -226,6 +226,7 @@ static const Type bzip2_reader_desc = {
 /* -------------------------------------------------------------- bitReader */
 
 static inline bool bzip2_read_byte(Bzip2Reader *z, Byte *c, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Error e = BURROW_NO_ERROR;
     if (z->direct != NULL) {
         *c = bufio_reader_read_byte(z->direct, &e);

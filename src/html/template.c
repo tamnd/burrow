@@ -177,6 +177,7 @@ Error html_template_execute(HtmlTemplate *t, IoWriter wr, Any data) {
 
 /* lookupAndEscapeTemplate: the template called name, escaped. */
 static HtmlTemplate *htt_lookup_and_escape(HtmlTemplate *t, Str name, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     burrow__HtNameSpace *ns = t->ns;
     sync_mutex_lock(&ns->mu);
     ns->escaped = true;
@@ -351,6 +352,7 @@ static Slice htt_read_file(Alloc *a, const Fs *fsys, Str file, Str *name, Error 
  * copy of the text. */
 static HtmlTemplate *htt_parse_files(HtmlTemplate *t, Alloc *a, const Fs *fsys,
                                      Slice filenames, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Error e = htt_check_can_parse(t);
     if (BURROW_FAILED(e)) {
         *err = e;
@@ -430,6 +432,7 @@ HtmlTemplate *html_template_from_glob(Alloc *a, Str pattern, Error *err) {
 
 static HtmlTemplate *htt_parse_fs(HtmlTemplate *t, Alloc *a, Fs fsys, Slice patterns,
                                   Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Arena ar;
     arena_init(&ar, heap_allocator(), 0);
     Alloc *ta = arena_allocator(&ar);

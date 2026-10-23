@@ -307,6 +307,7 @@ bool driver_is_scan_value(Any v) {
 /* A copy of the size bytes at src in a, as a value of type t. */
 static DriverValue dr_box(Alloc *a, const Type *t, const void *src, size_t size,
                           Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     void *p = mem_alloc(a, size, t->align);
     if (p == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);

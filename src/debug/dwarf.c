@@ -754,6 +754,7 @@ static DwarfClass dw_form_to_class(uint32_t form, DwarfAttr attr, Int vers, DwBu
 }
 
 Map *burrow__dwarf_parse_abbrev(DwarfData *d, uint64_t off, Int vers, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Map *cached = (Map *)dw_map_lookup(d->abbrev_cache, &off);
     if (cached != NULL)
         return cached;
@@ -848,6 +849,7 @@ static Str dw_hex_text(DwMsg *m, Str prefix, uint64_t v) {
 
 static uint64_t dw_debug_addr(DwarfData *d, const DwUnit *format, uint64_t addr_base,
                               uint64_t idx, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     uint64_t off = idx * (uint64_t)dw_format_addrsize(format) + addr_base;
     if (!dw_fits_int(off)) {
         *err = burrow__dwarf_error(d, DW_S("offset out of range"));

@@ -117,6 +117,7 @@ static AstFile *gsi_parse_file(burrow__SrcImporter *p, Str filename, Error *err)
 /* parseFiles. It gives back a Slice of AstFile *. */
 static Slice gsi_parse_files(burrow__SrcImporter *p, Str dir, Slice filenames,
                              Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice files = slice_nil(TYPE_AST_FILE_PTR);
     for (Int i = 0; i < filenames.len; i++) {
         Str name = gsi_join_path(p, dir, ((Str *)filenames.p)[i]);
@@ -226,6 +227,7 @@ static void gsi_on_error(void *env, const TypesError *e) {
 /* ImportFrom, from the point where the package is marked as being imported.
  * The caller does what Go's deferred function does. */
 static TypesPackage *gsi_import(burrow__SrcImporter *p, BuildPackage *bp, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Alloc *a = p->a;
     Slice filenames = slice_nil(TYPE_STRING);
     gsi_push_all(a, &filenames, bp->go_files);
@@ -285,6 +287,7 @@ static TypesPackage *gsi_import(burrow__SrcImporter *p, BuildPackage *bp, Error 
 TypesPackage *burrow__srcimporter_import_from(burrow__SrcImporter *p, Str path,
                                               Str src_dir, TypesImportMode mode,
                                               Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (mode != 0)
         runtime_panic(GSI_S("non-zero import mode"));
 

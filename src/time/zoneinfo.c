@@ -1238,6 +1238,7 @@ static Int tz_nplatform(void) {
  * there is no GOROOT here. */
 static TimeLocation *tz_load_sources(Str name, const char *const *sources, Int n,
                                      Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Error first = BURROW_NO_ERROR;
     for (Int i = 0; i < n; i++) {
         TzFile f = tz_load_from_dir_or_zip(tz_cstr(sources[i]), name);
@@ -1310,6 +1311,7 @@ static bool tz_contains_dot_dot(Str s) {
 
 /* Everything LoadLocation does after the checks on the name. */
 static TimeLocation *tz_load(Str name, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Error first = BURROW_NO_ERROR;
     Str zoneinfo;
     if (tz_getenv("ZONEINFO", &zoneinfo) && zoneinfo.len > 0) {

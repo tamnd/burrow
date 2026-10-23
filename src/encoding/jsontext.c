@@ -2400,6 +2400,7 @@ static JsontextToken jt_zero_token(void) {
 
 static JsontextToken jt_read_literal(JsontextDecoder *d, Int pos, Str lit,
                                      JsontextToken tok, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Error e = BURROW_NO_ERROR;
     if (burrow__jsonwire_consume_literal(d->db.buf + pos, d->db.len - pos, lit, &e) ==
             lit.len &&

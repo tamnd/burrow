@@ -2097,6 +2097,7 @@ static Error pf_compatible(Alloc *a, PfProfile *p, PfProfile *pb) {
 /* combineHeaders checks that all profiles can be merged and returns
  * their combined profile. */
 static PfProfile *pf_combine_headers(Alloc *a, Slice srcs, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     PfProfile *s0 = pf_ptr_at(srcs, 0);
     for (Int i = 1; i < srcs.len; i++) {
         *err = pf_compatible(a, s0, pf_ptr_at(srcs, i));

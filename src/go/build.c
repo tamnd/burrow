@@ -777,6 +777,7 @@ static Str gb_has_subdir(BuildContext *ctxt, Alloc *a, Str root, Str dir, bool *
 
 /* readDir: a Slice of FsDirEntry. */
 static Slice gb_read_dir(BuildContext *ctxt, Alloc *a, Str path, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (!BURROW_FUNC_IS_NIL(ctxt->read_dir)) {
         Error ferr = BURROW_NO_ERROR;
         Slice fis = BURROW_CALLF(ctxt->read_dir, a, path, &ferr);
@@ -812,6 +813,7 @@ static const IoReadCloserVT gb_os_rc_vt = {
 };
 
 static IoReadCloser gb_open_file(BuildContext *ctxt, Alloc *a, Str path, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (!BURROW_FUNC_IS_NIL(ctxt->open_file))
         return BURROW_CALLF(ctxt->open_file, a, path, err);
     Error oerr = BURROW_NO_ERROR;
@@ -1089,6 +1091,7 @@ static bool gb_is_go_build_comment(Str line) {
  * a //go:binary-only-package line. */
 static Str gb_parse_file_header(Str content, Str *go_build, bool *saw_binary_only,
                                 Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Int end = 0;
     Str p = content;
     bool ended = false;         /* past the comments, so no more //go:build lines */
@@ -1160,6 +1163,7 @@ static Str gb_parse_file_header(Str content, Str *go_build, bool *saw_binary_onl
  * between them. */
 static bool gb_should_build(BuildContext *ctxt, Alloc *a, Str content, Map *all_tags,
                             bool *binary_only, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Str go_build = BURROW_STR_EMPTY;
     bool saw_binary_only = false;
     Error herr = BURROW_NO_ERROR;
@@ -1279,6 +1283,7 @@ static void gb_make_paths_absolute(Alloc *a, Slice args, Str src_dir) {
 /* splitQuoted: s split at spaces, where single or double quotes keep spaces in
  * and a backslash escapes the next character. */
 static Slice gb_split_quoted(Alloc *a, Str s, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice args = slice_nil(TYPE_STRING);
     /* Each byte of s is at most one rune, and a bad byte becomes U+FFFD. */
     Int cap = s.len * UTF8_UTF_MAX + 1;
@@ -1523,6 +1528,7 @@ static void gb_close_quiet(IoReadCloser f) {
 static burrow__BuildFileInfo *gb_match_file(BuildContext *ctxt, Alloc *a, Str dir,
                                             Str name, Map *all_tags, bool *binary_only,
                                             TokenFileSet *fset, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (strings_has_prefix(name, GB_S("_")) || strings_has_prefix(name, GB_S(".")))
         return NULL;
 

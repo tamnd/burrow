@@ -435,6 +435,7 @@ static Error sc_strconv_err(Error err) {
 /* A copy of v in a that outlives the driver's memory, for a destination of
  * type any. */
 static Any sc_clone_any(Alloc *a, Any v, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (v.t == NULL || v.data == NULL)
         return (Any){NULL, NULL};
     void *p =
@@ -1061,6 +1062,7 @@ SQL_NULL_SCAN(sql_null_time_scan, SqlNullTime, time, TYPE_TIME)
 
 static DriverValue sc_box(Alloc *a, const Type *t, const void *v, size_t size,
                           Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     void *p = mem_alloc(a, size, t->align);
     if (p == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);

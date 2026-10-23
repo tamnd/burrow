@@ -1542,6 +1542,7 @@ static void png_write_plte_and_trns(PngEncoderBuffer *e, ColorPalette p) {
 /* Write: the IDAT writer, which puts each buffer it is given in a chunk of
  * its own. The bufio.Writer in front of it makes those 32 KB. */
 static Int png_idat_write(void *self, Slice b, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     PngEncoderBuffer *e = (PngEncoderBuffer *)self;
     png_write_chunk(e, (const Byte *)b.p, b.len, "IDAT");
     if (BURROW_FAILED(e->err)) {

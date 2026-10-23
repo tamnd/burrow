@@ -384,6 +384,7 @@ static Int gt_verify(TypesChecker *check, Alloc *a, TokenPos pos, Slice tparams,
 
 Int burrow__tc_verify(TypesChecker *check, TokenPos pos, Slice tparams, Slice targs,
                       TypesContext *ctxt, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Str cause = BURROW_STR_EMPTY;
     Int i = gt_verify(check, check->a, pos, tparams, targs, ctxt, &cause);
     if (i >= 0)

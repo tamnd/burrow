@@ -157,6 +157,7 @@ static bool xi_oom(Error *err) {
 
 static XmlFieldInfo *xi_struct_field_info(Alloc *a, const Type *typ, const Field *f,
                                           const Int *idx, Int nidx, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     XmlFieldInfo *finfo =
         (XmlFieldInfo *)mem_alloc(a, sizeof(XmlFieldInfo), _Alignof(XmlFieldInfo));
     if (finfo == NULL) {
@@ -329,6 +330,7 @@ static const Field *xi_field_by_index(const Type *typ, const Int *idx, Int nidx)
 }
 
 static bool xi_append(XiBuild *b, const XmlFieldInfo *f, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     XmlTypeInfo *ti = b->ti;
     if (ti->nfields == b->cap) {
         Int cap = b->cap == 0 ? 8 : b->cap * 2;
@@ -356,6 +358,7 @@ static bool xi_parents_eq(const XmlFieldInfo *a, const XmlFieldInfo *b, Int n) {
  * conflicts with, or fails, by Go's rules for embedding. */
 static bool xi_add_field_info(XiBuild *b, const Type *typ, const XmlFieldInfo *newf,
                               Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     XmlTypeInfo *ti = b->ti;
     Int stack_conflicts[8];
     Int *conflicts = stack_conflicts;
@@ -437,6 +440,7 @@ static bool xi_add_field_info(XiBuild *b, const Type *typ, const XmlFieldInfo *n
 
 /* getTypeInfo's body, building into b. */
 static bool xi_build(XiBuild *b, const Type *typ, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     XmlTypeInfo *ti = b->ti;
     if (typ->kind != KIND_STRUCT || typ == &burrow_type_XmlName)
         return true;
@@ -565,6 +569,7 @@ static bool xi_cache_put(const Type *t, const XmlTypeInfo *ti, Arena *arena) {
 
 /* Called with xi_lock held, and again for each embedded struct on the way. */
 static const XmlTypeInfo *xi_get_locked(const Type *t, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const XmlTypeInfo *found = xi_cache_find(t);
     if (found != NULL)
         return found;

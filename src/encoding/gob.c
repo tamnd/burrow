@@ -765,6 +765,7 @@ static const Method *gob_method(const Type *t, Str name, int shape) {
 }
 
 static const GobUserType *gob_user_type_l(const Type *rt, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const GobUserType *cached = (const GobUserType *)gob_pget(gob_uts, rt);
     if (cached != NULL)
         return cached;
@@ -847,6 +848,7 @@ const GobUserType *burrow__gob_user_type(const Type *t, Error *err) {
 }
 
 static GobEncPlan *gob_enc_plan_l(const GobUserType *ut, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const Type *t = ut->base;
     GobEncPlan *plan = (GobEncPlan *)mem_alloc(
         heap_allocator(), sizeof(GobEncPlan) + (size_t)t->nfield * sizeof(GobEncField),
@@ -876,6 +878,7 @@ static GobEncPlan *gob_enc_plan_l(const GobUserType *ut, Error *err) {
 }
 
 const GobEncPlan *burrow__gob_enc_plan(const GobUserType *ut, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     GobUserType *m = (GobUserType *)(uintptr_t)ut;
     const GobEncPlan *plan = burrow__atomic_load_acquire_ptr(&m->enc_plan);
     if (plan != NULL)
@@ -896,6 +899,7 @@ const GobEncPlan *burrow__gob_enc_plan(const GobUserType *ut, Error *err) {
 }
 
 const GobUserType *burrow__gob_elem_ut(const GobUserType *ut, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     GobUserType *m = (GobUserType *)(uintptr_t)ut;
     const GobUserType *eut = burrow__atomic_load_acquire_ptr(&m->elem_ut);
     if (eut != NULL)
@@ -926,6 +930,7 @@ static GobType *gob_oom(Error *err) {
 
 static GobType *gob_new_type_object_l(Str name, const GobUserType *ut, const Type *rt,
                                       Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (ut->external_enc != 0) {
         GobType *g = gob_new_type(GOB_GOB_ENCODER, name);
         if (g == NULL || !gob_set_type_id(g))
@@ -1040,6 +1045,7 @@ static GobType *gob_new_type_object_l(Str name, const GobUserType *ut, const Typ
 
 static GobType *gob_get_type_l(Str name, const GobUserType *ut, const Type *rt,
                                Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     rt = gob_canon_l(rt);
     GobType *t = (GobType *)gob_pget(gob_types, rt);
     if (t != NULL)
@@ -1053,6 +1059,7 @@ static GobType *gob_get_type_l(Str name, const GobUserType *ut, const Type *rt,
 /* ----------------------------------------------------------- getTypeInfo */
 
 static GobTypeInfo *gob_type_info_l(const GobUserType *ut, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const Type *rt = ut->external_enc != 0 ? ut->user : ut->base;
     GobTypeInfo *info = (GobTypeInfo *)gob_pget(gob_infos, rt);
     if (info != NULL)

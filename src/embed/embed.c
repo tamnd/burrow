@@ -332,6 +332,7 @@ static FsFileInfo embed_dir_stat(void *self, Alloc *a, Error *err) {
 }
 
 static Slice embed_entries(Alloc *a, const EmbedFile *files, Int n, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice list = slice_make(a, TYPE_FS_DIR_ENTRY, n, n);
     if (n > 0 && list.p == NULL) {
         *err = burrow_err_out_of_memory;

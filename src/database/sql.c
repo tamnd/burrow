@@ -1484,6 +1484,7 @@ static const DriverRows sq_no_rows = {NULL, NULL};
 
 /* namedValueToValue. */
 static Slice sq_named_to_values(Alloc *a, Slice named, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Int n = named.len;
     DriverValue *v = NULL;
     if (n > 0) {

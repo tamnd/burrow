@@ -420,6 +420,7 @@ static const Byte *asn1_ptr(Slice b) {
 }
 
 static Str asn1_str_copy(Alloc *a, const Byte *p, Int n, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (n == 0)
         return BURROW_STR_EMPTY;
     Byte *q = (Byte *)mem_alloc_nozero(a, (size_t)n, 1);
@@ -838,6 +839,7 @@ Str asn1_object_identifier_string(Asn1ObjectIdentifier oi, Alloc *a) {
 
 /* parseBase128Int: the value in *ret and the offset after it. */
 static Int asn1_parse_base128_int(Slice b, Int offset, Int *ret, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const Byte *p = asn1_ptr(b);
     int64_t ret64 = 0;
     *ret = 0;
@@ -993,6 +995,7 @@ static Str asn1_parse_ia5_string(Alloc *a, Slice b, Error *err) {
 
 /* T61String, read as Latin-1, which is what Go does too. */
 static Str asn1_parse_t61_string(Alloc *a, Slice b, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const Byte *p = asn1_ptr(b);
     if (b.len == 0)
         return BURROW_STR_EMPTY;
@@ -1132,6 +1135,7 @@ static Int asn1_parse_field(Asn1Dec *d, const Type *t, void *v, Slice b,
 /* parseSequenceOf: the elements in b, each of type elem, as a slice. */
 static Slice asn1_parse_sequence_of(Asn1Dec *d, Slice b, const Type *elem, int depth,
                                     Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     bool match_any = false;
     bool compound = false;
     Int expected = 0;
@@ -1366,6 +1370,7 @@ static Str asn1_params_string(const Asn1FieldParameters *p) {
 static Int asn1_parse_field(Asn1Dec *d, const Type *ft, void *v, Slice b,
                             Int init_offset, const Asn1FieldParameters *params,
                             int depth, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     depth++;
     if (depth > ASN1_MAX_DEPTH || asn1_stack_low(&d->floor, depth, ASN1_MAX_DEPTH)) {
         *err = asn1_err_depth;

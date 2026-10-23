@@ -298,6 +298,7 @@ SlogLevel slog_set_log_logger_level(SlogLevel level) {
  * asked for a file, and here the log package says where the call was. */
 static Int slogl_write_record(SlogHandler h, SlogLevel level, bool capture_site,
                               Slice buf, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Context ctx = context_background();
     if (!h.vt->enabled(h.data, ctx, level))
         return 0;

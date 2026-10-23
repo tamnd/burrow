@@ -240,6 +240,7 @@ static void bc_write_arg(StringsBuilder *b, ConstraintExpr x, int paren, Error *
 }
 
 static void bc_write(StringsBuilder *b, ConstraintExpr x, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (x == NULL)
         return;
     switch ((int)x->kind) {

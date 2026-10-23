@@ -135,7 +135,7 @@ static void tt_put(Map *m, Str name, TextTemplate *t) {
 }
 
 TextTemplate *text_template_clone(TextTemplate *t, Alloc *a, Error *err) {
-    (void)err;
+    BURROW_OUT(err, BURROW_NO_ERROR);
     TextTemplate *nt = tt_copy(t, a, NULL);
     tt_init(nt);
     if (t->common == NULL)
@@ -182,7 +182,7 @@ static bool tt_associate(TextTemplate *t, TextTemplate *new, ParseTree *tree) {
 
 TextTemplate *text_template_add_parse_tree(TextTemplate *t, Str name, ParseTree *tree,
                                            Error *err) {
-    (void)err;
+    BURROW_OUT(err, BURROW_NO_ERROR);
     tt_init(t);
     sync_rw_mutex_lock(&t->common->mu_tmpl);
     TextTemplate *nt = t;
@@ -272,6 +272,7 @@ TextTemplate *text_template_lookup(TextTemplate *t, Str name) {
 }
 
 TextTemplate *text_template_parse(TextTemplate *t, Str text, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     tt_init(t);
     Error e = BURROW_NO_ERROR;
     sync_rw_mutex_r_lock(&t->common->mu_funcs);
@@ -378,6 +379,7 @@ static Slice tt_read_file(Alloc *a, const Fs *fsys, Str file, Str *name, Error *
  * copy of the text. */
 static TextTemplate *tt_parse_files(TextTemplate *t, Alloc *a, const Fs *fsys,
                                     Slice filenames, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (filenames.len == 0) {
         *err = fmt_errorf_v("template: no files named in call to ParseFiles");
         return NULL;
@@ -449,6 +451,7 @@ TextTemplate *text_template_from_glob(Alloc *a, Str pattern, Error *err) {
 
 static TextTemplate *tt_parse_fs(TextTemplate *t, Alloc *a, Fs fsys, Slice patterns,
                                  Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Arena ar;
     arena_init(&ar, heap_allocator(), 0);
     Alloc *ta = arena_allocator(&ar);

@@ -1144,6 +1144,7 @@ static Int tf_parse_uint(TfRfc *r, Str s, Int lo, Int hi) {
 
 static bool tf_parse_rfc3339(Str s, TimeLocation *local, Alloc *a, Time *out,
                              Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     TfRfc r = {true};
     if (s.len < 19)
         return false;
@@ -1203,6 +1204,7 @@ static bool tf_parse_rfc3339(Str s, TimeLocation *local, Alloc *a, Time *out,
  * is the location a zone offset or name is matched against. */
 static Time tf_parse(Alloc *a, Str layout, Str value, TimeLocation *default_loc,
                      TimeLocation *local, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Str alayout = layout;
     Str avalue = value;
     const char *range_err = NULL;

@@ -3479,6 +3479,7 @@ static const Str gp_invalid_source_text = BURROW_S_INIT("invalid source");
 
 /* The source as bytes in a, from src or, when src is nil, the file. */
 static Slice gp_read_source(Alloc *a, Str filename, Any src, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (src.t == NULL)
         return os_read_file(a, filename, err);
     Slice from = slice_nil(TYPE_BYTE);

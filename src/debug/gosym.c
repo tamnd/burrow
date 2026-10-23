@@ -1720,6 +1720,7 @@ static Str gosym_line_from_aline(Alloc *a, const GosymObj *o, Int aline, Int *li
 
 /* Obj.alineFromLine, the other way. */
 static Int gosym_aline_from_line(const GosymObj *o, Str path, Int line, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (line < 1) {
         *err = gosym_line_error_build(error_allocator(), path, line);
         return 0;

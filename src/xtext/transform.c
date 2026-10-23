@@ -128,6 +128,7 @@ static void nop_reset(void *self) {
 
 static Int nop_transform(void *self, Slice dst, Slice src, bool at_eof, Int *n_src,
                          Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     (void)self;
     (void)at_eof;
     Int n = transform_copy_bytes(dst, src);

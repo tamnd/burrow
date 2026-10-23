@@ -994,6 +994,7 @@ Error xml_encoder_encode_element(XmlEncoder *e, Any v, XmlStartElement start) {
 }
 
 static Slice xm_marshal(Alloc *a, Any v, bool indent, Str prefix, Str ind, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Slice nil = {NULL, 0, 0, TYPE_BYTE};
     if (a == NULL)
         a = heap_allocator();

@@ -747,6 +747,7 @@ ReflectValue reflect_value_field(ReflectValue v, Int i) {
  * there rather than panicking. */
 static ReflectValue rf_field_by_index(ReflectValue v, Slice index, Error *err,
                                       const char *method) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const Int *ix = index.p;
     if (index.len == 1)
         return reflect_value_field(v, ix[0]);

@@ -609,6 +609,7 @@ static Error flate_corrupt(const FlateDecompressor *f) {
 /* The next input byte into *c, or false and the error with io_eof made
  * io_err_unexpected_eof. */
 static inline bool flate_read_byte(FlateDecompressor *f, Byte *c, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Error e = BURROW_NO_ERROR;
     if (f->direct != NULL) {
         *c = bufio_reader_read_byte(f->direct, &e);
@@ -638,6 +639,7 @@ static bool flate_more_bits(FlateDecompressor *f, Error *err) {
 /* Read the next Huffman-encoded symbol from f according to h. The symbol, or
  * -1 and the error. */
 static inline int flate_huff_sym(FlateDecompressor *f, const FlateHuff *h, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     /* Since a huffmanDecoder can be empty or be composed of a degenerate tree
      * with single element, huff_sym must error on these two edge cases. In
      * both cases, the chunks slice will be 0 for the invalid sequence,

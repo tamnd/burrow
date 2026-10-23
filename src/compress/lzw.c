@@ -148,6 +148,7 @@ static const Type lzw_reader_desc = {
 const Type *const TYPE_LZW_READER = &lzw_reader_desc;
 
 static inline bool lzw_read_byte(LzwReader *r, Byte *c, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Error e = BURROW_NO_ERROR;
     if (r->direct != NULL) {
         *c = bufio_reader_read_byte(r->direct, &e);
@@ -169,6 +170,7 @@ static inline bool lzw_read_byte(LzwReader *r, Byte *c, Error *err) {
 /* readLSB and readMSB: the next code, or false and the error from the
  * source. */
 static inline bool lzw_read_code(LzwReader *r, uint16_t *code, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     while (r->n_bits < r->width) {
         Byte x;
         if (!lzw_read_byte(r, &x, err))

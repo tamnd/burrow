@@ -263,6 +263,7 @@ ReflectValue burrow__tt_safe_call(Alloc *a, ReflectValue fun, Slice args, Error 
         failed = true;
     }
     BURROW_TRY_END;
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (failed) {
         *err = e;
         return ttf_zero;
@@ -299,6 +300,7 @@ static bool ttf_int_like(ReflectKind k) {
  * the zero arg_type in place of an invalid value when it can be nil. */
 static ReflectValue ttf_prepare_arg(Alloc *a, ReflectValue value, ReflectType arg_type,
                                     Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (!reflect_value_is_valid(value)) {
         if (!burrow__tt_can_be_nil(arg_type)) {
             *err = fmt_errorf_v("value is nil; should be of type %s",
@@ -321,6 +323,7 @@ static ReflectValue ttf_prepare_arg(Alloc *a, ReflectValue value, ReflectType ar
 
 /* indexArg: index as an int no greater than cap, in *x. */
 static bool ttf_index_arg(ReflectValue index, Int cap, Int *x, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     int64_t v = 0;
     switch ((int)reflect_value_kind(index)) {
     case REFLECT_INT:
@@ -716,6 +719,7 @@ static bool ttf_iface_equal(ReflectValue a, ReflectValue b) {
 
 static bool ttf_eq1(ReflectValue arg1, int k1, ReflectValue arg, bool *truth,
                     Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     arg = burrow__tt_indirect_interface(arg);
     int k2 = ttf_basic_kind(arg);
     *truth = false;
@@ -863,6 +867,7 @@ static bool ttf_le(void *env, ReflectValue arg1, ReflectValue arg2, Error *err) 
 
 /* gt: > is the inverse of <=. */
 static bool ttf_gt(void *env, ReflectValue arg1, ReflectValue arg2, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Error e = BURROW_NO_ERROR;
     bool less_or_equal = ttf_le(env, arg1, arg2, &e);
     if (BURROW_FAILED(e)) {
@@ -874,6 +879,7 @@ static bool ttf_gt(void *env, ReflectValue arg1, ReflectValue arg2, Error *err) 
 
 /* ge: >= is the inverse of <. */
 static bool ttf_ge(void *env, ReflectValue arg1, ReflectValue arg2, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Error e = BURROW_NO_ERROR;
     bool less_than = ttf_lt(env, arg1, arg2, &e);
     if (BURROW_FAILED(e)) {

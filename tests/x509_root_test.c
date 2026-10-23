@@ -1,4 +1,5 @@
-/* crypto/x509 system root tests: Go's root_test.go and cert_pool_test.go.
+/* crypto/x509 system root tests: Go's root_test.go, cert_pool_test.go and
+ * platform_test.go.
  *
  * Go points certFiles and certDirectories somewhere else for a test by
  * assigning to them. Here burrow__x509_load_system_roots takes them as
@@ -9,8 +10,7 @@
  * Some of Go's crypto/x509 tests are not anywhere in burrow's tests.
  * TestSetFallbackRoots re-runs the test binary in a new user and mount
  * namespace with an empty /etc. TestFallback here goes through the same
- * SetFallbackRoots paths without one. TestHybridPool and TestPlatformVerifier
- * need the macOS and Windows platform verifiers, which are not done yet.
+ * SetFallbackRoots paths without one.
  * TestNISTPKITSPolicy and TestX509Limbo read large test suites from outside
  * the package. The fips140v1.0 tests check a GODEBUG that pins an older FIPS
  * module, TestGob is about encoding/gob, and TestImports checks Go's import
@@ -24,16 +24,22 @@
 #include "burrow/crypto/x509.h"
 
 #include "burrow/bytes.h"
+#include "burrow/crypto/ecdsa.h"
+#include "burrow/crypto/tls.h"
+#include "burrow/encoding/pem.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
 #include "burrow/io/fs.h"
+#include "burrow/math/big.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
+#include "burrow/netpoll.h"
 #include "burrow/os.h"
 #include "burrow/panic.h"
 #include "burrow/path/filepath.h"
 #include "burrow/strings.h"
 #include "burrow/testing.h"
+#include "burrow/time.h"
 
 #include "../src/crypto/x509_internal.h"
 #include "check.h"
@@ -571,6 +577,429 @@ static void TestCertPoolEqual(TestingT *t) {
     arena_free(&ar);
 }
 
+/* ------------------------------------------------------ platform_test.go */
+
+/* In order to run this test suite locally, you need to insert the test root, at
+ * the path below, into your trust store. This root is constrained such that it
+ * should not be dangerous to local developers to trust, but care should be
+ * taken when inserting it into the trust store not to give it increased
+ * permissions.
+ *
+ * On macOS the certificate can be further constrained to only be valid for
+ * 'SSL' in the certificate properties pane of the 'Keychain Access' program.
+ *
+ * On Windows the certificate can also be constrained to only server
+ * authentication in the properties pane of the certificate in the
+ * "Certificates" snap-in of mmc.exe.
+ *
+ * Not in Go: the root and its key are platform_root_cert and
+ * platform_root_key in x509_root_test_gen.h, which tools/gen-x509-tests.sh
+ * makes from Go's platform_root_cert.pem and platform_root_key.pem. Those files
+ * are the ones to add to the trust store. */
+
+typedef struct PlatformVerifier PlatformVerifier;
+
+typedef struct PlatformVerifierTest {
+    const char *name;
+    X509ExtKeyUsage cert_eku;
+    bool self_signed;
+    const char *dns_name;
+    Duration time; /* from now, and no time when 0 */
+    X509ExtKeyUsage eku;
+    bool has_eku;
+
+    const char *expected_err;
+    const char *windows_err;
+    const char *macos_err;
+
+    const PlatformVerifier *v;
+} PlatformVerifierTest;
+
+/* What the subtests use, which has to last until the last of them is done, as
+ * they can run after the test function has returned. */
+struct PlatformVerifier {
+    Arena ar;
+    X509Certificate *test_root;
+    EcdsaPrivateKey *test_root_key;
+    EcdsaPrivateKey *leaf_key;
+    Time now;
+    PlatformVerifierTest tests[10];
+};
+
+static void platform_verifier_free(void *env) {
+    PlatformVerifier *v = env;
+    arena_free(&v->ar);
+    mem_free(heap_allocator(), v, sizeof *v, _Alignof(PlatformVerifier));
+}
+
+static const PlatformVerifierTest platform_verifier_tests[] = {
+    {.name = "valid", .cert_eku = X509_EXT_KEY_USAGE_SERVER_AUTH},
+    {.name = "valid (with name)",
+     .cert_eku = X509_EXT_KEY_USAGE_SERVER_AUTH,
+     .dns_name = "valid.testing.golang.invalid"},
+    {.name = "valid (with time)",
+     .cert_eku = X509_EXT_KEY_USAGE_SERVER_AUTH,
+     .time = TIME_MINUTE * 30},
+    {.name = "valid (with eku)",
+     .cert_eku = X509_EXT_KEY_USAGE_SERVER_AUTH,
+     .eku = X509_EXT_KEY_USAGE_SERVER_AUTH,
+     .has_eku = true},
+    {.name = "wrong name",
+     .cert_eku = X509_EXT_KEY_USAGE_SERVER_AUTH,
+     .dns_name = "invalid.testing.golang.invalid",
+     .expected_err = "x509: certificate is valid for valid.testing.golang.invalid, not "
+                     "invalid.testing.golang.invalid"},
+    {.name = "expired (future)",
+     .cert_eku = X509_EXT_KEY_USAGE_SERVER_AUTH,
+     .time = TIME_HOUR * 2,
+     .expected_err = "x509: certificate has expired or is not yet valid"},
+    {.name = "expired (past)",
+     .cert_eku = X509_EXT_KEY_USAGE_SERVER_AUTH,
+     .time = TIME_HOUR * 2,
+     .expected_err = "x509: certificate has expired or is not yet valid"},
+    {.name = "self-signed",
+     .cert_eku = X509_EXT_KEY_USAGE_SERVER_AUTH,
+     .self_signed = true,
+     .macos_err =
+         "x509: \xe2\x80\x9cvalid.testing.golang.invalid\xe2\x80\x9d certificate "
+         "is not trusted",
+     .windows_err = "x509: certificate signed by unknown authority"},
+    {.name = "non-specified KU",
+     .cert_eku = X509_EXT_KEY_USAGE_SERVER_AUTH,
+     .eku = X509_EXT_KEY_USAGE_EMAIL_PROTECTION,
+     .has_eku = true,
+     .expected_err = "x509: certificate specifies an incompatible key usage"},
+    {.name = "non-nested KU",
+     .cert_eku = X509_EXT_KEY_USAGE_EMAIL_PROTECTION,
+     .macos_err =
+         "x509: \xe2\x80\x9cvalid.testing.golang.invalid\xe2\x80\x9d certificate "
+         "is not permitted for this usage",
+     .windows_err = "x509: certificate specifies an incompatible key usage"},
+};
+
+/* Not in Go: each of Go's cases spells out the same template, apart from its
+ * ExtKeyUsage, so here it is made once from the case. */
+static X509Certificate platform_cert_template(Alloc *a,
+                                              const PlatformVerifierTest *tc) {
+    static const Str dns_name = BURROW_S_INIT("valid.testing.golang.invalid");
+    X509Certificate c;
+    memset(&c, 0, sizeof c);
+    c.serial_number = big_new_int(a, 1);
+    c.dns_names = slice_append(a, slice_nil(TYPE_STRING), &dns_name, 1);
+    c.not_before = time_add(tc->v->now, -TIME_HOUR);
+    c.not_after = time_add(tc->v->now, TIME_HOUR);
+    c.ext_key_usage = slice_append(a, slice_nil(TYPE_INT), &tc->cert_eku, 1);
+    return c;
+}
+
+static void platform_verifier_case(void *env, TestingT *t) {
+    const PlatformVerifierTest *tc = env;
+    const PlatformVerifier *v = tc->v;
+    testing_t_parallel(t);
+    ARENA(a);
+    X509Certificate tmpl = platform_cert_template(a, tc);
+    const X509Certificate *parent = v->test_root;
+    if (tc->self_signed)
+        parent = &tmpl;
+    Error err = BURROW_NO_ERROR;
+    Slice cert_der = x509_create_certificate(
+        a, (IoReader){0}, &tmpl, parent, ecdsa_private_key_public(v->leaf_key),
+        ecdsa_private_key_signer(v->test_root_key), &err);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        testing_t_fatalf_v(t, "CreateCertificate failed: %s", err);
+    }
+    X509Certificate *cert = x509_parse_certificate(a, cert_der, &err);
+    if (BURROW_FAILED(err)) {
+        arena_free(&ar);
+        testing_t_fatalf_v(t, "ParseCertificate failed: %s", err);
+    }
+
+    X509VerifyOptions opts;
+    memset(&opts, 0, sizeof opts);
+    if (tc->dns_name != NULL)
+        opts.dns_name = str_from_cstr(tc->dns_name);
+    if (tc->time != 0)
+        opts.current_time = time_add(v->now, tc->time);
+    if (tc->has_eku)
+        opts.key_usages = slice_append(a, slice_nil(TYPE_INT), &tc->eku, 1);
+
+    const char *expected_err = tc->expected_err;
+    if (strcmp(burrow_os_name(), "darwin") == 0 && tc->macos_err != NULL)
+        expected_err = tc->macos_err;
+    else if (strcmp(burrow_os_name(), "windows") == 0 && tc->windows_err != NULL)
+        expected_err = tc->windows_err;
+
+    (void)x509_certificate_verify(cert, a, opts, &err);
+    if (BURROW_FAILED(err) && expected_err == NULL)
+        testing_t_errorf_v(t, "unexpected verification error: %s", err);
+    else if (BURROW_FAILED(err) &&
+             !strings_has_prefix(error_text(err), str_from_cstr(expected_err)))
+        testing_t_errorf_v(t, "unexpected verification error: got %q, want %q",
+                           error_text(err), str_from_cstr(expected_err));
+    else if (!BURROW_FAILED(err) && expected_err != NULL)
+        testing_t_errorf_v(t, "unexpected verification success: want %q",
+                           str_from_cstr(expected_err));
+    arena_free(&ar);
+}
+
+static void TestPlatformVerifier(TestingT *t) {
+    if (strcmp(burrow_os_name(), "windows") != 0 &&
+        strcmp(burrow_os_name(), "darwin") != 0) {
+        testing_t_skip_v(t, "only tested on windows and darwin");
+        return;
+    }
+
+    PlatformVerifier *v = BURROW_NEW(heap_allocator(), PlatformVerifier);
+    if (v == NULL) {
+        testing_t_fatal_v(t, "out of memory");
+        return;
+    }
+    arena_init(&v->ar, NULL, 0);
+    testing_t_cleanup(t, BURROW_FN(Func, platform_verifier_free, v));
+    Alloc *a = arena_allocator(&v->ar);
+
+    Error err = BURROW_NO_ERROR;
+    PemBlock *b = pem_decode(a, cstr_bytes(platform_root_cert), NULL);
+    if (b == NULL) {
+        /* Not in Go: Go reads the file here, and would panic on b.Bytes if
+         * there were no PEM block in it. */
+        testing_t_fatal_v(t, "no PEM block in the test root");
+        return;
+    }
+    v->test_root = x509_parse_certificate(a, b->bytes, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "failed to parse test root: %s", err);
+        return;
+    }
+
+    b = pem_decode(a, cstr_bytes(platform_root_key), NULL);
+    if (b == NULL) {
+        /* Not in Go: Go reads the file here, and would panic on b.Bytes if
+         * there were no PEM block in it. */
+        testing_t_fatal_v(t, "no PEM block in the test key");
+        return;
+    }
+    v->test_root_key = x509_parse_ec_private_key(a, b->bytes, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "failed to parse test key: %s", err);
+        return;
+    }
+
+    X509VerifyOptions none;
+    memset(&none, 0, sizeof none);
+    (void)x509_certificate_verify(v->test_root, a, none, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_skipf_v(t, "test root is not in trust store, skipping (err: %q)",
+                          error_text(err));
+        return;
+    }
+
+    v->now = time_now();
+
+    v->leaf_key = ecdsa_generate_key(a, elliptic_p256(), (IoReader){0}, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "ecdsa.GenerateKey failed: %s", err);
+        return;
+    }
+
+    for (Int i = 0; i < LEN(platform_verifier_tests); i++) {
+        v->tests[i] = platform_verifier_tests[i];
+        v->tests[i].v = v;
+        testing_t_run(t, str_from_cstr(v->tests[i].name),
+                      BURROW_FN(TestingTFunc, platform_verifier_case, &v->tests[i]));
+    }
+}
+
+/* Go's hybrid_pool_test.go. */
+
+/* Not in Go: what TestHybridPool holds, which a fatal error must not leak. */
+typedef struct {
+    Arena ar;
+    TlsConn *c;
+} HybridPool;
+
+static void hybrid_pool_free(void *env) {
+    HybridPool *h = env;
+    if (h->c != NULL) {
+        (void)tls_conn_close(h->c);
+        tls_conn_free(h->c);
+    }
+    arena_free(&h->ar);
+    mem_free(heap_allocator(), h, sizeof *h, _Alignof(HybridPool));
+}
+
+/* Not in Go: the dials need the readiness poll FD. */
+static void need_tcp(TestingT *t) {
+#if !defined(BURROW_NETPOLL_READINESS)
+    testing_t_skip_v(t, "TCP here needs the readiness poll FD");
+#else
+    (void)t;
+#endif
+}
+
+static void TestHybridPool(TestingT *t) {
+    testing_t_parallel(t);
+    if (!(strcmp(burrow_os_name(), "windows") == 0 ||
+          strcmp(burrow_os_name(), "darwin") == 0 ||
+          strcmp(burrow_os_name(), "ios") == 0)) {
+        testing_t_skipf_v(t, "platform verifier not available on %s",
+                          str_from_cstr(burrow_os_name()));
+        return;
+    }
+    /* Not in Go: what testenv.HasExternalNetwork asks here. */
+    if (testing_short()) {
+        testing_t_skip_now(t);
+        return;
+    }
+    need_tcp(t);
+
+    HybridPool *h = BURROW_NEW(heap_allocator(), HybridPool);
+    if (h == NULL) {
+        testing_t_fatal_v(t, "out of memory");
+        return;
+    }
+    arena_init(&h->ar, NULL, 0);
+    testing_t_cleanup(t, BURROW_FN(Func, hybrid_pool_free, h));
+    Alloc *a = arena_allocator(&h->ar);
+    Error err = BURROW_NO_ERROR;
+
+    if (strcmp(burrow_os_name(), "windows") == 0) {
+        /* NOTE(#51599): on the Windows builders we sometimes see that the state
+         * of the root pool is not fully initialized, causing an expected
+         * platform verification to fail. In part this is because Windows
+         * dynamically populates roots into its local trust store at time of
+         * use. We can attempt to prime the pool by attempting TLS connections
+         * to google.com until it works, suggesting the pool has been properly
+         * updated. If after we hit the deadline, the pool has _still_ not been
+         * populated with the expected root, it's unlikely we are ever going to
+         * get into a good state, and so we just fail the test. #52108 suggests
+         * a better possible long term solution. */
+
+        Time deadline = time_add(time_now(), TIME_SECOND * 10);
+        Duration next_sleep = 10 * TIME_MILLISECOND;
+        for (Duration i = 0;; i++) {
+            err = BURROW_NO_ERROR;
+            TlsConn *c = tls_dial(heap_allocator(), BURROW_S("tcp"),
+                                  BURROW_S("google.com:443"), NULL, &err);
+            if (!BURROW_FAILED(err)) {
+                (void)tls_conn_close(c);
+                tls_conn_free(c);
+                break;
+            }
+            next_sleep = next_sleep * i;
+            if (time_until(deadline) < next_sleep) {
+                testing_t_fatal_v(t, "windows root pool appears to be in an "
+                                     "uninitialized state (missing root that "
+                                     "chains to google.com)");
+                return;
+            }
+            time_sleep(next_sleep);
+        }
+    }
+
+    /* Get the google.com chain, which should be valid on all platforms we
+     * are testing */
+    TlsConfig config;
+    memset(&config, 0, sizeof config);
+    config.insecure_skip_verify = true;
+    err = BURROW_NO_ERROR;
+    h->c = tls_dial(heap_allocator(), BURROW_S("tcp"), BURROW_S("google.com:443"),
+                    &config, &err);
+    tls_config_release(&config);
+    if (BURROW_FAILED(err)) {
+        h->c = NULL;
+        testing_t_fatalf_v(t, "tls connection failed: %s", err);
+        return;
+    }
+    Slice goog_chain = tls_conn_connection_state(h->c).peer_certificates;
+    if (goog_chain.len == 0) {
+        /* Not in Go: Go would panic on googChain[0]. */
+        testing_t_fatal_v(t, "no peer certificates from google.com");
+        return;
+    }
+    const X509Certificate *goog_leaf = *(X509Certificate *const *)goog_chain.p;
+
+    Time now = time_now();
+    X509Certificate root_tmpl;
+    memset(&root_tmpl, 0, sizeof root_tmpl);
+    root_tmpl.serial_number = big_new_int(a, 1);
+    root_tmpl.subject.common_name = BURROW_S("Go test root");
+    root_tmpl.is_ca = true;
+    root_tmpl.basic_constraints_valid = true;
+    root_tmpl.not_before = time_add(now, -TIME_HOUR);
+    root_tmpl.not_after = time_add(now, TIME_HOUR * 10);
+    EcdsaPrivateKey *k = ecdsa_generate_key(a, elliptic_p256(), (IoReader){0}, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "failed to generate test key: %s", err);
+        return;
+    }
+    Slice root_der = x509_create_certificate(a, (IoReader){0}, &root_tmpl, &root_tmpl,
+                                             ecdsa_private_key_public(k),
+                                             ecdsa_private_key_signer(k), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "failed to create test cert: %s", err);
+        return;
+    }
+    X509Certificate *root = x509_parse_certificate(a, root_der, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "failed to parse test cert: %s", err);
+        return;
+    }
+
+    X509CertPool *pool = x509_system_cert_pool(a, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "SystemCertPool failed: %s", err);
+        return;
+    }
+    X509VerifyOptions opts;
+    memset(&opts, 0, sizeof opts);
+    opts.roots = pool;
+
+    (void)x509_certificate_verify(goog_leaf, a, opts, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(
+            t, "verification failed for google.com chain (system only pool): %s", err);
+        return;
+    }
+
+    x509_cert_pool_add_cert(pool, root);
+
+    (void)x509_certificate_verify(goog_leaf, a, opts, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(
+            t, "verification failed for google.com chain (hybrid pool): %s", err);
+        return;
+    }
+
+    static const Str example = BURROW_S_INIT("example.com");
+    X509Certificate cert_tmpl;
+    memset(&cert_tmpl, 0, sizeof cert_tmpl);
+    cert_tmpl.serial_number = big_new_int(a, 1);
+    cert_tmpl.not_before = time_add(now, -TIME_HOUR);
+    cert_tmpl.not_after = time_add(now, TIME_HOUR * 10);
+    cert_tmpl.dns_names = slice_append(a, slice_nil(TYPE_STRING), &example, 1);
+    Slice cert_der = x509_create_certificate(a, (IoReader){0}, &cert_tmpl, &root_tmpl,
+                                             ecdsa_private_key_public(k),
+                                             ecdsa_private_key_signer(k), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "failed to create test cert: %s", err);
+        return;
+    }
+    X509Certificate *cert = x509_parse_certificate(a, cert_der, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "failed to parse test cert: %s", err);
+        return;
+    }
+
+    (void)x509_certificate_verify(cert, a, opts, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "verification failed for custom chain (hybrid pool): %s",
+                           err);
+        return;
+    }
+}
+
 #define TESTS(X)                                                                       \
     X(TestFallbackPanic)                                                               \
     X(TestFallback)                                                                    \
@@ -578,6 +1007,8 @@ static void TestCertPoolEqual(TestingT *t) {
     X(TestLoadSystemCertsLoadColonSeparatedDirs)                                       \
     X(TestReadUniqueDirectoryEntries)                                                  \
     X(TestSSLCertEnvOverride)                                                          \
-    X(TestCertPoolEqual)
+    X(TestCertPoolEqual)                                                               \
+    X(TestPlatformVerifier)                                                            \
+    X(TestHybridPool)
 
 TESTING_MAIN(TESTS)

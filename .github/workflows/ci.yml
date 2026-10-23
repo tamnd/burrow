@@ -135,6 +135,28 @@ jobs:
           install: mingw-w64-ucrt-x86_64-gcc make
           update: true
 
+      # Go's TestPlatformVerifier skips unless its test root is in the machine's
+      # trust store, and Go's builders don't put it there. This does, on the
+      # macOS and Windows runners, so that the test runs against SecTrust and
+      # CryptoAPI. Go says the root "is constrained such that it should not be
+      # dangerous to local developers to trust": it is a CA only for names
+      # under testing.golang.invalid.
+      - if: runner.os == 'macOS'
+        name: trust Go's platform test root
+        run: |
+          curl -fsSL -o "$RUNNER_TEMP/platform_root_cert.pem" \
+            https://raw.githubusercontent.com/golang/go/go1.27.1/src/crypto/x509/platform_root_cert.pem
+          sudo security add-trusted-cert -d -r trustRoot \
+            -k /Library/Keychains/System.keychain "$RUNNER_TEMP/platform_root_cert.pem"
+
+      - if: runner.os == 'Windows'
+        name: trust Go's platform test root
+        shell: pwsh
+        run: |
+          Invoke-WebRequest -OutFile "$env:RUNNER_TEMP\platform_root_cert.pem" `
+            -Uri https://raw.githubusercontent.com/golang/go/go1.27.1/src/crypto/x509/platform_root_cert.pem
+          certutil -addstore -f Root "$env:RUNNER_TEMP\platform_root_cert.pem"
+
       # MSVC has no make and no business pretending to. It gets the CMake path,
       # which is the one Windows users are going to take anyway.
       - if: matrix.cmake

@@ -2,9 +2,12 @@
  * Go source: go1.27.1.
  *
  * Server.ServeTLS, how Serve and ListenAndServeTLS turn HTTP/2 on, the TLS
- * handshake timeout, and the caller's NextProtos left alone. Go's
- * CondSkipHTTP2 is left out, since HTTP/2 can't be built out of burrow, and so
- * is afterTest, which looks for goroutines Go's transports leave behind.
+ * handshake timeout, the caller's NextProtos left alone, and the limit on the
+ * count of header values in Go's h1 and h2 modes. The "comma separated trailer
+ * values count as multiple" case of TestRequestHeaderValueCountLimit came with
+ * go1.27.2 (GO-2026-6603, CL 847314). Go's CondSkipHTTP2 is left out, since
+ * HTTP/2 can't be built out of burrow, and so is afterTest, which looks for
+ * goroutines Go's transports leave behind.
  *
  * Copyright 2010 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -21,12 +24,16 @@
 #include "burrow/crypto/x509.h"
 #include "burrow/fmt.h"
 #include "burrow/iface.h"
+#include "burrow/io.h"
+#include "burrow/log.h"
 #include "burrow/map.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
 #include "burrow/net.h"
 #include "burrow/net/http.h"
+#include "burrow/net/http/httptest.h"
 #include "burrow/netpoll.h"
+#include "burrow/strings.h"
 #include "burrow/sync.h"
 #include "burrow/time.h"
 
@@ -515,8 +522,8 @@ static void TestServerTLSHandshakeTimeout(TestingT *t) {
 
 /* ------------------------------------------------ the server's NextProtos */
 
-/* Not in Go: the mode a subtest of TestServerTLSNextProtos runs in. */
-typedef enum { HTTPS1_MODE, HTTP2_MODE } TestMode;
+/* Not in Go: the mode a subtest runs in, of the ones Go runs these tests in. */
+typedef enum { HTTP1_MODE, HTTPS1_MODE, HTTP2_MODE } TestMode;
 
 static void test_server_tls_next_protos(void *env, TestingT *t) {
     TestMode mode = *(const TestMode *)env;
@@ -547,6 +554,7 @@ static void test_server_tls_next_protos(void *env, TestingT *t) {
 
     HttpProtocols protos = {0};
     switch (mode) {
+    case HTTP1_MODE:
     case HTTPS1_MODE:
         http_protocols_set_http1(&protos, true);
         break;
@@ -642,6 +650,170 @@ static void TestServerTLSNextProtos(TestingT *t) {
                             (void *)(uintptr_t)&modes[1]));
 }
 
+/* ------------------------------------------- the count of header values */
+
+/* Not in Go: run's subtests, named as Go names them, for the h1 and h2 modes. */
+static void run_http3_skipped_modes(TestingT *t, void (*fn)(void *env, TestingT *t)) {
+    static const TestMode modes[2] = {HTTP1_MODE, HTTP2_MODE};
+    (void)testing_t_run(t, BURROW_S("h1"),
+                        BURROW_FN(TestingTFunc, fn, (void *)(uintptr_t)&modes[0]));
+    (void)testing_t_run(t, BURROW_S("h2"),
+                        BURROW_FN(TestingTFunc, fn, (void *)(uintptr_t)&modes[1]));
+}
+
+/* newClientServerTest for an unstarted server in the h1 or h2 mode, with the
+ * quiet ErrorLog of optQuietLog. */
+static void start_quiet_client_server_test(HttptestServer *ts, TestMode mode,
+                                           LogLogger *quiet) {
+    ts->config.error_log = quiet;
+    if (mode == HTTP2_MODE) {
+        ts->enable_http2 = true;
+        httptest_server_start_tls(ts);
+    } else {
+        httptest_server_start(ts);
+    }
+}
+
+static void handler_status_ok(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)r;
+    w.vt->write_header(w.data, HTTP_STATUS_OK);
+}
+
+typedef struct HeaderValueCountTest {
+    const char *name;
+    Int limit;
+    void (*setup)(Alloc *a, HttpRequest *req);
+    int want_status;
+} HeaderValueCountTest;
+
+static void setup_below_limit(Alloc *a, HttpRequest *req) {
+    /* Send considerably below the limit, to account for the client
+     * automatically adding pseudo-headers and headers that it can
+     * infer. */
+    for (Int i = 0; i < 5; i++)
+        (void)http_header_add(req->header, fmt_sprintf_v(a, "X-Header-%d", i),
+                              BURROW_S("val"));
+}
+
+static void setup_above_limit(Alloc *a, HttpRequest *req) {
+    for (Int i = 0; i < 16; i++)
+        (void)http_header_add(req->header, fmt_sprintf_v(a, "X-Header-%d", i),
+                              BURROW_S("val"));
+}
+
+static void setup_comma_separated(Alloc *a, HttpRequest *req) {
+    Str vals[16];
+    for (Int i = 0; i < 16; i++)
+        vals[i] = BURROW_S("val");
+    (void)http_header_add(
+        req->header, BURROW_S("X-Comma"),
+        strings_join(a, slice_from(vals, 16, 16, TYPE_STRING), BURROW_S(", ")));
+}
+
+static void setup_repeated(Alloc *a, HttpRequest *req) {
+    (void)a;
+    for (Int i = 0; i < 16; i++)
+        (void)http_header_add(req->header, BURROW_S("X-Repeated"), BURROW_S("val"));
+}
+
+static void setup_trailer_values(Alloc *a, HttpRequest *req) {
+    req->body = http_no_body;
+    Str *te = mem_alloc(a, sizeof *te, _Alignof(Str));
+    if (te != NULL) {
+        *te = BURROW_S("chunked");
+        req->transfer_encoding = slice_from(te, 1, 1, TYPE_STRING);
+    }
+    req->trailer = http_header_make(a);
+    if (req->trailer == NULL)
+        return;
+    for (Int i = 0; i < 16; i++) {
+        Str key = fmt_sprintf_v(a, "X-Trailer-%d", i);
+        Slice none = slice_nil(TYPE_STRING);
+        (void)map_set(req->trailer, &key, &none);
+    }
+}
+
+static const HeaderValueCountTest header_value_count_tests[] = {
+    {"below limit", 15, setup_below_limit, 200},
+    {"above limit", 15, setup_above_limit, 431},
+    {"comma separated values count as one", 15, setup_comma_separated, 200},
+    {"multiple values count as multiple", 15, setup_repeated, 431},
+    /* Comma separated Trailer values are counted as multiple, because
+     * each value becomes its own field / a key in Request.Trailer.
+     * This is different from TestRequestTrailerHeaderValueCountLimit
+     * which tests the actual sending of the trailer, this just tests
+     * the Trailer header declaration. */
+    {"comma separated trailer values count as multiple", 15, setup_trailer_values, 431},
+};
+
+typedef struct HeaderValueCountRun {
+    TestMode mode;
+    const HeaderValueCountTest *tt;
+} HeaderValueCountRun;
+
+static void test_header_value_count_case(void *env, TestingT *t) {
+    const HeaderValueCountRun *run = (const HeaderValueCountRun *)env;
+    const HeaderValueCountTest *tt = run->tt;
+    HttpHandlerFunc handler = BURROW_FN(HttpHandlerFunc, handler_status_ok, NULL);
+    HttptestServer *ts =
+        httptest_new_unstarted_server(NULL, http_handler_func_as_handler(&handler));
+    ts->config.max_header_value_count = tt->limit;
+    LogLogger *quiet = log_new(heap_allocator(), io_discard, BURROW_S(""), 0);
+    start_quiet_client_server_test(ts, run->mode, quiet);
+
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    HttpRequest *req = http_new_request(heap_allocator(), BURROW_S("GET"), ts->url,
+                                        (IoReader){0}, &err);
+    if (req == NULL) {
+        /* Not in Go: what the test made is given back first. */
+        httptest_server_free(ts);
+        log_logger_free(heap_allocator(), quiet);
+        arena_free(&ar);
+        testing_t_fatal_v(t, err);
+    }
+    tt->setup(a, req);
+
+    HttpResponse *res = http_client_do(httptest_server_client(ts), req, &err);
+    if (res == NULL) {
+        http_request_free(req);
+        httptest_server_free(ts);
+        log_logger_free(heap_allocator(), quiet);
+        arena_free(&ar);
+        testing_t_fatal_v(t, err);
+    }
+    if (res->status_code != tt->want_status)
+        testing_t_errorf_v(t, "got status %d, want %d", (Int)res->status_code,
+                           (Int)tt->want_status);
+    (void)res->body.vt->closer.close(res->body.data);
+    http_response_free(res);
+    http_request_free(req);
+    httptest_server_free(ts);
+    log_logger_free(heap_allocator(), quiet);
+    arena_free(&ar);
+}
+
+static void test_request_header_value_count_limit(void *env, TestingT *t) {
+    TestMode mode = *(const TestMode *)env;
+    need_tcp(t);
+    enum { N = sizeof header_value_count_tests / sizeof header_value_count_tests[0] };
+    HeaderValueCountRun runs[N];
+    for (int i = 0; i < N; i++) {
+        runs[i].mode = mode;
+        runs[i].tt = &header_value_count_tests[i];
+        (void)testing_t_run(
+            t, str_from_cstr(header_value_count_tests[i].name),
+            BURROW_FN(TestingTFunc, test_header_value_count_case, &runs[i]));
+    }
+}
+
+static void TestRequestHeaderValueCountLimit(TestingT *t) {
+    run_http3_skipped_modes(t, test_request_header_value_count_limit);
+}
+
 #define TESTS(X)                                                                       \
     X(TestServeTLS)                                                                    \
     X(TestAutomaticHTTP2_Serve_NoTLSConfig)                                            \
@@ -652,5 +824,6 @@ static void TestServerTLSNextProtos(TestingT *t) {
     X(TestAutomaticHTTP2_ListenAndServe_GetCertificate)                                \
     X(TestAutomaticHTTP2_ListenAndServe_GetConfigForClient)                            \
     X(TestServerTLSHandshakeTimeout)                                                   \
-    X(TestServerTLSNextProtos)
+    X(TestServerTLSNextProtos)                                                         \
+    X(TestRequestHeaderValueCountLimit)
 TESTING_MAIN(TESTS)

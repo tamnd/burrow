@@ -2954,6 +2954,20 @@ static void alarm_main(void *arg) {
     }
     buf_str(&b, BURROW_S("\n"));
     write_to(stderr, buf_view(&b));
+    /* Go sets debug.SetTraceback("all") here, so its panic prints every
+     * goroutine. runtime_stack(..., true) is the same list. The buffer doubles
+     * until the stacks fit, up to 64 MiB. */
+    Int cap = (Int)1 << 20;
+    for (;;) {
+        Byte *sb = (Byte *)must_alloc(a, (size_t)cap, 1);
+        Int sn = runtime_stack(slice_from(sb, cap, cap, TYPE_BYTE), true);
+        if (sn < cap || cap >= (Int)64 << 20) {
+            write_to(stderr, BURROW_S("\n"));
+            write_to(stderr, str_from_bytes(sb, sn));
+            break;
+        }
+        cap *= 2;
+    }
     _Exit(2);
 }
 

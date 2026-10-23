@@ -1217,7 +1217,7 @@ static const Scenario scenarios[] = {
      "panic: test timed out after 300ms\n"
      "running tests:\n"
      "\tTestSleep (0s)\n",
-     false},
+     true},
 };
 
 /* The same, for benchmarks. */
@@ -1367,6 +1367,24 @@ static void TestOutput(TestingT *t) {
 
 static bool has(const Buf *out, const char *want) {
     return out->p != NULL && strstr(out->p, want) != NULL;
+}
+
+/* Not in Go: after the running tests, a timeout prints every goroutine, as
+ * Go's does with its traceback set to all. TestSleep's goroutine is parked in
+ * time_sleep, so it is listed as sleeping. */
+static void TestTimeoutStacks(TestingT *t) {
+    if (self_path == NULL)
+        testing_t_skip_v(t, "no path to this binary");
+    Buf out = {0};
+    int code = spawn("-test.timeout=300ms", "sleep", &out);
+    if (code != 2)
+        testing_t_errorf_v(t, "exit status %d, want 2", code);
+    if (!has(&out, "\tTestSleep (0s)\n\n") || !has(&out, " [sleep]:\n"))
+        testing_t_errorf_v(t,
+                           "output\n%s\nwant the running tests, then a goroutine "
+                           "that is sleeping",
+                           str_from_bytes((const Byte *)out.p, (Int)out.len));
+    buf_free(&out);
 }
 
 /* The file a crash went to, relative to the child's directory, which the
@@ -1803,6 +1821,7 @@ static void TestHelpers(TestingT *t) {
     X(TestParallel)                                                                    \
     X(TestHelpers)                                                                     \
     X(TestOutput)                                                                      \
+    X(TestTimeoutStacks)                                                               \
     X(TestBenchmarkOutput)                                                             \
     X(TestFuzzing)                                                                     \
     X(TestProfileFlags)                                                                \

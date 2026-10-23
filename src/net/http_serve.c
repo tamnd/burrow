@@ -1584,7 +1584,9 @@ static sv_Response *sv_read_request(sv_Conn *c, Context ctx, sv_ReadError *e) {
     HttpRequest *req = burrow__http_read_request_limit(
         sa, c->bufr, (int64_t)sv_max_header_value_count(s), &err);
     if (req == NULL) {
-        if (c->r.remain <= 0)
+        /* readRequest gives errTooLarge for a read past the limit, and
+         * readRequestLimit gives it too, for too many header values. */
+        if (c->r.remain <= 0 || errors_is(err, burrow__http_err_too_large))
             e->too_large = true;
         else
             e->err = err;

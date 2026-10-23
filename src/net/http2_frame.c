@@ -23,6 +23,7 @@
 #include "burrow/pal.h"
 #include "burrow/panic.h"
 #include "burrow/strconv.h"
+#include "burrow/strings.h"
 #include "burrow/time.h"
 
 #include <stdint.h>
@@ -1658,14 +1659,20 @@ Http2Frame *burrow__http2_framer_read_frame(Http2Framer *fr, Error *err) {
 
 /* ------------------------------------------------------- meta headers */
 
+/* headerBudget. */
+typedef struct H2HeaderBudget {
+    uint32_t remain_size;
+    Int count;
+} H2HeaderBudget;
+
 typedef struct H2Meta {
     Http2Framer *fr;
     Http2Frame *mh;
     HpackDecoder *hdec;
-    uint32_t remain_size;
+    H2HeaderBudget headers;
+    H2HeaderBudget trailers;
     bool saw_regular;
     bool failed;
-    Int header_count;
     Error invalid;
 } H2Meta;
 
@@ -1720,14 +1727,6 @@ static void h2_meta_emit(void *ctx, HpackHeaderField hf) {
         BURROW_CALLF(fr->debug_read_logger, msg);
         arena_free(&ar);
     }
-    st->header_count++;
-    if (fr->max_header_value_count > 0 &&
-        st->header_count > fr->max_header_value_count) {
-        burrow__hpack_decoder_set_emit_enabled(st->hdec, false);
-        st->mh->u.meta_headers.truncated = true;
-        st->remain_size = 0;
-        return;
-    }
     int bad = -1;
     if (!burrow__httpguts_valid_header_field_value(hf.value))
         bad = H2_HDR_FIELD_VALUE;
@@ -1749,14 +1748,36 @@ static void h2_meta_emit(void *ctx, HpackHeaderField hf) {
         burrow__hpack_decoder_set_emit_enabled(st->hdec, false);
         return;
     }
-    uint32_t size = burrow__hpack_header_field_size(hf);
-    if (size > st->remain_size) {
+
+    H2HeaderBudget *budget;
+    uint32_t size;
+    if (str_eq(hf.name, BURROW_S("trailer"))) {
+        budget = &st->trailers;
+        Int field_count = strings_count(hf.value, BURROW_S(",")) + 1;
+        budget->count += field_count;
+        /* Rather than actually constructing hpack.HeaderField for each
+         * trailer field and cumulatively adding its Size, just do the math
+         * manually to avoid unnecessary work. This does make it so
+         * whitespaces after comma are counted against the budget, but that
+         * should be innocuous. */
+        HpackHeaderField empty = {BURROW_STR_EMPTY, BURROW_STR_EMPTY, false};
+        size = (uint32_t)(hf.value.len - field_count + 1) +
+               (uint32_t)field_count * burrow__hpack_header_field_size(empty);
+    } else {
+        budget = &st->headers;
+        budget->count++;
+        size = burrow__hpack_header_field_size(hf);
+    }
+    Int count_limit = fr->max_header_value_count;
+    if ((count_limit > 0 && budget->count > count_limit) ||
+        size > budget->remain_size) {
         burrow__hpack_decoder_set_emit_enabled(st->hdec, false);
         st->mh->u.meta_headers.truncated = true;
-        st->remain_size = 0;
+        st->headers.remain_size = 0;
+        st->trailers.remain_size = 0;
         return;
     }
-    st->remain_size -= size;
+    budget->remain_size -= size;
     h2_meta_append(st, hf);
 }
 
@@ -1781,13 +1802,14 @@ static Http2Frame *h2_read_meta_frame(Http2Framer *fr, Http2Frame *hf, Error *er
     st.fr = fr;
     st.mh = hf;
     st.hdec = fr->read_meta_headers;
-    st.remain_size =
+    st.headers.remain_size =
         fr->max_header_list_size == 0 ? 16U << 20 : fr->max_header_list_size;
+    st.trailers.remain_size = st.headers.remain_size;
     HpackDecoder *hdec = st.hdec;
     burrow__hpack_decoder_set_emit_enabled(hdec, true);
     /* maxHeaderStringLen: int(maxHeaderListSize), or 0 where that is
      * negative, which is only where int is 32 bits. */
-    uint64_t max_len = st.remain_size;
+    uint64_t max_len = st.headers.remain_size;
     burrow__hpack_decoder_set_max_string_length(
         hdec, max_len > (uint64_t)BURROW_INT_MAX ? 0 : (Int)max_len);
     burrow__hpack_decoder_set_emit_func(hdec, h2_meta_emit, &st);
@@ -1797,8 +1819,13 @@ static Http2Frame *h2_read_meta_frame(Http2Framer *fr, Http2Frame *hf, Error *er
         burrow__http2_flags_has(hf->header.flags, HTTP2_FLAG_HEADERS_END_HEADERS);
     Http2Frame *cont = NULL;
     for (;;) {
-        /* 2*remainSize is a uint32 in Go, and wraps the same way. */
-        if ((int64_t)frag.len > (int64_t)(uint32_t)(2U * st.remain_size)) {
+        /* "Too much" is either any CONTINUATION frame after we've already
+         * exceeded the max header list size (if so, both budgets are 0), or a
+         * frame whose encoded size is more than twice the remaining header
+         * list bytes we're willing to accept. The sum of the two is a uint32
+         * in Go, and wraps the same way. */
+        if ((int64_t)frag.len >
+            2 * (int64_t)(st.headers.remain_size + st.trailers.remain_size)) {
             burrow__http2_frame_free(cont);
             if (h2_verbose())
                 h2_std_log_str(BURROW_S("http2: header list too large"));

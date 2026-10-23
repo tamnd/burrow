@@ -1318,7 +1318,12 @@ typedef struct HttpHTTP2Config {
  * max_header_bytes is the most a request's first line and header may have,
  * HTTP_DEFAULT_MAX_HEADER_BYTES when it is zero or less, and a request with
  * more gets a 431. max_header_value_count is the most header values,
- * HTTP_DEFAULT_MAX_HEADER_VALUE_COUNT when it is zero or less.
+ * HTTP_DEFAULT_MAX_HEADER_VALUE_COUNT when it is zero or less. Comma-separated
+ * values in a single header line are counted once, while values sent as
+ * multiple header lines are counted multiple times. An exception to this is
+ * the Trailer header, whose comma-separated values are counted separately, as
+ * each of them is expected to be received later as an individual trailer
+ * header line.
  *
  * conn_state, base_context and conn_context are the hooks of those names, and
  * error_log is where the server logs what goes wrong with a connection, and

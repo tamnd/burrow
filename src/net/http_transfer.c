@@ -25,6 +25,7 @@
 #include "burrow/net/textproto.h"
 #include "burrow/slice.h"
 #include "burrow/strconv.h"
+#include "burrow/strings.h"
 #include "burrow/sync.h"
 
 #include <stdbool.h>
@@ -305,7 +306,7 @@ static void hb_trailer_key(void *env, Str f) {
 /* fixTrailer. The keys the Trailer field names, as a header with no values,
  * or NULL when there are none or the body is not chunked. */
 static HttpHeader hb_fix_trailer(Alloc *a, HttpHeader header, bool chunked,
-                                 Error *err) {
+                                 int64_t max_headers, Error *err) {
     Str tkey = BURROW_S("Trailer");
     *err = BURROW_NO_ERROR;
     Slice *present = header != NULL ? (Slice *)map_get(header, &tkey) : NULL;
@@ -315,6 +316,14 @@ static HttpHeader hb_fix_trailer(Alloc *a, HttpHeader header, bool chunked,
         return NULL;
     Slice vv = *present;
     map_del(header, &tkey);
+    for (Int i = 0; i < vv.len; i++) {
+        max_headers -=
+            (int64_t)strings_count(((const Str *)vv.p)[i], BURROW_S(",")) + 1;
+        if (max_headers < 0) {
+            *err = burrow__http_err_too_large;
+            return NULL;
+        }
+    }
 
     HttpHeader trailer = http_header_make(a);
     if (trailer == NULL) {
@@ -662,7 +671,7 @@ Error burrow__http_read_transfer(HttpRequest *req, HttpResponse *resp, BufioRead
         t.content_length = real_length;
     }
 
-    t.trailer = hb_fix_trailer(a, t.header, t.chunked, &err);
+    t.trailer = hb_fix_trailer(a, t.header, t.chunked, max_trailer_headers, &err);
     if (BURROW_FAILED(err))
         return err;
 

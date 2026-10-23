@@ -1,5 +1,6 @@
 /* Derived from net/http/internal/http2's frame_test.go and errors_test.go in
- * Go 1.27.1.
+ * Go 1.27.1. The trailer_declaration cases of TestMetaFrameHeader are newer:
+ * they came with the go1.27.2 fix for GO-2026-6603, CL 847314.
  *
  * Go's tests compare whole frames with reflect.DeepEqual, and these compare
  * the header and each field of the kind of frame. Every frame read is freed,
@@ -20,6 +21,7 @@
 #include "burrow/mem/heap.h"
 
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 /* ---------------------------------------------------------------- helpers */
@@ -1052,6 +1054,15 @@ static void TestMetaFrameHeader(TestingT *t) {
     memset(one_kb, 'a', 1024);
     one_kb[1024] = '\0';
 
+    /* A Trailer declaration of 20 fields: ~250 bytes on the wire, but ~900
+     * bytes by our accounting since we add 32 bytes for each entry in
+     * Request.Trailer. */
+    char trailer_decl[512];
+    int nd = 0;
+    for (int i = 0; i < 20; i++)
+        nd += snprintf(trailer_decl + nd, sizeof trailer_decl - (size_t)nd,
+                       i == 0 ? "x-trailer-%d" : ",x-trailer-%d", i);
+
     static const Str req[] = {BURROW_S_INIT(":method"), BURROW_S_INIT("GET"),
                               BURROW_S_INIT(":path"), BURROW_S_INIT("/")};
     static const Str req_foo[] = {BURROW_S_INIT(":method"), BURROW_S_INIT("GET"),
@@ -1080,6 +1091,12 @@ static void TestMetaFrameHeader(TestingT *t) {
     static const Str bad_name[] = {BURROW_S_INIT("CapitalBad"), BURROW_S_INIT("x")};
     static const Str bad_value[] = {BURROW_S_INIT("key"),
                                     BURROW_S_INIT("bad_null\x00")};
+    const Str req_trailer[] = {req[0],
+                               req[1],
+                               req[2],
+                               req[3],
+                               BURROW_S("trailer"),
+                               str_from_bytes((const Byte *)trailer_decl, nd)};
     static const Int cut1[] = {1};
     static const Int cut2[] = {2};
     static const Int cut24[] = {2, 4};
@@ -1100,7 +1117,7 @@ static void TestMetaFrameHeader(TestingT *t) {
         uint32_t max_header_list_size;
         Http2Flags flags;
         bool truncated;
-    } tests[13];
+    } tests[15];
     memset(tests, 0, sizeof tests);
 
     tests[0].name = "single_headers";
@@ -1195,7 +1212,24 @@ static void TestMetaFrameHeader(TestingT *t) {
     tests[12].want_err = 2;
     tests[12].want_err_reason = "invalid header field value for \"key\"";
 
-    for (int i = 0; i < 13; i++) {
+    tests[13].name = "trailer_declaration_okay";
+    tests[13].headers = req_trailer;
+    tests[13].nheaders = 6;
+    tests[13].max_header_list_size = 1024;
+    tests[13].flags = HTTP2_FLAG_HEADERS_END_HEADERS;
+    tests[13].length = 193;
+    tests[13].npairs = 6;
+
+    tests[14].name = "trailer_declaration_truncated";
+    tests[14].headers = req_trailer;
+    tests[14].nheaders = 6;
+    tests[14].max_header_list_size = 512;
+    tests[14].flags = HTTP2_FLAG_HEADERS_END_HEADERS;
+    tests[14].length = 193;
+    tests[14].npairs = 4;
+    tests[14].truncated = true;
+
+    for (int i = 0; i < 15; i++) {
         Str name = str_from_cstr(tests[i].name);
         TF tf;
         Http2Framer *f = tf_init(&tf);

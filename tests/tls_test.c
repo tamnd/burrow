@@ -1149,6 +1149,9 @@ static Slice sc_slice(const void *p, int n, bool zero_is_nil, const Type *elem) 
 }
 
 static void TestClientHelloInfo_SupportsCertificate(TestingT *t) {
+    /* SHA-1, Ed25519, and legacy RSA kex test cases not FIPS compatible. */
+    skip_fips(t);
+
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
@@ -2848,10 +2851,15 @@ static void TestConnectionStateMarshal(TestingT *t) {
 }
 
 static void TestConnectionState(TestingT *t) {
-    for (int i = 0; i < 3; i++)
+    for (int i = 0; i < 3; i++) {
+        uint16_t v = connection_state_versions[i];
+        if (!is_fips_version(v) && burrow__tls_fips140_required())
+            testing_t_skipf_v(
+                t, "skipping test in FIPS 140-3 mode for non-FIPS version %x", v);
         testing_t_run(t, str_from_cstr(connection_state_names[i]),
                       BURROW_FN(TestingTFunc, connection_state_version,
                                 (void *)(uintptr_t)&connection_state_versions[i]));
+    }
 }
 
 /* Not in Go: brokenSigner, a crypto.Signer that replaces opts with
@@ -3586,6 +3594,7 @@ static void test_invalid_handshake_signature(TestingT *t, uint16_t version) {
 
 static void invalid_handshake_signature_tls10(void *env, TestingT *t) {
     (void)env;
+    skip_fips(t);
     test_invalid_handshake_signature(t, TLS_VERSION_TLS10);
 }
 
@@ -3675,6 +3684,10 @@ static void local_cert_configs(Alloc *a, uint16_t version, bool callback,
 }
 
 static void test_local_certificate(TestingT *t, uint16_t version, bool callback) {
+    /* Not in Go: this is before the arena is made rather than after the
+     * versions are set, so a skip leaks nothing. */
+    if (version < TLS_VERSION_TLS12)
+        skip_fips(t);
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
@@ -3752,6 +3765,9 @@ static void TestLocalCertificate(TestingT *t) {
 
 static void test_local_certificate_resumption(TestingT *t, uint16_t version,
                                               bool callback) {
+    /* Not in Go: this is before the arena is made, as in test_local_certificate. */
+    if (version < TLS_VERSION_TLS12)
+        skip_fips(t);
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
@@ -4129,6 +4145,12 @@ static TlsConfig *mlkem_get_config_for_client(void *envp, TlsClientHelloInfo *he
     MLKEMEnv *env = (MLKEMEnv *)envp;
     TlsCurveID buf[MLKEM_MAX_CURVES];
     Slice expect_client = mlkem_curves(env->test->expect_client, buf);
+    Int n = 0;
+    for (Int i = 0; i < expect_client.len; i++) {
+        if (!(burrow__tls_fips140_required() && buf[i] == TLS_X25519))
+            buf[n++] = buf[i];
+    }
+    expect_client.len = n;
     bool equal = hello->supported_curves.len == expect_client.len;
     for (Int i = 0; equal && i < expect_client.len; i++)
         equal = *(const TlsCurveID *)slice_at(hello->supported_curves, i) == buf[i];
@@ -4141,8 +4163,8 @@ static TlsConfig *mlkem_get_config_for_client(void *envp, TlsClientHelloInfo *he
 
 static void handshake_mlkem(void *envp, TestingT *t) {
     const MLKEMTest *test = (const MLKEMTest *)envp;
-    /* There is no FIPS mode here, so X25519 is never skipped or taken out of
-     * the expected client curves. */
+    if (burrow__tls_fips140_required() && test->expect_selected == TLS_X25519)
+        testing_t_skip_v(t, "X25519 not supported in FIPS mode");
     if (test->godebug != NULL)
         burrow__tls_godebug_set(test->godebug);
     else
@@ -4202,6 +4224,8 @@ static void handshake_mlkem(void *envp, TestingT *t) {
 }
 
 static void TestHandshakeMLKEM(TestingT *t) {
+    /* Not in Go: there is no BoringCrypto, so the skip for its FIPS mode is left
+     * out. */
     Int n = (Int)(sizeof mlkem_tests / sizeof mlkem_tests[0]);
     for (Int i = 0; i < n; i++)
         testing_t_run(t, str_from_cstr(mlkem_tests[i].name),
@@ -4365,8 +4389,10 @@ static void mldsa_rejected_version(TestingT *t, const MLDSACase *c, TlsConfig *s
 
 static void handshake_mldsa(void *env, TestingT *t) {
     const MLDSACase *c = (const MLDSACase *)env;
-    /* There is no FIPS 140-3 module here, so nothing is skipped, and the
-     * branches for module v1.0.0 never run. */
+    if (c->subtest == MLDSA_REJECTED_SERVER && c->version == TLS_VERSION_TLS10)
+        skip_fips(t); /* TLS 1.0 is not allowed in FIPS 140-3 mode. */
+    /* There is no FIPS 140-3 module v1.0.0 here, so the branches for it never
+     * run. */
     testing_t_parallel(t);
     Arena ar;
     arena_init(&ar, NULL, 0);

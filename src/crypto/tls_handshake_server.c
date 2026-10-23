@@ -45,6 +45,8 @@
 #include <stdint.h>
 #include <string.h>
 
+BURROW_SENTINEL_ERROR(tsv_err_fips_ems,
+                      "tls: FIPS 140-3 requires the use of Extended Master Secret");
 BURROW_SENTINEL_ERROR(tsv_err_ech_pre_tls13,
                       "tls: Encrypted Client Hello cannot be used pre-TLS 1.3");
 BURROW_SENTINEL_ERROR(tsv_err_compression,
@@ -635,8 +637,12 @@ static bool tsv_can_resume(TlsServerHandshakeState *hs, const TlsSessionState *s
         BURROW_OUT(err, tsv_err_session_ems);
         return false;
     }
-    /* FIPS 140-3 requires the use of Extended Master Secret. There is no FIPS
-     * 140-3 mode here. */
+    if (!ss->ext_master_secret && burrow__tls_fips140_required()) {
+        if (!burrow__tls_godebug_fips140ems_off()) {
+            /* FIPS 140-3 requires the use of Extended Master Secret. */
+            return false;
+        }
+    }
     return true;
 }
 
@@ -1033,8 +1039,12 @@ static Error tsv_full_handshake_key_exchange(TlsServerHandshakeState *hs,
             hs->a, c->vers, hs->suite, pre_master_secret,
             burrow__tls_finished_hash_sum(&hs->finished_hash, hs->a));
     } else {
-        /* FIPS 140-3 requires the use of Extended Master Secret. There is no
-         * FIPS 140-3 mode here. */
+        if (burrow__tls_fips140_required()) {
+            if (!burrow__tls_godebug_fips140ems_off()) {
+                (void)burrow__tls_conn_send_alert(c, TLS_ALERT_HANDSHAKE_FAILURE);
+                return tsv_err_fips_ems;
+            }
+        }
         hs->master_secret = burrow__tls_master_from_pre_master_secret(
             hs->a, c->vers, hs->suite, pre_master_secret, hs->client_hello->random,
             hs->hello->random);

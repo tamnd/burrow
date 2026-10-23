@@ -3105,8 +3105,15 @@ static void test_get_client_certificate(TestingT *t, uint16_t version) {
         GetClientCertificateEnv e = {&empty, &client_cert};
         test->setup(&client_config, &server_config, &e);
 
-        /* TLS 1.1 isn't available for FIPS required. Not in Go: burrow has no
-         * FIPS 140-3 mode, so nothing is skipped. */
+        /* TLS 1.1 isn't available for FIPS required */
+        if (burrow__tls_fips140_required() &&
+            client_config.max_version == TLS_VERSION_TLS11) {
+            testing_t_logf_v(t, "skipping test %d for FIPS mode", i);
+            tls_config_release(&client_config);
+            tls_config_release(&server_config);
+            arena_free(&ar);
+            continue;
+        }
 
         NetConn c, s;
         local_pipe(a, &c, &s);
@@ -3316,12 +3323,15 @@ static void TestDowngradeCanary(TestingT *t) {
         testing_t_errorf_v(t, "server unexpectedly sent downgrade canary for TLS 1.3");
     if (test_downgrade_canary(t, TLS_VERSION_TLS12, TLS_VERSION_TLS12))
         testing_t_errorf_v(t, "client didn't ignore expected TLS 1.2 canary");
-    /* Not in Go: burrow has no FIPS 140-3 mode, so fips140tls.Required() is
-     * always false and these always run. */
-    if (test_downgrade_canary(t, TLS_VERSION_TLS11, TLS_VERSION_TLS11))
-        testing_t_errorf_v(t, "client unexpectedly reacted to a canary in TLS 1.1");
-    if (test_downgrade_canary(t, TLS_VERSION_TLS10, TLS_VERSION_TLS10))
-        testing_t_errorf_v(t, "client unexpectedly reacted to a canary in TLS 1.0");
+    if (!burrow__tls_fips140_required()) {
+        if (test_downgrade_canary(t, TLS_VERSION_TLS11, TLS_VERSION_TLS11))
+            testing_t_errorf_v(t, "client unexpectedly reacted to a canary in TLS 1.1");
+        if (test_downgrade_canary(t, TLS_VERSION_TLS10, TLS_VERSION_TLS10))
+            testing_t_errorf_v(t, "client unexpectedly reacted to a canary in TLS 1.0");
+    } else {
+        testing_t_logf_v(t, "skipping TLS 1.1 and TLS 1.0 downgrade canary checks in "
+                            "FIPS mode");
+    }
 }
 
 /* Not in Go: reflect.DeepEqual on two [][]byte, which is all the test below
@@ -3560,8 +3570,10 @@ static TlsConfig *tls13_only_get_config_for_client(void *env, TlsClientHelloInfo
     const uint16_t *expected_ciphersuites =
         burrow__tls_default_cipher_suites_tls13_no_aes;
     Int expected_len = 3;
-    /* Not in Go: burrow has no FIPS 140-3 mode, so fips140tls.Required() is
-     * always false and allowedCipherSuitesTLS13FIPS is never wanted. */
+    if (burrow__tls_fips140_required()) {
+        expected_ciphersuites = burrow__tls_allowed_cipher_suites_tls13_fips;
+        expected_len = 2;
+    }
     const uint16_t *got_suites = chi->cipher_suites.p;
     if (chi->cipher_suites.len != expected_len) {
         testing_t_errorf_v(t, "only TLS 1.3 suites should be advertised, got=%x",

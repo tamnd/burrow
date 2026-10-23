@@ -18,6 +18,7 @@
 #include "burrow/testing/cryptotest.h"
 
 #include "../src/crypto/tls_internal.h"
+#include "tls_handshake_test.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -317,6 +318,8 @@ static inline void replay_run(void *env, TestingT *t) {
 
 static inline void run_test_and_update_if_needed(TestingT *t, Str name,
                                                  ReplayRunFunc run) {
+    skip_fips(t); /* FIPS 140-3 mode changes the advertised parameters. */
+
     ReplayRun rr = {run};
     (void)testing_t_run(t, name, BURROW_FN(TestingTFunc, replay_run, &rr));
 }

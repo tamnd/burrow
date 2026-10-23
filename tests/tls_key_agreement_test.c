@@ -121,6 +121,9 @@ static void run_key_agreement(TestingT *t, Alloc *a, const char *name,
 
 /* Not in Go. */
 static void TestKeyAgreementECDHE(TestingT *t) {
+    /* The server picks X25519 here, which FIPS 140-3 mode does not allow. */
+    if (burrow__tls_fips140_required())
+        testing_t_skip_v(t, "skipping test in FIPS mode");
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
@@ -221,6 +224,10 @@ static void TestKeyAgreementRSA(TestingT *t) {
 
 /* Not in Go. */
 static void TestKeyAgreementErrors(TestingT *t) {
+    /* The server picks X25519 here, and TLS 1.0 is used, and FIPS 140-3 mode
+     * allows neither. */
+    if (burrow__tls_fips140_required())
+        testing_t_skip_v(t, "skipping test in FIPS mode");
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);

@@ -9,6 +9,8 @@
 #ifndef BURROW_SRC_NET_HTTP2_CIPHERS_H
 #define BURROW_SRC_NET_HTTP2_CIPHERS_H
 
+#include "burrow/net/http.h"
+
 #include <stdbool.h>
 #include <stdint.h>
 

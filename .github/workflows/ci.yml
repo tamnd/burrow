@@ -121,6 +121,10 @@ jobs:
           - name: windows-msvc
             os: windows-latest
             cmake: true
+            # Once the msvc build worked again, it took 7.5 minutes to build
+            # and 12.4 to run the tests, and was cancelled at 20 minutes just
+            # after every test had passed.
+            timeout: 35
           - name: windows-mingw
             os: windows-latest
             cc: gcc
@@ -347,7 +351,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: the fallback
-        run: make BUILD=build-portable PORTABLE_CONTEXT=1 test
+        run: make -j4 BUILD=build-portable PORTABLE_CONTEXT=1 test
       - name: the assembly is really in the default build
         run: |
           make BUILD=build-asm lib
@@ -397,7 +401,8 @@ jobs:
     name: amalgamation (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     # Both were cut off at 20 minutes in October 2026, Linux while it was
-    # building for Windows.
+    # building for Windows, and macOS at 35 while it was still running the
+    # suite, after 25 minutes of building the tests one at a time.
     timeout-minutes: 35
     strategy:
       fail-fast: false
@@ -411,7 +416,7 @@ jobs:
           tools/burrow-gen amalgamate --out dist-b --source-id ci
           for f in burrow.c burrow.h burrow-manifest.json; do cmp "dist-a/$f" "dist-b/$f"; done
       - name: the test suite against it
-        run: make AMALGAMATION=1 BUILD=build-amalg test
+        run: make -j4 AMALGAMATION=1 BUILD=build-amalg test
       - name: on its own
         run: |
           cc -std=c11 -O2 -c dist-a/burrow.c -o burrow.o

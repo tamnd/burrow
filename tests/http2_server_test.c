@@ -4098,6 +4098,22 @@ static bool h2t_step(H2tSteps *s, Int step) {
     return chan_recv(s->done, &v);
 }
 
+/* Not in Go: h2t_step in two halves, for the steps that write. Go's call.do
+ * waits for the step to finish before the test reads anything, which works
+ * because its fake connection buffers what the server writes. A net_pipe write
+ * waits for the reader, so a handler's flush can wait on a server write that
+ * waits on the test. These steps start, the test reads what they write, and
+ * then it waits for them to finish. */
+static bool h2t_step_start(H2tSteps *s, Int step) {
+    chan_send(s->step, &step);
+    return true;
+}
+
+static bool h2t_step_wait(H2tSteps *s) {
+    bool v;
+    return chan_recv(s->done, &v);
+}
+
 static void TestServerSendDataAfterRequestBodyClose(TestingT *t) {
     SKIP_WITHOUT_THREADS(t);
     H2tSteps s = {chan_make(heap_allocator(), TYPE_INT, 0),
@@ -4109,16 +4125,18 @@ static void TestServerSendDataAfterRequestBodyClose(TestingT *t) {
     /* The handler starts writing the response body. */
     if (ok && h2t_start(&st, t, h2t_steps_handler, &s) && h2t_greet(&st) &&
         h2t_write_headers(&st, 1, h2t_encode_header(&st, NULL, 0), false, true) &&
-        h2t_step(&s, H2T_STEP_WRITE_ONE) &&
+        h2t_step_start(&s, H2T_STEP_WRITE_ONE) &&
         h2t_want_frame_type(&st, HTTP2_META_HEADERS_FRAME) &&
-        h2t_want_data(&st, 1, false, "one") && h2t_want_idle(&st) &&
+        h2t_want_data(&st, 1, false, "one") && h2t_step_wait(&s) &&
+        h2t_want_idle(&st) &&
         /* The handler closes the request body, which the client can't see. */
         h2t_step(&s, H2T_STEP_CLOSE_BODY) && h2t_want_idle(&st) &&
         /* The client can still send request data, which is thrown away. */
         h2t_write_data(&st, 1, false, "client-sent data", 16) && h2t_want_idle(&st) &&
         /* The handler can still write more of the response body, which goes
          * to the client. */
-        h2t_step(&s, H2T_STEP_WRITE_TWO) && h2t_want_data(&st, 1, false, "two"))
+        h2t_step_start(&s, H2T_STEP_WRITE_TWO) && h2t_want_data(&st, 1, false, "two") &&
+        h2t_step_wait(&s))
         (void)h2t_want_idle(&st);
     if (s.step != NULL)
         chan_close(s.step);

@@ -187,14 +187,14 @@
 {
    rsa OAEP padding check
    Memcheck:Cond
-   fun:rsa_fips_decrypt_oaep*
+   fun:burrow__rsa_fips_decrypt_oaep*
 }
 {
    rsa OAEP message start
    Memcheck:Cond
    fun:slice_from
    fun:rsa_sub
-   fun:rsa_fips_decrypt_oaep*
+   fun:burrow__rsa_fips_decrypt_oaep*
 }
 {
    rsa OAEP message copy

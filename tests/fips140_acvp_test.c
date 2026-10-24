@@ -11,12 +11,13 @@
  *
  * writes and tools/check-gen.sh keeps up to date.
  *
- * Not in Go: this has the protocol, its tests, and the commands for the
- * hashes, the XOFs, HMAC, the KDFs, AES, CMAC, the DRBGs, ML-KEM, EdDSA,
- * ECDSA, ECDH and ML-DSA. The commands for RSA, and TestACVP, which runs
- * BoringSSL's acvptool on this program, are not here yet. Go's handlers close
- * over the hash or the direction they were made with, and here those are
- * fields of the command, which is passed to its handler.
+ * The config TestACVP gives check_expected.go is Go's file too, in the same
+ * directory.
+ *
+ * Not in Go: Go's handlers close over the hash or the direction they were
+ * made with, and here those are fields of the command, which is passed to its
+ * handler. TestACVP needs the go command on $PATH, and the program it gives
+ * acvptool as the module wrapper is the one from fipstest_program.
  *
  * Copyright 2024 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -58,6 +59,7 @@
 #include "burrow/crypto/subtle.h"
 #include "burrow/embed.h"
 #include "burrow/encoding/binary.h"
+#include "burrow/math/big.h"
 
 #include "../src/crypto/aes_internal.h"
 #include "../src/crypto/drbg_internal.h"
@@ -68,12 +70,18 @@
 #include "../src/crypto/fips140_module.h"
 #include "../src/crypto/mldsa_internal.h"
 #include "../src/crypto/mlkem_internal.h"
+#include "../src/crypto/rsa_internal.h"
 #include "../src/crypto/ssh_internal.h"
 #include "../src/crypto/tls_internal.h"
 
 #include <string.h>
 
 BURROW_EMBED_BYTES(capabilities_json, "acvp_capabilities_fips140v1.28.json");
+
+/* Not in Go: the tests run from the top of the tree, so the path starts with
+ * the directory the file is in. */
+static const Str test_config_file =
+    BURROW_S_INIT("tests/fips140test/acvp_test_fips140v1.28.config.json");
 
 /* Separate capabilities specific to testing the entropy source's SHA2-384
  * implementation. This implementation differs from the FIPS module's SHA2-384
@@ -132,6 +140,8 @@ struct AcvpCommand {
     bool rand_nonce;
     const EcdhCurve *(*ecdh_curve)(void);
     const MldsaParameters *(*mldsa)(void);
+    const char *hash_name;
+    bool pss;
 };
 
 /* ------------------------------------------------------------- helpers */
@@ -1982,6 +1992,167 @@ static Error cmd_kdf_feedback_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
     return BURROW_NO_ERROR;
 }
 
+/* Not in Go: Go makes paddedE with copy(paddedE[4-len(eBytes):], eBytes),
+ * which panics for more than 4 bytes, and this returns an error instead. */
+static Error padded_e(Alloc *a, Slice e_bytes, Int *e) {
+    if (e_bytes.len > 4)
+        return fmt_errorf_v("invalid RSA public exponent length: %d", e_bytes.len);
+    Slice padded = make_bytes(a, 4);
+    memcpy((Byte *)padded.p + 4 - e_bytes.len, e_bytes.p, (size_t)e_bytes.len);
+    *e = (Int)binary_big_endian_uint32(padded);
+    return BURROW_NO_ERROR;
+}
+
+static Error get_rsa_key(Int bits, const RsaFipsKey **out);
+
+#define CMD_RSA_KEY_GEN_AFT()                                                          \
+    .required_args = 1 /* Modulus bit-size */, .handler = cmd_rsa_key_gen_aft
+
+static Error cmd_rsa_key_gen_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                 AcvpArgs *out) {
+    (void)c;
+    uint32_t bit_size = le32(args.v[0]);
+
+    const RsaFipsKey *key;
+    Error err = get_rsa_key((Int)bit_size, &key);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("generating RSA key: %w", err);
+
+    RsaFipsExport x = burrow__rsa_fips_export(key, a);
+
+    Slice e_bytes = make_bytes(a, 4);
+    binary_big_endian_put_uint32(e_bytes, (uint32_t)x.e);
+
+    *out = make_args(a, 5);
+    out->v[0] = e_bytes;
+    out->v[1] = x.p;
+    out->v[2] = x.q;
+    out->v[3] = x.n;
+    out->v[4] = x.d;
+    return BURROW_NO_ERROR;
+}
+
+#define CMD_RSA_SIG_GEN_AFT(f, name, p)                                                \
+    .required_args = 2, /* Modulus bit-size, message */                                \
+        .handler = cmd_rsa_sig_gen_aft, .h = (f), .hash_name = (name), .pss = (p)
+
+static Error cmd_rsa_sig_gen_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                 AcvpArgs *out) {
+    uint32_t bit_size = le32(args.v[0]);
+    Slice msg = args.v[1];
+
+    const RsaFipsKey *key;
+    Error err = get_rsa_key((Int)bit_size, &key);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("generating RSA key: %w", err);
+
+    Hash h = c->h(a);
+    hash_write(h, msg, NULL);
+    Slice digest = hash_sum(a, h, make_bytes(a, 0));
+
+    Slice sig;
+    if (!c->pss) {
+        if (!burrow__rsa_fips_sign_pkcs1_v15(key, str_from_cstr(c->hash_name), digest,
+                                             a, &sig, &err))
+            return fmt_errorf_v("signing RSA message: %w", err);
+    } else {
+        if (!burrow__rsa_fips_sign_pss(crypto_rand_reader, key, c->h(a), digest,
+                                       hash_size(h), a, &sig, &err))
+            return fmt_errorf_v("signing RSA message: %w", err);
+    }
+
+    RsaFipsExport x = burrow__rsa_fips_export(key, a);
+    Slice e_bytes = make_bytes(a, 4);
+    binary_big_endian_put_uint32(e_bytes, (uint32_t)x.e);
+
+    *out = make_args(a, 3);
+    out->v[0] = x.n;
+    out->v[1] = e_bytes;
+    out->v[2] = sig;
+    return BURROW_NO_ERROR;
+}
+
+#define CMD_RSA_SIG_VER_AFT(f, name, p)                                                \
+    .required_args = 4, /* n, e, message, signature */                                 \
+        .handler = cmd_rsa_sig_ver_aft, .h = (f), .hash_name = (name), .pss = (p)
+
+static Error cmd_rsa_sig_ver_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                 AcvpArgs *out) {
+    Slice n_bytes = args.v[0];
+    Slice e_bytes = args.v[1];
+    Slice msg = args.v[2];
+    Slice sig = args.v[3];
+
+    Int e;
+    Error err = padded_e(a, e_bytes, &e);
+    if (BURROW_FAILED(err))
+        return err;
+
+    /* Not in Go: the module's functions take the public key as n and e,
+     * which Go puts in an rsa.PublicKey. */
+    BigmodModulus *n = bigmod_new_modulus(a, n_bytes, &err);
+    if (n == NULL)
+        return fmt_errorf_v("invalid RSA modulus: %w", err);
+
+    Hash h = c->h(a);
+    hash_write(h, msg, NULL);
+    Slice digest = hash_sum(a, h, make_bytes(a, 0));
+
+    if (!c->pss)
+        err = burrow__rsa_fips_verify_pkcs1_v15(n, e, str_from_cstr(c->hash_name),
+                                                digest, sig, a);
+    else
+        err = burrow__rsa_fips_verify_pss(n, e, c->h(a), digest, sig, a);
+    if (BURROW_FAILED(err)) {
+        *out = byte_args(a, 0);
+        return BURROW_NO_ERROR;
+    }
+
+    *out = byte_args(a, 1);
+    return BURROW_NO_ERROR;
+}
+
+/* rsaKeyCache caches generated keys by modulus bit-size.
+ *
+ * Not in Go: a list rather than a map. The keys and the list are from the
+ * heap and are kept until the program exits, as Go's are. */
+typedef struct RsaKeyCacheEntry {
+    Int bits;
+    RsaFipsKey *key;
+    struct RsaKeyCacheEntry *next;
+} RsaKeyCacheEntry;
+
+static RsaKeyCacheEntry *rsa_key_cache;
+
+/* getRSAKey returns a cached RSA private key with the specified modulus
+ * bit-size or generates one if necessary. */
+static Error get_rsa_key(Int bits, const RsaFipsKey **out) {
+    for (RsaKeyCacheEntry *k = rsa_key_cache; k != NULL; k = k->next) {
+        if (k->bits == bits) {
+            *out = k->key;
+            return BURROW_NO_ERROR;
+        }
+    }
+
+    Error err = BURROW_NO_ERROR;
+    RsaFipsKey *key =
+        burrow__rsa_fips_generate_key(heap_allocator(), crypto_rand_reader, bits, &err);
+    if (key == NULL)
+        return err;
+
+    RsaKeyCacheEntry *k = BURROW_NEW(heap_allocator(), RsaKeyCacheEntry);
+    if (k == NULL) {
+        burrow__rsa_fips_key_free(key);
+        return burrow_err_out_of_memory;
+    }
+    k->bits = bits;
+    k->key = key;
+    k->next = rsa_key_cache;
+    rsa_key_cache = k;
+    *out = key;
+    return BURROW_NO_ERROR;
+}
+
 #define CMD_ONE_STEP_NO_COUNTER_HMAC_AFT(f)                                            \
     .required_args = 4, /* key, info, salt, outBytes */                                \
         .handler = cmd_one_step_no_counter_hmac_aft, .h = (f)
@@ -2005,6 +2176,306 @@ static Error cmd_one_step_no_counter_hmac_aft(Alloc *a, const AcvpCommand *c,
 
     hash_write(mac, data, NULL);
     *out = args1(a, hash_sum(a, mac, make_bytes(a, 0)));
+    return BURROW_NO_ERROR;
+}
+
+#define CMD_KTS_IFC_INITIATOR_AFT(f)                                                   \
+    .required_args = 3, /* output bytes, n bytes, e bytes */                           \
+        .handler = cmd_kts_ifc_initiator_aft, .h = (f)
+
+static Error cmd_kts_ifc_initiator_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                       AcvpArgs *out) {
+    uint32_t output_bytes = le32(args.v[0]);
+    Slice n_bytes = args.v[1];
+    Slice e_bytes = args.v[2];
+
+    Error err = BURROW_NO_ERROR;
+    BigmodModulus *n = bigmod_new_modulus(a, n_bytes, &err);
+    if (n == NULL)
+        return fmt_errorf_v("invalid RSA modulus: %w", err);
+
+    Int e;
+    err = padded_e(a, e_bytes, &e);
+    if (BURROW_FAILED(err))
+        return err;
+    if (e != 0x10001)
+        return errors_new(error_allocator(), BURROW_S("e must be 0x10001"));
+
+    Slice dkm = make_bytes(a, (Int)output_bytes);
+    crypto_rand_read(dkm, &err);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("failed to generate random DKM: %v", err);
+
+    Slice iut_c;
+    if (!burrow__rsa_fips_encrypt_oaep(c->h(a), c->h(a), crypto_rand_reader, n, e, dkm,
+                                       slice_nil(TYPE_BYTE), a, &iut_c, &err))
+        return fmt_errorf_v("OAEP encryption failed: %v", err);
+
+    *out = make_args(a, 2);
+    out->v[0] = iut_c;
+    out->v[1] = dkm;
+    return BURROW_NO_ERROR;
+}
+
+#define CMD_KTS_IFC_RESPONDER_AFT(f)                                                   \
+    .required_args = 6, /* n bytes, e bytes, p bytes, q bytes, d bytes, c bytes */     \
+        .handler = cmd_kts_ifc_responder_aft, .h = (f)
+
+static Error cmd_kts_ifc_responder_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                       AcvpArgs *out) {
+    Slice n_bytes = args.v[0];
+    Slice e_bytes = args.v[1];
+
+    Slice p_bytes = args.v[2];
+    Slice q_bytes = args.v[3];
+    Slice d_bytes = args.v[4];
+
+    Slice c_bytes = args.v[5];
+
+    Int e;
+    Error err = padded_e(a, e_bytes, &e);
+    if (BURROW_FAILED(err))
+        return err;
+    if (e != 0x10001)
+        return errors_new(error_allocator(), BURROW_S("e must be 0x10001"));
+
+    RsaFipsKey *priv = burrow__rsa_fips_new_private_key(a, a, n_bytes, e, d_bytes,
+                                                        p_bytes, q_bytes, &err);
+    if (priv == NULL)
+        return fmt_errorf_v("failed to create private key: %v", err);
+
+    Slice dkm;
+    bool ok = burrow__rsa_fips_decrypt_oaep(c->h(a), c->h(a), priv, c_bytes,
+                                            slice_nil(TYPE_BYTE), a, &dkm, &err);
+    burrow__rsa_fips_key_free(priv);
+    if (!ok)
+        return fmt_errorf_v("OAEP decryption failed: %v", err);
+
+    *out = args1(a, dkm);
+    return BURROW_NO_ERROR;
+}
+
+/* From acvp_fips140v1.28_test.go. */
+#define CMD_RSA_KEY_GEN_CRT_AFT()                                                      \
+    .required_args = 1 /* Modulus bit-size */, .handler = cmd_rsa_key_gen_crt_aft
+
+static Error cmd_rsa_key_gen_crt_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                     AcvpArgs *out) {
+    (void)c;
+    uint32_t bit_size = le32(args.v[0]);
+
+    const RsaFipsKey *key;
+    Error err = get_rsa_key((Int)bit_size, &key);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("generating RSA key: %w", err);
+
+    RsaFipsExport x = burrow__rsa_fips_export(key, a);
+
+    Slice e_bytes = make_bytes(a, 4);
+    binary_big_endian_put_uint32(e_bytes, (uint32_t)x.e);
+
+    *out = make_args(a, 8);
+    out->v[0] = e_bytes;
+    out->v[1] = x.p;
+    out->v[2] = x.q;
+    out->v[3] = x.n;
+    out->v[4] = x.d;
+    out->v[5] = x.dp;
+    out->v[6] = x.dq;
+    out->v[7] = x.qinv;
+    return BURROW_NO_ERROR;
+}
+
+#define CMD_RSA_SIG_GEN_SALT_LEN_AFT(f, name, p)                                       \
+    .required_args = 3, /* Modulus bit-size, message, saltLen */                       \
+        .handler = cmd_rsa_sig_gen_salt_len_aft, .h = (f), .hash_name = (name),        \
+    .pss = (p)
+
+static Error cmd_rsa_sig_gen_salt_len_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                          AcvpArgs *out) {
+    uint32_t bit_size = le32(args.v[0]);
+    Slice msg = args.v[1];
+    uint32_t salt_len = le32(args.v[2]);
+
+    const RsaFipsKey *key;
+    Error err = get_rsa_key((Int)bit_size, &key);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("generating RSA key: %w", err);
+
+    Hash h = c->h(a);
+    hash_write(h, msg, NULL);
+    Slice digest = hash_sum(a, h, make_bytes(a, 0));
+
+    Slice sig;
+    if (!c->pss) {
+        if (!burrow__rsa_fips_sign_pkcs1_v15(key, str_from_cstr(c->hash_name), digest,
+                                             a, &sig, &err))
+            return fmt_errorf_v("signing RSA message: %w", err);
+    } else {
+        if (!burrow__rsa_fips_sign_pss(crypto_rand_reader, key, c->h(a), digest,
+                                       (Int)salt_len, a, &sig, &err))
+            return fmt_errorf_v("signing RSA message: %w", err);
+    }
+
+    RsaFipsExport x = burrow__rsa_fips_export(key, a);
+    Slice e_bytes = make_bytes(a, 4);
+    binary_big_endian_put_uint32(e_bytes, (uint32_t)x.e);
+
+    *out = make_args(a, 3);
+    out->v[0] = x.n;
+    out->v[1] = e_bytes;
+    out->v[2] = sig;
+    return BURROW_NO_ERROR;
+}
+
+#define CMD_RSA_SIG_VER_RAND_EXP_AFT(f, name, p)                                       \
+    .required_args = 4, /* n, e, message, signature */                                 \
+        .handler = cmd_rsa_sig_ver_rand_exp_aft, .h = (f), .hash_name = (name),        \
+    .pss = (p)
+
+static Error cmd_rsa_sig_ver_rand_exp_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                          AcvpArgs *out) {
+    Slice n_bytes = args.v[0];
+    Slice e_bytes = args.v[1];
+    Slice msg = args.v[2];
+    Slice sig = args.v[3];
+
+    Error err = BURROW_NO_ERROR;
+    BigmodModulus *n = bigmod_new_modulus(a, n_bytes, &err);
+    if (n == NULL)
+        return fmt_errorf_v("invalid RSA modulus: %w", err);
+
+    Hash h = c->h(a);
+    hash_write(h, msg, NULL);
+    Slice digest = hash_sum(a, h, make_bytes(a, 0));
+
+    const Byte *eb = e_bytes.p;
+    if (e_bytes.len < 32 / 8 || (e_bytes.len == 32 / 8 && eb[0] < 0x80)) {
+        Slice padded_e_bytes = make_bytes(a, 4);
+        memcpy((Byte *)padded_e_bytes.p + 4 - e_bytes.len, e_bytes.p,
+               (size_t)e_bytes.len);
+        Int e = (Int)binary_big_endian_uint32(padded_e_bytes);
+
+        /* Not in Go: the module's functions take the public key as n and e,
+         * which Go puts in an rsa.PublicKey. */
+        if (!c->pss)
+            err = burrow__rsa_fips_verify_pkcs1_v15(n, e, str_from_cstr(c->hash_name),
+                                                    digest, sig, a);
+        else
+            err = burrow__rsa_fips_verify_pss(n, e, c->h(a), digest, sig, a);
+    } else {
+        RsaFipsLargeExponentPublicKey pub = {n, e_bytes};
+
+        if (!c->pss)
+            err = burrow__rsa_fips_testing_only_large_exponent_verify_pkcs1_v15(
+                &pub, str_from_cstr(c->hash_name), digest, sig, a);
+        else
+            err = burrow__rsa_fips_testing_only_large_exponent_verify_pss(
+                &pub, c->h(a), digest, sig, a);
+    }
+
+    if (BURROW_FAILED(err)) {
+        *out = byte_args(a, 0);
+        return BURROW_NO_ERROR;
+    }
+
+    *out = byte_args(a, 1);
+    return BURROW_NO_ERROR;
+}
+
+/* required_args: n bytes, e bytes, p bytes, q bytes, dmp1 bytes, dmq1 bytes,
+ * iqmp bytes, c bytes */
+#define CMD_KTS_IFC_RESPONDER_RAND_EXP_CRT_AFT(f)                                      \
+    .required_args = 8, .handler = cmd_kts_ifc_responder_rand_exp_crt_aft, .h = (f)
+
+static Error cmd_kts_ifc_responder_rand_exp_crt_aft(Alloc *a, const AcvpCommand *c,
+                                                    AcvpArgs args, AcvpArgs *out) {
+    Slice n_bytes = args.v[0];
+    Slice e_bytes = args.v[1];
+
+    Slice p_bytes = args.v[2];
+    Slice q_bytes = args.v[3];
+
+    Slice dmp1_bytes = args.v[4];
+    Slice dmq1_bytes = args.v[5];
+    Slice iqmp_bytes = args.v[6];
+
+    Slice c_bytes = args.v[7];
+
+    /* We need to compute 'd' from the CRT values for
+     * NewPrivateKeyWithPrecomputation to check consistency. */
+    BigInt p = BIG_INT(a), q = BIG_INT(a);
+    big_int_set_bytes(&p, p_bytes);
+    big_int_set_bytes(&q, q_bytes);
+    BigInt dP = BIG_INT(a), dQ = BIG_INT(a);
+    big_int_set_bytes(&dP, dmp1_bytes);
+    big_int_set_bytes(&dQ, dmq1_bytes);
+    BigInt p_minus1 = BIG_INT(a), q_minus1 = BIG_INT(a);
+    big_int_sub(&p_minus1, &p, big_new_int(a, 1));
+    big_int_sub(&q_minus1, &q, big_new_int(a, 1));
+    BigInt x = BIG_INT(a), y = BIG_INT(a);
+    BigInt gcd = BIG_INT(a);
+    big_int_gcd(&gcd, &x, &y, &p_minus1, &q_minus1);
+    BigInt diff = BIG_INT(a);
+    big_int_sub(&diff, &dQ, &dP);
+    BigInt r = BIG_INT(a);
+    if (big_int_sign(big_int_mod(&r, &diff, &gcd)) != 0)
+        return errors_new(error_allocator(), BURROW_S("inconsistent CRT parameters"));
+    BigInt lcm = BIG_INT(a);
+    big_int_mul(&lcm, &p_minus1, &q_minus1);
+    big_int_div(&lcm, &lcm, &gcd);
+    BigInt d = BIG_INT(a);
+    big_int_mul(&d, &x, &p_minus1);
+    big_int_div(&d, big_int_mul(&d, &d, &diff), &gcd);
+    big_int_mod(&d, big_int_add(&d, &d, &dP), &lcm);
+    Slice d_bytes = big_int_bytes(&d, a);
+
+    Slice dkm = slice_nil(TYPE_BYTE);
+    Error err = BURROW_NO_ERROR;
+
+    /* Not in Go: in Go, each branch declares an err of its own with :=, and
+     * the error of the decryption goes to that one, not to the err checked
+     * after the branches. So a decryption that fails gives an empty dkm and no
+     * error, and branch_err does the same here. */
+    const Byte *eb = e_bytes.p;
+    if (e_bytes.len < 32 / 8 || (e_bytes.len == 32 / 8 && eb[0] < 0x80)) {
+        /* Exponent fits in an int32, use standard PrivateKey. */
+        Slice padded_e_bytes = make_bytes(a, 4);
+        memcpy((Byte *)padded_e_bytes.p + 4 - e_bytes.len, e_bytes.p,
+               (size_t)e_bytes.len);
+        Int e = (Int)binary_big_endian_uint32(padded_e_bytes);
+
+        Error branch_err = BURROW_NO_ERROR;
+        RsaFipsKey *priv = burrow__rsa_fips_new_private_key_with_precomputation(
+            a, a, n_bytes, e, d_bytes, p_bytes, q_bytes, dmp1_bytes, dmq1_bytes,
+            iqmp_bytes, &branch_err);
+        if (priv == NULL)
+            return fmt_errorf_v("failed to create private key: %v", branch_err);
+
+        if (!burrow__rsa_fips_decrypt_oaep(c->h(a), c->h(a), priv, c_bytes,
+                                           slice_nil(TYPE_BYTE), a, &dkm, &branch_err))
+            dkm = slice_nil(TYPE_BYTE);
+        burrow__rsa_fips_key_free(priv);
+    } else {
+        /* Large exponent, use TestingOnlyLargeExponentPrivateKey. */
+        Error branch_err = BURROW_NO_ERROR;
+        RsaFipsLargeExponentKey *priv =
+            burrow__rsa_fips_testing_only_new_large_exponent_private_key_with_precomputation(
+                a, a, n_bytes, e_bytes, d_bytes, p_bytes, q_bytes, dmp1_bytes,
+                dmq1_bytes, iqmp_bytes, &branch_err);
+        if (priv == NULL)
+            return fmt_errorf_v("failed to create private key: %v", branch_err);
+
+        if (!burrow__rsa_fips_testing_only_large_exponent_decrypt_oaep(
+                c->h(a), c->h(a), priv, c_bytes, slice_nil(TYPE_BYTE), a, &dkm,
+                &branch_err))
+            dkm = slice_nil(TYPE_BYTE);
+        burrow__rsa_fips_large_exponent_key_free(priv);
+    }
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("OAEP decryption failed: %v", err);
+
+    *out = args1(a, dkm);
     return BURROW_NO_ERROR;
 }
 
@@ -2282,6 +2753,42 @@ static const AcvpCommand commands[] = {
     {.name = "ctrDRBG/AES-256", CMD_CTR_DRBG_AFT()},
     {.name = "ctrDRBG-reseed/AES-256", CMD_CTR_DRBG_RESEED_AFT()},
 
+    {.name = "RSA/keyGen", CMD_RSA_KEY_GEN_AFT()},
+
+    {.name = "RSA/sigGen/SHA2-224/pkcs1v1.5",
+     CMD_RSA_SIG_GEN_AFT(sha256_new224, "SHA-224", false)},
+    {.name = "RSA/sigGen/SHA2-256/pkcs1v1.5",
+     CMD_RSA_SIG_GEN_AFT(sha256_new, "SHA-256", false)},
+    {.name = "RSA/sigGen/SHA2-384/pkcs1v1.5",
+     CMD_RSA_SIG_GEN_AFT(sha512_new384, "SHA-384", false)},
+    {.name = "RSA/sigGen/SHA2-512/pkcs1v1.5",
+     CMD_RSA_SIG_GEN_AFT(sha512_new, "SHA-512", false)},
+    {.name = "RSA/sigGen/SHA2-224/pss",
+     CMD_RSA_SIG_GEN_AFT(sha256_new224, "SHA-224", true)},
+    {.name = "RSA/sigGen/SHA2-256/pss",
+     CMD_RSA_SIG_GEN_AFT(sha256_new, "SHA-256", true)},
+    {.name = "RSA/sigGen/SHA2-384/pss",
+     CMD_RSA_SIG_GEN_AFT(sha512_new384, "SHA-384", true)},
+    {.name = "RSA/sigGen/SHA2-512/pss",
+     CMD_RSA_SIG_GEN_AFT(sha512_new, "SHA-512", true)},
+
+    {.name = "RSA/sigVer/SHA2-224/pkcs1v1.5",
+     CMD_RSA_SIG_VER_AFT(sha256_new224, "SHA-224", false)},
+    {.name = "RSA/sigVer/SHA2-256/pkcs1v1.5",
+     CMD_RSA_SIG_VER_AFT(sha256_new, "SHA-256", false)},
+    {.name = "RSA/sigVer/SHA2-384/pkcs1v1.5",
+     CMD_RSA_SIG_VER_AFT(sha512_new384, "SHA-384", false)},
+    {.name = "RSA/sigVer/SHA2-512/pkcs1v1.5",
+     CMD_RSA_SIG_VER_AFT(sha512_new, "SHA-512", false)},
+    {.name = "RSA/sigVer/SHA2-224/pss",
+     CMD_RSA_SIG_VER_AFT(sha256_new224, "SHA-224", true)},
+    {.name = "RSA/sigVer/SHA2-256/pss",
+     CMD_RSA_SIG_VER_AFT(sha256_new, "SHA-256", true)},
+    {.name = "RSA/sigVer/SHA2-384/pss",
+     CMD_RSA_SIG_VER_AFT(sha512_new384, "SHA-384", true)},
+    {.name = "RSA/sigVer/SHA2-512/pss",
+     CMD_RSA_SIG_VER_AFT(sha512_new, "SHA-512", true)},
+
     {.name = "KDF-counter", CMD_KDF_COUNTER_AFT()},
     {.name = "KDF-feedback", CMD_KDF_FEEDBACK_AFT()},
 
@@ -2306,6 +2813,31 @@ static const AcvpCommand commands[] = {
     {.name = "OneStepNoCounter/HMAC-SHA3-512",
      CMD_ONE_STEP_NO_COUNTER_HMAC_AFT(new_sha3_512)},
 
+    {.name = "KTS-IFC/SHA2-224/initiator", CMD_KTS_IFC_INITIATOR_AFT(sha256_new224)},
+    {.name = "KTS-IFC/SHA2-224/responder", CMD_KTS_IFC_RESPONDER_AFT(sha256_new224)},
+    {.name = "KTS-IFC/SHA2-256/initiator", CMD_KTS_IFC_INITIATOR_AFT(sha256_new)},
+    {.name = "KTS-IFC/SHA2-256/responder", CMD_KTS_IFC_RESPONDER_AFT(sha256_new)},
+    {.name = "KTS-IFC/SHA2-384/initiator", CMD_KTS_IFC_INITIATOR_AFT(sha512_new384)},
+    {.name = "KTS-IFC/SHA2-384/responder", CMD_KTS_IFC_RESPONDER_AFT(sha512_new384)},
+    {.name = "KTS-IFC/SHA2-512/initiator", CMD_KTS_IFC_INITIATOR_AFT(sha512_new)},
+    {.name = "KTS-IFC/SHA2-512/responder", CMD_KTS_IFC_RESPONDER_AFT(sha512_new)},
+    {.name = "KTS-IFC/SHA2-512/224/initiator",
+     CMD_KTS_IFC_INITIATOR_AFT(sha512_new512224)},
+    {.name = "KTS-IFC/SHA2-512/224/responder",
+     CMD_KTS_IFC_RESPONDER_AFT(sha512_new512224)},
+    {.name = "KTS-IFC/SHA2-512/256/initiator",
+     CMD_KTS_IFC_INITIATOR_AFT(sha512_new512256)},
+    {.name = "KTS-IFC/SHA2-512/256/responder",
+     CMD_KTS_IFC_RESPONDER_AFT(sha512_new512256)},
+    {.name = "KTS-IFC/SHA3-224/initiator", CMD_KTS_IFC_INITIATOR_AFT(new_sha3_224)},
+    {.name = "KTS-IFC/SHA3-224/responder", CMD_KTS_IFC_RESPONDER_AFT(new_sha3_224)},
+    {.name = "KTS-IFC/SHA3-256/initiator", CMD_KTS_IFC_INITIATOR_AFT(new_sha3_256)},
+    {.name = "KTS-IFC/SHA3-256/responder", CMD_KTS_IFC_RESPONDER_AFT(new_sha3_256)},
+    {.name = "KTS-IFC/SHA3-384/initiator", CMD_KTS_IFC_INITIATOR_AFT(new_sha3_384)},
+    {.name = "KTS-IFC/SHA3-384/responder", CMD_KTS_IFC_RESPONDER_AFT(new_sha3_384)},
+    {.name = "KTS-IFC/SHA3-512/initiator", CMD_KTS_IFC_INITIATOR_AFT(new_sha3_512)},
+    {.name = "KTS-IFC/SHA3-512/responder", CMD_KTS_IFC_RESPONDER_AFT(new_sha3_512)},
+
     /* Not in Go: acvp_mldsa_test.go adds these to the map in its init. */
     {.name = "ML-DSA-44/keyGen", CMD_ML_DSA_KEY_GEN_AFT(mldsa_mldsa44)},
     {.name = "ML-DSA-65/keyGen", CMD_ML_DSA_KEY_GEN_AFT(mldsa_mldsa65)},
@@ -2318,6 +2850,111 @@ static const AcvpCommand commands[] = {
     {.name = "ML-DSA-87/sigVer", CMD_ML_DSA_SIG_VER_AFT(mldsa_mldsa87)},
 };
 
+/* From the init of acvp_fips140v1.28_test.go.
+ *
+ * Not in Go: Go's init sets these in the map, which replaces what is there
+ * for the names commands already has, so lookup_command looks here first. */
+static const AcvpCommand commands_v1_28[] = {
+    /* RSA keyGen for keyFormat=crt capability. Previous versions used
+     * standard */
+    {.name = "RSA/keyGen/crt", CMD_RSA_KEY_GEN_CRT_AFT()},
+
+    /* RSA sigGen additional hash algorithms (adds SHA2-512 truncated hashes,
+     * SHA-3) Support for PSS saltLen argument. */
+    {.name = "RSA/sigGen/SHA2-224/pkcs1v1.5",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(sha256_new224, "SHA-224", false)},
+    {.name = "RSA/sigGen/SHA2-256/pkcs1v1.5",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(sha256_new, "SHA-256", false)},
+    {.name = "RSA/sigGen/SHA2-384/pkcs1v1.5",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(sha512_new384, "SHA-384", false)},
+    {.name = "RSA/sigGen/SHA2-512/pkcs1v1.5",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(sha512_new, "SHA-512", false)},
+    {.name = "RSA/sigGen/SHA2-512/224/pkcs1v1.5",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(sha512_new512224, "SHA-512/224", false)},
+    {.name = "RSA/sigGen/SHA2-512/256/pkcs1v1.5",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(sha512_new512256, "SHA-512/256", false)},
+    {.name = "RSA/sigGen/SHA3-224/pkcs1v1.5",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(new_sha3_224, "SHA3-224", false)},
+    {.name = "RSA/sigGen/SHA3-256/pkcs1v1.5",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(new_sha3_256, "SHA3-256", false)},
+    {.name = "RSA/sigGen/SHA3-384/pkcs1v1.5",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(new_sha3_384, "SHA3-384", false)},
+    {.name = "RSA/sigGen/SHA3-512/pkcs1v1.5",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(new_sha3_512, "SHA3-512", false)},
+    {.name = "RSA/sigGen/SHA2-512/224/pss",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(sha512_new512224, "SHA-512/224", true)},
+    {.name = "RSA/sigGen/SHA2-512/256/pss",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(sha512_new512256, "SHA-512/256", true)},
+    {.name = "RSA/sigGen/SHA3-224/pss",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(new_sha3_224, "SHA3-224", true)},
+    {.name = "RSA/sigGen/SHA3-256/pss",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(new_sha3_256, "SHA3-256", true)},
+    {.name = "RSA/sigGen/SHA3-384/pss",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(new_sha3_384, "SHA3-384", true)},
+    {.name = "RSA/sigGen/SHA3-512/pss",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(new_sha3_512, "SHA3-512", true)},
+    {.name = "RSA/sigGen/SHA2-224/pss",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(sha256_new224, "SHA-224", true)},
+    {.name = "RSA/sigGen/SHA2-256/pss",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(sha256_new, "SHA-256", true)},
+    {.name = "RSA/sigGen/SHA2-384/pss",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(sha512_new384, "SHA-384", true)},
+    {.name = "RSA/sigGen/SHA2-512/pss",
+     CMD_RSA_SIG_GEN_SALT_LEN_AFT(sha512_new, "SHA-512", true)},
+
+    /* RSA sigGen with pubExpMode=random capability. Previous versions used
+     * fixed. Also adds SHA2-512 truncated hashes. Notably SHA-3 is not
+     * supported by ACVP for RSA sigVer. */
+    {.name = "RSA/sigVer/SHA2-224/pkcs1v1.5",
+     CMD_RSA_SIG_VER_RAND_EXP_AFT(sha256_new224, "SHA-224", false)},
+    {.name = "RSA/sigVer/SHA2-256/pkcs1v1.5",
+     CMD_RSA_SIG_VER_RAND_EXP_AFT(sha256_new, "SHA-256", false)},
+    {.name = "RSA/sigVer/SHA2-384/pkcs1v1.5",
+     CMD_RSA_SIG_VER_RAND_EXP_AFT(sha512_new384, "SHA-384", false)},
+    {.name = "RSA/sigVer/SHA2-512/pkcs1v1.5",
+     CMD_RSA_SIG_VER_RAND_EXP_AFT(sha512_new, "SHA-512", false)},
+    {.name = "RSA/sigVer/SHA2-512/224/pkcs1v1.5",
+     CMD_RSA_SIG_VER_RAND_EXP_AFT(sha512_new512224, "SHA-512/224", false)},
+    {.name = "RSA/sigVer/SHA2-512/256/pkcs1v1.5",
+     CMD_RSA_SIG_VER_RAND_EXP_AFT(sha512_new512256, "SHA-512/256", false)},
+    {.name = "RSA/sigVer/SHA2-224/pss",
+     CMD_RSA_SIG_VER_RAND_EXP_AFT(sha256_new224, "SHA-224", true)},
+    {.name = "RSA/sigVer/SHA2-256/pss",
+     CMD_RSA_SIG_VER_RAND_EXP_AFT(sha256_new, "SHA-256", true)},
+    {.name = "RSA/sigVer/SHA2-384/pss",
+     CMD_RSA_SIG_VER_RAND_EXP_AFT(sha512_new384, "SHA-384", true)},
+    {.name = "RSA/sigVer/SHA2-512/pss",
+     CMD_RSA_SIG_VER_RAND_EXP_AFT(sha512_new, "SHA-512", true)},
+    {.name = "RSA/sigVer/SHA2-512/224/pss",
+     CMD_RSA_SIG_VER_RAND_EXP_AFT(sha512_new512224, "SHA-512/224", true)},
+    {.name = "RSA/sigVer/SHA2-512/256/pss",
+     CMD_RSA_SIG_VER_RAND_EXP_AFT(sha512_new512256, "SHA-512/256", true)},
+
+    /* KTS-IFC with keyGenerationMethods=rsakpg2-crt (random exponent, CRT
+     * format). Previous version used rsakpg1-basic (fixed exponent, basic
+     * format). */
+    {.name = "KTS-IFC/SHA2-224/responder/crt",
+     CMD_KTS_IFC_RESPONDER_RAND_EXP_CRT_AFT(sha256_new224)},
+    {.name = "KTS-IFC/SHA2-256/responder/crt",
+     CMD_KTS_IFC_RESPONDER_RAND_EXP_CRT_AFT(sha256_new)},
+    {.name = "KTS-IFC/SHA2-384/responder/crt",
+     CMD_KTS_IFC_RESPONDER_RAND_EXP_CRT_AFT(sha512_new384)},
+    {.name = "KTS-IFC/SHA2-512/responder/crt",
+     CMD_KTS_IFC_RESPONDER_RAND_EXP_CRT_AFT(sha512_new)},
+    {.name = "KTS-IFC/SHA2-512/224/responder/crt",
+     CMD_KTS_IFC_RESPONDER_RAND_EXP_CRT_AFT(sha512_new512224)},
+    {.name = "KTS-IFC/SHA2-512/256/responder/crt",
+     CMD_KTS_IFC_RESPONDER_RAND_EXP_CRT_AFT(sha512_new512256)},
+    {.name = "KTS-IFC/SHA3-224/responder/crt",
+     CMD_KTS_IFC_RESPONDER_RAND_EXP_CRT_AFT(new_sha3_224)},
+    {.name = "KTS-IFC/SHA3-256/responder/crt",
+     CMD_KTS_IFC_RESPONDER_RAND_EXP_CRT_AFT(new_sha3_256)},
+    {.name = "KTS-IFC/SHA3-384/responder/crt",
+     CMD_KTS_IFC_RESPONDER_RAND_EXP_CRT_AFT(new_sha3_384)},
+    {.name = "KTS-IFC/SHA3-512/responder/crt",
+     CMD_KTS_IFC_RESPONDER_RAND_EXP_CRT_AFT(new_sha3_512)},
+};
+
 /* Not in Go: the command TestTooFewArgs and TestTooManyArgs add to the map as
  * "test", which is looked up first. */
 static AcvpCommand test_command;
@@ -2325,6 +2962,9 @@ static AcvpCommand test_command;
 static const AcvpCommand *lookup_command(Str name) {
     if (test_command.handler != NULL && str_eq(name, BURROW_S("test")))
         return &test_command;
+    for (size_t i = 0; i < sizeof commands_v1_28 / sizeof commands_v1_28[0]; i++)
+        if (str_eq(name, str_from_cstr(commands_v1_28[i].name)))
+            return &commands_v1_28[i];
     for (size_t i = 0; i < sizeof commands / sizeof commands[0]; i++)
         if (str_eq(name, str_from_cstr(commands[i].name)))
             return &commands[i];
@@ -2374,6 +3014,296 @@ static Error test_handler(Alloc *a, const AcvpCommand *c, AcvpArgs args,
     if (got_args != 1)
         return fmt_errorf_v("expected 1 args, got %d", got_args);
     return BURROW_NO_ERROR;
+}
+
+/* Not in Go: testenv.CPUIsSlow, for the GOARCH values it names that burrow
+ * builds for. */
+static bool cpu_is_slow(void) {
+#if defined(BURROW_ARCH_ARM) || defined(BURROW_ARCH_MIPS64) || defined(BURROW_ARCH_WASM)
+    return true;
+#else
+    return false;
+#endif
+}
+
+/* testenv.SkipIfShortAndSlow */
+static void skip_if_short_and_slow(TestingT *t) {
+    if (testing_short() && cpu_is_slow())
+        testing_t_skipf_v(t, "skipping test in -short mode on %s",
+                          str_from_cstr(burrow_arch_name()));
+}
+
+/* testenv.MustHaveExternalNetwork */
+static void must_have_external_network(TestingT *t) {
+#if defined(BURROW_OS_WASI)
+    testing_t_skipf_v(t, "skipping test: no external network on %s",
+                      str_from_cstr(burrow_os_name()));
+#endif
+    if (testing_short())
+        testing_t_skip_v(t, "skipping test: no external network in -short mode");
+}
+
+/* testenv.GoToolPath. Not in Go: a burrow program has no GOROOT of its own,
+ * so the go command is the one on $PATH, and the test is skipped when there
+ * is none, as MustHaveGoBuild skips it. */
+static Str go_tool_path(TestingT *t, Alloc *a) {
+    SKIP_WITHOUT_EXEC(t);
+    Error err = BURROW_NO_ERROR;
+    Str path = exec_look_path(a, BURROW_S("go"), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_skipf_v(t, "skipping test: 'go build' unavailable: %v", err);
+        return BURROW_STR_EMPTY;
+    }
+    return path;
+}
+
+/* testenv.CleanCmdEnv, as the environment it gives the command. */
+static Slice clean_cmd_env(Alloc *a) {
+    Slice environ = os_environ(a);
+    Slice env = slice_nil(TYPE_STRING);
+    for (Int i = 0; i < environ.len; i++) {
+        Str kv = ((const Str *)environ.p)[i];
+        /* Exclude GODEBUG from the environment to prevent its output from
+         * breaking tests that are trying to parse other command output. */
+        if (strings_has_prefix(kv, BURROW_S("GODEBUG=")))
+            continue;
+        /* Exclude GOTRACEBACK for the same reason. */
+        if (strings_has_prefix(kv, BURROW_S("GOTRACEBACK=")))
+            continue;
+        env = BURROW_APPEND(Str, a, env, kv);
+    }
+    return env;
+}
+
+/* Not in Go: the memory of TestACVP, freed after its other cleanups, even when
+ * it is skipped or fails. */
+static void acvp_free_arena(void *env) {
+    Arena *ar = env;
+    arena_free(ar);
+    mem_free(heap_allocator(), ar, sizeof *ar, _Alignof(Arena));
+}
+
+static void acvp_remove_all(void *env) {
+    (void)os_remove_all(*(Str *)env);
+}
+
+/* Not in Go: t.TempDir. */
+static Str acvp_temp_dir(TestingT *t, Alloc *a) {
+    Error err = BURROW_NO_ERROR;
+    Str dir = os_mkdir_temp(a, BURROW_STR_EMPTY, BURROW_S("TestACVP"), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "TempDir: %s", err);
+        return BURROW_STR_EMPTY;
+    }
+    Str *p = BURROW_NEW(a, Str);
+    *p = dir;
+    testing_t_cleanup(t, BURROW_FN(Func, acvp_remove_all, p));
+    return dir;
+}
+
+typedef struct AcvpEnvVar {
+    Str key;
+    Str value;
+    bool found;
+} AcvpEnvVar;
+
+static void acvp_restore_env(void *env) {
+    const AcvpEnvVar *v = (const AcvpEnvVar *)env;
+    if (v->found)
+        (void)os_setenv(v->key, v->value);
+    else
+        (void)os_unsetenv(v->key);
+}
+
+/* Not in Go: t.Setenv. */
+static void acvp_setenv(TestingT *t, Alloc *a, Str key, Str value) {
+    AcvpEnvVar *v = BURROW_NEW(a, AcvpEnvVar);
+    v->key = key;
+    v->value = os_lookup_env(a, key, &v->found);
+    Error err = os_setenv(key, value);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatal_v(t, err);
+        return;
+    }
+    testing_t_cleanup(t, BURROW_FN(Func, acvp_restore_env, v));
+}
+
+/* The struct FetchModule reads 'go mod download -json' into. Not in Go: it
+ * has a name, so that it can have a type. */
+#define ACVP_MODULE_DOWNLOAD_FIELDS(F, T) F(T, Str, Dir, "")
+BURROW_STRUCT(AcvpModuleDownload, ACVP_MODULE_DOWNLOAD_FIELDS);
+
+/* cryptotest.FetchModule: FetchModule fetches the module at the given version
+ * and returns the directory containing its source tree. It skips the test if
+ * fetching modules is not possible in this environment. */
+static Str fetch_module(TestingT *t, Alloc *a, Str module, Str version) {
+    must_have_external_network(t);
+    Str go = go_tool_path(t, a);
+
+    /* If the default GOMODCACHE doesn't exist, use a temporary directory
+     * instead. (For example, run.bash sets GOPATH=/nonexist-gopath.) */
+    ExecCmd *cmd = exec_command_v(a, go, 2, BURROW_S("env"), BURROW_S("GOMODCACHE"));
+    cmd->env = clean_cmd_env(a);
+    Error err = BURROW_NO_ERROR;
+    Slice out = exec_cmd_output(cmd, a, &err);
+    exec_cmd_free(cmd);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%s env GOMODCACHE: %v\n%s", go, err, bytes_str(out));
+        const ExecExitError *ee =
+            (const ExecExitError *)errors_as(err, TYPE_EXEC_EXIT_ERROR);
+        if (ee != NULL)
+            testing_t_logf_v(t, "%s", bytes_str(ee->stderr_));
+        testing_t_fail_now(t);
+        return BURROW_STR_EMPTY;
+    }
+    bool modcache_ok = false;
+    Str gomodcache = bytes_str(bytes_trim_space(out));
+    if (gomodcache.len > 0) {
+        Error serr = BURROW_NO_ERROR;
+        (void)os_stat(a, gomodcache, &serr);
+        if (!BURROW_FAILED(serr))
+            modcache_ok = true;
+    }
+    if (!modcache_ok) {
+        acvp_setenv(t, a, BURROW_S("GOMODCACHE"), acvp_temp_dir(t, a));
+        /* Allow t.TempDir() to clean up subdirectories. */
+        Str goflags = os_getenv(a, BURROW_S("GOFLAGS"));
+        acvp_setenv(t, a, BURROW_S("GOFLAGS"),
+                    fmt_sprintf_v(a, "%s -modcacherw", goflags));
+    }
+
+    testing_t_logf_v(t, "fetching %s@%s\n", module, version);
+
+    cmd = exec_command_v(a, go, 4, BURROW_S("mod"), BURROW_S("download"),
+                         BURROW_S("-json"), fmt_sprintf_v(a, "%s@%s", module, version));
+    BytesBuffer stderr_b = BYTES_BUFFER(a);
+    cmd->stderr_ = bytes_buffer_as_io_writer(&stderr_b);
+    Slice output = exec_cmd_output(cmd, a, &err);
+    exec_cmd_free(cmd);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(
+            t, "failed to download %s@%s: %s\nstdout:\n%s\nstderr:\n%s\n", module,
+            version, err, bytes_str(output), bytes_str(bytes_buffer_bytes(&stderr_b)));
+        return BURROW_STR_EMPTY;
+    }
+    if (bytes_buffer_len(&stderr_b) > 0)
+        testing_t_logf_v(t, "go mod download stderr:\n%s",
+                         bytes_str(bytes_buffer_bytes(&stderr_b)));
+    AcvpModuleDownload j = {0};
+    err = json_unmarshal(a, output, BURROW_ANY(TYPE_OF(AcvpModuleDownload), &j));
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(
+            t, "failed to parse 'go mod download': %s\nstdout:\n%s\nstderr:\n%s\n", err,
+            bytes_str(output), bytes_str(bytes_buffer_bytes(&stderr_b)));
+        return BURROW_STR_EMPTY;
+    }
+
+    return j.Dir;
+}
+
+static void TestACVP(TestingT *t) {
+    skip_if_short_and_slow(t);
+
+    Arena *ar = BURROW_NEW(heap_allocator(), Arena);
+    if (ar == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    arena_init(ar, NULL, 0);
+    testing_t_cleanup(t, BURROW_FN(Func, acvp_free_arena, ar));
+    Alloc *a = arena_allocator(ar);
+
+    Str bssl_module = BURROW_S("boringssl.googlesource.com/boringssl.git");
+    Str bssl_version = BURROW_S("v0.0.0-20260422110153-4ccbe2adaf4f");
+    Str go_acvp_module = BURROW_S("github.com/geomys/acvp-testdata");
+    Str go_acvp_version = BURROW_S("v0.0.0-20260526143807-16992c4b1561");
+
+    /* In crypto/tls/bogo_shim_test.go the test is skipped if run on a builder
+     * with runtime.GOOS == "windows" due to flaky networking. It may be
+     * necessary to do the same here. */
+
+    /* Stat the acvp test config file so the test will be re-run if it
+     * changes, invalidating cached results from the old config. */
+    Error err = BURROW_NO_ERROR;
+    (void)os_stat(a, test_config_file, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "failed to stat config file: %s", err);
+        return;
+    }
+
+    /* Fetch the BSSL module and use the JSON output to find the absolute path
+     * to the dir. */
+    Str bssl_dir = fetch_module(t, a, bssl_module, bssl_version);
+
+    testing_t_log_v(t, "building acvptool");
+
+    /* Build the acvptool binary. */
+    Str go = go_tool_path(t, a);
+    Str tool_path =
+        filepath_join_v(a, 2, acvp_temp_dir(t, a), BURROW_S("acvptool.exe"));
+    ExecCmd *cmd =
+        exec_command_v(a, go, 4, BURROW_S("build"), BURROW_S("-o"), tool_path,
+                       BURROW_S("./util/fipstools/acvp/acvptool"));
+    cmd->dir = bssl_dir;
+    Slice out = exec_cmd_combined_output(cmd, a, &err);
+    exec_cmd_free(cmd);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "failed to build acvptool: %s\n%s", err, bytes_str(out));
+        return;
+    }
+
+    /* Similarly, fetch the ACVP data module that has vectors/expected
+     * answers. */
+    Str data_dir = fetch_module(t, a, go_acvp_module, go_acvp_version);
+
+    Str cwd = os_getwd(a, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "failed to fetch cwd: %s", err);
+        return;
+    }
+    Str config_path = filepath_join_v(a, 2, cwd, test_config_file);
+
+    /* Not in Go: testenv.Executable is this program, which Go's linker has
+     * written the module's checksum into. Here it is fipstest_program, which
+     * is a copy with the checksum written in unless burrow-gen fips has been
+     * run on this one, and the module has to be one that can be turned on. */
+    MUST_SUPPORT_FIPS140(t);
+    Str wrapper_dir;
+    Str wrapper = fipstest_program(t, a, &wrapper_dir);
+    if (wrapper_dir.len > 0) {
+        Str *p = BURROW_NEW(a, Str);
+        *p = wrapper_dir;
+        testing_t_cleanup(t, BURROW_FN(Func, acvp_remove_all, p));
+    }
+    if (wrapper.len == 0)
+        return;
+    testing_t_logf_v(
+        t,
+        "running check_expected.go\ncwd: %q\ndata_dir: %q\nconfig: %q\ntool: "
+        "%q\nmodule-wrapper: %q\n",
+        cwd, data_dir, config_path, tool_path, wrapper);
+
+    /* Run the check_expected test driver using the acvptool we built, and this
+     * test binary as the module wrapper. The file paths in the config file are
+     * specified relative to the dataDir root so we run the command from that
+     * dir. */
+    cmd = exec_command_v(
+        a, go, 8, BURROW_S("run"),
+        filepath_join_v(
+            a, 2, bssl_dir,
+            BURROW_S("util/fipstools/acvp/acvptool/test/check_expected.go")),
+        BURROW_S("-tool"), tool_path,
+        /* Note: module prefix must match Wrapper value in testConfigFile. */
+        BURROW_S("-module-wrappers"), fmt_sprintf_v(a, "go:%s", wrapper),
+        BURROW_S("-tests"), config_path);
+    cmd->dir = data_dir;
+    cmd->env = BURROW_APPEND(Str, a, os_environ(a), BURROW_S("ACVP_WRAPPER=1"));
+    cmd->env = BURROW_APPEND(Str, a, cmd->env, BURROW_S("GODEBUG=fips140=on"));
+    out = exec_cmd_combined_output(cmd, a, &err);
+    exec_cmd_free(cmd);
+    testing_t_logf_v(t, "\n%s", bytes_str(out));
+    if (BURROW_FAILED(err)) {
+        testing_t_fatalf_v(t, "failed to run acvp tests: %s", err);
+        return;
+    }
 }
 
 static void TestTooFewArgs(TestingT *t) {
@@ -2520,6 +3450,7 @@ static int acvp_main(TestingM *m) {
     return testing_m_run(m);
 }
 
-#define TESTS(X) X(TestTooFewArgs) X(TestTooManyArgs) X(TestGetConfig) X(TestSha2256)
+#define TESTS(X)                                                                       \
+    X(TestACVP) X(TestTooFewArgs) X(TestTooManyArgs) X(TestGetConfig) X(TestSha2256)
 
 TESTING_MAIN_WITH(acvp_main, TESTS)

@@ -661,7 +661,7 @@ static void length_8_32(SaisBytes text, SaisInt32s sa, Int num_lms) {
                 code = (int32_t)(end - j);
                 if (code <= 32 / 8 && ~cx >= (uint32_t)text.len) { /* byte-only */
                     code = (int32_t)~cx;                           /* byte-only */
-                }                                                  /* byte-only */
+                } /* byte-only */
             }
             sa.p[j >> 1] = code;
             end = j + 1;

@@ -165,9 +165,9 @@ static inline Str fetch_module(TestingT *t, Alloc *a, Str module, Str version) {
     if (!modcache_ok) {
         fetchmodule_setenv(t, a, BURROW_S("GOMODCACHE"), fetchmodule_temp_dir(t, a));
         /* Allow t.TempDir() to clean up subdirectories. */
-        fetchmodule_setenv(
-            t, a, BURROW_S("GOFLAGS"),
-            fmt_sprintf_v(a, "%s -modcacherw", os_getenv(a, BURROW_S("GOFLAGS"))));
+        Str goflags = os_getenv(a, BURROW_S("GOFLAGS"));
+        fetchmodule_setenv(t, a, BURROW_S("GOFLAGS"),
+                           fmt_sprintf_v(a, "%s -modcacherw", goflags));
     }
 
     testing_t_logf_v(t, "fetching %s@%s\n", module, version);

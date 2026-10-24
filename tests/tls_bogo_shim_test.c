@@ -349,7 +349,8 @@ static Str signature_schemes_string(Alloc *a, Slice schemes) {
         TlsSignatureScheme s = ((const TlsSignatureScheme *)schemes.p)[i];
         names = BURROW_APPEND(Str, a, names, tls_signature_scheme_string(s, a));
     }
-    return fmt_sprintf_v(a, "[%s]", strings_join(a, names, BURROW_S(" ")));
+    Str joined = strings_join(a, names, BURROW_S(" "));
+    return fmt_sprintf_v(a, "[%s]", joined);
 }
 
 static TlsConfig *get_config_for_client(void *env, TlsClientHelloInfo *chi,

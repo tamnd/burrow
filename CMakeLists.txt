@@ -307,6 +307,8 @@ if(BURROW_BUILD_TESTS)
     set_tests_properties(fips140_acvp_test PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
     # ioutil_test reads its own source and the files under tests from the tree.
     set_tests_properties(ioutil_test PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
+    # runtime_metrics_test reads the list of metrics from its header.
+    set_tests_properties(runtime_metrics_test PROPERTIES WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR})
 
     # The one test that fuzzes with the compiler's coverage counters, as the
     # Makefile builds it: 8-bit counters where the compiler has them, trace-pc

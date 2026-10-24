@@ -497,6 +497,11 @@ int32_t burrow__thread_count(void) {
     return n;
 }
 
+uint64_t burrow__goroutines_created(void) {
+    /* Each new goroutine takes the next id, so the counter is the count. */
+    return burrow__atomic_load_u64(&sched.nextgoid);
+}
+
 void burrow__thread_create_profile(burrow__StackRecordFn fn, void *env) {
     burrow__StackRecord r;
 

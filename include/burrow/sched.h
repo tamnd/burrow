@@ -723,6 +723,10 @@ bool burrow__goroutine_stacks(burrow__StackRecordFn fn, void *env);
  * ThreadCreateProfile(nil). */
 int32_t burrow__thread_count(void);
 
+/* How many goroutines this run has created, the main one included, which is
+ * Go's sched.goroutinesCreated. For runtime/metrics. */
+uint64_t burrow__goroutines_created(void);
+
 /* Go's ThreadCreateProfile: calls fn once for each thread the scheduler has
  * started, with the stack of the call that started it. */
 void burrow__thread_create_profile(burrow__StackRecordFn fn, void *env);

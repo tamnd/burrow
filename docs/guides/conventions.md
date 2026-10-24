@@ -101,7 +101,7 @@ It writes through the pointer if there is one and does nothing if there is not. 
 
 Some functions have nothing useful to return, and those return the `Error` directly, which makes the common check read the way it should.
 
-<!-- not compiled: os is not ported yet, so os_write_file does not exist -->
+<!-- example: ../examples/conventions/write.c#write-file -->
 ```c
 Error err = os_write_file(path, data, 0644);
 if (BURROW_FAILED(err))

@@ -18,7 +18,7 @@ The line between the last two is the one worth getting right, and burrow does no
 
 A file that is not there, a connection that was refused, JSON that does not parse. None of these are bugs. They are the ordinary outcomes of asking the world a question, they happen to correct programs, and the calling code is the only thing that knows what to do about them.
 
-<!-- not compiled: the os package is not ported yet, so os_read_file does not exist -->
+<!-- example: ../examples/failure/errors.c#read-file -->
 ```c
 Error err;
 Slice data = os_read_file(a, BURROW_S("config.json"), &err);

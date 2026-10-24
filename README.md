@@ -17,7 +17,7 @@ C programmers hand roll a worse version of `strings` in every project. They reac
 
 ## What it looks like
 
-<!-- not compiled: uses strings_to_upper and fmt_println, and the strings and fmt packages come in a later milestone -->
+<!-- example: docs/examples/readme/hello.c#hello -->
 ```c
 #define BURROW_SHORT 1
 #include "burrow.h"
@@ -31,7 +31,7 @@ int main(void) {
     Slice words = strings_fields(a, body);
 
     for (int i = 0; i < words.len; i++)
-        fmt_println(AT(Str, words, i));
+        fmt_println_v(AT(Str, words, i));
 
     arena_free(&ar);
     return 0;
@@ -63,7 +63,7 @@ Macros are the one exception and keep a `BURROW_` prefix, because a header that 
 
 Every function that can allocate takes an allocator as its first parameter. Uniformly, mechanically, with no exceptions.
 
-<!-- not compiled: uses the strings package, which comes in a later milestone -->
+<!-- example: docs/examples/readme/memory.c#memory -->
 ```c
 Str upper = strings_to_upper(a, name);
 Slice parts = strings_split(a, path, S("/"));
@@ -265,26 +265,28 @@ int64_t n = io_copy(a, dst, src, &err);
 
 `io_read_full` and `io_read_at_least` are ported line for line from Go's, including the distinction that makes them worth having: an input that ends before anything arrives is `io_eof` and an input that ends halfway through is `io_err_unexpected_eof`, which is the difference between there was no next record and the file is truncated.
 
-The implementations that fill these in live where they live in Go, which is `os` and `bytes`, and neither of those is written yet.
+The implementations that fill these in live where they live in Go: files in `os`, buffers in `bytes`, and a reader over a string in `strings`.
 
 ## Errors
 
 Go's `error` is an interface with one method, so burrow's is an interface value: a vtable pointer and a data pointer, returned by value, and a zeroed one means nothing went wrong.
 
-<!-- not compiled: uses the os package, which comes in a later milestone -->
+<!-- example: docs/examples/readme/files.c#errors -->
 ```c
 Error err = os_write_file(path, data, 0644);
 if (FAILED(err))
     return err;
 
-if (errors_is(err, os_err_not_exist)) { ... }
+err = os_remove(S("missing.txt"));
+if (errors_is(err, os_err_not_exist))
+    puts("missing.txt was not there");
 ```
 
 Succeeding costs nothing, since there is no allocation on the happy path and nothing to free. The several hundred sentinels in Go's library, `io.EOF` and friends, are static `const` objects in read only memory here, so comparing against one is two pointer loads and creating one is a line the linker resolves. `errors_is` and `errors_as` are ports of Go's, walk for walk, including the `Unwrap() []error` trees that `errors.Join` builds.
 
 `errors_as` returns the pointer instead of taking one and returning a bool, because in C the pointer is the bool:
 
-<!-- not compiled: uses the os package, which comes in a later milestone -->
+<!-- example: docs/examples/readme/files.c#errors-as -->
 ```c
 const OsPathError *pe = errors_as(err, TYPE_OS_PATH_ERROR);
 ```
@@ -435,18 +437,20 @@ Details: [docs/guides/time.md](docs/guides/time.md).
 
 ## defer
 
-<!-- not compiled: uses the os package, which comes in a later milestone -->
+<!-- example: docs/examples/readme/files.c#defer -->
 ```c
 BURROW_SCOPE {
     OsFile *f = os_open(a, path, &err);
     if (BURROW_FAILED(err))
         return err;
-    BURROW_DEFER(os_file_close, f);
+    BURROW_DEFER(close_file, f);
 
     err = read_header(f);
 }
 BURROW_SCOPE_END;
 ```
+
+A deferred call takes one `void *`, so `close_file` is `os_file_close` in that shape, a short function that closes the file and reports what the close returned if it failed.
 
 The close runs when control leaves the block, however it leaves: off the end, `return`, `break`, `continue`, a `goto` out, or a panic unwinding past it. Calls run last in first out and the argument is read at the line you wrote it on, both of which are Go's.
 
@@ -712,7 +716,7 @@ From a checkout, `make` and CMake both build a static library, and `make amalgam
 
 ## Status
 
-Early. The core that every package stands on works, and every example on this page that doesn't need a package from a later milestone compiles and runs in CI, but the packages themselves are still to come.
+Most of it is here. The milestones for the substrate, the pure packages, and go/\*, the templates, database/sql and log/slog are closed, and the other four are open, each with a list of what is left. `tools/burrow-coverage` finds 23,117 of the 23,641 declarations in Go 1.27.1's API manifest, which is 97.78%. Every example on this page compiles and runs in CI.
 
 The design is finished and written down in [docs/design](docs/design), twenty documents covering the scope measurement, the C dialect, the core types, the memory model, the scheduler, the reflection layer, the naming rules, every package tier, the conformance strategy, the build and deployment story, the phasing, and the legal position on porting a BSD licensed library.
 
@@ -728,7 +732,7 @@ The implementation plan is tracked in milestone issues:
 
 ## Completeness is measured, not claimed
 
-Go ships a machine readable manifest of its own API at `$GOROOT/api/go1.*.txt`, one line per exported declaration across every version. Because the naming rules are mechanical and reversible, a C symbol maps back to a Go declaration, so `tools/coverage` turns burrow's exported symbols into Go declarations and diffs them against that manifest. Coverage is a number a script prints, not an adjective in a README.
+Go ships a machine readable manifest of its own API at `$GOROOT/api/go1.*.txt`, one line per exported declaration across every version. Because the naming rules are mechanical and reversible, a C symbol maps back to a Go declaration, so `tools/burrow-coverage` turns burrow's exported symbols into Go declarations and diffs them against that manifest. Coverage is a number a script prints, not an adjective in a README.
 
 Correctness is measured the same way. Go's tests come across with the code, 440,000 lines of them, and a differential fuzzer runs burrow and Go against the same input and compares the output byte for byte. A package is not done until its coverage gate passes, its translated tests pass, its examples produce Go's exact output, it survives a day of fuzzing without diverging, it is clean under five sanitizers, its benchmarks are within the published ratios, it is green on every supported platform, and its documentation exists. Eight conditions, all of them checkable by a machine, none of them a matter of opinion.
 

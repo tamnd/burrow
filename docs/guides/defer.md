@@ -21,7 +21,7 @@ static Error count_lines(const char *path, Int *lines) {
 }
 ```
 
-burrow's `os` package is not ported yet, so the examples on this page open files with stdio, and `close_file` is a two line wrapper around `fclose` in the shape a deferred call takes. Nothing about the pattern changes when `os_open` arrives.
+The examples on this page open files with stdio, so that they need nothing but `burrow/defer.h`, and `close_file` is a two line wrapper around `fclose` in the shape a deferred call takes. With `os_open` the pattern is the same, and the wrapper calls `os_file_close` instead.
 
 The close runs when control leaves the block, and it does not matter how control leaves: falling off the end, `return`, `break`, `continue`, a `goto` out, or a panic once panic lands.
 

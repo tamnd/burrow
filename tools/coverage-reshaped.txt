@@ -66,6 +66,9 @@ io: func NopCloser: returns the IoNopCloser value, io_nop_closer_as_io_read_clos
 io: func NewSectionReader: returns the IoSectionReader value rather than a pointer to a new one
 io: func NewOffsetWriter: returns the IoOffsetWriter value rather than a pointer to a new one
 
+# include/burrow/io/ioutil.h: NopCloser is io's, so it has io's shape.
+io/ioutil: func NopCloser: returns the IoNopCloser value, io_nop_closer_as_io_read_closer makes the ReadCloser
+
 # include/burrow/io.h: these have to allocate, so they take an allocator, and a
 # variadic list in C is a pointer and a count.
 io: func MultiReader: takes an allocator and the readers as a pointer and a count

@@ -147,6 +147,7 @@
 #include "burrow/image/png.h"
 #include "burrow/io.h"
 #include "burrow/io/fs.h"
+#include "burrow/io/ioutil.h"
 #include "burrow/iter.h"
 #include "burrow/log.h"
 #include "burrow/log/slog.h"

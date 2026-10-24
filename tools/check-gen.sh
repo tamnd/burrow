@@ -69,6 +69,20 @@ if ! diff -u "$tmp/embed_want.c" "$tmp/embed.c"; then
 	exit 1
 fi
 
+# The same for the ACVP capabilities of tests/fips140_acvp_test.c, which are
+# Go's files in tests/fips140test.
+tools/burrow-gen embed tests/fips140_acvp_test.c --dir tests/fips140test -o "$tmp/fips140_acvp_test_embed.c" 2>"$tmp/err" || {
+	cat "$tmp/err" >&2
+	exit 1
+}
+grep -v -e '^#embed ' -e '^#if __has_embed(' "$tmp/fips140_acvp_test_embed.c" >"$tmp/acvp.c"
+grep -v -e '^#embed ' -e '^#if __has_embed(' tests/fips140test/fips140_acvp_test_embed.c >"$tmp/acvp_want.c"
+if ! diff -u "$tmp/acvp_want.c" "$tmp/acvp.c"; then
+	printf 'check-gen: tests/fips140test/fips140_acvp_test_embed.c is not what burrow-gen embed writes now.\n' >&2
+	printf 'check-gen: regenerate with tools/burrow-gen embed tests/fips140_acvp_test.c --dir tests/fips140test -o tests/fips140test/fips140_acvp_test_embed.c\n' >&2
+	exit 1
+fi
+
 # The time zone database, src/time/zoneinfo.zip as C.
 tools/burrow-gen embed src/time/tzdata.c --include burrow/time/tzdata.h -o "$tmp/tzdata_zip.c" || exit 1
 grep -v -e '^#embed ' -e '^#if __has_embed(' "$tmp/tzdata_zip.c" >"$tmp/tz.c"

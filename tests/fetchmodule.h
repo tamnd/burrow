@@ -1,6 +1,6 @@
 /* cryptotest.FetchModule, and the parts of testenv and testing.T it uses, for
- * the tests that fetch a module and run something from it: TestACVP and
- * TestBetterTLS.
+ * the tests that fetch a module and run something from it: TestACVP,
+ * TestBetterTLS and TestBogoSuite.
  *
  * Copyright 2024 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.

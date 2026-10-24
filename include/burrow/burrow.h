@@ -199,6 +199,7 @@
 #include "burrow/regexp.h"
 #include "burrow/regexp/syntax.h"
 #include "burrow/runtime.h"
+#include "burrow/runtime/cgo.h"
 #include "burrow/runtime/debug.h"
 #include "burrow/runtime/pprof.h"
 #include "burrow/runtime/trace.h"

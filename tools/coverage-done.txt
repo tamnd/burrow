@@ -140,3 +140,4 @@ text/template
 html/template
 testing/cryptotest
 crypto/tls
+runtime/cgo

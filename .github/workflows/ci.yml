@@ -463,6 +463,11 @@ jobs:
           sudo sh -c "echo ':APE:M::MZqFpD::/usr/bin/ape:' >/proc/sys/fs/binfmt_misc/register" || true
           echo "$RUNNER_TEMP/cosmocc/bin" >>"$GITHUB_PATH"
       - name: the test suite
+        # make exports CC to the tests, and TestACVP runs go build, which would
+        # hand cosmocc the C that cgo writes for package net. cosmocc can't
+        # compile it, so the go commands the tests run don't use cgo.
+        env:
+          CGO_ENABLED: "0"
         run: make BUILD=build-cosmo CC=x86_64-unknown-cosmo-cc AR=x86_64-unknown-cosmo-ar test
       - name: hello, from the single file build
         run: |

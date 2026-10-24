@@ -88,6 +88,60 @@ static NetAddr h2t_listener_addr(void *self) {
 static const NetListenerVT h2t_listener_vt = {
     {NULL, h2t_listener_close}, h2t_accept, h2t_listener_addr};
 
+/* Not in Go: the server's end of the pipe, which counts the writes the server
+ * starts on it, so that a test can wait for a write to be blocked on the pipe
+ * where Go waits for its bubble to go quiet. */
+typedef struct H2tServerConn {
+    NetConn conn;
+    SyncAtomicInt64 writes;
+} H2tServerConn;
+
+static Int h2t_sc_read(void *self, Slice p, Error *err) {
+    H2tServerConn *c = (H2tServerConn *)self;
+    return c->conn.vt->reader.read(c->conn.data, p, err);
+}
+
+static Int h2t_sc_write(void *self, Slice p, Error *err) {
+    H2tServerConn *c = (H2tServerConn *)self;
+    (void)sync_atomic_int64_add(&c->writes, 1);
+    return c->conn.vt->writer.write(c->conn.data, p, err);
+}
+
+static Error h2t_sc_close(void *self) {
+    H2tServerConn *c = (H2tServerConn *)self;
+    return c->conn.vt->closer.close(c->conn.data);
+}
+
+static NetAddr h2t_sc_local_addr(void *self) {
+    H2tServerConn *c = (H2tServerConn *)self;
+    return c->conn.vt->local_addr(c->conn.data);
+}
+
+static NetAddr h2t_sc_remote_addr(void *self) {
+    H2tServerConn *c = (H2tServerConn *)self;
+    return c->conn.vt->remote_addr(c->conn.data);
+}
+
+static Error h2t_sc_set_deadline(void *self, Time t) {
+    H2tServerConn *c = (H2tServerConn *)self;
+    return c->conn.vt->set_deadline(c->conn.data, t);
+}
+
+static Error h2t_sc_set_read_deadline(void *self, Time t) {
+    H2tServerConn *c = (H2tServerConn *)self;
+    return c->conn.vt->set_read_deadline(c->conn.data, t);
+}
+
+static Error h2t_sc_set_write_deadline(void *self, Time t) {
+    H2tServerConn *c = (H2tServerConn *)self;
+    return c->conn.vt->set_write_deadline(c->conn.data, t);
+}
+
+static const NetConnVT h2t_sc_vt = {
+    {NULL, h2t_sc_read},      {NULL, h2t_sc_write},     {NULL, h2t_sc_close},
+    h2t_sc_local_addr,        h2t_sc_remote_addr,       h2t_sc_set_deadline,
+    h2t_sc_set_read_deadline, h2t_sc_set_write_deadline};
+
 /* ---------------------------------------------------------- the tester */
 
 /* serverTester. */
@@ -100,6 +154,7 @@ typedef struct H2tTester {
     LogLogger *lg;
     NetConn sc;
     NetConn cc;
+    H2tServerConn scw;
     H2tListener ol;
     Error serve_err;
     SyncWaitGroup wg;
@@ -217,7 +272,9 @@ static bool h2t_start_server(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *
         testing_t_errorf_v(t, "no memory for the tester");
         return false;
     }
-    st->ol.conn = st->sc;
+    st->scw.conn = st->sc;
+    st->ol.conn.vt = &h2t_sc_vt;
+    st->ol.conn.data = &st->scw;
     (void)sync_wait_group_go(&st->wg, BURROW_FN(Func, h2t_serve_job, st));
     st->wcond = SYNC_COND(sync_mutex_locker(&st->wmu));
     st->wbuf = BYTES_BUFFER(st->a);
@@ -3291,16 +3348,56 @@ static void TestServerContinuationAfterInvalidHeader(TestingT *t) {
  * its bubble to go quiet. */
 #define H2T_SETTLE (100 * TIME_MILLISECOND)
 
+/* Not in Go: waits for the server to start a write on its end of the pipe
+ * after the first n it made, for at most 10s. The pipe has no buffer, so the
+ * write then waits for the client to read. */
+static bool h2t_wait_server_write(H2tTester *st, int64_t n) {
+    Time give_up = time_add(time_now(), 10 * TIME_SECOND);
+    while (sync_atomic_int64_load(&st->scw.writes) <= n) {
+        if (!time_before(time_now(), give_up)) {
+            testing_t_errorf_v(st->t, "the server made no write after its first %d",
+                               (int)n);
+            return false;
+        }
+        time_sleep(TIME_MILLISECOND);
+    }
+    return true;
+}
+
+/* Not in Go: waits for the server to read everything the client has written
+ * so far, for at most 10s. The pipe has no buffer, so a write to it is done
+ * when the server has read all of it, and the server reads a frame only when
+ * it is done with the one before. */
+static bool h2t_wait_read(H2tTester *st) {
+    Time give_up = time_add(time_now(), 10 * TIME_SECOND);
+    for (;;) {
+        sync_mutex_lock(&st->wmu);
+        bool done = st->wfailed || (bytes_buffer_len(&st->wbuf) == 0 && !st->wbusy);
+        sync_mutex_unlock(&st->wmu);
+        if (done)
+            return true;
+        if (!time_before(time_now(), give_up)) {
+            testing_t_errorf_v(st->t, "the server didn't read what the client wrote");
+            return false;
+        }
+        time_sleep(TIME_MILLISECOND);
+    }
+}
+
 /* TestServer_HeaderTableSizeDuringWrite tests that a
  * SETTINGS_HEADER_TABLE_SIZE change from the client is not applied to the
  * server's HPACK encoder while a frame write, which may be using the encoder
  * on another goroutine, is in progress.
  *
  * Not in Go: the server's writes block here because the client doesn't read
- * from the pipe, and the test sleeps where Go waits for its bubble to go
- * quiet. Go also checks the size the server's encoder has during and after
- * the write, which the tester can't see; the header block for stream 3 is
- * checked as Go checks it. */
+ * from the pipe. Where Go waits for its bubble to go quiet after the request,
+ * the test waits for the server to start writing the response. Where it waits
+ * after the SETTINGS, the test sends a PING with ACK set, which the server
+ * ignores, and waits for the server to read it, so the server has handled both
+ * SETTINGS frames by then. Otherwise the response could finish before the
+ * second one arrives, and the server would ACK each on its own. Go also checks
+ * the size the server's encoder has during and after the write, which the
+ * tester can't see; the header block for stream 3 is checked as Go checks it. */
 static void TestServer_HeaderTableSizeDuringWrite(TestingT *t) {
     SKIP_WITHOUT_THREADS(t);
     H2tTester st;
@@ -3311,21 +3408,24 @@ static void TestServer_HeaderTableSizeDuringWrite(TestingT *t) {
 
     /* Leave the response HEADERS write for stream 1 in progress while the
      * client changes SETTINGS_HEADER_TABLE_SIZE twice. */
-    if (!h2t_bodyless_req1(&st, NULL, 0)) {
+    int64_t writes = sync_atomic_int64_load(&st.scw.writes);
+    if (!h2t_bodyless_req1(&st, NULL, 0) || !h2t_wait_server_write(&st, writes)) {
         h2t_close(&st);
         return;
     }
-    time_sleep(H2T_SETTLE);
     Http2Setting s0 = {HTTP2_SETTING_HEADER_TABLE_SIZE, 0};
     Http2Setting s1 = {HTTP2_SETTING_HEADER_TABLE_SIZE, 2048};
+    static const Byte ack_ping_data[8] = {1, 2, 4, 8, 16, 32, 64, 128};
     if (h2t_failed(&st, "WriteSettings",
                    burrow__http2_framer_write_settings(st.fr, &s0, 1)) ||
         h2t_failed(&st, "WriteSettings",
-                   burrow__http2_framer_write_settings(st.fr, &s1, 1))) {
+                   burrow__http2_framer_write_settings(st.fr, &s1, 1)) ||
+        h2t_failed(&st, "WritePing",
+                   burrow__http2_framer_write_ping(st.fr, true, ack_ping_data)) ||
+        !h2t_wait_read(&st)) {
         h2t_close(&st);
         return;
     }
-    time_sleep(H2T_SETTLE);
     if (!h2t_want_headers(&st, 1, true, NULL, 0) || !h2t_want_settings_ack(&st) ||
         !h2t_write_headers(&st, 3, h2t_encode_header(&st, NULL, 0), true, true)) {
         h2t_close(&st);

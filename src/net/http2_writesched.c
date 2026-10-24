@@ -58,7 +58,10 @@ Int burrow__http2_frame_write_request_consume(const Http2FrameWriteRequest *wr,
     }
 
     /* It may need splitting to keep to the limits. */
-    int32_t allowed = burrow__http2_outflow_available(&wr->stream->flow);
+    bool ok = false;
+    int32_t allowed = burrow__http2_outflow_available(&wr->stream->flow, &ok);
+    if (!ok)
+        return 0;
     if (n < allowed)
         allowed = n;
     if (wr->stream->sc->max_frame_size < allowed)
@@ -201,6 +204,8 @@ static bool hws_queue_consume(const HwsBase *b, HwsQueue *q, int32_t n,
     if (hws_queue_empty(q))
         return false;
     Http2FrameWriteRequest *first = hws_queue_peek(q);
+    if (first == NULL)
+        return false;
     Http2FrameWriteRequest consumed;
     Http2FrameWriteRequest rest;
     switch (burrow__http2_frame_write_request_consume(first, n, &consumed, &rest)) {

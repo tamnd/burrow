@@ -1,6 +1,8 @@
 /* Derived from net/http/internal/http2's writesched_test.go,
  * writesched_roundrobin_test.go and writesched_priority_rfc9218_test.go in
- * Go 1.27.1.
+ * Go 1.27.1. TestFrameWriteRequestWithData and TestFrameWriteRequestData give
+ * the stream a connection-level window, as go1.27.2 does for GO-2026-6611
+ * (CL 847308).
  *
  * Go's checkConsume compares requests with reflect.DeepEqual, and here that
  * is the same writer kind, stream, done channel and, for DATA, the same bytes
@@ -163,6 +165,8 @@ static void TestFrameWriteRequestWithData(TestingT *t) {
     Alloc *a = arena_allocator(&ar);
     Http2ServerConn sc = wt_conn(16);
     Http2Stream st = wt_stream(1, &sc);
+    Http2ConnOutflow conn = {0, 0, false};
+    st.flow.conn = &conn;
     enum { size = 32 };
     Chan *done = chan_make(heap_allocator(), TYPE_ERROR, 0);
     Http2FrameWriteRequest wr =
@@ -205,6 +209,10 @@ static void TestFrameWriteRequestData(TestingT *t) {
     Alloc *a = arena_allocator(&ar);
     Http2ServerConn sc = wt_conn(16);
     Http2Stream st = wt_stream(1, &sc);
+    Http2ConnOutflow conn = {0, 0, false};
+    st.flow.conn = &conn;
+    (void)burrow__http2_conn_outflow_add(
+        st.flow.conn, HTTP2_MAX_FLOW_WINDOW); /* conn-level flow is large */
     enum { size = 32 };
     Chan *done = chan_make(heap_allocator(), TYPE_ERROR, 0);
     Http2FrameWriteRequest wr =

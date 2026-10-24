@@ -17,6 +17,11 @@
  * TestServer_HeaderTableSizeDuringWrite came with go1.27.2 (GO-2026-6617, CL
  * 847313).
  *
+ * The PING at the end of TestServer_Send_RstStream_After_Bogus_WindowUpdate,
+ * and the handler writes in TestServerSettingsFlowControlUpdateBeyondLimit and
+ * TestServerSettingsFlowControlUpdateWithinLimit, came with go1.27.2
+ * (GO-2026-6611, CL 847308).
+ *
  * Copyright 2014 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -2305,6 +2310,9 @@ static void h2t_block_free(H2tBlock *b) {
         chan_free(b->block);
 }
 
+static bool h2t_want_frame_type(H2tTester *st, Http2FrameKind k);
+static bool h2t_want_idle(H2tTester *st);
+
 static void TestServer_Send_GoAway_After_Bogus_WindowUpdate(TestingT *t) {
     SKIP_WITHOUT_THREADS(t);
     H2tTester st;
@@ -2328,8 +2336,13 @@ static void TestServer_Send_RstStream_After_Bogus_WindowUpdate(TestingT *t) {
         h2t_write_headers(&st, 1, h2t_encode_header(&st, h2t_post, 2), false, true)) {
         bool v;
         (void)chan_recv(b.in, &v);
-        if (h2t_write_window_update(&st, 1, (1U << 31) - 1))
-            (void)h2t_want_rst_stream(&st, 1, HTTP2_ERR_CODE_FLOW_CONTROL);
+        static const Byte zero[8] = {0};
+        if (h2t_write_window_update(&st, 1, (1U << 31) - 1) &&
+            h2t_want_rst_stream(&st, 1, HTTP2_ERR_CODE_FLOW_CONTROL) &&
+            /* Connection is still alive, even if the stream has been reset. */
+            !h2t_failed(&st, "WritePing",
+                        burrow__http2_framer_write_ping(st.fr, false, zero)))
+            (void)h2t_want_frame_type(&st, HTTP2_PING_FRAME);
     }
     chan_close(b.block);
     h2t_close(&st);
@@ -2635,30 +2648,76 @@ static void TestServerPathInitialSlashes(TestingT *t) {
 enum { H2T_WINDOW_INCREASE = 1000 };
 #define H2T_MAX_WINDOW ((1U << 31) - 1) /* RFC 9113, 6.9.1 */
 
-/* A POST with its data still to come, and some more window for it. Then a
- * SETTINGS frame moves the initial window to over_by past what the stream can
- * take. */
+/* Go's handler call for the two tests below: the handler flushes the response
+ * header and says so on in, writes "hello" and flushes once step has a value
+ * for it, and then waits for block to close. */
+typedef struct H2tFlowCall {
+    Chan *in;
+    Chan *step;
+    Chan *block;
+} H2tFlowCall;
+
+static void h2t_flow_call_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    H2tFlowCall *c = (H2tFlowCall *)env;
+    (void)w.vt->flush(w.data);
+    bool v = true;
+    (void)chan_try_send(c->in, &v);
+    if (chan_recv(c->step, &v)) {
+        static const Byte hello[] = "hello";
+        Error err = BURROW_NO_ERROR;
+        (void)http_response_writer_write(
+            w, slice_from((void *)(uintptr_t)hello, 5, 5, TYPE_BYTE), &err);
+        (void)w.vt->flush(w.data);
+    }
+    (void)chan_recv(c->block, &v);
+}
+
+/* A POST with its data still to come, its response header flushed, and some
+ * more window for it. Then a SETTINGS frame moves the initial window to
+ * over_by past what the stream can take, and the handler writes. */
 static void h2t_settings_flow_control(TestingT *t, uint32_t over_by) {
-    H2tBlock b;
-    if (!h2t_block_make(t, &b)) {
-        h2t_block_free(&b);
-        return;
+    H2tFlowCall c;
+    c.in = chan_make(heap_allocator(), TYPE_BOOL, 1);
+    c.step = chan_make(heap_allocator(), TYPE_BOOL, 0);
+    c.block = chan_make(heap_allocator(), TYPE_BOOL, 0);
+    if (c.in == NULL || c.step == NULL || c.block == NULL) {
+        testing_t_errorf_v(t, "no memory");
+    } else {
+        H2tTester st;
+        bool v = true;
+        if (h2t_start(&st, t, h2t_flow_call_handler, &c) && h2t_greet(&st) &&
+            h2t_write_headers(&st, 1, h2t_encode_header(&st, h2t_post, 2), false,
+                              true) &&
+            chan_recv(c.in, &v) && h2t_want_frame_type(&st, HTTP2_META_HEADERS_FRAME) &&
+            /* Give this stream some additional flow control. */
+            h2t_write_window_update(&st, 1, H2T_WINDOW_INCREASE) &&
+            h2t_want_idle(&st)) {
+            /* Adjust the initial flow control window. */
+            Http2Setting s = {HTTP2_SETTING_INITIAL_WINDOW_SIZE,
+                              H2T_MAX_WINDOW - H2T_WINDOW_INCREASE + over_by};
+            if (h2t_write_settings(&st, &s, 1)) {
+                /* We detect this condition lazily. Write something to the
+                 * stream so we notice. */
+                chan_send(c.step, &v);
+                if (over_by == 0) {
+                    if (h2t_want_frame_type(&st, HTTP2_DATA_FRAME))
+                        (void)h2t_want_idle(&st);
+                } else {
+                    (void)h2t_want_go_away(&st, 1, HTTP2_ERR_CODE_FLOW_CONTROL);
+                }
+            }
+        }
+        chan_close(c.step);
+        chan_close(c.block);
+        h2t_close(&st);
     }
-    H2tTester st;
-    if (h2t_start(&st, t, h2t_block_handler, &b) && h2t_greet(&st) &&
-        h2t_write_headers(&st, 1, h2t_encode_header(&st, h2t_post, 2), false, true) &&
-        h2t_write_window_update(&st, 1, H2T_WINDOW_INCREASE)) {
-        Http2Setting s = {HTTP2_SETTING_INITIAL_WINDOW_SIZE,
-                          H2T_MAX_WINDOW - H2T_WINDOW_INCREASE + over_by};
-        if (over_by == 0)
-            (void)h2t_write_settings(&st, &s, 1);
-        else if (!h2t_failed(&st, "WriteSettings",
-                             burrow__http2_framer_write_settings(st.fr, &s, 1)))
-            (void)h2t_want_go_away(&st, 1, HTTP2_ERR_CODE_FLOW_CONTROL);
-    }
-    chan_close(b.block);
-    h2t_close(&st);
-    h2t_block_free(&b);
+    if (c.in != NULL)
+        chan_free(c.in);
+    if (c.step != NULL)
+        chan_free(c.step);
+    if (c.block != NULL)
+        chan_free(c.block);
 }
 
 /* "An endpoint MUST treat a change to SETTINGS_INITIAL_WINDOW_SIZE that causes

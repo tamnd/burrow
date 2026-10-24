@@ -19,6 +19,9 @@
  *
  * TestTransportResponseContentLength and TestTransportResponseConnHeaders came
  * with go1.27.2 (GO-2026-6610, CL 835145).
+ * TestTransportSettingsFlowControlUpdateBeyondLimit and
+ * TestTransportSettingsFlowControlUpdateWithinLimit send a request body, as
+ * go1.27.2 does for GO-2026-6611 (CL 847308).
  *
  * Copyright 2015 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -2611,8 +2614,11 @@ static void h2ct_settings_flow_control_update(H2ctTT *tt, const void *arg) {
     H2ctConn *tc = h2ct_new_client_conn(tt);
     H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
 
-    H2ctRT *rt = h2ct_tc_round_trip(
-        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    H2ctBody *body = h2ct_new_request_body(tt);
+    H2CT_TRY(body != NULL);
+    H2ctRT *rt =
+        h2ct_tc_round_trip(tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"),
+                                                (IoReader){&h2ct_body_vt, body}));
     H2CT_TRY(rt != NULL);
     H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
     uint32_t id = h2ct_rt_stream_id(rt);
@@ -2631,11 +2637,17 @@ static void h2ct_settings_flow_control_update(H2ctTT *tt, const void *arg) {
     s[0].id = HTTP2_SETTING_INITIAL_WINDOW_SIZE;
     s[0].val = beyond ? max_initial_window_size + 1 : max_initial_window_size;
     H2CT_TRY(h2ct_write_settings(tc, s, 1));
+    H2CT_TRY(h2ct_want_settings_ack(tc));
+
+    /* We detect this condition lazily. Write something to the stream so we
+     * notice. */
+    h2ct_body_write_bytes(body, 1);
+    h2ct_body_close_with_error(body, io_eof);
     if (beyond) {
         H2CT_TRY(h2ct_want_go_away(tc, 0, HTTP2_ERR_CODE_FLOW_CONTROL));
         return;
     }
-    H2CT_TRY(h2ct_want_settings_ack(tc));
+    H2CT_TRY(h2ct_want_data(tc, 1, true, 1, NULL, true));
     H2CT_TRY(h2ct_want_idle(tc));
 }
 

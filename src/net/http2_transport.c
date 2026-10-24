@@ -752,7 +752,7 @@ struct burrow__Http2ClientConn {
 
     SyncMutex mu;  /* guards the following */
     SyncCond cond; /* on mu, broadcast on flow and closed changes */
-    Http2Outflow flow;
+    Http2ConnOutflow flow;
     Http2Inflow inflow;
     Chan *seen_settings_chan; /* closed when seen_settings is or reading fails */
     Str go_away_debug;        /* in earena */
@@ -771,7 +771,6 @@ struct burrow__Http2ClientConn {
     uint32_t max_frame_size;
     uint32_t max_concurrent_streams;
     uint32_t peer_max_header_table_size;
-    uint32_t initial_window_size;
     int32_t initial_stream_recv_window_size;
     uint32_t read_before_stream_id;
     uint64_t peer_max_header_list_size;
@@ -1219,6 +1218,85 @@ static void h2c_close_for_error(h2c_Conn *cc, Error err) {
     h2c_close_conn(cc);
 }
 
+/* What goAwayAndClose and the goroutine it starts share. */
+typedef struct h2c_GoAwayWrite {
+    h2c_Conn *cc; /* a reference */
+    SyncAtomicInt32 refs;
+    Http2ErrCode code;
+    Chan *done;
+} h2c_GoAwayWrite;
+
+static void h2c_go_away_write_unref(h2c_GoAwayWrite *gw) {
+    if (sync_atomic_int32_add(&gw->refs, -1) != 0)
+        return;
+    h2c_Conn *cc = gw->cc;
+    chan_free(gw->done);
+    mem_free(cc->a, gw, sizeof *gw, _Alignof(h2c_GoAwayWrite));
+    h2c_unref(cc);
+}
+
+static void h2c_go_away_write(void *env) {
+    h2c_GoAwayWrite *gw = (h2c_GoAwayWrite *)env;
+    h2c_Conn *cc = gw->cc;
+    sync_mutex_lock(&cc->wmu);
+    ArenaMark m = error_mark();
+    (void)burrow__http2_framer_write_go_away(cc->fr, 0, gw->code,
+                                             slice_from(NULL, 0, 0, TYPE_BYTE));
+    (void)bufio_writer_flush(cc->bw);
+    error_release(m);
+    sync_mutex_unlock(&cc->wmu);
+    chan_close(gw->done);
+    h2c_go_away_write_unref(gw);
+}
+
+/* goAwayAndClose. When there is no memory for the goroutine that writes the
+ * GOAWAY, the connection closes without one. */
+static void h2c_go_away_and_close(h2c_Conn *cc, Http2ErrCode code) {
+    sync_mutex_lock(&cc->mu);
+    bool closed = cc->closed;
+    cc->closing = true;
+    cc->closed = true;
+    sync_mutex_unlock(&cc->mu);
+    if (closed)
+        return;
+    h2c_count(cc, "conn_close_error_", code);
+    h2c_GoAwayWrite *gw =
+        (h2c_GoAwayWrite *)mem_alloc(cc->a, sizeof *gw, _Alignof(h2c_GoAwayWrite));
+    if (gw != NULL) {
+        gw->cc = cc;
+        gw->refs.v = 2;
+        gw->code = code;
+        gw->done = chan_make(cc->a, TYPE_BOOL, 0);
+        if (gw->done == NULL) {
+            mem_free(cc->a, gw, sizeof *gw, _Alignof(h2c_GoAwayWrite));
+            gw = NULL;
+        }
+    }
+    if (gw != NULL) {
+        h2c_ref(cc);
+        if (go(BURROW_FN(Func, h2c_go_away_write, gw))) {
+            TimeTimer *t = time_new_timer(cc->a, 250 * TIME_MILLISECOND);
+            if (t != NULL) {
+                SelectCase cases[2] = {
+                    BURROW_RECV(gw->done, NULL),
+                    BURROW_RECV(time_timer_c(t), NULL),
+                };
+                (void)chan_select(cases, 2);
+                time_timer_free(t);
+            } else {
+                (void)chan_recv(gw->done, NULL);
+            }
+        } else {
+            gw->refs.v = 1;
+        }
+        h2c_go_away_write_unref(gw);
+    }
+    Byte cb[HTTP2_STRING_MAX];
+    Str cs = burrow__http2_err_code_string(code, cb);
+    h2c_close_for_error(
+        cc, h2c_keep_err(cc, fmt_errorf_v("http2: closing connection with %s", cs)));
+}
+
 /* closeForLostPing. */
 static void h2c_close_for_lost_ping(h2c_Conn *cc) {
     h2c_count_name(cc, "conn_close_lost_ping");
@@ -1289,8 +1367,7 @@ static h2c_Conn *h2c_new_client_conn(Http2Transport *t, NetConn c, bool single_u
     cc->conf = h2c_config_from_transport(t->t1);
     cc->single_use = single_use;
     cc->next_stream_id = 1;
-    cc->max_frame_size = H2C_SPEC_MAX_FRAME_SIZE;      /* spec default */
-    cc->initial_window_size = H2C_INITIAL_WINDOW_SIZE; /* spec default */
+    cc->max_frame_size = H2C_SPEC_MAX_FRAME_SIZE; /* spec default */
     cc->initial_stream_recv_window_size =
         (int32_t)cc->conf.max_receive_buffer_per_stream;
     /* "infinite", per spec. Use a smaller value until we have received
@@ -1330,7 +1407,7 @@ static h2c_Conn *h2c_new_client_conn(Http2Transport *t, NetConn c, bool single_u
         cc->streams == NULL || cc->pings == NULL)
         goto oom;
 
-    (void)burrow__http2_outflow_add(&cc->flow, H2C_INITIAL_WINDOW_SIZE);
+    burrow__http2_conn_outflow_init(&cc->flow);
     IoWriter sw = {&h2c_sticky_writer_vt, cc};
     cc->bw = bufio_new_writer_size(a, sw, H2C_BUF_SIZE);
     IoReader cr = {&c.vt->reader, c.data};
@@ -1598,8 +1675,19 @@ static Str h2c_frame_type_name(const Http2Frame *f) {
 }
 
 /* streamByID, with a reference to the stream for the caller to drop. */
+static h2c_Stream *h2c_stream_by_id_locked(h2c_Conn *cc, uint32_t id,
+                                           bool header_or_data);
+
 static h2c_Stream *h2c_stream_by_id(h2c_Conn *cc, uint32_t id, bool header_or_data) {
     sync_mutex_lock(&cc->mu);
+    h2c_Stream *cs = h2c_stream_by_id_locked(cc, id, header_or_data);
+    sync_mutex_unlock(&cc->mu);
+    return cs;
+}
+
+/* streamByIDLocked, which takes a reference to the stream it finds. */
+static h2c_Stream *h2c_stream_by_id_locked(h2c_Conn *cc, uint32_t id,
+                                           bool header_or_data) {
     if (header_or_data) {
         /* Work around an unfortunate gRPC behavior. See the comment on
          * rst_stream_pings_blocked. */
@@ -1615,7 +1703,6 @@ static h2c_Stream *h2c_stream_by_id(h2c_Conn *cc, uint32_t id, bool header_or_da
         else
             h2c_sref(cs);
     }
-    sync_mutex_unlock(&cc->mu);
     return cs;
 }
 
@@ -2251,22 +2338,14 @@ static Error h2c_process_settings_no_write(h2c_Conn *cc, const Http2Frame *f) {
         case HTTP2_SETTING_MAX_HEADER_LIST_SIZE:
             cc->peer_max_header_list_size = (uint64_t)s.val;
             break;
-        case HTTP2_SETTING_INITIAL_WINDOW_SIZE: {
-            /* Adjust flow control of currently-open frames by the difference
-             * of the old initial window size and this one. */
-            int32_t delta = (int32_t)s.val - (int32_t)cc->initial_window_size;
-            const void *k_;
-            void *v_;
-            H2C_EACH_STREAM(cc, cs) {
-                if (!burrow__http2_outflow_add(&cs->flow, delta))
-                    err = burrow__http2_connection_error(HTTP2_ERR_CODE_FLOW_CONTROL);
-            }
-            if (BURROW_FAILED(err))
+        case HTTP2_SETTING_INITIAL_WINDOW_SIZE:
+            if (!burrow__http2_conn_outflow_change_initial_window_size(
+                    &cc->flow, (int64_t)s.val)) {
+                err = burrow__http2_connection_error(HTTP2_ERR_CODE_FLOW_CONTROL);
                 break;
+            }
             sync_cond_broadcast(&cc->cond);
-            cc->initial_window_size = s.val;
             break;
-        }
         case HTTP2_SETTING_HEADER_TABLE_SIZE:
             burrow__hpack_encoder_set_max_dynamic_table_size(cc->henc, s.val);
             cc->peer_max_header_table_size = s.val;
@@ -2329,25 +2408,37 @@ static Error h2c_process_settings(h2c_Conn *cc, const Http2Frame *f) {
 /* processWindowUpdate. */
 static Error h2c_process_window_update(h2c_Conn *cc, const Http2Frame *f) {
     uint32_t id = f->header.stream_id;
-    h2c_Stream *cs = h2c_stream_by_id(cc, id, false);
-    if (id != 0 && cs == NULL)
-        return BURROW_NO_ERROR;
-
+    int32_t inc = (int32_t)f->u.window_update.increment;
     Error err = BURROW_NO_ERROR;
+    bool ok = true;
+    h2c_Stream *cs = NULL;
     sync_mutex_lock(&cc->mu);
-    Http2Outflow *fl = cs != NULL ? &cs->flow : &cc->flow;
-    if (!burrow__http2_outflow_add(fl, (int32_t)f->u.window_update.increment)) {
-        /* For a stream, the sender sends RST_STREAM with an error code of
-         * FLOW_CONTROL_ERROR. */
-        if (cs != NULL)
-            h2c_end_stream_error_locked(
-                cs, burrow__http2_stream_error(id, HTTP2_ERR_CODE_FLOW_CONTROL,
-                                               BURROW_NO_ERROR));
-        else
+    if (id == 0) {
+        if (!burrow__http2_conn_outflow_add(&cc->flow, inc)) {
             err = burrow__http2_connection_error(HTTP2_ERR_CODE_FLOW_CONTROL);
+            ok = false;
+        }
     } else {
-        sync_cond_broadcast(&cc->cond);
+        cs = h2c_stream_by_id_locked(cc, id, false);
+        if (cs == NULL) {
+            ok = false;
+        } else if (!burrow__http2_outflow_add(&cs->flow, inc)) {
+            ok = false;
+            if (cs->flow.conn->flow_err) {
+                /* This is a lazily-detected connection-level flow control
+                 * error. */
+                err = burrow__http2_connection_error(HTTP2_ERR_CODE_FLOW_CONTROL);
+            } else {
+                /* For stream, the sender sends RST_STREAM with an error code
+                 * of FLOW_CONTROL_ERROR. */
+                h2c_end_stream_error_locked(
+                    cs, burrow__http2_stream_error(id, HTTP2_ERR_CODE_FLOW_CONTROL,
+                                                   BURROW_NO_ERROR));
+            }
+        }
     }
+    if (ok)
+        sync_cond_broadcast(&cc->cond);
     sync_mutex_unlock(&cc->mu);
     if (cs != NULL)
         h2c_sunref(cs);
@@ -2937,8 +3028,7 @@ static Error h2c_add_stream_locked(h2c_Conn *cc, h2c_Stream *cs) {
     if (!map_set(cc->streams, &id, &v))
         return burrow_err_out_of_memory;
     h2c_sref(cs);
-    (void)burrow__http2_outflow_add(&cs->flow, (int32_t)cc->initial_window_size);
-    burrow__http2_outflow_set_conn_flow(&cs->flow, &cc->flow);
+    cs->flow.conn = &cc->flow;
     burrow__http2_inflow_init(&cs->inflow, cc->initial_stream_recv_window_size);
     cs->id = id;
     cc->next_stream_id += 2;
@@ -3147,9 +3237,14 @@ static int32_t h2c_await_flow_control(h2c_Stream *cs, Int max_bytes, Error *err)
             *err = context_err(cs->ctx);
             break;
         }
-        int32_t a = burrow__http2_outflow_available(&cs->flow);
-        if (a > 0) {
-            int32_t take = a;
+        bool ok = false;
+        int32_t avail = burrow__http2_outflow_available(&cs->flow, &ok);
+        if (!ok) {
+            *err = burrow__http2_connection_error(HTTP2_ERR_CODE_FLOW_CONTROL);
+            break;
+        }
+        if (avail > 0) {
+            int32_t take = avail;
             if ((Int)take > max_bytes)
                 take = (int32_t)max_bytes;
             if (take > (int32_t)cc->max_frame_size)
@@ -3593,7 +3688,10 @@ static void h2c_cleanup_write_request(h2c_Stream *cs, Error err) {
     }
     if (BURROW_FAILED(err)) {
         h2c_abort_stream(cs, err); /* possibly redundant, but harmless */
-        if (cs->sent_headers) {
+        Http2ErrCode ce;
+        if (burrow__http2_error_connection(err, &ce)) {
+            h2c_go_away_and_close(cc, ce);
+        } else if (cs->sent_headers) {
             Http2StreamError se;
             if (burrow__http2_error_stream(err, &se)) {
                 if (!h2c_same(se.cause, burrow__http2_err_from_peer))

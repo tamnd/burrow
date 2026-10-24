@@ -673,8 +673,10 @@ void burrow__http2_godebug_set(const char *value);
 /* ------------------------------------------------------------ flow control
  *
  * flow.go. An Http2Inflow is the window this end gave the peer, and an
- * Http2Outflow is the window the peer gave this end. Both are zero values
- * ready to use, as Go's are. */
+ * Http2ConnOutflow and the Http2Outflow of each stream are the windows the
+ * peer gave this end. A stream's Http2Outflow keeps its window as a delta from
+ * the connection's initial window, so that a change to the initial window is
+ * one store and not a walk over every stream (GO-2026-6611). */
 
 /* inflowMinRefresh, the fewest bytes a WINDOW_UPDATE is sent for. */
 enum { HTTP2_INFLOW_MIN_REFRESH = 4 << 10 };
@@ -699,23 +701,56 @@ bool burrow__http2_inflow_take(Http2Inflow *f, uint32_t n);
  * is short. */
 bool burrow__http2_take_inflows(Http2Inflow *f1, Http2Inflow *f2, uint32_t n);
 
+/* initialWindowSize: 6.9.2 Initial Flow Control Window Size. */
+enum { HTTP2_INITIAL_WINDOW_SIZE = 65535 };
+
+/* maxFlowWindow is the maximum size of a flow control window. */
+enum { HTTP2_MAX_FLOW_WINDOW = INT32_MAX };
+
+/* connOutflow is connection-level outbound flow control. */
+typedef struct Http2ConnOutflow {
+    int32_t initial; /* SETTINGS_INITIAL_WINDOW_SIZE, changes with settings updates */
+    int32_t n;       /* connection-level flow control window */
+    bool flow_err;   /* set when a flow control error is encountered */
+} Http2ConnOutflow;
+
+void burrow__http2_conn_outflow_init(Http2ConnOutflow *f);
+
+/* Sets the initial window, or reports false and marks the flow control error
+ * when size is more than 2^31-1. */
+bool burrow__http2_conn_outflow_change_initial_window_size(Http2ConnOutflow *f,
+                                                           int64_t size);
+
+/* Adds n to the connection's window, or reports false and marks the flow
+ * control error when the sum would pass 2^31-1. */
+bool burrow__http2_conn_outflow_add(Http2ConnOutflow *f, int32_t n);
+
+/* outflow is the stream-level outbound flow control window's size. */
 typedef struct Http2Outflow {
-    /* The DATA bytes this end may send. */
-    int32_t n;
-    /* The connection's window, shared by its streams. NULL on the
-     * connection's own. */
-    struct Http2Outflow *conn;
+    /* delta is the difference between the stream's flow control window and
+     * the connection's initial window size (conn.initial).
+     *
+     * Another view is that delta is the number of flow control bytes
+     * provided to this stream in WINDOW_UPDATE frames, less the number of
+     * bytes sent on the stream. */
+    int32_t delta;
+
+    /* conn points to the shared connection-level outflow that is shared by
+     * all streams on that conn. */
+    Http2ConnOutflow *conn;
 } Http2Outflow;
 
-void burrow__http2_outflow_set_conn_flow(Http2Outflow *f, Http2Outflow *cf);
-int32_t burrow__http2_outflow_available(const Http2Outflow *f);
+/* The bytes the stream may send now. *ok is false, and the result 0, once
+ * there has been a flow control error on the connection, which this may be
+ * the one to find. */
+int32_t burrow__http2_outflow_available(Http2Outflow *f, bool *ok);
 
 /* Takes n bytes from the window and the connection's. Panics when n is more
  * than available gives. */
 void burrow__http2_outflow_take(Http2Outflow *f, int32_t n);
 
-/* Adds n, which may be negative, and reports false, changing nothing, when
- * the sum would pass 2^31-1. */
+/* add adds n bytes (positive or negative) to the flow control window. It
+ * returns false if the sum would exceed 2^31-1. */
 bool burrow__http2_outflow_add(Http2Outflow *f, int32_t n);
 
 /* ------------------------------------------------------------- dataBuffer

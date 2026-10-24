@@ -9,20 +9,20 @@
  *     BURROW_FUNC_TYPE_DECL(PropFn);
  *     BURROW_FUNC_TYPE_DEFINE(PropFn, PROP_SIG);
  *
- * A function quick calls is a value of a type declared like that, with
- * BURROW_FUNC and then BURROW_FUNC_TYPE_DEFINE from burrow/declare.h, since
- * the descriptor is what knows how to call it, and it goes in as an Any.
+ * Not in Go: a function quick calls is a value of a type declared like that,
+ * with BURROW_FUNC and then BURROW_FUNC_TYPE_DEFINE from burrow/declare.h,
+ * since the descriptor is what knows how to call it, and it goes in as an Any.
  *
- * Everything quick makes, the arguments, what the function returns, the
- * random source when the Config has none and the error, comes from the
+ * Not in Go: everything quick makes, the arguments, what the function returns,
+ * the random source when the Config has none and the error, comes from the
  * allocator it is handed, and none of it is given back, so that is best an
  * arena. Go's -quickchecks flag is left out, since burrow's testing does not
  * read flags it was not built with, so the default count is always 100.
  *
- * A value of a recursive type is made as deep as Go would make it, which rand
- * decides, and a goroutine's stack does not grow the way Go's does. Checking a
- * function that takes one can need a goroutine started with go_stack and a
- * bigger stack than the default.
+ * Not in Go: a value of a recursive type is made as deep as Go would make it,
+ * which rand decides, and a goroutine's stack does not grow the way Go's does.
+ * Checking a function that takes one can need a goroutine started with go_stack
+ * and a bigger stack than the default.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -50,10 +50,10 @@ extern "C" {
 
 /* A Generator can generate random values of its own type.
  *
- * A type is one when a vtable for it was recorded with BURROW_IMPLEMENTS, as
- * burrow/type.h describes, and quick_value calls it on the zero value of the
- * type, the way Go calls the method. Generate takes the allocator the value
- * should come from, which Go's does not. */
+ * Not in Go: a type is one when a vtable for it was recorded with
+ * BURROW_IMPLEMENTS, as burrow/type.h describes, and quick_value calls it on
+ * the zero value of the type, the way Go calls the method. Generate takes the
+ * allocator the value should come from, which Go's does not. */
 typedef struct QuickGeneratorVT {
     const Type *self_type;
     /* Generate returns a random instance of the type on which it is a
@@ -76,11 +76,11 @@ extern const Type burrow_type_QuickGenerator;
 BURROW_OWNS(ret) ReflectValue quick_value(Alloc *a, ReflectType t, MathRandRand *rand,
                                           bool *ok);
 
-/* Config.Values, which is handed a Slice of ReflectValue to fill in. */
+/* Config.Values. Not in Go: it is handed a Slice of ReflectValue to fill in. */
 BURROW_FUNC(QuickValuesFunc, void, Slice values, MathRandRand *rand);
 
-/* A Config structure contains options for running a test. A NULL Config is
- * the zero one. */
+/* A Config structure contains options for running a test. Not in Go: a NULL
+ * Config is the zero one. */
 typedef struct QuickConfig {
     /* MaxCount sets the maximum number of iterations.
      * If zero, MaxCountScale is used. */
@@ -101,7 +101,7 @@ typedef struct QuickConfig {
 } QuickConfig;
 
 /* A SetupError is the result of an error in the way that check is being
- * used, independent of the functions being tested. errors_as with
+ * used, independent of the functions being tested. Not in Go: errors_as with
  * TYPE_QUICK_SETUP_ERROR gives a pointer to the text. */
 typedef Str QuickSetupError;
 
@@ -110,12 +110,13 @@ extern const Type *const TYPE_QUICK_SETUP_ERROR;
 /* SetupError.Error, which is s itself. */
 BURROW_BORROWS(ret, s) Str quick_setup_error_error(QuickSetupError s);
 
-/* An Error for s, which is copied into a. Out of memory gives
+/* Not in Go: an Error for s, which is copied into a. Out of memory gives
  * burrow_err_out_of_memory. */
 BURROW_OWNS(ret) Error quick_setup_error_as_error(QuickSetupError s, Alloc *a);
 
-/* A CheckError is the result of Check finding an error. In is a Slice of Any.
- * errors_as with TYPE_QUICK_CHECK_ERROR gives a pointer to one. */
+/* A CheckError is the result of Check finding an error. Not in Go: In is a
+ * Slice of Any. errors_as with TYPE_QUICK_CHECK_ERROR gives a pointer to
+ * one. */
 typedef struct QuickCheckError {
     Int count;
     Slice in;
@@ -126,14 +127,14 @@ extern const Type *const TYPE_QUICK_CHECK_ERROR;
 /* CheckError.Error, built in a. */
 BURROW_OWNS(ret) Str quick_check_error_error(const QuickCheckError *s, Alloc *a);
 
-/* An Error for a copy of *s, made in a with its message. The copy shares s's
- * In. Out of memory gives burrow_err_out_of_memory. */
+/* Not in Go: an Error for a copy of *s, made in a with its message. The copy
+ * shares s's In. Out of memory gives burrow_err_out_of_memory. */
 BURROW_OWNS(ret) Error quick_check_error_as_error(const QuickCheckError *s, Alloc *a);
 
-/* A CheckEqualError is the result CheckEqual finding an error. Out1 and Out2
- * are Slices of Any. errors_as with TYPE_QUICK_CHECK_EQUAL_ERROR gives a
- * pointer to one, and errors_as with TYPE_QUICK_CHECK_ERROR does not, the same
- * as in Go, where the CheckError is embedded and not the error's type. */
+/* A CheckEqualError is the result CheckEqual finding an error. Not in Go: Out1
+ * and Out2 are Slices of Any. errors_as with TYPE_QUICK_CHECK_EQUAL_ERROR gives
+ * a pointer to one, and errors_as with TYPE_QUICK_CHECK_ERROR does not, the
+ * same as in Go, where the CheckError is embedded and not the error's type. */
 typedef struct QuickCheckEqualError {
     QuickCheckError check_error;
     Slice out1;
@@ -146,8 +147,8 @@ extern const Type *const TYPE_QUICK_CHECK_EQUAL_ERROR;
 BURROW_OWNS(ret) Str quick_check_equal_error_error(const QuickCheckEqualError *s,
                                                    Alloc *a);
 
-/* An Error for a copy of *s, made in a with its message, sharing s's slices.
- * Out of memory gives burrow_err_out_of_memory. */
+/* Not in Go: an Error for a copy of *s, made in a with its message, sharing s's
+ * slices. Out of memory gives burrow_err_out_of_memory. */
 BURROW_OWNS(ret) Error quick_check_equal_error_as_error(const QuickCheckEqualError *s,
                                                         Alloc *a);
 
@@ -173,8 +174,8 @@ BURROW_OWNS(ret) Error quick_check_equal_error_as_error(const QuickCheckEqualErr
  *         arena_free(&ar);
  *     }
  *
- * f is the function value itself in an Any, and everything Check makes comes
- * from a. */
+ * Not in Go: f is the function value itself in an Any, and everything Check
+ * makes comes from a. */
 BURROW_OWNS(ret) Error quick_check(Alloc *a, Any f, const QuickConfig *config);
 
 /* quick.CheckEqual: looks for an input on which f and g return different
@@ -182,7 +183,8 @@ BURROW_OWNS(ret) Error quick_check(Alloc *a, Any f, const QuickConfig *config);
  * If f and g return different answers, CheckEqual returns a *CheckEqualError
  * describing the input and the outputs.
  *
- * f and g have to have the same type, which here means the same descriptor. */
+ * Not in Go: f and g have to have the same type, which here means the same
+ * descriptor. */
 BURROW_OWNS(ret) Error quick_check_equal(Alloc *a, Any f, Any g,
                                          const QuickConfig *config);
 

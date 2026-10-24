@@ -368,6 +368,12 @@ static void restore_rate(void *env) {
 }
 
 static void TestDeltaProfile(TestingT *t) {
+#if defined(BURROW_ARCH_ARM) || defined(BURROW_ARCH_ARM64)
+    /* testenv.SkipFlaky(t, 50218). Not in Go: there is no -flaky flag to run
+     * it anyway. */
+    testing_t_skip_v(t, "skipping known flaky test without the -flaky flag; see "
+                        "golang.org/issue/50218");
+#endif
 #if !defined(HAVE_TCP)
     /* Not in Go: the test server needs TCP, which here needs the readiness poll
      * FD. */

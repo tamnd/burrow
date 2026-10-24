@@ -77,7 +77,7 @@ CgoHandle cgo_new_handle(Any v);
  *
  * Panics with "runtime/cgo: misuse of an invalid Handle" if the handle is
  * invalid. */
-Any cgo_handle_value(CgoHandle h);
+BURROW_BORROWS(ret, h) Any cgo_handle_value(CgoHandle h);
 
 /* Handle.Delete: invalidates a handle. It should only be called once the
  * program no longer needs to pass the handle to C and the C code no longer has

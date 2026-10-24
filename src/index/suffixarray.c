@@ -262,7 +262,7 @@ static Error sx_read(SuffixarrayIndex *x, Alloc *a, IoReader r, Slice buf) {
     Int n = (Int)n64;
 
     /* allocate space */
-    if ((Int)((uint64_t)n * 2u) < x->data.cap || x->data.cap < n ||
+    if ((Int)((uint64_t)n * 2U) < x->data.cap || x->data.cap < n ||
         (x->sa.int32.p != NULL && n > max_data32) ||
         (x->sa.int64.p != NULL && n <= max_data32)) {
         /* new data is significantly smaller or larger than
@@ -405,7 +405,7 @@ Slice suffixarray_index_lookup(SuffixarrayIndex *x, Alloc *a, Slice s, Int n) {
                 const int32_t *m = (const int32_t *)matches.int32.p;
                 for (Int i = 0; i < result.len; i++)
                     rp[i] = (Int)m[i];
-            } else {
+            } else if (matches.int64.p != NULL) {
                 const int64_t *m = (const int64_t *)matches.int64.p;
                 for (Int i = 0; i < result.len; i++)
                     rp[i] = (Int)m[i];
@@ -417,7 +417,7 @@ Slice suffixarray_index_lookup(SuffixarrayIndex *x, Alloc *a, Slice s, Int n) {
 
 /* n1 += 2 * (n - len(result)), which Go lets overflow. */
 static Int sx_next_n1(Int n1, Int n, Int len) {
-    return (Int)((uint64_t)n1 + 2u * ((uint64_t)n - (uint64_t)len));
+    return (Int)((uint64_t)n1 + 2U * ((uint64_t)n - (uint64_t)len));
 }
 
 static Slice sx_find_all_complete(SuffixarrayIndex *x, Alloc *a, Slice lit, Int n) {

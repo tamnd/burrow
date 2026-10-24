@@ -8,6 +8,13 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#ifndef BURROW_INDEX_SUFFIXARRAY_SAIS_H
+#define BURROW_INDEX_SUFFIXARRAY_SAIS_H
+
+/* suffixarray.h comes first so that the amalgamation files this header with
+ * index/suffixarray, the package it is part of. */
+#include "burrow/index/suffixarray.h"
+
 /* Suffix array construction by induced sorting (SAIS).
  * See Ge Nong, Sen Zhang, and Wai Hong Chen,
  * "Two Efficient Algorithms for Linear Time Suffix Array Construction",
@@ -1001,3 +1008,5 @@ static void induce_s_8_32(SaisBytes text, SaisInt32s sa, SaisInt32s freq,
         sa.p[b] = (int32_t)k;
     }
 }
+
+#endif /* BURROW_INDEX_SUFFIXARRAY_SAIS_H */

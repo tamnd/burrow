@@ -258,6 +258,39 @@ In the text form, debug 1, a profile starts with `--- contention:` for block and
 
 The stack of a block record starts at the function that blocked, such as `chan_recv` or `burrow__sync_mutex_lock_slow`, and the stack of a mutex record starts at the unlock, `burrow__sync_mutex_unlock_slow` or the `sync_rw_mutex` function that let the lock go. When an unlock wakes one goroutine and others are still queued, the unlock is charged an estimate of their waiting as well, as Go does. Go's mutex profile also has contention on the runtime's own locks, and burrow's scheduler locks are not profiled.
 
+## Runtime metrics
+
+`burrow/runtime/metrics.h` is Go's `runtime/metrics`. Each metric has a name that ends in its unit, and `metrics_read` fills in the value for every sample it is given. `metrics_all` lists the names with what each one means. A name it doesn't know comes back as `METRICS_KIND_BAD`, so a program can ask for a metric a later version adds without failing:
+
+<!-- example: ../examples/pprof/metrics.c#read -->
+```c
+MetricsSample s[4];
+memset(s, 0, sizeof s);
+s[0].name = BURROW_S("/gc/gogc:percent");
+s[1].name = BURROW_S("/gc/stack/starting-size:bytes");
+s[2].name = BURROW_S("/gc/heap/allocs-by-size:bytes");
+s[3].name = BURROW_S("/no/such:metric");
+metrics_read(a, slice_from(s, 4, 4, TYPE_METRICS_SAMPLE));
+
+fmt_printf_v("%s %d\n", s[0].name, metrics_value_uint64(s[0].value));
+fmt_printf_v("%s %d\n", s[1].name, metrics_value_uint64(s[1].value));
+MetricsFloat64Histogram *h = metrics_value_float64_histogram(s[2].value);
+fmt_printf_v("%s %d buckets\n", s[2].name, h->buckets.len);
+bool bad = metrics_value_kind(s[3].value) == METRICS_KIND_BAD;
+fmt_printf_v("%s bad: %t\n", s[3].name, bad);
+```
+
+That prints:
+
+```text
+/gc/gogc:percent 100
+/gc/stack/starting-size:bytes 262144
+/gc/heap/allocs-by-size:bytes 69 buckets
+/no/such:metric bad: true
+```
+
+The list of names is Go's, so code that reads them works the same here. Some of them can't mean anything without Go's collector and scheduler, and those read zero. The header says which have real values. A histogram that `metrics_read` has to make comes from the allocator it is given, and it is reused when the same samples are read again, so an arena is the easy choice.
+
 ## Serving the profiles over HTTP
 
 `burrow/net/http/pprof.h` is Go's `net/http/pprof`. In Go, importing the package puts its handlers on `http.DefaultServeMux`. C has nothing that runs on import, so a program calls `http_pprof_register` instead, and from then on a server for the default mux answers under `/debug/pprof/`. This example sends it a few requests through a recorder:

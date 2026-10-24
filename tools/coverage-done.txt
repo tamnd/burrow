@@ -143,3 +143,4 @@ testing/cryptotest
 crypto/tls
 io/ioutil
 runtime/cgo
+runtime/metrics

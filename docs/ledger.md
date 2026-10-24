@@ -14,7 +14,7 @@ A symbol with an entry here links to it from its reference page, and the entry l
 | --- | --- | --- |
 | `unsafe`, all of it | Compiler intrinsics: `Sizeof`, `Offsetof`, `Alignof`, `Pointer`, `Slice`, `String`, `Add` | `sizeof`, `offsetof` and `_Alignof` are native C and do the same thing. `unsafe_slice` and `unsafe_string` are real functions. Nothing is lost. |
 | `embed.FS` | `//go:embed` is a compiler directive | `BURROW_EMBED_FILE(sym, path)` using C23's `#embed`, with `burrow-gen embed` emitting a C array for C11 toolchains that do not have it. Produces a real `EmbedFs` that satisfies `Fs`. |
-| `runtime/cgo` | It is the boundary between Go and C, and in C there is no boundary | The header exists and all five declarations are no-ops that report success. |
+| `runtime/cgo` | It is the boundary between Go and C, and in C there is no boundary | The glue the cgo tool generates has nothing to join, so it is not there. The five declarations a program uses by name are: handles work as Go's do, a number that stands for an `Any` until it is deleted, and `CgoIncomplete` is a C incomplete type. |
 | `runtime/race` | Needs compiler instrumentation | Maps to ThreadSanitizer. Full functionality, and it needs a rebuild, which is exactly the deal Go's `-race` offers. |
 | `runtime/coverage` | Needs compiler instrumentation | Maps to `-fprofile-instr-generate` and gcov, and writes `covmeta` and `covcounters` files that `go tool covdata` can read. |
 | `iter.Seq`, `iter.Seq2` | Range over function is compiler syntax | Function pointer and yield callback types, plus `BURROW_RANGE(...)` which gives you `for` loop syntax over an `IterSeq`. The ergonomics differ, the capability does not. |

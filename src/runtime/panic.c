@@ -33,6 +33,7 @@
 #include "burrow/defer.h"
 #include "burrow/error.h"
 #include "burrow/iface.h"
+#include "burrow/pal.h"
 #include "burrow/runtime.h"
 #include "burrow/sched.h"
 #include "burrow/trace.h"
@@ -65,7 +66,19 @@ static void write_message(Str msg) {
     fflush(stderr);
 }
 
+/* Not in Go, whose os.Exit stops every thread at once. A throw on a thread
+ * that is still running after pal_exit has started the process down is the
+ * process coming apart, not news, and the thread is about to be stopped
+ * anyway, so it waits for that. */
+static void wait_if_exiting(void) {
+    if (!pal_exit_started())
+        return;
+    for (;;)
+        pal_nanosleep(1000000000);
+}
+
 void runtime_throw(Str msg) {
+    wait_if_exiting();
     RuntimeFatalFunc fn = fatal_handler;
 
     /* A handler that returns is a handler that has misunderstood the deal, so
@@ -465,6 +478,7 @@ static burrow__Panic *oldest_first(burrow__Panic *p) {
 
 static BURROW_NORETURN void print_and_exit(burrow__PanicState *st, const Uintptr *pcs,
                                            Int npcs) {
+    wait_if_exiting();
     RuntimeFatalFunc fn = fatal_handler;
     bool again = st->printing;
     char buf[PANIC_MSG_MAX];

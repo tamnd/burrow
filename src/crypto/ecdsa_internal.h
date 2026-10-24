@@ -18,6 +18,7 @@
 #include "burrow/error.h"
 #include "burrow/func.h"
 #include "burrow/hash.h"
+#include "burrow/io.h"
 #include "burrow/mem.h"
 #include "burrow/slice.h"
 
@@ -35,6 +36,25 @@ const EcdsaFipsCurve *burrow__ecdsa_fips_p521(void);
 
 /* The length of the curve's order in bytes, N.Size() in Go. */
 Int burrow__ecdsa_fips_size(const EcdsaFipsCurve *c);
+
+/* NewPublicKey and NewPrivateKey. A key here is its encoding, so these only
+ * check it: q is the uncompressed point and d the scalar, as long as the
+ * order. */
+bool burrow__ecdsa_fips_new_public_key(const EcdsaFipsCurve *c, Slice q, Error *err);
+bool burrow__ecdsa_fips_new_private_key(const EcdsaFipsCurve *c, Slice d, Slice q,
+                                        Error *err);
+
+/* Sign, SignDeterministic and Verify, for a key that the two above have
+ * checked. hf makes the hash of the HMAC_DRBG the nonce comes from. r and s
+ * each have as many bytes as the order. */
+bool burrow__ecdsa_fips_sign(const EcdsaFipsCurve *c, HashNewFunc hf, Slice d,
+                             IoReader rand, Slice hash, uint8_t *r, uint8_t *s,
+                             Error *err);
+bool burrow__ecdsa_fips_sign_deterministic(const EcdsaFipsCurve *c, HashNewFunc hf,
+                                           Slice d, Slice hash, uint8_t *r, uint8_t *s,
+                                           Error *err);
+bool burrow__ecdsa_fips_verify(const EcdsaFipsCurve *c, Slice q, Slice hash,
+                               Slice sig_r, Slice sig_s, Error *err);
 
 /* What randomPoint takes to fill b, returning false and setting *err when it
  * cannot. */

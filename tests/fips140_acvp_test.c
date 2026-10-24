@@ -1,5 +1,5 @@
-/* Derived from Go's src/crypto/internal/fips140test/acvp_test.go and
- * acvp_fips140v1.28_test.go.
+/* Derived from Go's src/crypto/internal/fips140test/acvp_test.go,
+ * acvp_fips140v1.28_test.go and acvp_mldsa_test.go.
  * Go source: go1.27.1.
  *
  * The capabilities are Go's files, copied into tests/fips140test. The
@@ -12,11 +12,11 @@
  * writes and tools/check-gen.sh keeps up to date.
  *
  * Not in Go: this has the protocol, its tests, and the commands for the
- * hashes, the XOFs, HMAC, the KDFs, AES, CMAC and the DRBGs. The commands for
- * ML-KEM, EdDSA, ECDSA, ECDH and RSA, and TestACVP, which runs BoringSSL's
- * acvptool on this program, are not here yet. Go's handlers close over the
- * hash or the direction they were made with, and here those are fields of the
- * command, which is passed to its handler.
+ * hashes, the XOFs, HMAC, the KDFs, AES, CMAC, the DRBGs, ML-KEM, EdDSA,
+ * ECDSA, ECDH and ML-DSA. The commands for RSA, and TestACVP, which runs
+ * BoringSSL's acvptool on this program, are not here yet. Go's handlers close
+ * over the hash or the direction they were made with, and here those are
+ * fields of the command, which is passed to its handler.
  *
  * Copyright 2024 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -44,6 +44,12 @@
 #include "burrow/burrow.h"
 #include "burrow/crypto/aes.h"
 #include "burrow/crypto/cipher.h"
+#include "burrow/crypto/ecdh.h"
+#include "burrow/crypto/ecdsa.h"
+#include "burrow/crypto/ed25519.h"
+#include "burrow/crypto/elliptic.h"
+#include "burrow/crypto/mldsa.h"
+#include "burrow/crypto/mlkem.h"
 #include "burrow/crypto/pbkdf2.h"
 #include "burrow/crypto/rand.h"
 #include "burrow/crypto/sha256.h"
@@ -55,9 +61,13 @@
 
 #include "../src/crypto/aes_internal.h"
 #include "../src/crypto/drbg_internal.h"
+#include "../src/crypto/ecdh_internal.h"
 #include "../src/crypto/ecdsa_internal.h"
+#include "../src/crypto/edwards25519.h"
 #include "../src/crypto/entropy_internal.h"
 #include "../src/crypto/fips140_module.h"
+#include "../src/crypto/mldsa_internal.h"
+#include "../src/crypto/mlkem_internal.h"
 #include "../src/crypto/ssh_internal.h"
 #include "../src/crypto/tls_internal.h"
 
@@ -89,6 +99,11 @@ typedef struct AcvpRequest {
     AcvpArgs args;
 } AcvpRequest;
 
+typedef enum EcdsaSigType {
+    ECDSA_SIG_TYPE_NORMAL,
+    ECDSA_SIG_TYPE_DETERMINISTIC,
+} EcdsaSigType;
+
 typedef enum AesDirection {
     AES_ENCRYPT,
     AES_DECRYPT,
@@ -112,8 +127,11 @@ struct AcvpCommand {
     Sha3SHAKE *(*shake)(Alloc *a);
     Sha3SHAKE *(*cshake)(Alloc *a, Slice n, Slice s);
     const SshDirection *direction;
+    EcdsaSigType sig_type;
     AesDirection aes_direction;
     bool rand_nonce;
+    const EcdhCurve *(*ecdh_curve)(void);
+    const MldsaParameters *(*mldsa)(void);
 };
 
 /* ------------------------------------------------------------- helpers */
@@ -779,6 +797,539 @@ static Error cmd_pbkdf(Alloc *a, const AcvpCommand *c, AcvpArgs args, AcvpArgs *
     return BURROW_NO_ERROR;
 }
 
+/* Not in Go: [][]byte{{b}}. */
+static AcvpArgs byte_args(Alloc *a, Byte b) {
+    AcvpArgs r = args1(a, make_bytes(a, 1));
+    ((Byte *)r.v[0].p)[0] = b;
+    return r;
+}
+
+/* Not in Go: Go calls the module's ed25519 package. Here that is the
+ * ed25519_* functions, which are the module's code, with the length checks of
+ * the module's NewPrivateKeyFromSeed and NewPublicKey done here, since the
+ * public functions panic instead. */
+#define CMD_EDDSA_KEY_GEN_AFT()                                                        \
+    .required_args = 1 /* Curve name */, .handler = cmd_eddsa_key_gen_aft
+
+static Error cmd_eddsa_key_gen_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                   AcvpArgs *out) {
+    (void)c;
+    if (!str_eq(bytes_str(args.v[0]), BURROW_S("ED-25519")))
+        return fmt_errorf_v("unsupported EDDSA curve: %q", bytes_str(args.v[0]));
+
+    Ed25519PrivateKey sk = slice_nil(TYPE_BYTE);
+    Error err = BURROW_NO_ERROR;
+    Ed25519PublicKey pk = ed25519_generate_key(a, (IoReader){0}, &sk, &err);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("generating EDDSA keypair: %w", err);
+
+    /* EDDSA/keyGen/AFT responses are d & q, described[0] as:
+     *   d	The encoded private key point
+     *   q	The encoded public key point
+     *
+     * Contrary to the description of a "point", d is the private key
+     * seed bytes per FIPS.186-5[1] A.2.3.
+     *
+     * [0]: https://pages.nist.gov/ACVP/draft-celi-acvp-eddsa.html#section-9.1
+     * [1]: https://nvlpubs.nist.gov/nistpubs/FIPS/NIST.FIPS.186-5.pdf */
+    *out = make_args(a, 2);
+    out->v[0] = ed25519_private_key_seed(sk, a);
+    out->v[1] = pk;
+    return BURROW_NO_ERROR;
+}
+
+#define CMD_EDDSA_KEY_VER_AFT()                                                        \
+    .required_args = 2 /* Curve name, Q */, .handler = cmd_eddsa_key_ver_aft
+
+static Error cmd_eddsa_key_ver_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                   AcvpArgs *out) {
+    (void)c;
+    if (!str_eq(bytes_str(args.v[0]), BURROW_S("ED-25519")))
+        return fmt_errorf_v("unsupported EDDSA curve: %q", bytes_str(args.v[0]));
+
+    /* Verify the point is on the curve. The higher-level ed25519 API does
+     * this at signature verification time so we have to use the lower-level
+     * edwards25519 package to do it here in absence of a signature to verify. */
+    Edwards25519Point p;
+    Error err = BURROW_NO_ERROR;
+    if (burrow__ge_set_bytes(&p, args.v[1], &err) == NULL) {
+        *out = byte_args(a, 0);
+        return BURROW_NO_ERROR;
+    }
+
+    *out = byte_args(a, 1);
+    return BURROW_NO_ERROR;
+}
+
+#define CMD_EDDSA_SIG_GEN_AFT_BFT()                                                    \
+    .required_args = 5, /* Curve name, private key seed, message, prehash, context */  \
+        .handler = cmd_eddsa_sig_gen_aft_bft
+
+static Error cmd_eddsa_sig_gen_aft_bft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                       AcvpArgs *out) {
+    (void)c;
+    if (!str_eq(bytes_str(args.v[0]), BURROW_S("ED-25519")))
+        return fmt_errorf_v("unsupported EDDSA curve: %q", bytes_str(args.v[0]));
+
+    if (args.v[1].len != ED25519_SEED_SIZE) {
+        Error err = fmt_errorf_v("ed25519: bad seed length: %d", args.v[1].len);
+        return fmt_errorf_v("error creating private key: %w", err);
+    }
+    Ed25519PrivateKey sk = ed25519_new_key_from_seed(a, args.v[1]);
+    Slice msg = args.v[2];
+    Slice prehash = args.v[3];
+    Str context = bytes_str(args.v[4]);
+
+    Slice sig;
+    if (((const Byte *)prehash.p)[0] == 1) {
+        msg = hash_digest(a, sha512_new, msg);
+
+        /* With ed25519 the context is only specified for sigGen tests when using
+         * prehashing. See
+         * https://pages.nist.gov/ACVP/draft-celi-acvp-eddsa.html#section-8.6 */
+        Ed25519Options opts = {CRYPTO_SHA512, context};
+        Error err = BURROW_NO_ERROR;
+        sig = ed25519_private_key_sign(sk, a, (IoReader){0}, msg,
+                                       ed25519_options_as_signer_opts(&opts), &err);
+        if (BURROW_FAILED(err))
+            return fmt_errorf_v("error signing message: %w", err);
+    } else {
+        sig = ed25519_sign(a, sk, msg);
+    }
+
+    *out = args1(a, sig);
+    return BURROW_NO_ERROR;
+}
+
+#define CMD_EDDSA_SIG_VER_AFT()                                                        \
+    .required_args = 5, /* Curve name, message, public key, signature, prehash */      \
+        .handler = cmd_eddsa_sig_ver_aft
+
+static Error cmd_eddsa_sig_ver_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                   AcvpArgs *out) {
+    (void)c;
+    if (!str_eq(bytes_str(args.v[0]), BURROW_S("ED-25519")))
+        return fmt_errorf_v("unsupported EDDSA curve: %q", bytes_str(args.v[0]));
+
+    Slice msg = args.v[1];
+    Ed25519PublicKey pk = args.v[2];
+    Error err = BURROW_NO_ERROR;
+    if (pk.len != ED25519_PUBLIC_KEY_SIZE) {
+        err = fmt_errorf_v("ed25519: bad public key length: %d", pk.len);
+        return fmt_errorf_v("invalid public key: %w", err);
+    }
+    Edwards25519Point p;
+    if (burrow__ge_set_bytes(&p, pk, &err) == NULL) {
+        err = errors_new(error_allocator(), BURROW_S("ed25519: bad public key"));
+        return fmt_errorf_v("invalid public key: %w", err);
+    }
+    Slice sig = args.v[3];
+    Slice prehash = args.v[4];
+
+    bool ok;
+    if (((const Byte *)prehash.p)[0] == 1) {
+        msg = hash_digest(a, sha512_new, msg);
+        /* Context is only specified for sigGen, not sigVer.
+         * See https://pages.nist.gov/ACVP/draft-celi-acvp-eddsa.html#section-8.6 */
+        Ed25519Options opts = {CRYPTO_SHA512, BURROW_S("")};
+        ok = !BURROW_FAILED(ed25519_verify_with_options(pk, msg, sig, &opts));
+    } else {
+        ok = ed25519_verify(pk, msg, sig);
+    }
+
+    if (!ok) {
+        *out = byte_args(a, 0);
+        return BURROW_NO_ERROR;
+    }
+
+    *out = byte_args(a, 1);
+    return BURROW_NO_ERROR;
+}
+
+static Error lookup_curve(Str name, EllipticCurve *c);
+
+/* Not in Go: the module's curve for curve, which Go picks with a switch on
+ * curve.Params() in each handler, or NULL for its default case. That case
+ * prints the curve, and here it is the curve's name. */
+static const EcdsaFipsCurve *ecdsa_fips_curve(EllipticCurve curve) {
+    const EllipticCurveParams *p = elliptic_curve_params(curve);
+    if (p == elliptic_curve_params(elliptic_p224()))
+        return burrow__ecdsa_fips_p224();
+    if (p == elliptic_curve_params(elliptic_p256()))
+        return burrow__ecdsa_fips_p256();
+    if (p == elliptic_curve_params(elliptic_p384()))
+        return burrow__ecdsa_fips_p384();
+    if (p == elliptic_curve_params(elliptic_p521()))
+        return burrow__ecdsa_fips_p521();
+    return NULL;
+}
+
+/* Not in Go: Go calls the module's ecdsa.GenerateKey. Here that is
+ * ecdsa_generate_key, which calls the module's code for the four curves. */
+#define CMD_ECDSA_KEY_GEN_AFT()                                                        \
+    .required_args = 1 /* Curve name */, .handler = cmd_ecdsa_key_gen_aft
+
+static Error cmd_ecdsa_key_gen_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                   AcvpArgs *out) {
+    (void)c;
+    EllipticCurve curve;
+    Error err = lookup_curve(bytes_str(args.v[0]), &curve);
+    if (BURROW_FAILED(err))
+        return err;
+
+    if (ecdsa_fips_curve(curve) == NULL)
+        return fmt_errorf_v("unsupported curve: %v",
+                            elliptic_curve_params(curve)->name);
+    EcdsaPrivateKey *sk = ecdsa_generate_key(a, curve, crypto_rand_reader, &err);
+
+    if (BURROW_FAILED(err))
+        return err;
+
+    Slice sk_bytes = ecdsa_private_key_bytes(sk, a, &err);
+    if (BURROW_FAILED(err))
+        return err;
+    Slice pub_bytes = ecdsa_public_key_bytes(&sk->public_key, a, &err);
+    if (BURROW_FAILED(err))
+        return err;
+    Int byte_len = (elliptic_curve_params(curve)->bit_size + 7) / 8;
+
+    *out = make_args(a, 3);
+    out->v[0] = sk_bytes;
+    out->v[1] = slice_sub(pub_bytes, 1, 1 + byte_len);
+    out->v[2] = slice_sub(pub_bytes, 1 + byte_len, pub_bytes.len);
+    return BURROW_NO_ERROR;
+}
+
+#define CMD_ECDSA_KEY_VER_AFT()                                                        \
+    .required_args = 3 /* Curve name, X, Y */, .handler = cmd_ecdsa_key_ver_aft
+
+static Error cmd_ecdsa_key_ver_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                   AcvpArgs *out) {
+    (void)c;
+    EllipticCurve curve;
+    Error err = lookup_curve(bytes_str(args.v[0]), &curve);
+    if (BURROW_FAILED(err))
+        return err;
+
+    BigInt x = BIG_INT(a), y = BIG_INT(a);
+    big_int_set_bytes(&x, args.v[1]);
+    big_int_set_bytes(&y, args.v[2]);
+
+    if (elliptic_curve_is_on_curve(curve, &x, &y)) {
+        *out = byte_args(a, 1);
+        return BURROW_NO_ERROR;
+    }
+
+    *out = byte_args(a, 0);
+    return BURROW_NO_ERROR;
+}
+
+/* pointFromAffine is used to convert the PublicKey to a nistec SetBytes input.
+ * Duplicated from crypto/ecdsa.go's pointFromAffine. */
+static Error point_from_affine(Alloc *a, EllipticCurve curve, const BigInt *x,
+                               const BigInt *y, Slice *out) {
+    Int bit_size = elliptic_curve_params(curve)->bit_size;
+    /* Reject values that would not get correctly encoded. */
+    if (big_int_sign(x) < 0 || big_int_sign(y) < 0)
+        return errors_new(error_allocator(), BURROW_S("negative coordinate"));
+    if (big_int_bit_len(x) > bit_size || big_int_bit_len(y) > bit_size)
+        return errors_new(error_allocator(), BURROW_S("overflowing coordinate"));
+    /* Encode the coordinates and let SetBytes reject invalid points. */
+    Int byte_len = (bit_size + 7) / 8;
+    Slice buf = make_bytes(a, 1 + 2 * byte_len);
+    ((Byte *)buf.p)[0] = 4; /* uncompressed point */
+    big_int_fill_bytes(x, slice_sub(buf, 1, 1 + byte_len));
+    big_int_fill_bytes(y, slice_sub(buf, 1 + byte_len, 1 + 2 * byte_len));
+    *out = buf;
+    return BURROW_NO_ERROR;
+}
+
+/* Not in Go: the signature is r and s, made from a. */
+static Error sign_ecdsa(Alloc *a, const EcdsaFipsCurve *c, HashNewFunc h,
+                        EcdsaSigType sig_type, Slice q, Slice sk, Slice digest,
+                        Slice *r, Slice *s) {
+    Error err = BURROW_NO_ERROR;
+    if (!burrow__ecdsa_fips_new_private_key(c, sk, q, &err))
+        return fmt_errorf_v("invalid private key: %w", err);
+
+    Int n = burrow__ecdsa_fips_size(c);
+    *r = make_bytes(a, n);
+    *s = make_bytes(a, n);
+    bool ok;
+    if (sig_type == ECDSA_SIG_TYPE_NORMAL)
+        ok = burrow__ecdsa_fips_sign(c, h, sk, crypto_rand_reader, digest, r->p, s->p,
+                                     &err);
+    else if (sig_type == ECDSA_SIG_TYPE_DETERMINISTIC)
+        ok = burrow__ecdsa_fips_sign_deterministic(c, h, sk, digest, r->p, s->p, &err);
+    else
+        return fmt_errorf_v("unsupported signature type: %v", (Int)sig_type);
+    if (!ok)
+        return fmt_errorf_v("signing failed: %w", err);
+
+    return BURROW_NO_ERROR;
+}
+
+#define CMD_ECDSA_SIG_GEN_AFT(t)                                                       \
+    .required_args = 4, /* Curve name, private key, hash name, message */              \
+        .handler = cmd_ecdsa_sig_gen_aft, .sig_type = (t)
+
+static Error cmd_ecdsa_sig_gen_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                   AcvpArgs *out) {
+    EllipticCurve curve;
+    Error err = lookup_curve(bytes_str(args.v[0]), &curve);
+    if (BURROW_FAILED(err))
+        return err;
+
+    Slice sk = args.v[1];
+
+    HashNewFunc new_h;
+    err = lookup_hash(bytes_str(args.v[2]), &new_h);
+    if (BURROW_FAILED(err))
+        return err;
+
+    Slice msg = args.v[3];
+    Slice digest = hash_digest(a, new_h, msg);
+
+    BigInt d = BIG_INT(a);
+    big_int_set_bytes(&d, sk);
+    BigInt *y = NULL;
+    BigInt *x = elliptic_curve_scalar_base_mult(curve, a, big_int_bytes(&d, a), &y);
+    Slice q;
+    err = point_from_affine(a, curve, x, y, &q);
+    if (BURROW_FAILED(err))
+        return err;
+
+    const EcdsaFipsCurve *fc = ecdsa_fips_curve(curve);
+    if (fc == NULL)
+        return fmt_errorf_v("unsupported curve: %v",
+                            elliptic_curve_params(curve)->name);
+    Slice r, s;
+    err = sign_ecdsa(a, fc, new_h, c->sig_type, q, sk, digest, &r, &s);
+    if (BURROW_FAILED(err))
+        return err;
+
+    *out = make_args(a, 2);
+    out->v[0] = r;
+    out->v[1] = s;
+    return BURROW_NO_ERROR;
+}
+
+#define CMD_ECDSA_SIG_VER_AFT()                                                        \
+    .required_args = 7, /* Curve name, hash name, message, X, Y, R, S */               \
+        .handler = cmd_ecdsa_sig_ver_aft
+
+static Error verify_ecdsa(const EcdsaFipsCurve *c, Slice q, Slice digest, Slice r,
+                          Slice s);
+
+static Error cmd_ecdsa_sig_ver_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                   AcvpArgs *out) {
+    (void)c;
+    EllipticCurve curve;
+    Error err = lookup_curve(bytes_str(args.v[0]), &curve);
+    if (BURROW_FAILED(err))
+        return err;
+
+    HashNewFunc new_h;
+    err = lookup_hash(bytes_str(args.v[1]), &new_h);
+    if (BURROW_FAILED(err))
+        return err;
+
+    Slice msg = args.v[2];
+    Slice digest = hash_digest(a, new_h, msg);
+
+    BigInt x = BIG_INT(a), y = BIG_INT(a);
+    big_int_set_bytes(&x, args.v[3]);
+    big_int_set_bytes(&y, args.v[4]);
+    Slice q;
+    err = point_from_affine(a, curve, &x, &y, &q);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("invalid x/y coordinates: %v", err);
+
+    const EcdsaFipsCurve *fc = ecdsa_fips_curve(curve);
+    if (fc == NULL)
+        return fmt_errorf_v("unsupported curve: %v",
+                            elliptic_curve_params(curve)->name);
+    err = verify_ecdsa(fc, q, digest, args.v[5], args.v[6]);
+
+    if (!BURROW_FAILED(err)) {
+        *out = byte_args(a, 1);
+        return BURROW_NO_ERROR;
+    }
+
+    *out = byte_args(a, 0);
+    return BURROW_NO_ERROR;
+}
+
+static Error verify_ecdsa(const EcdsaFipsCurve *c, Slice q, Slice digest, Slice r,
+                          Slice s) {
+    Error err = BURROW_NO_ERROR;
+    if (!burrow__ecdsa_fips_new_public_key(c, q, &err))
+        return fmt_errorf_v("invalid public key: %w", err);
+
+    if (!burrow__ecdsa_fips_verify(c, q, digest, r, s, &err))
+        return err;
+    return BURROW_NO_ERROR;
+}
+
+/* Not in Go: Go calls the module's mlkem package. The mlkem_* functions are
+ * the module's code, and what only the module has comes from
+ * mlkem_internal.h. */
+#define CMD_ML_KEM768_KEY_GEN_AFT()                                                    \
+    .required_args = 1 /* Seed */, .handler = cmd_ml_kem768_key_gen_aft
+
+static Error cmd_ml_kem768_key_gen_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                       AcvpArgs *out) {
+    (void)c;
+    Slice seed = args.v[0];
+
+    Error err = BURROW_NO_ERROR;
+    MlkemDecapsulationKey768 *dk = mlkem_new_decapsulation_key768(a, seed, &err);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("generating ML-KEM 768 decapsulation key: %w", err);
+
+    /* Important: we must return the full encoding of dk, not the seed. */
+    *out = make_args(a, 2);
+    out->v[0] = mlkem_encapsulation_key768_bytes(
+        mlkem_decapsulation_key768_encapsulation_key(dk), a);
+    out->v[1] = burrow__mlkem_testing_only_expanded_bytes768(dk, a);
+    return BURROW_NO_ERROR;
+}
+
+#define CMD_ML_KEM768_ENCAP_AFT()                                                      \
+    .required_args = 2 /* Public key, entropy */, .handler = cmd_ml_kem768_encap_aft
+
+static Error cmd_ml_kem768_encap_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                     AcvpArgs *out) {
+    (void)c;
+    Slice pk = args.v[0];
+    Slice entropy = args.v[1];
+
+    Error err = BURROW_NO_ERROR;
+    MlkemEncapsulationKey768 *ek = mlkem_new_encapsulation_key768(a, pk, &err);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("generating ML-KEM 768 encapsulation key: %w", err);
+
+    if (entropy.len != 32)
+        return fmt_errorf_v("wrong entropy length: got %d, want 32", entropy.len);
+
+    Slice ct = slice_nil(TYPE_BYTE);
+    Slice shared_key = burrow__mlkem_encapsulate_internal768(ek, a, entropy.p, &ct);
+
+    *out = make_args(a, 2);
+    out->v[0] = ct;
+    out->v[1] = shared_key;
+    return BURROW_NO_ERROR;
+}
+
+#define CMD_ML_KEM768_DECAP_AFT()                                                      \
+    .required_args = 2 /* Private key, ciphertext */, .handler = cmd_ml_kem768_decap_aft
+
+static Error cmd_ml_kem768_decap_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                     AcvpArgs *out) {
+    (void)c;
+    Slice pk = args.v[0];
+    Slice ct = args.v[1];
+
+    Error err = BURROW_NO_ERROR;
+    MlkemDecapsulationKey768 *dk =
+        burrow__mlkem_testing_only_new_decapsulation_key768(a, pk, &err);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("generating ML-KEM 768 decapsulation key: %w", err);
+
+    Slice shared_key = mlkem_decapsulation_key768_decapsulate(dk, a, ct, &err);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("decapsulating ML-KEM 768 ciphertext: %w", err);
+
+    *out = args1(a, shared_key);
+    return BURROW_NO_ERROR;
+}
+
+#define CMD_ML_KEM1024_KEY_GEN_AFT()                                                   \
+    .required_args = 1 /* Seed */, .handler = cmd_ml_kem1024_key_gen_aft
+
+static Error cmd_ml_kem1024_key_gen_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                        AcvpArgs *out) {
+    (void)c;
+    Slice seed = args.v[0];
+
+    Error err = BURROW_NO_ERROR;
+    MlkemDecapsulationKey1024 *dk = mlkem_new_decapsulation_key1024(a, seed, &err);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("generating ML-KEM 1024 decapsulation key: %w", err);
+
+    /* Important: we must return the full encoding of dk, not the seed. */
+    *out = make_args(a, 2);
+    out->v[0] = mlkem_encapsulation_key1024_bytes(
+        mlkem_decapsulation_key1024_encapsulation_key(dk), a);
+    out->v[1] = burrow__mlkem_testing_only_expanded_bytes1024(dk, a);
+    return BURROW_NO_ERROR;
+}
+
+#define CMD_ML_KEM1024_ENCAP_AFT()                                                     \
+    .required_args = 2 /* Public key, entropy */, .handler = cmd_ml_kem1024_encap_aft
+
+static Error cmd_ml_kem1024_encap_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                      AcvpArgs *out) {
+    (void)c;
+    Slice pk = args.v[0];
+    Slice entropy = args.v[1];
+
+    Error err = BURROW_NO_ERROR;
+    MlkemEncapsulationKey1024 *ek = mlkem_new_encapsulation_key1024(a, pk, &err);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("generating ML-KEM 1024 encapsulation key: %w", err);
+
+    if (entropy.len != 32)
+        return fmt_errorf_v("wrong entropy length: got %d, want 32", entropy.len);
+
+    Slice ct = slice_nil(TYPE_BYTE);
+    Slice shared_key = burrow__mlkem_encapsulate_internal1024(ek, a, entropy.p, &ct);
+
+    *out = make_args(a, 2);
+    out->v[0] = ct;
+    out->v[1] = shared_key;
+    return BURROW_NO_ERROR;
+}
+
+#define CMD_ML_KEM1024_DECAP_AFT()                                                     \
+    .required_args = 2 /* Private key, ciphertext */,                                  \
+    .handler = cmd_ml_kem1024_decap_aft
+
+static Error cmd_ml_kem1024_decap_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                      AcvpArgs *out) {
+    (void)c;
+    Slice pk = args.v[0];
+    Slice ct = args.v[1];
+
+    Error err = BURROW_NO_ERROR;
+    MlkemDecapsulationKey1024 *dk =
+        burrow__mlkem_testing_only_new_decapsulation_key1024(a, pk, &err);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("generating ML-KEM 1024 decapsulation key: %w", err);
+
+    Slice shared_key = mlkem_decapsulation_key1024_decapsulate(dk, a, ct, &err);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("decapsulating ML-KEM 1024 ciphertext: %w", err);
+
+    *out = args1(a, shared_key);
+    return BURROW_NO_ERROR;
+}
+
+static Error lookup_curve(Str name, EllipticCurve *c) {
+    if (str_eq(name, BURROW_S("P-224")))
+        *c = elliptic_p224();
+    else if (str_eq(name, BURROW_S("P-256")))
+        *c = elliptic_p256();
+    else if (str_eq(name, BURROW_S("P-384")))
+        *c = elliptic_p384();
+    else if (str_eq(name, BURROW_S("P-521")))
+        *c = elliptic_p521();
+    else
+        return fmt_errorf_v("unknown curve name: %q", name);
+
+    return BURROW_NO_ERROR;
+}
+
 /* Not in Go: Go calls the module's aes package. Here that is aes_new_cipher
  * and the CBC, CTR and GCM of crypto/cipher, which hand an AES block to the
  * module's code. */
@@ -1104,6 +1655,57 @@ static Error cmd_ssh_kdf_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
     return BURROW_NO_ERROR;
 }
 
+/* Not in Go: Go calls the module's ecdh package. Here that is the ecdh_*
+ * functions, which are the module's code, and P-224, which crypto/ecdh does
+ * not have, comes from ecdh_internal.h. */
+#define CMD_ECDH_AFT_VAL(f)                                                            \
+    .required_args = 3, /* X, Y, private key (empty for Val type tests) */             \
+        .handler = cmd_ecdh_aft_val, .ecdh_curve = (f)
+
+static Error cmd_ecdh_aft_val(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                              AcvpArgs *out) {
+    const EcdhCurve *curve = c->ecdh_curve();
+    Slice peer_x = args.v[0];
+    Slice peer_y = args.v[1];
+    Slice raw_sk = args.v[2];
+
+    /* 4 for uncompressed point format */
+    Slice uncompressed_pk = make_bytes(a, 1 + peer_x.len + peer_y.len);
+    ((Byte *)uncompressed_pk.p)[0] = 4;
+    if (peer_x.len > 0)
+        memcpy((Byte *)uncompressed_pk.p + 1, peer_x.p, (size_t)peer_x.len);
+    if (peer_y.len > 0)
+        memcpy((Byte *)uncompressed_pk.p + 1 + peer_x.len, peer_y.p,
+               (size_t)peer_y.len);
+    Error err = BURROW_NO_ERROR;
+    EcdhPublicKey *pk = ecdh_curve_new_public_key(curve, a, uncompressed_pk, &err);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("invalid peer public key x,y: %v", err);
+
+    EcdhPrivateKey *sk;
+    if (raw_sk.len > 0)
+        sk = ecdh_curve_new_private_key(curve, a, raw_sk, &err);
+    else
+        sk = ecdh_curve_generate_key(curve, a, crypto_rand_reader, &err);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("private key error: %v", err);
+
+    Slice pub_bytes = ecdh_public_key_bytes(ecdh_private_key_public_key(sk), a);
+    Int coord_len = (pub_bytes.len - 1) / 2;
+    Slice x = slice_sub(pub_bytes, 1, 1 + coord_len);
+    Slice y = slice_sub(pub_bytes, 1 + coord_len, pub_bytes.len);
+
+    Slice secret = ecdh_private_key_ecdh(sk, a, pk, &err);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("key agreement failed: %v", err);
+
+    *out = make_args(a, 3);
+    out->v[0] = x;
+    out->v[1] = y;
+    out->v[2] = secret;
+    return BURROW_NO_ERROR;
+}
+
 #define CMD_HMAC_DRBG_AFT(f)                                                           \
     .required_args = 6, /* Output length, entropy, personalization, ad1, ad2, nonce */ \
         .handler = cmd_hmac_drbg_aft, .h = (f)
@@ -1406,6 +2008,119 @@ static Error cmd_one_step_no_counter_hmac_aft(Alloc *a, const AcvpCommand *c,
     return BURROW_NO_ERROR;
 }
 
+/* From acvp_mldsa_test.go. Not in Go: Go calls the module's mldsa package.
+ * The mldsa_* functions are the module's code, and what only the module has
+ * comes from mldsa_internal.h. */
+#define CMD_ML_DSA_KEY_GEN_AFT(f)                                                      \
+    .required_args = 1 /* Seed */, .handler = cmd_ml_dsa_key_gen_aft, .mldsa = (f)
+
+static Error cmd_ml_dsa_key_gen_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                    AcvpArgs *out) {
+    Slice seed = args.v[0];
+
+    Error err = BURROW_NO_ERROR;
+    MldsaPrivateKey *sk = mldsa_new_private_key(a, c->mldsa(), seed, &err);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("generating ML-DSA 44 private key: %w", err);
+
+    /* Important: we must return the full encoding of sk, not the seed. */
+    *out = make_args(a, 2);
+    out->v[0] = mldsa_public_key_bytes(mldsa_private_key_public_key(sk), a);
+    out->v[1] = burrow__mldsa_testing_only_private_key_semi_expanded_bytes(sk, a);
+    return BURROW_NO_ERROR;
+}
+
+#define CMD_ML_DSA_SIG_GEN_AFT()                                                       \
+    .required_args = 5, /* secret key, message, randomizer, mu, context */             \
+        .handler = cmd_ml_dsa_sig_gen_aft
+
+static Error cmd_ml_dsa_sig_gen_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                    AcvpArgs *out) {
+    (void)c;
+    Slice sk_smi_expanded = args.v[0];
+    Slice message = args.v[1];          /* Optional, exclusive with mu */
+    Slice randomizer = args.v[2];       /* Optional */
+    Str context = bytes_str(args.v[3]); /* Optional */
+    Slice mu = args.v[4];               /* Optional, exclusive with message */
+
+    Error err = BURROW_NO_ERROR;
+    MldsaPrivateKey *sk = burrow__mldsa_testing_only_new_private_key_from_semi_expanded(
+        a, sk_smi_expanded, &err);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("making ML-DSA private key from semi-expanded form: %w",
+                            err);
+
+    bool have_message = message.len != 0;
+    bool have_randomizer = randomizer.len != 0;
+    bool have_mu = mu.len != 0;
+
+    Slice sig;
+    if (have_message && !have_randomizer && !have_mu) {
+        MldsaOptions opts = {context};
+        sig = mldsa_private_key_sign_deterministic(
+            sk, a, message, mldsa_options_as_signer_opts(&opts), &err);
+    } else if (have_message && have_randomizer && !have_mu) {
+        sig = burrow__mldsa_testing_only_sign_with_random(sk, a, message, context,
+                                                          randomizer, &err);
+    } else if (!have_message && !have_randomizer && have_mu) {
+        sig = burrow__mldsa_sign_external_mu_deterministic(sk, a, mu, NULL, &err);
+    } else if (!have_message && have_randomizer && have_mu) {
+        sig = burrow__mldsa_testing_only_sign_external_mu_with_random(sk, a, mu,
+                                                                      randomizer, &err);
+    } else {
+        bool have_context = context.len != 0;
+        return fmt_errorf_v("unsupported ML-DSA sigGen args: have message=%v have "
+                            "randomizer=%v haveMu=%v haveContext=%v",
+                            have_message, have_randomizer, have_mu, have_context);
+    }
+
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("creating deterministic ML-DSA signature: %w", err);
+
+    *out = args1(a, sig);
+    return BURROW_NO_ERROR;
+}
+
+#define CMD_ML_DSA_SIG_VER_AFT(f)                                                      \
+    .required_args = 5, /* public key, message, signature, context, mu */              \
+        .handler = cmd_ml_dsa_sig_ver_aft, .mldsa = (f)
+
+static Error cmd_ml_dsa_sig_ver_aft(Alloc *a, const AcvpCommand *c, AcvpArgs args,
+                                    AcvpArgs *out) {
+    Slice pk_raw = args.v[0];
+    Slice message = args.v[1]; /* Optional, exclusive with mu */
+    Slice signature = args.v[2];
+    Str context = bytes_str(args.v[3]); /* Optional */
+    Slice mu = args.v[4];               /* Optional, exclusive with message */
+
+    Error err = BURROW_NO_ERROR;
+    MldsaPublicKey *pk = mldsa_new_public_key(a, c->mldsa(), pk_raw, &err);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("loading ML-DSA public key: %w", err);
+
+    bool have_message = message.len != 0;
+    bool have_mu = mu.len != 0;
+    if (have_message && !have_mu) {
+        MldsaOptions opts = {context};
+        err = mldsa_verify(pk, message, signature, &opts);
+    } else if (!have_message && have_mu) {
+        err = burrow__mldsa_verify_external_mu(pk, mu, signature);
+    } else {
+        bool have_context = context.len != 0;
+        return fmt_errorf_v(
+            "unsupported ML-DSA sigVer args: have message=%v haveMu=%v haveContext=%v",
+            have_message, have_mu, have_context);
+    }
+
+    if (BURROW_FAILED(err)) {
+        *out = byte_args(a, 0);
+        return BURROW_NO_ERROR;
+    }
+
+    *out = byte_args(a, 1);
+    return BURROW_NO_ERROR;
+}
+
 /* commands should reflect what config says we support. E.g. adding a command
  * here will be a NOP unless the configuration/acvp_capabilities.json indicates
  * the command's associated algorithm is supported. */
@@ -1491,6 +2206,13 @@ static const AcvpCommand commands[] = {
 
     {.name = "PBKDF", CMD_PBKDF()},
 
+    {.name = "ML-KEM-768/keyGen", CMD_ML_KEM768_KEY_GEN_AFT()},
+    {.name = "ML-KEM-768/encap", CMD_ML_KEM768_ENCAP_AFT()},
+    {.name = "ML-KEM-768/decap", CMD_ML_KEM768_DECAP_AFT()},
+    {.name = "ML-KEM-1024/keyGen", CMD_ML_KEM1024_KEY_GEN_AFT()},
+    {.name = "ML-KEM-1024/encap", CMD_ML_KEM1024_ENCAP_AFT()},
+    {.name = "ML-KEM-1024/decap", CMD_ML_KEM1024_DECAP_AFT()},
+
     {.name = "hmacDRBG/SHA2-224", CMD_HMAC_DRBG_AFT(sha256_new224)},
     {.name = "hmacDRBG/SHA2-256", CMD_HMAC_DRBG_AFT(sha256_new)},
     {.name = "hmacDRBG/SHA2-384", CMD_HMAC_DRBG_AFT(sha512_new384)},
@@ -1501,6 +2223,17 @@ static const AcvpCommand commands[] = {
     {.name = "hmacDRBG/SHA3-256", CMD_HMAC_DRBG_AFT(new_sha3_256)},
     {.name = "hmacDRBG/SHA3-384", CMD_HMAC_DRBG_AFT(new_sha3_384)},
     {.name = "hmacDRBG/SHA3-512", CMD_HMAC_DRBG_AFT(new_sha3_512)},
+
+    {.name = "EDDSA/keyGen", CMD_EDDSA_KEY_GEN_AFT()},
+    {.name = "EDDSA/keyVer", CMD_EDDSA_KEY_VER_AFT()},
+    {.name = "EDDSA/sigGen", CMD_EDDSA_SIG_GEN_AFT_BFT()},
+    {.name = "EDDSA/sigVer", CMD_EDDSA_SIG_VER_AFT()},
+
+    {.name = "ECDSA/keyGen", CMD_ECDSA_KEY_GEN_AFT()},
+    {.name = "ECDSA/keyVer", CMD_ECDSA_KEY_VER_AFT()},
+    {.name = "ECDSA/sigGen", CMD_ECDSA_SIG_GEN_AFT(ECDSA_SIG_TYPE_NORMAL)},
+    {.name = "ECDSA/sigVer", CMD_ECDSA_SIG_VER_AFT()},
+    {.name = "DetECDSA/sigGen", CMD_ECDSA_SIG_GEN_AFT(ECDSA_SIG_TYPE_DETERMINISTIC)},
 
     {.name = "AES-CBC/encrypt", CMD_AES_CBC(AES_ENCRYPT)},
     {.name = "AES-CBC/decrypt", CMD_AES_CBC(AES_DECRYPT)},
@@ -1541,6 +2274,11 @@ static const AcvpCommand commands[] = {
     {.name = "SSHKDF/SHA2-512/server",
      CMD_SSH_KDF_AFT(sha512_new, &burrow__ssh_server_keys)},
 
+    {.name = "ECDH/P-224", CMD_ECDH_AFT_VAL(burrow__ecdh_p224)},
+    {.name = "ECDH/P-256", CMD_ECDH_AFT_VAL(ecdh_p256)},
+    {.name = "ECDH/P-384", CMD_ECDH_AFT_VAL(ecdh_p384)},
+    {.name = "ECDH/P-521", CMD_ECDH_AFT_VAL(ecdh_p521)},
+
     {.name = "ctrDRBG/AES-256", CMD_CTR_DRBG_AFT()},
     {.name = "ctrDRBG-reseed/AES-256", CMD_CTR_DRBG_RESEED_AFT()},
 
@@ -1567,6 +2305,17 @@ static const AcvpCommand commands[] = {
      CMD_ONE_STEP_NO_COUNTER_HMAC_AFT(new_sha3_384)},
     {.name = "OneStepNoCounter/HMAC-SHA3-512",
      CMD_ONE_STEP_NO_COUNTER_HMAC_AFT(new_sha3_512)},
+
+    /* Not in Go: acvp_mldsa_test.go adds these to the map in its init. */
+    {.name = "ML-DSA-44/keyGen", CMD_ML_DSA_KEY_GEN_AFT(mldsa_mldsa44)},
+    {.name = "ML-DSA-65/keyGen", CMD_ML_DSA_KEY_GEN_AFT(mldsa_mldsa65)},
+    {.name = "ML-DSA-87/keyGen", CMD_ML_DSA_KEY_GEN_AFT(mldsa_mldsa87)},
+    {.name = "ML-DSA-44/sigGen", CMD_ML_DSA_SIG_GEN_AFT()},
+    {.name = "ML-DSA-65/sigGen", CMD_ML_DSA_SIG_GEN_AFT()},
+    {.name = "ML-DSA-87/sigGen", CMD_ML_DSA_SIG_GEN_AFT()},
+    {.name = "ML-DSA-44/sigVer", CMD_ML_DSA_SIG_VER_AFT(mldsa_mldsa44)},
+    {.name = "ML-DSA-65/sigVer", CMD_ML_DSA_SIG_VER_AFT(mldsa_mldsa65)},
+    {.name = "ML-DSA-87/sigVer", CMD_ML_DSA_SIG_VER_AFT(mldsa_mldsa87)},
 };
 
 /* Not in Go: the command TestTooFewArgs and TestTooManyArgs add to the map as

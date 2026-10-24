@@ -23,7 +23,6 @@ src/crypto/ecdh.c ecdh_nist_shared
 src/crypto/ecdh.c ecdh_read
 src/crypto/ecdsa.c ecdsa_clone
 src/crypto/ecdsa.c ecdsa_read
-src/crypto/ecdsa.c ecdsa_fips_check_public
 src/crypto/ecdsa.c ecdsa_new_public_block
 src/crypto/ecdsa.c ecdsa_new_private_block
 src/crypto/ecdsa.c ecdsa_point_to_affine

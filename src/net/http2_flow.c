@@ -48,32 +48,76 @@ bool burrow__http2_take_inflows(Http2Inflow *f1, Http2Inflow *f2, uint32_t n) {
     return true;
 }
 
-void burrow__http2_outflow_set_conn_flow(Http2Outflow *f, Http2Outflow *cf) {
-    f->conn = cf;
+void burrow__http2_conn_outflow_init(Http2ConnOutflow *f) {
+    f->initial = HTTP2_INITIAL_WINDOW_SIZE; /* initial stream window size */
+    f->n = HTTP2_INITIAL_WINDOW_SIZE;       /* current connection window size */
 }
 
-int32_t burrow__http2_outflow_available(const Http2Outflow *f) {
-    int32_t n = f->n;
-    if (f->conn != NULL && f->conn->n < n)
-        n = f->conn->n;
-    return n;
+bool burrow__http2_conn_outflow_change_initial_window_size(Http2ConnOutflow *f,
+                                                           int64_t size) {
+    if (size > HTTP2_MAX_FLOW_WINDOW) {
+        f->flow_err = true;
+        return false;
+    }
+    f->initial = (int32_t)size;
+    return true;
+}
+
+bool burrow__http2_conn_outflow_add(Http2ConnOutflow *f, int32_t n) {
+    int64_t sum = (int64_t)f->n + (int64_t)n;
+    if (sum > HTTP2_MAX_FLOW_WINDOW) {
+        f->flow_err = true;
+        return false;
+    }
+    f->n = (int32_t)sum;
+    return true;
+}
+
+int32_t burrow__http2_outflow_available(Http2Outflow *f, bool *ok) {
+    *ok = true;
+    if (f->conn == NULL)
+        return HTTP2_MAX_FLOW_WINDOW; /* only happens in tests */
+    if (f->conn->flow_err) {
+        /* Block all sending once any stream observes a flow control error. */
+        *ok = false;
+        return 0;
+    }
+    int64_t n = (int64_t)f->conn->initial + (int64_t)f->delta;
+    if (n > HTTP2_MAX_FLOW_WINDOW) {
+        f->conn->flow_err = true;
+        *ok = false;
+        return 0;
+    }
+    return (int32_t)n < f->conn->n ? (int32_t)n : f->conn->n;
 }
 
 void burrow__http2_outflow_take(Http2Outflow *f, int32_t n) {
-    if (n > burrow__http2_outflow_available(f))
+    if (f->conn == NULL)
+        return; /* only happens in tests */
+    bool ok = false;
+    if (n > burrow__http2_outflow_available(f, &ok))
         panic_str(BURROW_S("internal error: took too much"));
-    f->n -= n;
-    if (f->conn != NULL)
-        f->conn->n -= n;
+    f->delta -= n;
+    f->conn->n -= n;
 }
 
 bool burrow__http2_outflow_add(Http2Outflow *f, int32_t n) {
-    /* Go's int32 addition wraps, and the test below is how it sees that it
-     * did. C's would be undefined, so the sum is made in uint32_t. */
-    int32_t sum = (int32_t)((uint32_t)f->n + (uint32_t)n);
-    if ((sum > n) == (f->n > 0)) {
-        f->n = sum;
-        return true;
+    if (f->conn == NULL)
+        return true; /* only happens in tests */
+    int64_t avail = (int64_t)f->conn->initial + (int64_t)f->delta;
+    if (avail > HTTP2_MAX_FLOW_WINDOW) {
+        /* An earlier change to the initial window pushed this stream over the
+         * limit. This is a connection-level flow control error. */
+        f->conn->flow_err = true;
+        return false;
     }
-    return false;
+    if (avail + (int64_t)n > HTTP2_MAX_FLOW_WINDOW) {
+        /* This update would push the stream over the limit. This is a
+         * stream-level flow control error. */
+        return false;
+    }
+    /* Go's int32 addition wraps where C's would be undefined, so the sum is
+     * made in uint32_t. */
+    f->delta = (int32_t)((uint32_t)f->delta + (uint32_t)n);
+    return true;
 }

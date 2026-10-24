@@ -1,5 +1,6 @@
 /* Derived from net/http/internal/http2's flow_test.go, databuffer_test.go and
- * pipe_test.go in Go 1.27.1.
+ * pipe_test.go in Go 1.27.1. The outflow tests are go1.27.2's, which changed
+ * them for GO-2026-6611 (CL 847308).
  *
  * Go's dataBuffer tests compare the chunks with reflect.DeepEqual, and these
  * compare them as the strings Go prints them as when they differ, which is
@@ -81,59 +82,64 @@ static void TestTakeInflows(TestingT *t) {
 
 static void TestOutFlow(TestingT *t) {
     Http2Outflow st = {0, NULL};
-    Http2Outflow conn = {0, NULL};
+    Http2ConnOutflow conn = {0, 0, false};
+    st.conn = &conn;
     burrow__http2_outflow_add(&st, 3);
-    burrow__http2_outflow_add(&conn, 2);
+    burrow__http2_conn_outflow_add(&conn, 2);
 
-    int32_t got = burrow__http2_outflow_available(&st);
-    if (got != 3)
-        testing_t_errorf_v(t, "available = %d; want %d", got, 3);
-    burrow__http2_outflow_set_conn_flow(&st, &conn);
-    got = burrow__http2_outflow_available(&st);
-    if (got != 2)
-        testing_t_errorf_v(t, "after parent setup, available = %d; want %d", got, 2);
+    bool ok = false;
+    int32_t got = burrow__http2_outflow_available(&st, &ok);
+    if (!ok || got != 2)
+        testing_t_errorf_v(t, "available = %d, %v; want 2, true", got, ok);
 
     burrow__http2_outflow_take(&st, 2);
-    got = burrow__http2_outflow_available(&conn);
-    if (got != 0)
-        testing_t_errorf_v(t, "after taking 2, conn = %d; want %d", got, 0);
-    got = burrow__http2_outflow_available(&st);
-    if (got != 0)
-        testing_t_errorf_v(t, "after taking 2, stream = %d; want %d", got, 0);
+    if (conn.n != 0)
+        testing_t_errorf_v(t, "after taking 2, conn = %d; want %d", conn.n, 0);
+    got = burrow__http2_outflow_available(&st, &ok);
+    if (!ok || got != 0)
+        testing_t_errorf_v(t, "after taking 2, stream = %d, %v; want 0, true", got, ok);
 }
 
 static void TestOutFlowAdd(TestingT *t) {
     Http2Outflow f = {0, NULL};
+    Http2ConnOutflow conn = {0, 0, false};
+    f.conn = &conn;
+    burrow__http2_conn_outflow_add(f.conn, INT32_MAX);
     if (!burrow__http2_outflow_add(&f, 1))
         FATALF("failed to add 1");
     if (!burrow__http2_outflow_add(&f, -1))
         FATALF("failed to add -1");
-    int32_t got = burrow__http2_outflow_available(&f);
-    if (got != 0)
-        FATALF("size = %d; want %d", got, 0);
+    bool ok = false;
+    int32_t got = burrow__http2_outflow_available(&f, &ok);
+    if (!ok || got != 0)
+        FATALF("size = %d, %v; want 0, true", got, ok);
     if (!burrow__http2_outflow_add(&f, INT32_MAX))
         FATALF("failed to add 2^31-1");
-    got = burrow__http2_outflow_available(&f);
-    if (got != INT32_MAX)
-        FATALF("size = %d; want %d", got, INT32_MAX);
+    got = burrow__http2_outflow_available(&f, &ok);
+    if (!ok || got != INT32_MAX)
+        FATALF("size = %d, %v; want %d, true", got, ok, INT32_MAX);
     if (burrow__http2_outflow_add(&f, 1))
         FATALF("adding 1 to max shouldn't be allowed");
 }
 
 static void TestOutFlowAddOverflow(TestingT *t) {
     Http2Outflow f = {0, NULL};
+    Http2ConnOutflow conn = {0, 0, false};
+    f.conn = &conn;
+    burrow__http2_conn_outflow_add(f.conn, INT32_MAX);
     static const int32_t adds[] = {0, -1, 0, 1, 1, 0, -3};
     for (size_t i = 0; i < sizeof adds / sizeof adds[0]; i++)
         if (!burrow__http2_outflow_add(&f, adds[i]))
             FATALF("failed to add %d", adds[i]);
-    int32_t got = burrow__http2_outflow_available(&f);
-    if (got != -2)
-        FATALF("size = %d; want %d", got, -2);
+    bool ok = false;
+    int32_t got = burrow__http2_outflow_available(&f, &ok);
+    if (!ok || got != -2)
+        FATALF("size = %d, %v; want -2, true", got, ok);
     if (!burrow__http2_outflow_add(&f, INT32_MAX))
         FATALF("failed to add 2^31-1");
-    got = burrow__http2_outflow_available(&f);
-    if (got != 1 + -3 + INT32_MAX)
-        FATALF("size = %d; want %d", got, 1 + -3 + INT32_MAX);
+    got = burrow__http2_outflow_available(&f, &ok);
+    if (!ok || got != 1 + -3 + INT32_MAX)
+        FATALF("size = %d, %v; want %d, true", got, ok, 1 + -3 + INT32_MAX);
 }
 
 /* ------------------------------------------------------------- dataBuffer */

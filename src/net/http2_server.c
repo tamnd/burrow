@@ -357,7 +357,7 @@ struct burrow__Http2ServeConn {
     Chan *body_read_ch;        /* of h2s_BodyReadMsg */
     Chan *serve_msg_ch;        /* of h2s_Msg */
     Chan *preface_ch;          /* of Error */
-    Http2Outflow flow;
+    Http2ConnOutflow flow;
     Http2Inflow inflow;
     bool has_tls_state;
     bool saw_client_preface;
@@ -381,7 +381,6 @@ struct burrow__Http2ServeConn {
     uint32_t cur_handlers;
     uint32_t max_client_stream_id;
     uint32_t max_pushed_stream_id;
-    int32_t initial_stream_send_window_size;
     int32_t initial_stream_recv_window_size;
     uint32_t peer_max_header_list_size;
     Map *streams; /* uint32 to h2s_Stream* */
@@ -1329,6 +1328,12 @@ static void h2s_schedule_frame_write(h2s_Conn *sc) {
         return;
     sc->in_frame_schedule_loop = true;
     while (!sc->writing_frame_async) {
+        if (sc->flow.flow_err &&
+            (!sc->in_go_away || sc->go_away_code == HTTP2_ERR_CODE_NO)) {
+            sc->in_go_away = true;
+            sc->need_to_send_go_away = true;
+            sc->go_away_code = HTTP2_ERR_CODE_FLOW_CONTROL;
+        }
         if (sc->need_to_send_go_away) {
             sc->need_to_send_go_away = false;
             h2s_start_frame_write(
@@ -1351,6 +1356,8 @@ static void h2s_schedule_frame_write(h2s_Conn *sc) {
                 h2s_start_frame_write(sc, wr);
                 continue;
             }
+            if (sc->flow.flow_err)
+                continue;
         }
         if (sc->needs_frame_flush) {
             h2s_start_frame_write(sc,
@@ -1549,10 +1556,16 @@ static Error h2s_process_window_update(h2s_Conn *sc, Http2Frame *f) {
             return BURROW_NO_ERROR;
         }
         h2s_Stream *s2 = st;
-        if (!burrow__http2_outflow_add(&s2->base.flow, inc))
+        if (!burrow__http2_outflow_add(&s2->base.flow, inc)) {
+            if (s2->base.flow.conn->flow_err) {
+                /* This is a lazily-detected connection-level flow control
+                 * error. */
+                return h2s_conn_err(sc, "bad_flow", HTTP2_ERR_CODE_FLOW_CONTROL);
+            }
             return h2s_stream_err(sc, "bad_flow", id, HTTP2_ERR_CODE_FLOW_CONTROL);
+        }
     } else { /* connection-level flow control */
-        if (!burrow__http2_outflow_add(&sc->flow, inc))
+        if (!burrow__http2_conn_outflow_add(&sc->flow, inc))
             return burrow__http2_err_go_away_flow;
     }
     h2s_schedule_frame_write(sc);
@@ -1674,23 +1687,13 @@ static Error h2s_process_setting(void *env, Http2Setting s) {
 
 /* processSettingInitialWindowSize. */
 static Error h2s_process_setting_initial_window_size(h2s_Conn *sc, uint32_t val) {
-    /* Note: val already validated to be within range by processSetting's
-     * Valid call. */
-    int32_t old = sc->initial_stream_send_window_size;
-    sc->initial_stream_send_window_size = (int32_t)val;
-    int32_t growth = (int32_t)val - old; /* may be negative */
-    MapIter it = map_iter(sc->streams);
-    const void *k;
-    void *v;
-    while (map_next(&it, &k, &v)) {
-        h2s_Stream *st = *(h2s_Stream **)v;
-        if (!burrow__http2_outflow_add(&st->base.flow, growth)) {
-            /* 6.9.2 Initial Flow Control Window Size "An endpoint MUST treat
-             * a change to SETTINGS_INITIAL_WINDOW_SIZE that causes any flow
-             * control window to exceed the maximum size as a connection
-             * error (Section 5.4.1) of type FLOW_CONTROL_ERROR." */
-            return h2s_conn_err(sc, "setting_win_size", HTTP2_ERR_CODE_FLOW_CONTROL);
-        }
+    if (!burrow__http2_conn_outflow_change_initial_window_size(&sc->flow,
+                                                               (int64_t)val)) {
+        /* 6.9.2 Initial Flow Control Window Size "An endpoint MUST treat a
+         * change to SETTINGS_INITIAL_WINDOW_SIZE that causes any flow control
+         * window to exceed the maximum size as a connection error (Section
+         * 5.4.1) of type FLOW_CONTROL_ERROR." */
+        return h2s_conn_err(sc, "setting_win_size", HTTP2_ERR_CODE_FLOW_CONTROL);
     }
     return BURROW_NO_ERROR;
 }
@@ -1958,8 +1961,6 @@ static h2s_Stream *h2s_new_stream(h2s_Conn *sc, uint32_t id, uint32_t pusher_id,
         return NULL;
     }
     st->base.flow.conn = &sc->flow;
-    (void)burrow__http2_outflow_add(&st->base.flow,
-                                    sc->initial_stream_send_window_size);
     burrow__http2_inflow_init(&st->inflow, sc->initial_stream_recv_window_size);
     if (sc->srv->write_timeout > 0)
         h2s_stream_timer_init_deadline(st, true, sc->srv->write_timeout);
@@ -3805,7 +3806,7 @@ static bool h2s_setup(h2s_Conn *sc) {
     /* These start at the RFC-specified defaults. If there is a higher
      * configured value for inflow, that will be updated when we send a
      * WINDOW_UPDATE shortly after sending SETTINGS. */
-    (void)burrow__http2_outflow_add(&sc->flow, H2S_INITIAL_WINDOW_SIZE);
+    burrow__http2_conn_outflow_init(&sc->flow);
     burrow__http2_inflow_init(&sc->inflow, H2S_INITIAL_WINDOW_SIZE);
     sc->header_write_buf = BYTES_BUFFER(a);
     sc->hpack_encoder =
@@ -3866,7 +3867,6 @@ void burrow__http2_serve_conn(HttpServer *srv, Alloc *a, NetConn c, Context ctx,
     sc->client_max_streams = UINT32_MAX; /* Section 6.5.2: "Initially, there is no limit
                                           * to this value" */
     sc->adv_max_streams = (uint32_t)sc->conf.max_concurrent_streams;
-    sc->initial_stream_send_window_size = H2S_INITIAL_WINDOW_SIZE;
     sc->initial_stream_recv_window_size =
         (int32_t)sc->conf.max_receive_buffer_per_stream;
     sc->base.max_frame_size = H2S_INITIAL_MAX_FRAME_SIZE;

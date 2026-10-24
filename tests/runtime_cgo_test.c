@@ -18,7 +18,7 @@
 BURROW_PTR_TYPE(IntPtr, Int);
 
 /* Go's test walks the package's map, and this is the same walk from inside
- * src/runtime/cgo.c. */
+ * src/debug/runtime_cgo.c. */
 Int burrow__cgo_handle_count(void);
 
 /* The panic text of f(env), or an empty string when it did not panic. */

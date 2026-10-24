@@ -63,7 +63,6 @@ src/crypto/rsa.c rsa_clone
 src/crypto/rsa.c rsa_read
 src/crypto/rsa.c rsa_pkcs1_v15_construct_em
 src/crypto/rsa.c rsa_emsa_pss_encode
-src/crypto/rsa.c rsa_fips_decrypt_oaep
 src/crypto/rsa.c rsa_miller_rabin_iteration
 src/crypto/rsa.c rsa_fail
 src/crypto/rsa.c rsa_fips_private_key

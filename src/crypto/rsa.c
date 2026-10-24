@@ -1,6 +1,6 @@
 /* Derived from Go's src/crypto/rsa/rsa.go, fips.go and pkcs1v15.go, and
- * src/crypto/internal/fips140/rsa/rsa.go, pkcs1v15.go, pkcs1v22.go and
- * keygen.go.
+ * src/crypto/internal/fips140/rsa/rsa.go, pkcs1v15.go, pkcs1v22.go,
+ * keygen.go and largeexponent.go.
  * Go source: go1.27.1.
  *
  * Copyright 2009 The Go Authors. All rights reserved.
@@ -511,14 +511,6 @@ struct RsaFipsKey {
     Alloc *a;
 };
 
-/* What PrivateKey.Export gives, from the Alloc it is asked to use. */
-typedef struct RsaFipsExport {
-    Slice n;
-    Int e;
-    Slice d, p, q, dp, dq, qinv;
-    bool crt;
-} RsaFipsExport;
-
 CRYPTO_FIPS_TEXT static RsaFipsKey *rsa_fips_key_new(Alloc *a) {
     a = rsa_alloc(a);
     RsaFipsKey *k = mem_alloc(a, sizeof *k, _Alignof(RsaFipsKey));
@@ -545,7 +537,7 @@ CRYPTO_FIPS_TEXT static void rsa_modulus_free(BigmodModulus *m) {
     bigmod_modulus_free(m);
 }
 
-CRYPTO_FIPS_TEXT static void rsa_fips_key_free(RsaFipsKey *k) {
+CRYPTO_FIPS_TEXT void burrow__rsa_fips_key_free(RsaFipsKey *k) {
     if (k == NULL)
         return;
     Alloc *a = k->a;
@@ -726,10 +718,10 @@ CRYPTO_FIPS_TEXT static Error rsa_fips_complete(RsaFipsKey *k, Alloc *tmp) {
 }
 
 /* NewPrivateKey. */
-CRYPTO_FIPS_TEXT static RsaFipsKey *rsa_fips_new_private_key(Alloc *a, Alloc *tmp,
-                                                             Slice N, Int e, Slice d,
-                                                             Slice P, Slice Q,
-                                                             Error *err) {
+CRYPTO_FIPS_TEXT RsaFipsKey *burrow__rsa_fips_new_private_key(Alloc *a, Alloc *tmp,
+                                                              Slice N, Int e, Slice d,
+                                                              Slice P, Slice Q,
+                                                              Error *err) {
     RsaFipsKey *k = rsa_fips_key_new(a);
     k->e = e;
     k->n = bigmod_new_modulus(k->a, N, err);
@@ -751,15 +743,14 @@ CRYPTO_FIPS_TEXT static RsaFipsKey *rsa_fips_new_private_key(Alloc *a, Alloc *tm
     return k;
 
 fail:
-    rsa_fips_key_free(k);
+    burrow__rsa_fips_key_free(k);
     return NULL;
 }
 
 /* NewPrivateKeyWithPrecomputation. */
-CRYPTO_FIPS_TEXT static RsaFipsKey *
-rsa_fips_new_private_key_with_precomputation(Alloc *a, Alloc *tmp, Slice N, Int e,
-                                             Slice d, Slice P, Slice Q, Slice dP,
-                                             Slice dQ, Slice qInv, Error *err) {
+CRYPTO_FIPS_TEXT RsaFipsKey *burrow__rsa_fips_new_private_key_with_precomputation(
+    Alloc *a, Alloc *tmp, Slice N, Int e, Slice d, Slice P, Slice Q, Slice dP, Slice dQ,
+    Slice qInv, Error *err) {
     RsaFipsKey *k = rsa_fips_key_new(a);
     k->e = e;
     k->n = bigmod_new_modulus(k->a, N, err);
@@ -788,7 +779,7 @@ rsa_fips_new_private_key_with_precomputation(Alloc *a, Alloc *tmp, Slice N, Int 
     return k;
 
 fail:
-    rsa_fips_key_free(k);
+    burrow__rsa_fips_key_free(k);
     return NULL;
 }
 
@@ -811,12 +802,13 @@ rsa_fips_new_private_key_without_crt(Alloc *a, Alloc *tmp, Slice N, Int e, Slice
     return k;
 
 fail:
-    rsa_fips_key_free(k);
+    burrow__rsa_fips_key_free(k);
     return NULL;
 }
 
 /* PrivateKey.Export, from tmp. */
-CRYPTO_FIPS_TEXT static RsaFipsExport rsa_fips_export(const RsaFipsKey *k, Alloc *tmp) {
+CRYPTO_FIPS_TEXT RsaFipsExport burrow__rsa_fips_export(const RsaFipsKey *k,
+                                                       Alloc *tmp) {
     RsaFipsExport x;
     memset(&x, 0, sizeof x);
     x.n = rsa_modulus_bytes(k->n, tmp);
@@ -1180,6 +1172,34 @@ CRYPTO_FIPS_TEXT static void rsa_fips_self_test(void) {
     sync_once_do(&rsa_self_test, BURROW_FN(Func, rsa_self_test_once, NULL));
 }
 
+/* SignPKCS1v15 calculates an RSASSA-PKCS1-v1.5 signature.
+ *
+ * hash is the name of the hash function as returned by [crypto.Hash.String]
+ * or the empty string to indicate that the message is signed directly. */
+CRYPTO_FIPS_TEXT bool burrow__rsa_fips_sign_pkcs1_v15(const RsaFipsKey *k, Str hash,
+                                                      Slice hashed, Alloc *tmp,
+                                                      Slice *out, Error *err) {
+    rsa_fips_self_test();
+    burrow__fips140_record_approved();
+    rsa_check_approved_hash_name(hash);
+
+    return rsa_fips_sign_pkcs1_v15(k, hash, hashed, tmp, out, err);
+}
+
+/* VerifyPKCS1v15 verifies an RSASSA-PKCS1-v1.5 signature.
+ *
+ * hash is the name of the hash function as returned by [crypto.Hash.String]
+ * or the empty string to indicate that the message is signed directly. */
+CRYPTO_FIPS_TEXT Error burrow__rsa_fips_verify_pkcs1_v15(const BigmodModulus *N, Int e,
+                                                         Str hash, Slice hashed,
+                                                         Slice sig, Alloc *tmp) {
+    rsa_fips_self_test();
+    burrow__fips140_record_approved();
+    rsa_check_approved_hash_name(hash);
+
+    return rsa_fips_verify_pkcs1_v15(N, e, hash, hashed, sig, tmp);
+}
+
 /* The PCT GenerateKey runs on the key in arg, when it is FIPS approved. */
 CRYPTO_FIPS_TEXT static Error rsa_pct(void *arg) {
     const RsaFipsKey *k = arg;
@@ -1411,9 +1431,10 @@ CRYPTO_FIPS_TEXT static bool rsa_pss_max_salt_length(const BigmodModulus *N, Has
 }
 
 /* SignPSS calculates the signature of hashed using RSASSA-PSS. */
-CRYPTO_FIPS_TEXT static bool rsa_fips_sign_pss(IoReader rand, const RsaFipsKey *k,
-                                               Hash hash, Slice hashed, Int salt_length,
-                                               Alloc *tmp, Slice *out, Error *err) {
+CRYPTO_FIPS_TEXT bool burrow__rsa_fips_sign_pss(IoReader rand, const RsaFipsKey *k,
+                                                Hash hash, Slice hashed,
+                                                Int salt_length, Alloc *tmp, Slice *out,
+                                                Error *err) {
     rsa_fips_self_test();
     burrow__fips140_record_approved();
     rsa_check_approved_hash(hash);
@@ -1502,12 +1523,21 @@ rsa_fips_verify_pss_with_salt_length(const BigmodModulus *N, Int e, Hash hash,
     return rsa_fips_verify_pss(N, e, hash, digest, sig, salt_length, tmp);
 }
 
+/* VerifyPSS verifies sig with RSASSA-PSS automatically detecting the salt
+ * length. */
+CRYPTO_FIPS_TEXT Error burrow__rsa_fips_verify_pss(const BigmodModulus *N, Int e,
+                                                   Hash hash, Slice digest, Slice sig,
+                                                   Alloc *tmp) {
+    return rsa_fips_verify_pss(N, e, hash, digest, sig, RSA_PSS_SALT_LENGTH_AUTODETECT,
+                               tmp);
+}
+
 /* EncryptOAEP encrypts the given message with RSAES-OAEP. */
-CRYPTO_FIPS_TEXT static bool rsa_fips_encrypt_oaep(Hash hash, Hash mgf_hash,
-                                                   IoReader random,
-                                                   const BigmodModulus *N, Int e,
-                                                   Slice msg, Slice label, Alloc *tmp,
-                                                   Slice *out, Error *err) {
+CRYPTO_FIPS_TEXT bool burrow__rsa_fips_encrypt_oaep(Hash hash, Hash mgf_hash,
+                                                    IoReader random,
+                                                    const BigmodModulus *N, Int e,
+                                                    Slice msg, Slice label, Alloc *tmp,
+                                                    Slice *out, Error *err) {
     rsa_fips_self_test();
     burrow__fips140_record_approved();
     rsa_check_approved_hash(hash);
@@ -1550,10 +1580,11 @@ CRYPTO_FIPS_TEXT static bool rsa_fips_encrypt_oaep(Hash hash, Hash mgf_hash,
 
 /* DecryptOAEP decrypts ciphertext using RSAES-OAEP, giving the message in
  * *out, which points into memory from tmp. */
-CRYPTO_FIPS_TEXT static bool rsa_fips_decrypt_oaep(Hash hash, Hash mgf_hash,
-                                                   const RsaFipsKey *priv,
-                                                   Slice ciphertext, Slice label,
-                                                   Alloc *tmp, Slice *out, Error *err) {
+CRYPTO_FIPS_TEXT bool burrow__rsa_fips_decrypt_oaep(Hash hash, Hash mgf_hash,
+                                                    const RsaFipsKey *priv,
+                                                    Slice ciphertext, Slice label,
+                                                    Alloc *tmp, Slice *out,
+                                                    Error *err) {
     rsa_fips_self_test();
     burrow__fips140_record_approved();
     rsa_check_approved_hash(hash);
@@ -1613,7 +1644,410 @@ CRYPTO_FIPS_TEXT static bool rsa_fips_decrypt_oaep(Hash hash, Hash mgf_hash,
         return false;
     }
     *out = rsa_sub(rest, index + 1, rest.len);
+    BURROW_OUT(err, BURROW_NO_ERROR);
     return true;
+}
+
+/* ------------------------------------- large exponents, for testing only */
+
+/* TestingOnlyLargeExponentPublicKey.Size. */
+CRYPTO_FIPS_TEXT static Int
+rsa_large_exponent_public_size(const RsaFipsLargeExponentPublicKey *pub) {
+    return (bigmod_modulus_bit_len(pub->n) + 7) / 8;
+}
+
+/* checkLargeExponentPublicKey. */
+CRYPTO_FIPS_TEXT static Error
+rsa_check_large_exponent_public(const RsaFipsLargeExponentPublicKey *pub) {
+    if (pub->n == NULL)
+        return rsa_error("crypto/rsa: missing public modulus");
+    if (bigmod_nat_is_odd(&pub->n->nat) == 0)
+        return rsa_error("crypto/rsa: public modulus is even");
+    if (bigmod_modulus_bit_len(pub->n) < 2048)
+        return rsa_error("crypto/rsa: public modulus too small");
+    if (bigmod_modulus_bit_len(pub->n) % 2 == 1)
+        return rsa_error("crypto/rsa: public modulus bit length not even");
+    Slice E = pub->e;
+    while (E.len > 0 && rsa_p(E)[0] == 0)
+        E = rsa_sub(E, 1, E.len);
+    if (E.len < 32 / 8 || (E.len == 32 / 8 && rsa_p(E)[0] < 0x80)) {
+        /* Exponents less than 2^31 must use [PublicKey]. */
+        return rsa_error("crypto/rsa: public exponent too small");
+    }
+    if (E.len > 256 / 8)
+        return rsa_error("crypto/rsa: public exponent too large");
+    if ((rsa_p(E)[E.len - 1] & 1) == 0)
+        return rsa_error("crypto/rsa: public exponent is even");
+    return BURROW_NO_ERROR;
+}
+
+/* encryptLargeExponent, from tmp. */
+CRYPTO_FIPS_TEXT static bool
+rsa_encrypt_large_exponent(const RsaFipsLargeExponentPublicKey *pub, Slice plaintext,
+                           Alloc *tmp, Slice *out, Error *err) {
+    BigmodNat *m = bigmod_nat_set_bytes(bigmod_new_nat(tmp), plaintext, pub->n, err);
+    if (m == NULL)
+        return false;
+    BigmodNat *c = bigmod_nat_exp(bigmod_new_nat(tmp), m, pub->e, pub->n);
+    *out = bigmod_nat_bytes(c, tmp, pub->n);
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return true;
+}
+
+CRYPTO_FIPS_TEXT Error burrow__rsa_fips_testing_only_large_exponent_verify_pkcs1_v15(
+    const RsaFipsLargeExponentPublicKey *pub, Str hash, Slice hashed, Slice sig,
+    Alloc *tmp) {
+    rsa_fips_self_test();
+    burrow__fips140_record_approved();
+    rsa_check_approved_hash_name(hash);
+    Error ce = rsa_check_large_exponent_public(pub);
+    if (BURROW_FAILED(ce))
+        return ce;
+    if (rsa_large_exponent_public_size(pub) != sig.len)
+        return rsa_err_verification;
+    Slice em, expected;
+    if (!rsa_encrypt_large_exponent(pub, sig, tmp, &em, NULL))
+        return rsa_err_verification;
+    if (!rsa_pkcs1_v15_construct_em(rsa_large_exponent_public_size(pub), hash, hashed,
+                                    tmp, &expected, NULL))
+        return rsa_err_verification;
+    if (em.len != expected.len || memcmp(em.p, expected.p, (size_t)em.len) != 0)
+        return rsa_err_verification;
+    return BURROW_NO_ERROR;
+}
+
+CRYPTO_FIPS_TEXT Error burrow__rsa_fips_testing_only_large_exponent_verify_pss(
+    const RsaFipsLargeExponentPublicKey *pub, Hash hash, Slice digest, Slice sig,
+    Alloc *tmp) {
+    rsa_fips_self_test();
+    burrow__fips140_record_approved();
+    rsa_check_approved_hash(hash);
+    Error ce = rsa_check_large_exponent_public(pub);
+    if (BURROW_FAILED(ce))
+        return ce;
+    if (sig.len != rsa_large_exponent_public_size(pub))
+        return rsa_err_verification;
+    Int em_bits = bigmod_modulus_bit_len(pub->n) - 1;
+    Int em_len = (em_bits + 7) / 8;
+    Slice em;
+    if (!rsa_encrypt_large_exponent(pub, sig, tmp, &em, NULL))
+        return rsa_err_verification;
+    while (em.len > em_len && em.len > 0) {
+        if (rsa_p(em)[0] != 0)
+            return rsa_err_verification;
+        em = rsa_sub(em, 1, em.len);
+    }
+    return rsa_emsa_pss_verify(digest, em, em_bits, RSA_PSS_SALT_LENGTH_AUTODETECT,
+                               hash, tmp);
+}
+
+/* TestingOnlyLargeExponentPrivateKey is a variant of [PrivateKey] that
+ * supports large public exponents. It is only meant for supporting the full
+ * ACVP test suite. This type must not be used in production code.
+ *
+ * Not in Go: e is a copy, from a, as are dP and dQ. */
+struct RsaFipsLargeExponentKey {
+    BigmodModulus *n;
+    Slice e; /* big-endian public exponent */
+    BigmodNat d;
+    BigmodModulus *p, *q;
+    Slice dp;
+    Slice dq;
+    BigmodNat qinv;
+    Alloc *a;
+};
+
+/* TestingOnlyLargeExponentPrivateKey.Size. */
+CRYPTO_FIPS_TEXT static Int
+rsa_large_exponent_private_size(const RsaFipsLargeExponentKey *priv) {
+    return (bigmod_modulus_bit_len(priv->n) + 7) / 8;
+}
+
+CRYPTO_FIPS_TEXT void
+burrow__rsa_fips_large_exponent_key_free(RsaFipsLargeExponentKey *k) {
+    if (k == NULL)
+        return;
+    Alloc *a = k->a;
+    rsa_modulus_free(k->n);
+    rsa_modulus_free(k->p);
+    rsa_modulus_free(k->q);
+    rsa_nat_wipe(&k->d);
+    bigmod_nat_free(&k->d);
+    rsa_nat_wipe(&k->qinv);
+    bigmod_nat_free(&k->qinv);
+    rsa_slice_free(a, k->e);
+    rsa_slice_free(a, k->dp);
+    rsa_slice_free(a, k->dq);
+    memset(k, 0, sizeof *k);
+    mem_free(a, k, sizeof *k, _Alignof(RsaFipsLargeExponentKey));
+}
+
+/* checkLargeExponentPrivateKey. */
+CRYPTO_FIPS_TEXT static Error
+rsa_check_large_exponent_private(const RsaFipsLargeExponentKey *priv, Alloc *tmp) {
+    /* Check public key portion. */
+    RsaFipsLargeExponentPublicKey pub = {priv->n, priv->e};
+    Error ce = rsa_check_large_exponent_public(&pub);
+    if (BURROW_FAILED(ce))
+        return ce;
+
+    const BigmodModulus *N = priv->n;
+    const BigmodModulus *p = priv->p;
+    const BigmodModulus *q = priv->q;
+
+    /* FIPS 186-5, Section 5.1 requires "that p and q be of the same bit
+     * length."
+     *
+     * Not in Go: Go has an if p.BitLen() != q.BitLen() here, with nothing in
+     * it but the comment "We don't enforce this for testing, just note it." */
+
+    /* Check that pq ≡ 1 mod N (and that p < N and q < N). */
+    BigmodNat *pN = bigmod_nat_expand_for(bigmod_new_nat(tmp), N);
+    if (bigmod_nat_set_bytes(pN, rsa_modulus_bytes(p, tmp), N, NULL) == NULL)
+        return rsa_error("crypto/rsa: invalid prime");
+    BigmodNat *qN = bigmod_nat_expand_for(bigmod_new_nat(tmp), N);
+    if (bigmod_nat_set_bytes(qN, rsa_modulus_bytes(q, tmp), N, NULL) == NULL)
+        return rsa_error("crypto/rsa: invalid prime");
+    if (bigmod_nat_is_zero(bigmod_nat_mul(pN, qN, N)) != 1)
+        return rsa_error("crypto/rsa: p * q != n");
+
+    /* Check that de ≡ 1 mod p-1, and de ≡ 1 mod q-1.
+     * Uses byte-slice exponent for large exponents. */
+    BigmodModulus *pMinus1 = rsa_minus_one(p, tmp, NULL);
+    if (pMinus1 == NULL)
+        return rsa_error("crypto/rsa: invalid prime");
+    BigmodNat *dP = bigmod_nat_set_bytes(bigmod_new_nat(tmp), priv->dp, pMinus1, NULL);
+    if (dP == NULL)
+        return rsa_error("crypto/rsa: invalid CRT exponent");
+    BigmodNat *de = bigmod_new_nat(tmp);
+    if (bigmod_nat_set_bytes(de, priv->e, pMinus1, NULL) == NULL) {
+        /* Exponent might be larger than p-1, reduce it.
+         *
+         * Not in Go: Go drops the error of this SetBytes, and Mod then
+         * panics on the nil. */
+        BigmodNat *eNat =
+            bigmod_nat_set_bytes(bigmod_new_nat(tmp), priv->e, priv->n, NULL);
+        if (eNat == NULL)
+            rsa_nil();
+        bigmod_nat_mod(de, eNat, pMinus1);
+    }
+    bigmod_nat_mul(de, dP, pMinus1);
+    if (bigmod_nat_is_one(de) != 1)
+        return rsa_error("crypto/rsa: invalid CRT exponent");
+
+    BigmodModulus *qMinus1 = rsa_minus_one(q, tmp, NULL);
+    if (qMinus1 == NULL)
+        return rsa_error("crypto/rsa: invalid prime");
+    BigmodNat *dQ = bigmod_nat_set_bytes(bigmod_new_nat(tmp), priv->dq, qMinus1, NULL);
+    if (dQ == NULL)
+        return rsa_error("crypto/rsa: invalid CRT exponent");
+    if (bigmod_nat_set_bytes(de, priv->e, qMinus1, NULL) == NULL) {
+        /* Exponent might be larger than q-1, reduce it. */
+        BigmodNat *eNat =
+            bigmod_nat_set_bytes(bigmod_new_nat(tmp), priv->e, priv->n, NULL);
+        if (eNat == NULL)
+            rsa_nil();
+        bigmod_nat_mod(de, eNat, qMinus1);
+    }
+    bigmod_nat_mul(de, dQ, qMinus1);
+    if (bigmod_nat_is_one(de) != 1)
+        return rsa_error("crypto/rsa: invalid CRT exponent");
+
+    /* Check that qInv * q ≡ 1 mod p. */
+    BigmodNat *qP = bigmod_nat_set_overflowing_bytes(
+        bigmod_new_nat(tmp), rsa_modulus_bytes(q, tmp), p, NULL);
+    if (qP == NULL) {
+        /* q >= 2^⌈log2(p)⌉ */
+        qP = bigmod_nat_mod(bigmod_new_nat(tmp), &q->nat, p);
+    }
+    if (bigmod_nat_is_one(bigmod_nat_mul(qP, &priv->qinv, p)) != 1)
+        return rsa_error("crypto/rsa: invalid CRT coefficient");
+
+    return BURROW_NO_ERROR;
+}
+
+/* TestingOnlyNewLargeExponentPrivateKeyWithPrecomputation creates a new RSA
+ * private key with a large public exponent from the given parameters. It is
+ * only meant for ACVP testing. */
+CRYPTO_FIPS_TEXT RsaFipsLargeExponentKey *
+burrow__rsa_fips_testing_only_new_large_exponent_private_key_with_precomputation(
+    Alloc *a, Alloc *tmp, Slice N, Slice e, Slice d, Slice P, Slice Q, Slice dP,
+    Slice dQ, Slice qInv, Error *err) {
+    a = rsa_alloc(a);
+    RsaFipsLargeExponentKey *k =
+        mem_alloc(a, sizeof *k, _Alignof(RsaFipsLargeExponentKey));
+    if (k == NULL)
+        rsa_oom();
+    memset(k, 0, sizeof *k);
+    k->a = a;
+    bigmod_nat_init(&k->d, a);
+    bigmod_nat_init(&k->qinv, a);
+    k->e = rsa_clone(a, e, NULL);
+    k->dp = rsa_clone(a, dP, NULL);
+    k->dq = rsa_clone(a, dQ, NULL);
+    if ((k->e.p == NULL && e.len > 0) || (k->dp.p == NULL && dP.len > 0) ||
+        (k->dq.p == NULL && dQ.len > 0))
+        rsa_oom();
+    k->n = bigmod_new_modulus(a, N, err);
+    if (k->n == NULL)
+        goto fail;
+    k->p = bigmod_new_modulus(a, P, err);
+    if (k->p == NULL)
+        goto fail;
+    k->q = bigmod_new_modulus(a, Q, err);
+    if (k->q == NULL)
+        goto fail;
+    if (bigmod_nat_set_bytes(&k->d, d, k->n, err) == NULL)
+        goto fail;
+    if (bigmod_nat_set_bytes(&k->qinv, qInv, k->p, err) == NULL)
+        goto fail;
+
+    Error ce = rsa_check_large_exponent_private(k, tmp);
+    if (BURROW_FAILED(ce)) {
+        BURROW_OUT(err, ce);
+        goto fail;
+    }
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return k;
+
+fail:
+    burrow__rsa_fips_large_exponent_key_free(k);
+    return NULL;
+}
+
+/* decryptLargeExponent, from tmp, and false for ErrDecryption. */
+CRYPTO_FIPS_TEXT static bool
+rsa_decrypt_large_exponent(const RsaFipsLargeExponentKey *priv, Slice ciphertext,
+                           Alloc *tmp, Slice *out) {
+    const BigmodModulus *N = priv->n;
+    BigmodNat *c = bigmod_nat_set_bytes(bigmod_new_nat(tmp), ciphertext, N, NULL);
+    if (c == NULL)
+        return false;
+
+    /* CRT-based decryption (same as regular decrypt, doesn't use E). */
+    const BigmodModulus *P = priv->p, *Q = priv->q;
+    BigmodNat *t0 = bigmod_new_nat(tmp);
+    /* m = c ^ Dp mod p */
+    BigmodNat *m =
+        bigmod_nat_exp(bigmod_new_nat(tmp), bigmod_nat_mod(t0, c, P), priv->dp, P);
+    /* m2 = c ^ Dq mod q */
+    BigmodNat *m2 =
+        bigmod_nat_exp(bigmod_new_nat(tmp), bigmod_nat_mod(t0, c, Q), priv->dq, Q);
+    /* m = m - m2 mod p */
+    bigmod_nat_sub(m, bigmod_nat_mod(t0, m2, P), P);
+    /* m = m * Qinv mod p */
+    bigmod_nat_mul(m, &priv->qinv, P);
+    /* m = m * q mod N */
+    bigmod_nat_mul(bigmod_nat_expand_for(m, N), bigmod_nat_mod(t0, &Q->nat, N), N);
+    /* m = m + m2 mod N */
+    bigmod_nat_add(m, bigmod_nat_expand_for(m2, N), N);
+
+    *out = bigmod_nat_bytes(m, tmp, N);
+    return true;
+}
+
+/* TestingOnlyLargeExponentDecryptOAEP decrypts ciphertext using RSAES-OAEP
+ * with a private key that has a large public exponent. It is only meant for
+ * ACVP testing. */
+CRYPTO_FIPS_TEXT bool burrow__rsa_fips_testing_only_large_exponent_decrypt_oaep(
+    Hash hash, Hash mgf_hash, const RsaFipsLargeExponentKey *priv, Slice ciphertext,
+    Slice label, Alloc *tmp, Slice *out, Error *err) {
+    rsa_fips_self_test();
+    burrow__fips140_record_approved();
+    rsa_check_approved_hash(hash);
+
+    Int k = rsa_large_exponent_private_size(priv);
+    Int h_len = hash_size(hash);
+    if (ciphertext.len > k || k < h_len * 2 + 2) {
+        BURROW_OUT(err, rsa_err_decryption);
+        return false;
+    }
+
+    Slice em;
+    if (!rsa_decrypt_large_exponent(priv, ciphertext, tmp, &em)) {
+        BURROW_OUT(err, rsa_err_decryption);
+        return false;
+    }
+
+    hash_reset(hash);
+    (void)hash_write(hash, label, NULL);
+    Slice l_hash = hash_sum(tmp, hash, slice_nil(TYPE_BYTE));
+
+    Int first_byte_is_zero = subtle_constant_time_byte_eq(rsa_p(em)[0], 0);
+
+    Slice seed = rsa_sub(em, 1, h_len + 1);
+    Slice db = rsa_sub(em, h_len + 1, em.len);
+
+    rsa_mgf1_xor(seed, mgf_hash, db, tmp);
+    rsa_mgf1_xor(db, mgf_hash, seed, tmp);
+
+    Slice l_hash2 = rsa_sub(db, 0, h_len);
+
+    Int l_hash2_good = subtle_constant_time_compare(l_hash, l_hash2);
+
+    Int looking_for_index = 1, index = 0, invalid = 0;
+    Slice rest = rsa_sub(db, h_len, db.len);
+    const uint8_t *r = rsa_p(rest);
+
+    for (Int i = 0; i < rest.len; i++) {
+        Int equals0 = subtle_constant_time_byte_eq(r[i], 0);
+        Int equals1 = subtle_constant_time_byte_eq(r[i], 1);
+        index = subtle_constant_time_select(looking_for_index & equals1, i, index);
+        looking_for_index = subtle_constant_time_select(equals1, 0, looking_for_index);
+        invalid = subtle_constant_time_select(looking_for_index & ~equals0, 1, invalid);
+    }
+
+    if ((first_byte_is_zero & l_hash2_good & ~invalid & ~looking_for_index) != 1) {
+        BURROW_OUT(err, rsa_err_decryption);
+        return false;
+    }
+    *out = rsa_sub(rest, index + 1, rest.len);
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    return true;
+}
+
+/* TestingOnlyLargeExponentEncryptOAEP encrypts the given message with
+ * RSAES-OAEP using a public key with a large exponent. It is only meant for
+ * ACVP testing. */
+CRYPTO_FIPS_TEXT bool burrow__rsa_fips_testing_only_large_exponent_encrypt_oaep(
+    Hash hash, Hash mgf_hash, IoReader random, const RsaFipsLargeExponentPublicKey *pub,
+    Slice msg, Slice label, Alloc *tmp, Slice *out, Error *err) {
+    rsa_fips_self_test();
+    burrow__fips140_record_approved();
+    rsa_check_approved_hash(hash);
+    Error ce = rsa_check_large_exponent_public(pub);
+    if (BURROW_FAILED(ce)) {
+        BURROW_OUT(err, ce);
+        return false;
+    }
+    Int k = rsa_large_exponent_public_size(pub);
+    Int h_len = hash_size(hash);
+    if (msg.len > k - 2 * h_len - 2) {
+        BURROW_OUT(err, rsa_err_message_too_long);
+        return false;
+    }
+
+    hash_reset(hash);
+    (void)hash_write(hash, label, NULL);
+    Slice l_hash = hash_sum(tmp, hash, slice_nil(TYPE_BYTE));
+
+    Slice em = rsa_make(tmp, k);
+    Slice seed = rsa_sub(em, 1, 1 + h_len);
+    Slice db = rsa_sub(em, 1 + h_len, k);
+    uint8_t *dbp = rsa_p(db);
+
+    memcpy(dbp, l_hash.p, (size_t)h_len);
+    dbp[db.len - msg.len - 1] = 1;
+    if (msg.len > 0)
+        memcpy(dbp + db.len - msg.len, msg.p, (size_t)msg.len);
+
+    if (!rsa_read(random, seed, err))
+        return false;
+
+    rsa_mgf1_xor(db, mgf_hash, seed, tmp);
+    rsa_mgf1_xor(seed, mgf_hash, db, tmp);
+
+    return rsa_encrypt_large_exponent(pub, em, tmp, out, err);
 }
 
 /* ------------------------------------------------------- key generation */
@@ -1885,8 +2319,8 @@ CRYPTO_FIPS_TEXT Slice burrow__rsa_totient(Alloc *a, Slice p, Slice q, Error *er
 
 /* GenerateKey generates a new RSA key pair of the given bit size. bits must
  * be at least 32. */
-CRYPTO_FIPS_TEXT static RsaFipsKey *rsa_fips_generate_key(Alloc *a, IoReader rand,
-                                                          Int bits, Error *err) {
+CRYPTO_FIPS_TEXT RsaFipsKey *burrow__rsa_fips_generate_key(Alloc *a, IoReader rand,
+                                                           Int bits, Error *err) {
     if (bits < 32) {
         rsa_set_error(err, "rsa: key too small");
         return NULL;
@@ -1938,7 +2372,7 @@ CRYPTO_FIPS_TEXT static RsaFipsKey *rsa_fips_generate_key(Alloc *a, IoReader ran
         BigmodModulus *lambda = rsa_totient_mod(k->p, k->q, s.a, &terr);
         if (lambda == NULL) {
             if (errors_is(terr, burrow__rsa_err_divisor_too_large)) {
-                rsa_fips_key_free(k);
+                burrow__rsa_fips_key_free(k);
                 k = NULL;
                 arena_release(&s.ar, mark);
                 continue;
@@ -1952,7 +2386,7 @@ CRYPTO_FIPS_TEXT static RsaFipsKey *rsa_fips_generate_key(Alloc *a, IoReader ran
             /* This checks that GCD(e, lcm(p-1, q-1)) = 1, which is equivalent
              * to checking GCD(e, p-1) = 1 and GCD(e, q-1) = 1 separately in
              * FIPS 186-5, Appendix A.1.3, steps 4.5 and 5.6. */
-            rsa_fips_key_free(k);
+            burrow__rsa_fips_key_free(k);
             k = NULL;
             arena_release(&s.ar, mark);
             continue;
@@ -1992,7 +2426,7 @@ CRYPTO_FIPS_TEXT static RsaFipsKey *rsa_fips_generate_key(Alloc *a, IoReader ran
     return NULL;
 
 fail:
-    rsa_fips_key_free(k);
+    burrow__rsa_fips_key_free(k);
     rsa_scratch_free(&s);
     return NULL;
 }
@@ -2155,7 +2589,7 @@ CRYPTO_FIPS_TEXT static void rsa_precomputed_free(RsaPrecomputedValues *pv, Allo
                  (size_t)pv->crt_values_len * sizeof(RsaCRTValue),
                  _Alignof(RsaCRTValue));
     }
-    rsa_fips_key_free(pv->fips);
+    burrow__rsa_fips_key_free(pv->fips);
     memset(pv, 0, sizeof *pv);
 }
 
@@ -2264,7 +2698,7 @@ CRYPTO_FIPS_TEXT static bool rsa_precompute(const RsaPrivateKey *priv, Alloc *a,
     /* If the CRT values are already set, use them. */
     const RsaPrecomputedValues *pv = &priv->precomputed;
     if (pv->dp != NULL && pv->dq != NULL && pv->qinv != NULL) {
-        RsaFipsKey *k = rsa_fips_new_private_key_with_precomputation(
+        RsaFipsKey *k = burrow__rsa_fips_new_private_key_with_precomputation(
             a, tmp, N, priv->public_key.e, d, P, Q, big_int_bytes(pv->dp, tmp),
             big_int_bytes(pv->dq, tmp), big_int_bytes(pv->qinv, tmp), err);
         if (k == NULL)
@@ -2277,11 +2711,11 @@ CRYPTO_FIPS_TEXT static bool rsa_precompute(const RsaPrivateKey *priv, Alloc *a,
     }
 
     RsaFipsKey *k =
-        rsa_fips_new_private_key(a, tmp, N, priv->public_key.e, d, P, Q, err);
+        burrow__rsa_fips_new_private_key(a, tmp, N, priv->public_key.e, d, P, Q, err);
     if (k == NULL)
         return false;
     out->fips = k;
-    RsaFipsExport x = rsa_fips_export(k, tmp);
+    RsaFipsExport x = burrow__rsa_fips_export(k, tmp);
     out->dp = rsa_big_from_bytes(a, x.dp);
     out->dq = rsa_big_from_bytes(a, x.dq);
     out->qinv = rsa_big_from_bytes(a, x.qinv);
@@ -2293,7 +2727,7 @@ CRYPTO_FIPS_TEXT static bool rsa_precomputed_is_consistent(const RsaPrivateKey *
                                                            Alloc *tmp) {
     if (priv->precomputed.fips == NULL)
         return false;
-    RsaFipsExport x = rsa_fips_export(priv->precomputed.fips, tmp);
+    RsaFipsExport x = burrow__rsa_fips_export(priv->precomputed.fips, tmp);
     if (!rsa_big_equal_to_bytes(priv->public_key.n, x.n, tmp) ||
         priv->public_key.e != x.e || !rsa_big_equal_to_bytes(priv->d, x.d, tmp))
         return false;
@@ -2486,7 +2920,7 @@ CRYPTO_FIPS_TEXT RsaPrivateKey *rsa_generate_key(Alloc *a, IoReader random, Int 
     }
 
     Error e = BURROW_NO_ERROR;
-    RsaFipsKey *k = rsa_fips_generate_key(a, random, bits, &e);
+    RsaFipsKey *k = burrow__rsa_fips_generate_key(a, random, bits, &e);
     if (bits < 256 && k == NULL) {
         /* Toy-sized keys have a non-negligible chance of hitting two hard
          * failure cases: p == q and d <= 2^(nlen / 2).
@@ -2500,7 +2934,7 @@ CRYPTO_FIPS_TEXT RsaPrivateKey *rsa_generate_key(Alloc *a, IoReader random, Int 
          * for 256-bit keys. */
         for (int i = 1; i < 8 && k == NULL; i++) {
             e = BURROW_NO_ERROR;
-            k = rsa_fips_generate_key(a, random, bits, &e);
+            k = burrow__rsa_fips_generate_key(a, random, bits, &e);
         }
     }
     if (k == NULL) {
@@ -2510,7 +2944,7 @@ CRYPTO_FIPS_TEXT RsaPrivateKey *rsa_generate_key(Alloc *a, IoReader random, Int 
 
     RsaScratch s;
     rsa_scratch_init(&s);
-    RsaFipsExport x = rsa_fips_export(k, s.a);
+    RsaFipsExport x = burrow__rsa_fips_export(k, s.a);
     RsaPrivateKey *priv = rsa_private_key_new(a, 2);
     priv->public_key.n = rsa_big_from_bytes(a, x.n);
     priv->public_key.e = x.e;
@@ -2737,7 +3171,7 @@ CRYPTO_FIPS_TEXT Slice rsa_sign_pss(Alloc *a, IoReader rand, const RsaPrivateKey
     }
 
     Slice sig;
-    if (rsa_fips_sign_pss(rand, k, h, digest, salt_length, s.a, &sig, err))
+    if (burrow__rsa_fips_sign_pss(rand, k, h, digest, salt_length, s.a, &sig, err))
         out = rsa_clone(a, sig, err);
 
 done:
@@ -2780,8 +3214,7 @@ CRYPTO_FIPS_TEXT Error rsa_verify_pss(const RsaPublicKey *pub, CryptoHash hash,
     }
     switch (salt_length) {
     case RSA_PSS_SALT_LENGTH_AUTO:
-        err = rsa_fips_verify_pss(N, pub->e, h, digest, sig,
-                                  RSA_PSS_SALT_LENGTH_AUTODETECT, s.a);
+        err = burrow__rsa_fips_verify_pss(N, pub->e, h, digest, sig, s.a);
         break;
     case RSA_PSS_SALT_LENGTH_EQUALS_HASH:
         err = rsa_fips_verify_pss_with_salt_length(N, pub->e, h, digest, sig,
@@ -2823,8 +3256,8 @@ rsa_encrypt_oaep_hashes(Alloc *a, Hash hash, Hash mgf_hash, IoReader random,
     rsa_scratch_init(&s);
     BigmodModulus *N = rsa_fips_public_key(pub, s.a, err);
     Slice ct;
-    if (N != NULL && rsa_fips_encrypt_oaep(hash, mgf_hash, random, N, pub->e, msg,
-                                           label, s.a, &ct, err))
+    if (N != NULL && burrow__rsa_fips_encrypt_oaep(hash, mgf_hash, random, N, pub->e,
+                                                   msg, label, s.a, &ct, err))
         out = rsa_clone(a, ct, err);
     rsa_scratch_free(&s);
 
@@ -2885,8 +3318,8 @@ rsa_decrypt_oaep_hashes(Alloc *a, Hash hash, Hash mgf_hash, const RsaPrivateKey 
     Slice out = slice_nil(TYPE_BYTE);
     const RsaFipsKey *k = rsa_fips_private_key(priv, s.a, err);
     Slice msg;
-    if (k != NULL &&
-        rsa_fips_decrypt_oaep(hash, mgf_hash, k, ciphertext, label, s.a, &msg, err))
+    if (k != NULL && burrow__rsa_fips_decrypt_oaep(hash, mgf_hash, k, ciphertext, label,
+                                                   s.a, &msg, err))
         out = rsa_clone(a, msg, err);
     rsa_scratch_free(&s);
     return out;
@@ -2932,12 +3365,8 @@ CRYPTO_FIPS_TEXT Slice rsa_sign_pkcs1_v15(Alloc *a, IoReader random,
 
     const RsaFipsKey *k = rsa_fips_private_key(priv, s.a, err);
     if (k != NULL) {
-        rsa_fips_self_test();
-        burrow__fips140_record_approved();
-        rsa_check_approved_hash_name(name);
-
         Slice sig;
-        if (rsa_fips_sign_pkcs1_v15(k, name, hashed, s.a, &sig, err))
+        if (burrow__rsa_fips_sign_pkcs1_v15(k, name, hashed, s.a, &sig, err))
             out = rsa_clone(a, sig, err);
     }
 
@@ -2975,11 +3404,7 @@ CRYPTO_FIPS_TEXT Error rsa_verify_pkcs1_v15(const RsaPublicKey *pub, CryptoHash 
 
     BigmodModulus *N = rsa_fips_public_key(pub, s.a, &err);
     if (N != NULL) {
-        rsa_fips_self_test();
-        burrow__fips140_record_approved();
-        rsa_check_approved_hash_name(name);
-
-        err = rsa_fips_verify_pkcs1_v15(N, pub->e, name, hashed, sig, s.a);
+        err = burrow__rsa_fips_verify_pkcs1_v15(N, pub->e, name, hashed, sig, s.a);
     }
 
 done:

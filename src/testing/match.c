@@ -13,6 +13,7 @@
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
+#include "burrow/pal.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
 #include "burrow/strconv.h"
@@ -21,7 +22,6 @@
 #include "burrow/utf8.h"
 
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 
 /* ------------------------------------------------------------ the regexp
@@ -1208,7 +1208,11 @@ burrow__TestingMatcher *burrow__testing_matcher_new(TestingMatchString match,
         if (msg.len > 0) {
             fprintf(stderr, "testing: invalid regexp for %.*s\n", (int)msg.len,
                     (const char *)msg.p);
-            exit(1);
+            /* Not in Go: os.Exit is pal_exit, which ends the process where
+             * it is. The C library's exit would run its handlers and take
+             * the runtime down around threads that are still running. */
+            fflush(stderr);
+            pal_exit(1);
         }
     }
     if (skips.len == 0) {
@@ -1219,7 +1223,8 @@ burrow__TestingMatcher *burrow__testing_matcher_new(TestingMatchString match,
         if (msg.len > 0) {
             fprintf(stderr, "testing: invalid regexp for %.*s\n", (int)msg.len,
                     (const char *)msg.p);
-            exit(1);
+            fflush(stderr);
+            pal_exit(1);
         }
     }
     arena_init(&m->names, NULL, 0);

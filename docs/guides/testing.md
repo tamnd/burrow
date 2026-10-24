@@ -753,6 +753,86 @@ Five of the cases look for the time. The zero-time case checks the opposite, tha
 
 `slogtest_run` is `slogtest.Run`, the same cases with one subtest each. It asks for a new handler at the start of each subtest and for the one record as a map at the end, so a failure names the case it came from.
 
+## Property checks
+
+`testing/quick` is `burrow/testing/quick.h`. `quick_check` calls a function that returns bool with random arguments, 100 times by default, and returns the first input that makes it false as a `QuickCheckError`. `quick_check_equal` calls two functions of the same type with the same random arguments and reports the first input where they differ. A function goes in as an `Any`, so its type needs a descriptor, which `BURROW_FUNC_TYPE_DEFINE` from `burrow/declare.h` makes from the signature:
+
+<!-- example: ../examples/testing/quick.c#checkequal -->
+```c
+/* Two ways to take the absolute value of an int32, which should agree. */
+BURROW_FUNC(AbsFn, int64_t, int32_t x);
+#define ABS_SIG(IN, OUT) IN(0, int32_t) OUT(int64_t)
+BURROW_FUNC_TYPE_DEFINE(AbsFn, ABS_SIG);
+
+static int64_t abs_branch(void *env, int32_t x) {
+    (void)env;
+    return x < 0 ? -(int64_t)x : (int64_t)x;
+}
+
+static int64_t abs_bits(void *env, int32_t x) {
+    (void)env;
+    int64_t v = x;
+    int64_t m = v >> 63;
+    return (v ^ m) - m;
+}
+
+static void TestAbs(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    AbsFn f = {abs_branch, NULL};
+    AbsFn g = {abs_bits, NULL};
+    Error err = quick_check_equal(a, BURROW_ANY(TYPE_OF(AbsFn), &f),
+                                  BURROW_ANY(TYPE_OF(AbsFn), &g), NULL);
+    fmt_printf_v("abs: %v\n", err);
+    if (BURROW_FAILED(err))
+        testing_t_error_v(t, err);
+    arena_free(&ar);
+}
+```
+
+The arguments, the results and the error all come from the allocator you pass, so an arena is the easy choice. A type can make its own random values by having a `QuickGenerator` vtable recorded for it with `BURROW_IMPLEMENTS`. `QuickConfig` sets the count, the random source and, through `values`, a function that fills in the arguments itself, which is also how you get the same inputs on every run:
+
+<!-- example: ../examples/testing/quick.c#values -->
+```c
+/* Doubling and halving an int8 should give it back, which it does not once
+ * the doubling overflows. */
+BURROW_FUNC(HalfFn, bool, int8_t x);
+#define HALF_SIG(IN, OUT) IN(0, int8_t) OUT(bool)
+BURROW_FUNC_TYPE_DEFINE(HalfFn, HALF_SIG);
+
+static bool double_then_half(void *env, int8_t x) {
+    (void)env;
+    int8_t d = (int8_t)(x * 2);
+    return d / 2 == x;
+}
+
+/* The inputs, in order, instead of random ones. */
+static int8_t inputs[] = {1, 50, 100, 120};
+static Int next_input;
+
+static void fixed_values(void *env, Slice values, MathRandRand *r) {
+    (void)env;
+    (void)r;
+    BURROW_AT(ReflectValue, values, 0) =
+        reflect_value_of(BURROW_ANY(TYPE_OF(int8_t), &inputs[next_input++]));
+}
+
+static void TestDoubleThenHalf(TestingT *t) {
+    (void)t;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    HalfFn f = {double_then_half, NULL};
+    QuickConfig cfg = {4, 0, NULL, BURROW_FN(QuickValuesFunc, fixed_values, NULL)};
+    Error err =
+        quick_check(arena_allocator(&ar), BURROW_ANY(TYPE_OF(HalfFn), &f), &cfg);
+    fmt_println_v(err);
+    arena_free(&ar);
+}
+```
+
+Go's `-quickchecks` flag is not there, so the default count is always 100. Like Go's, the package is frozen.
+
 ## Deterministic randomness for crypto tests
 
 `cryptotest_set_global_random` is `cryptotest.SetGlobalRandom`. For the rest of the test it replaces crypto/rand, and every place in the crypto packages that reads randomness on its own, with a ChaCha8 stream from the seed you give. Key generation, nonces and the randoms a TLS handshake sends all come out the same on every run. Calling it again starts the stream over, and when the test ends crypto/rand goes back to the system's randomness:

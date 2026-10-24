@@ -130,6 +130,7 @@ debug/buildinfo
 log/slog
 testing/slogtest
 testing/iotest
+testing/quick
 net/http/httputil
 expvar
 database/sql/driver

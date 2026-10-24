@@ -3594,10 +3594,23 @@ static void TestServerDoS_MaxHeaderListSize(TestingT *t) {
                 st.fr, 1, off == blen, slice_from(b + off - n, n, n, TYPE_BYTE)));
     }
     if (ok) {
+#if defined(BURROW_HARDENED) && BURROW_HARDENED
+        /* Not in Go: in a hardened build the server takes a header list of 64
+         * KiB, and 1 MiB of CONTINUATION is more than twice what is left of it,
+         * so the server ends the connection, as it does in
+         * TestServerContinuationFlood, rather than answer 431. */
+        uint32_t last_id = 0;
+        if (!h2t_read_until_closed(&st, &last_id))
+            testing_t_errorf_v(t, "connection closed with no GOAWAY frame; want one");
+        else if (last_id != 1)
+            testing_t_errorf_v(t, "received GOAWAY with LastStreamId %d, want %d",
+                               (Int)last_id, 1);
+#else
         static const Str want[] = {S_(":status"),        S_("431"),
                                    S_("content-type"),   S_("text/html; charset=utf-8"),
                                    S_("content-length"), S_("63")};
         (void)h2t_want_headers(&st, 1, false, want, 6);
+#endif
     }
     h2t_close(&st);
     if (b != NULL)

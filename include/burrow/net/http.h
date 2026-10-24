@@ -1203,9 +1203,18 @@ extern const Error http_err_line_too_long;
 
 /* http.DefaultMaxHeaderBytes and DefaultMaxHeaderValueCount, the most bytes a
  * request's first line and header may have, and the most header values, when
- * the server does not say. */
+ * the server does not say.
+ *
+ * Not in Go: in a build with BURROW_HARDENED defined to 1 they are 64 KiB and
+ * 100. 100 is Apache's default LimitRequestFields. See docs/guides/building.md.
+ */
+#if defined(BURROW_HARDENED) && BURROW_HARDENED
+#define HTTP_DEFAULT_MAX_HEADER_BYTES ((Int)64 << 10)
+#define HTTP_DEFAULT_MAX_HEADER_VALUE_COUNT ((Int)100)
+#else
 #define HTTP_DEFAULT_MAX_HEADER_BYTES ((Int)1 << 20)
 #define HTTP_DEFAULT_MAX_HEADER_VALUE_COUNT ((Int)500)
+#endif
 
 /* http.ConnState, where a connection to a server is in its life. A connection
  * is new when it has been accepted and nothing has been read from it, active

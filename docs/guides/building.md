@@ -116,6 +116,23 @@ The setjmp flags are there because burrow's panics use it, and wasi-sdk does set
 
 What wasip1 lacks, burrow lacks there too, much as Go does. There is one thread, so `runtime_gomaxprocs` is always 1 and goroutines take turns rather than run at once. Starting a process fails with `ENOSYS` and asking for a signal with `ENOTSUP`, and some runtimes refuse a symbolic link to an absolute path. The tests skip what isn't there. `make test` with wasi-sdk's `clang` and `llvm-ar` as `CC` and `AR` runs the suite this way, and CI does the same on every pull request.
 
+## Hardened builds
+
+A program that takes connections from the internet should build burrow hardened. With make that is `make HARDENED=1`, and with CMake it is `-DBURROW_HARDENED=ON`. With the two files, compile both of them and your own code with the same flags:
+
+```sh
+cc -std=c11 -O2 -DBURROW_HARDENED=1 -fsanitize=bounds,object-size -fsanitize-undefined-trap-on-error -c burrow.c
+cc -std=c11 -O2 -DBURROW_HARDENED=1 -fsanitize=bounds,object-size -fsanitize-undefined-trap-on-error main.c burrow.o -pthread -o main
+```
+
+It turns on two things.
+
+The first is the compiler's own checks. burrow's `s[i]`, `str_at` and the rest are always bounds checked, as Go's are, and an index out of range panics in every build. Underneath them the library's C indexes arrays and walks pointers directly once it has checked the bounds itself, and that is where a slip in the port would do harm. `-fsanitize=bounds` checks each index into an array whose size the compiler knows, and `-fsanitize=object-size` checks an access through a pointer when the compiler can work out how big the object it points into is, which it can do more often with optimisation on. In trap mode a check that fails runs a trap instruction, so there is no runtime library to link, and the program stops there instead of going on with memory it should not touch. That is a crash and not a panic, and nothing can recover it. The checks cost some speed.
+
+The second is lower limits on what an HTTP server reads. `HTTP_DEFAULT_MAX_HEADER_BYTES`, the most a request's first line and header may be when the server's `max_header_bytes` is zero, is 64 KiB instead of Go's 1 MiB, and `HTTP_DEFAULT_MAX_HEADER_VALUE_COUNT` is 100 instead of 500. The server uses them for HTTP/1 and for HTTP/2, where the first also sets the header list size it tells the client. A server that sets its own limits keeps them. The two constants are in `burrow/net/http.h`, so code that reads them has to be compiled with `-DBURROW_HARDENED=1` as well to see the values the library uses. CMake does that for anything that links `burrow::burrow`.
+
+MSVC has no checks like those two for a release build, so with MSVC the CMake option defines `BURROW_HARDENED` and does nothing else.
+
 ## make
 
 From a checkout, `make` builds `build/libburrow.a`, and your program adds `-Iinclude` and links the archive. `make test` runs the suite and `make check` runs the source gates first. `make amalgamation` writes the two files into `build/amalgamation`, and `make AMALGAMATION=1 test` builds the library out of them and runs every test against exactly what ships.

@@ -139,9 +139,9 @@
  * since that is what the generator strips.
  *
  * Go's make cannot fail and a C allocation can. Only recurse_32 allocates, in
- * the case TestSAIS/forcealloc reaches, so it and the functions that call it
- * take the allocator and return false when it is out of memory. text_32 has
- * its 512 entries of tmp on the stack. */
+ * the case the forcealloc subtests of TestNew32 and TestNew64 reach, so it and
+ * the functions that call it take the allocator and return false when it is
+ * out of memory. text_32 has its 512 entries of tmp on the stack. */
 
 /* A []byte, a []int32 and a []int64, which is all a slice is here. */
 typedef struct SaisBytes {

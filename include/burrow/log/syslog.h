@@ -20,8 +20,8 @@
  *
  *     https://godoc.org/?q=syslog
  *
- * Each message goes to the server in one write, so a datagram holds one
- * message and a stream connection gets them whole, one after another.
+ * Not in Go: each message goes to the server in one write, so a datagram holds
+ * one message and a stream connection gets them whole, one after another.
  *
  * Not in Go: Go does not build this package on Windows or Plan 9. Here it is
  * in every build. On a system with no syslog daemon listening on a Unix socket,
@@ -115,8 +115,8 @@ typedef struct SyslogWriter SyslogWriter;
  * priority (a combination of the syslog facility and severity) and prefix
  * tag. If tag is empty, os_args()[0] is used.
  *
- * The writer is made in a, and NULL comes back with the error when there is
- * no daemon to reach. Give it back with syslog_writer_free. */
+ * Not in Go: the writer is made in a, and NULL comes back with the error when
+ * there is no daemon to reach. Give it back with syslog_writer_free. */
 BURROW_OWNS(ret) SyslogWriter *syslog_new(Alloc *a, SyslogPriority priority, Str tag,
                                           Error *err);
 
@@ -127,20 +127,21 @@ BURROW_OWNS(ret) SyslogWriter *syslog_new(Alloc *a, SyslogPriority priority, Str
  * connect to the local syslog server. Otherwise, see the documentation for
  * net_dial for valid values of network and raddr.
  *
- * A priority outside SYSLOG_LOG_EMERG to SYSLOG_LOG_LOCAL7 | SYSLOG_LOG_DEBUG
- * is the error "log/syslog: invalid priority". The writer keeps its own copies
- * of network, raddr and tag. */
+ * Not in Go: a priority outside SYSLOG_LOG_EMERG to
+ * SYSLOG_LOG_LOCAL7 | SYSLOG_LOG_DEBUG is the error
+ * "log/syslog: invalid priority". The writer keeps its own copies of network,
+ * raddr and tag. */
 BURROW_OWNS(ret) SyslogWriter *syslog_dial(Alloc *a, Str network, Str raddr,
                                            SyslogPriority priority, Str tag,
                                            Error *err);
 
-/* Writer.Write. Write sends a log message to the syslog daemon. The message
- * gets a newline unless it ends in one, and the count is len(b), not what went
- * to the server, as an io.Writer's has to be. */
+/* Writer.Write. Write sends a log message to the syslog daemon. Not in Go:
+ * the message gets a newline unless it ends in one, and the count is len(b),
+ * not what went to the server, as an io.Writer's has to be. */
 Int syslog_writer_write(SyslogWriter *w, Slice b, Error *err);
 
-/* Writer.Close. Close closes a connection to the syslog daemon. A write after
- * it connects again. */
+/* Writer.Close. Close closes a connection to the syslog daemon. Not in Go: a
+ * write after it connects again. */
 BURROW_STATIC(ret) Error syslog_writer_close(SyslogWriter *w);
 
 /* Writer.Emerg and the rest. Each logs m with its own severity, ignoring the
@@ -154,7 +155,8 @@ BURROW_STATIC(ret) Error syslog_writer_notice(SyslogWriter *w, Str m);
 BURROW_STATIC(ret) Error syslog_writer_info(SyslogWriter *w, Str m);
 BURROW_STATIC(ret) Error syslog_writer_debug(SyslogWriter *w, Str m);
 
-/* The Writer as an io.Writer, which Go converts to without being asked. */
+/* Not in Go: the Writer as an io.Writer, which Go converts to without being
+ * asked. */
 IoWriter syslog_writer_as_io_writer(SyslogWriter *w);
 
 /* Not in Go, which has a collector: closes w if it is open and gives back
@@ -166,8 +168,8 @@ void syslog_writer_free(SyslogWriter *w);
  * syslog facility and severity. The log_flag argument is the flag set passed
  * through to log_new to create the Logger.
  *
- * The logger and the writer under it are made in a. Give both back with
- * syslog_logger_free. */
+ * Not in Go: the logger and the writer under it are made in a. Give both back
+ * with syslog_logger_free. */
 BURROW_OWNS(ret) LogLogger *syslog_new_logger(Alloc *a, SyslogPriority p, Int log_flag,
                                               Error *err);
 

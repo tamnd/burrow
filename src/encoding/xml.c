@@ -2409,7 +2409,6 @@ static XmlToken xml_raw_token(XmlDecoder *d, Error *err) {
 /* An allocation that failed part way through a call spoils what the call
  * made, so the call fails instead. */
 static XmlToken xml_check_oom(XmlDecoder *d, XmlToken t, Error *err) {
-    BURROW_OUT(err, BURROW_NO_ERROR);
     if (BURROW_UNLIKELY(d->oom)) {
         d->oom = false;
         d->err = burrow_err_out_of_memory;

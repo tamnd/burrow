@@ -74,6 +74,9 @@ src/crypto/x509_verify.c burrow__x509_load_system_roots
 src/crypto/x509_verify.c x509_system_cert_pool
 src/crypto/x509_verify.c x509_copy_chains
 src/crypto/x509_verify.c x509_system_verify
+# The token's own call has written *err already, and this only replaces it
+# when an allocation failed part way through.
+src/encoding/xml.c xml_check_oom
 src/io/io.c burrow__io_try_write_to
 src/io/io.c burrow__io_try_read_from
 src/io/io.c burrow__io_try_write_string

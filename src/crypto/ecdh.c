@@ -21,6 +21,7 @@
 #include "burrow/sync.h"
 #include "burrow/type.h"
 
+#include "ecdh_internal.h"
 #include "edwards25519.h"
 #include "fips140_module.h"
 #include "fips140only_internal.h"
@@ -94,6 +95,11 @@ struct EcdhCurve {
     const uint8_t *order;
 };
 
+CRYPTO_FIPS_RODATA static const uint8_t ecdh_p224_order[28] = {
+    0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff,
+    0x16, 0xa2, 0xe0, 0xb8, 0xf0, 0x3e, 0x13, 0xdd, 0x29, 0x45, 0x5c, 0x5c, 0x2a, 0x3d,
+};
+
 CRYPTO_FIPS_RODATA static const uint8_t ecdh_p256_order[32] = {
     0xff, 0xff, 0xff, 0xff, 0x00, 0x00, 0x00, 0x00, 0xff, 0xff, 0xff,
     0xff, 0xff, 0xff, 0xff, 0xff, 0xbc, 0xe6, 0xfa, 0xad, 0xa7, 0x17,
@@ -115,6 +121,8 @@ CRYPTO_FIPS_RODATA static const uint8_t ecdh_p521_order[66] = {
     0x47, 0xae, 0xbb, 0x6f, 0xb7, 0x1e, 0x91, 0x38, 0x64, 0x09,
 };
 
+static const EcdhCurve ecdh_curve_p224 = {"P-224", &burrow__nistec_p224,
+                                          ecdh_p224_order};
 static const EcdhCurve ecdh_curve_p256 = {"P-256", &burrow__nistec_p256,
                                           ecdh_p256_order};
 static const EcdhCurve ecdh_curve_p384 = {"P-384", &burrow__nistec_p384,
@@ -123,6 +131,9 @@ static const EcdhCurve ecdh_curve_p521 = {"P-521", &burrow__nistec_p521,
                                           ecdh_p521_order};
 static const EcdhCurve ecdh_curve_x25519 = {"X25519", NULL, NULL};
 
+CRYPTO_FIPS_TEXT const EcdhCurve *burrow__ecdh_p224(void) {
+    return &ecdh_curve_p224;
+}
 CRYPTO_FIPS_TEXT const EcdhCurve *ecdh_p256(void) {
     return &ecdh_curve_p256;
 }

@@ -176,6 +176,20 @@ endif
 CFLAGS  ?= $(STD) $(OPT) $(WARNINGS) $(HARDENING) $(CFRAME) $(INCLUDES) $(DEFINES)
 LDFLAGS ?=
 
+# The hardened build, for a program that faces the internet. make HARDENED=1
+# defines BURROW_HARDENED, which lowers the HTTP server's header limits, and
+# turns on the compiler's bounds and object size checks in trap mode, so they
+# need no runtime library and a check that fails stops the program on the spot.
+# docs/guides/building.md says what each part does. It is added to CFLAGS with
+# override, so that a CFLAGS given on the command line, as CI gives it, keeps
+# it. The program that links the library has to be compiled with
+# -DBURROW_HARDENED=1 too, for HTTP_DEFAULT_MAX_HEADER_BYTES to say what the
+# server does.
+ifeq ($(HARDENED),1)
+  override CFLAGS += -DBURROW_HARDENED=1 -fsanitize=bounds,object-size \
+	-fsanitize-undefined-trap-on-error
+endif
+
 # Threads. -pthread is a compile flag and a link flag at the same time, which is
 # why it is on both rules below and why -lpthread on its own is not enough on
 # every system. Windows has threads in the CRT and no flag to ask for them, and

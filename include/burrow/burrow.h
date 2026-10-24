@@ -218,6 +218,7 @@
 #include "burrow/testing/cryptotest.h"
 #include "burrow/testing/fstest.h"
 #include "burrow/testing/iotest.h"
+#include "burrow/testing/quick.h"
 #include "burrow/testing/slogtest.h"
 #include "burrow/text/scanner.h"
 #include "burrow/text/tabwriter.h"

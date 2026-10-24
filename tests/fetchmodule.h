@@ -87,7 +87,7 @@ static inline void fetchmodule_remove_all(void *env) {
 /* Not in Go: t.TempDir. */
 static inline Str fetchmodule_temp_dir(TestingT *t, Alloc *a) {
     Error err = BURROW_NO_ERROR;
-    Str dir = os_mkdir_temp(a, BURROW_STR_EMPTY, BURROW_S("TestACVP"), &err);
+    Str dir = os_mkdir_temp(a, BURROW_STR_EMPTY, testing_t_name(t), &err);
     if (BURROW_FAILED(err)) {
         testing_t_fatalf_v(t, "TempDir: %s", err);
         return BURROW_STR_EMPTY;

@@ -311,7 +311,7 @@ static Error qk_setup(const QuickSetupError *s) {
 }
 
 /* toString: the %#v of each, joined by ", ". */
-static Str to_string(Alloc *a, Slice interfaces) {
+static Str values_string(Alloc *a, Slice interfaces) {
     Slice s = slice_make(a, TYPE_OF(Str), interfaces.len, interfaces.len);
     if (slice_is_nil(s))
         return BURROW_S("");
@@ -349,7 +349,7 @@ static const ErrorVT qk_check_equal_vt = {
 };
 
 Str quick_check_error_error(const QuickCheckError *s, Alloc *a) {
-    Str in = to_string(a, s->in);
+    Str in = values_string(a, s->in);
     return fmt_sprintf_v(a, "#%d: failed on input %s", s->count, in);
 }
 
@@ -363,9 +363,9 @@ Error quick_check_error_as_error(const QuickCheckError *s, Alloc *a) {
 }
 
 Str quick_check_equal_error_error(const QuickCheckEqualError *s, Alloc *a) {
-    Str in = to_string(a, s->check_error.in);
-    Str out1 = to_string(a, s->out1);
-    Str out2 = to_string(a, s->out2);
+    Str in = values_string(a, s->check_error.in);
+    Str out1 = values_string(a, s->out1);
+    Str out2 = values_string(a, s->out2);
     return fmt_sprintf_v(a, "#%d: failed on input %s. Output 1: %s. Output 2: %s",
                          s->check_error.count, in, out1, out2);
 }

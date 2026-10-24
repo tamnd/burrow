@@ -1788,6 +1788,7 @@ static Http2Frame *h2_meta_fail(H2Meta *st, Error e, Error *err) {
 }
 
 static Http2Frame *h2_read_meta_frame(Http2Framer *fr, Http2Frame *hf, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (fr->allow_illegal_reads) {
         burrow__http2_frame_free(hf);
         BURROW_OUT(err, h2_err_illegal_meta);

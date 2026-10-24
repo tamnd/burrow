@@ -210,6 +210,7 @@ static bool if_fill(Alloc *a, const PalInterface *p, NetInterface *out) {
 }
 
 static NetInterface *if_one(Alloc *a, const PalInterface *p, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     NetInterface *ifi =
         (NetInterface *)mem_alloc_nozero(a, sizeof *ifi, _Alignof(NetInterface));
     if (ifi == NULL || !if_fill(a, p, ifi)) {
@@ -224,6 +225,7 @@ static NetInterface *if_one(Alloc *a, const PalInterface *p, Error *err) {
 static void if_zone_update(const IfTable *ift, bool force);
 
 Slice net_interfaces(Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     IfTable t;
     Error e = if_table(0, &t);
     if (BURROW_FAILED(e)) {
@@ -353,6 +355,7 @@ static bool if_addr(Alloc *a, const PalIfAddr *p, NetAddr *out) {
 /* interfaceAddrTable or interfaceMulticastAddrTable through the PAL, with
  * the OpError round a failure. */
 static Slice if_addr_list(IfAddrsFn fn, int32_t index, Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     IfAddrs t;
     Error e = if_addrs_table(fn, index, &t);
     if (BURROW_FAILED(e)) {
@@ -380,6 +383,7 @@ Slice net_interface_addrs(Alloc *a, Error *err) {
 }
 
 Slice net_interface_addrs_of(const NetInterface *ifi, Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (ifi == NULL) {
         BURROW_OUT(err, if_op_error(burrow__net_err_invalid_interface));
         return slice_nil(TYPE_NET_ADDR);
@@ -404,6 +408,7 @@ static bool if_proc_groups(Alloc *a, const NetInterface *ifi, Slice *out) {
 #endif
 
 Slice net_interface_multicast_addrs(const NetInterface *ifi, Alloc *a, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (ifi == NULL) {
         BURROW_OUT(err, if_op_error(burrow__net_err_invalid_interface));
         return slice_nil(TYPE_NET_ADDR);

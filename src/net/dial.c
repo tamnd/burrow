@@ -356,6 +356,7 @@ static bool dl_partition(Alloc *a, DlList l, DlList *primaries, DlList *fallback
  * in the caller's allocator and whose lookups go in the error arena. */
 
 static const DlAddr *dl_resolve(Str network, Str address, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     DlList l = {NULL, 0};
     Error e = dl_internet_addr_list(NULL, error_allocator(), context_background(),
                                     network, address, &l);

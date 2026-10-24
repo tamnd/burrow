@@ -425,6 +425,7 @@ static Error cg_detail_error(Str text, Str name) {
  * can never be done, and here it goes to another thread either way, for the
  * reason at the top of the file. */
 static bool cg_do(Context ctx, Str lookup_name, CgJob *j, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Error e = cg_acquire(ctx);
     if (BURROW_FAILED(e)) {
         if (e.vt != burrow_err_out_of_memory.vt ||
@@ -765,6 +766,7 @@ Slice burrow__net_cgo_lookup_ptr(Alloc *a, Context ctx, Str addr, Error *err) {
  * before it looks at the first, and a reply none of whose answers parse is an
  * error either way. */
 static Str cg_parse_cname(Alloc *a, Slice msg, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     DnsmsgParser p;
     DnsmsgHeader h;
     Error e = burrow__dnsmsg_parser_start(&p, msg, &h);

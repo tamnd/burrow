@@ -61,6 +61,7 @@ void quotedprintable_reader_free(QuotedprintableReader *r) {
 }
 
 static bool qp_from_hex(Byte b, Byte *v, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     if (b >= '0' && b <= '9') {
         *v = (Byte)(b - '0');
         return true;

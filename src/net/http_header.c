@@ -103,6 +103,7 @@ HttpHeader burrow__http_clone_or_make_header(Alloc *a, HttpHeader h) {
 /* ---------------------------------------------------------------- ParseTime */
 
 Time http_parse_time(Alloc *a, Str text, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const Str layouts[3] = {HTTP_TIME_FORMAT, TIME_RFC850, TIME_ANSIC};
     Time t = {0};
     for (int i = 0; i < 3; i++) {
@@ -134,6 +135,7 @@ static bool ht_is_space(Byte b) {
  * headerNewlineToSpace replacer and TrimString do between them. v has been
  * trimmed already. */
 static void ht_write_value(IoWriter w, Str v, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     Int start = 0;
     for (Int i = 0; i < v.len; i++) {
         if (v.p[i] != '\r' && v.p[i] != '\n')
@@ -153,6 +155,7 @@ static void ht_write_value(IoWriter w, Str v, Error *err) {
 }
 
 static void ht_write_key(IoWriter w, Str key, const Slice *values, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
     const Str *vs = (const Str *)values->p;
     for (Int j = 0; j < values->len; j++) {
         /* TrimString after the newlines are spaces is the same as trimming

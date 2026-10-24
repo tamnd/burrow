@@ -527,6 +527,10 @@ static void TestWrite(TestingT *t) {
 
     testing_t_parallel(t);
 
+    /* Not in Go: a build with no sockets. */
+    if (!testable_network(BURROW_S("udp")))
+        testing_t_skip_v(t, "skipping: no udp here");
+
     Arena ar;
     arena_init(&ar, heap_allocator(), 0);
     Alloc *a = arena_allocator(&ar);
@@ -586,6 +590,10 @@ static void concurrent_write(void *env) {
 }
 
 static void TestConcurrentWrite(TestingT *t) {
+    /* Not in Go: a build with no sockets. */
+    if (!testable_network(BURROW_S("udp")))
+        testing_t_skip_v(t, "skipping: no udp here");
+
     Server *sv = start_server(t, BURROW_S("udp"), BURROW_S(""), make_done(t, 1));
     Error err = BURROW_NO_ERROR;
     ConcurrentWrite cw;

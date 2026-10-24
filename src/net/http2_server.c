@@ -2237,17 +2237,19 @@ static HttpRequest *h2s_new_writer_and_request(h2s_Conn *sc, h2s_Stream *st,
     return req;
 }
 
+/* From http://httpwg.org/specs/rfc7540.html#rfc.section.8.1.2.2 */
+const Str burrow__http2_conn_headers[HTTP2_NCONN_HEADERS] = {
+    BURROW_S_INIT("Connection"),       BURROW_S_INIT("Keep-Alive"),
+    BURROW_S_INIT("Proxy-Connection"), BURROW_S_INIT("Transfer-Encoding"),
+    BURROW_S_INIT("Upgrade"),
+};
+
 /* checkValidHTTP2RequestHeaders. */
 static Error h2s_check_valid_request_headers(HttpHeader h) {
-    static const Str conn_headers[] = {
-        BURROW_S_INIT("Connection"),       BURROW_S_INIT("Keep-Alive"),
-        BURROW_S_INIT("Proxy-Connection"), BURROW_S_INIT("Transfer-Encoding"),
-        BURROW_S_INIT("Upgrade"),
-    };
-    for (size_t i = 0; i < sizeof conn_headers / sizeof conn_headers[0]; i++) {
-        if (map_get(h, &conn_headers[i]) != NULL)
+    for (size_t i = 0; i < HTTP2_NCONN_HEADERS; i++) {
+        if (map_get(h, &burrow__http2_conn_headers[i]) != NULL)
             return fmt_errorf_v("request header %q is not valid in HTTP/2",
-                                conn_headers[i]);
+                                burrow__http2_conn_headers[i]);
     }
     Slice te = http_header_values(h, BURROW_S("Te"));
     if (te.len > 0) {

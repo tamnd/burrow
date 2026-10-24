@@ -1851,19 +1851,46 @@ static HttpResponse *h2c_handle_response(h2c_Conn *cc, h2c_Stream *cs,
         return NULL;
     }
 
+    /* Delete various headers that might mess up framing for HTTP/1. This is
+     * not a problem for HTTP/2, but someone might use HTTP/2 transport as a
+     * reverse proxy which forwards the response to an HTTP/1 client. Our
+     * HTTP/1 client transport will properly reject improper headers such as
+     * multiple conflicting Content-Length headers, but other implementations
+     * might not.
+     * TODO: just reject such responses? We deleted them for compatibility
+     * since this was done in a security fix (go.dev/issue/81115). However,
+     * rejecting them seems entirely reasonable and relatively safe. */
+
+    /* Connection-specific header fields must not appear in an HTTP/2 message,
+     * and any message containing them is malformed. RFC 9113, Section 8.2.2. */
+    for (size_t i = 0; i < HTTP2_NCONN_HEADERS; i++)
+        http_header_del(res->header, burrow__http2_conn_headers[i]);
     res->content_length = -1;
-    Slice clens = http_header_values(res->header, BURROW_S("Content-Length"));
-    if (clens.len == 1) {
+    Str clkey = BURROW_S("Content-Length");
+    Slice *clens = (Slice *)map_get(res->header, &clkey);
+    if (clens != NULL) {
+        /* Repeated Content-Length values may be collapsed into one only if
+         * they are identical per RFC 9110 Section 8.6.
+         * No need to trim whitespace, HTTP/2 header values must not have
+         * extraneous whitespace per RFC 9113 Section 8.2.1.
+         * Non-canonical headers are already rejected by our framer at this
+         * point. */
+        const Str *v = (const Str *)clens->p;
+        bool conflicting = false;
+        for (Int i = 1; i < clens->len; i++)
+            conflicting = conflicting || !str_eq(v[i], v[0]);
         Error pe = BURROW_NO_ERROR;
-        uint64_t cl = strconv_parse_uint(((const Str *)clens.p)[0], 10, 63, &pe);
-        if (BURROW_OK(pe))
+        uint64_t cl = strconv_parse_uint(v[0], 10, 63, &pe);
+        if (conflicting || BURROW_FAILED(pe)) {
+            http_header_del(res->header, clkey);
+        } else {
+            clens->len = 1;
             res->content_length = (int64_t)cl;
-        /* Otherwise, unlike http/1, it won't mess up our framing, so it's
-         * safer smuggling-wise to ignore it. The same goes for more than one
-         * of them. */
-    } else if (clens.len == 0 && stream_ended && !cs->is_head) {
-        res->content_length = 0;
+        }
     }
+
+    if (res->content_length < 0 && stream_ended && !cs->is_head)
+        res->content_length = 0;
 
     if (cs->is_head)
         return res;

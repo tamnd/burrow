@@ -17,6 +17,9 @@
  * real. Go's tests that move it along by a minute or more, or look inside the
  * client's state, are not here.
  *
+ * TestTransportResponseContentLength and TestTransportResponseConnHeaders came
+ * with go1.27.2 (GO-2026-6610, CL 835145).
+ *
  * Copyright 2015 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -5892,6 +5895,159 @@ static void TestTransportRejectsContentLengthWithSign(TestingT *t) {
     }
 }
 
+typedef struct H2ctCLValues {
+    const char *name;
+    const Str *cl_values;
+    size_t n;
+    int want_len; /* -1 means the header is expected to be dropped. */
+} H2ctCLValues;
+
+static void h2ct_response_content_length(H2ctTT *tt, const void *arg) {
+    const H2ctCLValues *p = (const H2ctCLValues *)arg;
+    TestingT *t = tt->t;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    H2ctRT *rt = h2ct_tc_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    H2CT_TRY(rt != NULL);
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+
+    Str headers[2 + 2 * 3];
+    size_t n = 0;
+    headers[n++] = BURROW_S(":status");
+    headers[n++] = BURROW_S("200");
+    for (size_t i = 0; i < p->n; i++) {
+        headers[n++] = BURROW_S("content-length");
+        headers[n++] = p->cl_values[i];
+    }
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    H2CT_TRY(h2ct_write_headers(tc, h2ct_hfp(id, h2ct_block(tc, headers, n), false)));
+    const char *body = p->want_len == 3 ? "aaa" : "a";
+    H2CT_TRY(h2ct_write_data(tc, id, true, body));
+
+    HttpResponse *res = h2ct_rt_response(rt);
+    H2CT_TRY(res != NULL);
+    (void)h2ct_rt_want_body(rt, body);
+
+    if (res->content_length != p->want_len)
+        testing_t_errorf_v(t, "got ContentLength = %d, want %d", res->content_length,
+                           p->want_len);
+    Str want_value = BURROW_S("3");
+    Slice want_header = slice_from(&want_value, 0, 0, TYPE_STRING);
+    if (p->want_len >= 0)
+        want_header = slice_from(&want_value, 1, 1, TYPE_STRING);
+    Slice got = http_header_values(res->header, BURROW_S("Content-Length"));
+    bool ok = got.len == want_header.len;
+    for (Int i = 0; ok && i < got.len; i++)
+        ok = str_eq(((const Str *)got.p)[i], ((const Str *)want_header.p)[i]);
+    if (!ok)
+        testing_t_errorf_v(t, "got Header[%q] = %q, want %q",
+                           BURROW_S("Content-Length"), got, want_header);
+}
+
+static void h2ct_response_content_length_sub(void *env, TestingT *t) {
+    h2ct_run(t, h2ct_response_content_length, env);
+}
+
+/* TestTransportResponseContentLength checks that a Content-Length we cannot
+ * validate is dropped from the response rather than passed on to the caller,
+ * who may be forwarding it to an HTTP/1 endpoint. */
+static void TestTransportResponseContentLength(TestingT *t) {
+    static const Str single[] = {S_("3")};
+    static const Str identical[] = {S_("3"), S_("3"), S_("3")};
+    static const Str different[] = {S_("3"), S_("1"), S_("3")};
+    static const Str space[] = {S_(" 3")};
+    static const Str identical_space[] = {S_("3"), S_("3"), S_(" 3")};
+    static const Str plus[] = {S_("+3")};
+    static const Str non_numeric[] = {S_("abc")};
+    static const Str empty[] = {S_("")};
+    static const H2ctCLValues tests[] = {
+        {"single value", single, 1, 3},
+        {"identical duplicate values", identical, 3, 3},
+        {"different duplicate values", different, 3, -1},
+        {"extraneous whitespace", space, 1, -1},
+        {"identical duplicate values with extraneous whitespace", identical_space, 3,
+         -1},
+        {"plus sign", plus, 1, -1},
+        {"non-numeric", non_numeric, 1, -1},
+        {"empty value", empty, 1, -1},
+        {"no header", NULL, 0, -1},
+    };
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++)
+        (void)testing_t_run(t, str_from_cstr(tests[i].name),
+                            BURROW_FN(TestingTFunc, h2ct_response_content_length_sub,
+                                      (void *)(uintptr_t)&tests[i]));
+}
+
+typedef struct H2ctConnHeaders {
+    const char *name;
+    const Str *fields;
+    size_t n;
+    const char *want_header; /* as HTTP/1 writes it */
+} H2ctConnHeaders;
+
+static void h2ct_response_conn_headers(H2ctTT *tt, const void *arg) {
+    const H2ctConnHeaders *p = (const H2ctConnHeaders *)arg;
+    H2ctConn *tc = h2ct_new_client_conn(tt);
+    H2CT_TRY(tc != NULL && h2ct_greet(tc, NULL, 0));
+
+    H2ctRT *rt = h2ct_tc_round_trip(
+        tt, h2ct_new_request(tt, (Context){0}, BURROW_S("GET"), h2ct_no_body));
+    H2CT_TRY(rt != NULL);
+    uint32_t id = h2ct_rt_stream_id(rt);
+    H2CT_TRY(id != 0);
+
+    Str headers[2 + 4];
+    size_t n = 0;
+    headers[n++] = BURROW_S(":status");
+    headers[n++] = BURROW_S("200");
+    for (size_t i = 0; i < p->n; i++)
+        headers[n++] = p->fields[i];
+    H2CT_TRY(h2ct_want_frame_type(tc, HTTP2_FRAME_HEADERS));
+    H2CT_TRY(h2ct_write_headers(tc, h2ct_hfp(id, h2ct_block(tc, headers, n), false)));
+    H2CT_TRY(h2ct_write_data(tc, id, true, "body"));
+
+    HttpResponse *res = h2ct_rt_response(rt);
+    H2CT_TRY(res != NULL);
+    (void)h2ct_rt_want_body(rt, "body");
+
+    (void)h2ct_want_header(tt->t, "header", res->header, p->want_header);
+}
+
+static void h2ct_response_conn_headers_sub(void *env, TestingT *t) {
+    h2ct_run(t, h2ct_response_conn_headers, env);
+}
+
+/* TestTransportResponseConnHeaders checks that connection-related headers,
+ * which are not valid in HTTP/2 and which an HTTP/1 endpoint may use for
+ * framing, are dropped from the response.
+ *
+ * Not in Go: the header is compared as HTTP/1 writes it, rather than as a map. */
+static void TestTransportResponseConnHeaders(TestingT *t) {
+    static const Str unaffected[] = {S_("content-type"), S_("text/plain")};
+    static const Str te[] = {S_("transfer-encoding"), S_("chunked")};
+    static const Str te_cl[] = {S_("content-length"), S_("-1"), S_("transfer-encoding"),
+                                S_("chunked")};
+    static const Str conn[] = {S_("connection"), S_("keep-alive"), S_("keep-alive"),
+                               S_("timeout=5")};
+    static const Str proxy[] = {S_("proxy-connection"), S_("keep-alive")};
+    static const Str upgrade[] = {S_("upgrade"), S_("websocket")};
+    static const H2ctConnHeaders tests[] = {
+        {"unaffected header", unaffected, 2, "Content-Type: text/plain\r\n"},
+        {"transfer-encoding", te, 2, ""},
+        {"transfer-encoding alongside content-length", te_cl, 4, ""},
+        {"connection and keep-alive", conn, 4, ""},
+        {"proxy-connection", proxy, 2, ""},
+        {"upgrade", upgrade, 2, ""},
+    };
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++)
+        (void)testing_t_run(t, str_from_cstr(tests[i].name),
+                            BURROW_FN(TestingTFunc, h2ct_response_conn_headers_sub,
+                                      (void *)(uintptr_t)&tests[i]));
+}
+
 static void h2ct_invalid_headers(H2ctTS *s, int i, const Str *hkey, const Str *hval,
                                  const Str *tkey, const Str *tval,
                                  const char *want_err) {
@@ -7395,6 +7551,8 @@ static void TestExtendedConnectClientWithoutServerSupport(TestingT *t) {
     X(TestTransportDisableCompression)                                                 \
     X(TestTransportRejectsConnHeaders)                                                 \
     X(TestTransportRejectsContentLengthWithSign)                                       \
+    X(TestTransportResponseContentLength)                                              \
+    X(TestTransportResponseConnHeaders)                                                \
     X(TestTransportFailsOnInvalidHeadersAndTrailers)                                   \
     X(TestTransportBodyDoubleEndStream)                                                \
     X(TestTransportCancelDataResponseRace)                                             \

@@ -1432,6 +1432,13 @@ int64_t pal_std_handle(int i);
  * program hangs on the way to dying. */
 BURROW_NORETURN void pal_exit(int32_t code);
 
+/* Whether pal_exit has been called. On Windows the process's other threads go
+ * on running for a moment after it has, and runtime_throw asks this so that a
+ * thread which finds the process coming apart under it waits to be stopped
+ * instead of printing over a program that asked to exit. It is always false on
+ * POSIX, where _exit stops every thread at once. */
+bool pal_exit_started(void);
+
 /* The environment as a NULL terminated array of "KEY=VALUE". It borrows from
  * the process and is only valid until something changes the environment, which
  * is why the os package copies it once at startup and never reads this

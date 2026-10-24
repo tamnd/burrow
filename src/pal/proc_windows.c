@@ -26,6 +26,7 @@
 
 #if defined(BURROW_OS_WINDOWS)
 
+#include "burrow/atomic.h"
 #include "burrow/pal.h"
 
 #include "internal.h"
@@ -653,14 +654,29 @@ int64_t pal_std_handle(int i) {
     return (int64_t)(intptr_t)h;
 }
 
+/* Set by pal_exit before the process starts down. */
+static uint32_t exit_started;
+
 /* ExitProcess tells every DLL the process is detaching, and the C runtime
  * answers by flushing stdio, which is running something on the way out.
  * TerminateProcess on ourselves does not, and it does not return once the
  * process is on its way down. ExitProcess is behind it only so that the
- * compiler can see nothing comes back. */
+ * compiler can see nothing comes back.
+ *
+ * TerminateProcess stops the other threads one at a time, though, and until a
+ * thread is stopped it runs, into a process whose other threads are gone. A
+ * thread that throws because of that would print a "fatal error:" after
+ * whatever the program said on its way out, and it can be stopped halfway
+ * through the line. exit_started is what lets runtime_throw tell. Issue
+ * #370. */
 void pal_exit(int32_t code) {
+    burrow__atomic_store_release_u32(&exit_started, 1);
     TerminateProcess(GetCurrentProcess(), (UINT)code);
     ExitProcess((UINT)code);
+}
+
+bool pal_exit_started(void) {
+    return burrow__atomic_load_acquire_u32(&exit_started) != 0;
 }
 
 /* -------------------------------------------------------------- environment */

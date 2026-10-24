@@ -1326,6 +1326,16 @@ Error os_root_symlink(OsRoot *r, Str oldname, Str newname) {
 
 /* ============================================================== by name */
 
+/* isLink reports whether fi is a symlink or other surrogate reparse point (such
+ * as a junction).
+ *
+ * Not in Go: it takes the PAL's mode. The Windows PAL gives no type bits at
+ * all to a name surrogate that is not a symlink. */
+static bool os_root_is_link(uint32_t mode) {
+    uint32_t type = mode & PAL_S_IFMT;
+    return type == PAL_S_IFLNK || type == 0;
+}
+
 /* checkPathEscapesInternal: whether name, walked from the root by its
  * name, stays inside it. lstat leaves a link in the last component alone.
  *
@@ -1390,7 +1400,7 @@ static Error os_root_check_escapes_to(OsRoot *r, Str name, bool lstat, Str *reso
                 err = le;
             break;
         }
-        if ((st.mode & PAL_S_IFMT) == PAL_S_IFLNK) {
+        if (os_root_is_link(st.mode)) {
             Error re = BURROW_NO_ERROR;
             Str link = os_readlink(t, next, &re);
             if (BURROW_FAILED(re)) {
@@ -1590,9 +1600,18 @@ static Error os_root_by_name_op(OsRoot *r, Str name, OsRootNameOp op, Str op_nam
     case OS_ROOT_N_CHTIMES:
         e = os_chtimes(full, args->atime, args->mtime);
         break;
-    case OS_ROOT_N_MKDIR:
-        e = os_mkdir(full, args->mode);
+    case OS_ROOT_N_MKDIR: {
+        /* Not in Go: CreateDirectoryW may follow a link that is the last part,
+         * a dangling junction to outside the root among them, and make its
+         * target. Go's mkdirat opens with FILE_OPEN_REPARSE_POINT and gets
+         * EEXIST, and so does this. */
+        PalStat st;
+        if (pal_lstat((const char *)full.p, &st, NULL) && os_root_is_link(st.mode))
+            e = burrow__os_errno_value(SYSCALL_EEXIST);
+        else
+            e = os_mkdir(full, args->mode);
         break;
+    }
     case OS_ROOT_N_REMOVE:
         e = os_remove(full);
         break;
@@ -1658,8 +1677,11 @@ static Error os_root_mkdir_all_impl(OsRoot *r, Str name, OsFileMode perm) {
     arena_init(&ar, NULL, 0);
     Error le = BURROW_NO_ERROR;
     OsFileInfo li = os_root_lstat(r, arena_allocator(&ar), name, &le);
+    /* The target of MkdirAll is a symlink or junction.
+     *
+     * Not in Go: the FileInfo of a junction is irregular. */
     if (BURROW_OK(le) && li.vt != NULL &&
-        (li.vt->mode(li.data) & OS_MODE_SYMLINK) != 0) {
+        (li.vt->mode(li.data) & (OS_MODE_SYMLINK | OS_MODE_IRREGULAR)) != 0) {
         OsFileInfo fi = os_root_stat(r, arena_allocator(&ar), name, &le);
         if (BURROW_OK(le) && fi.vt != NULL && fi.vt->is_dir(fi.data))
             le = BURROW_NO_ERROR;

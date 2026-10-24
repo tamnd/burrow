@@ -5,6 +5,10 @@
  * operation over it are Go's, case for case. Go's consistency tests, which
  * compare Root against the plain os functions on odd names, are not here yet.
  *
+ * Not in Go: TestRootJunction. go1.27.2 (GO-2026-6604, CL 847305) added
+ * junctions to those consistency tests, which are not here, so this checks the
+ * same thing on its own.
+ *
  * Copyright 2024 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
@@ -16,6 +20,7 @@
 #include "burrow/fmt.h"
 #include "burrow/io/fs.h"
 #include "burrow/mem/arena.h"
+#include "burrow/os/exec.h"
 #include "burrow/path.h"
 #include "burrow/path/filepath.h"
 #include "burrow/sort.h"
@@ -1119,6 +1124,70 @@ static void setup(void) {
     a = arena_allocator(&ar);
 }
 
+#if defined(BURROW_OS_WINDOWS)
+/* Not in Go: mklink /J makes a junction to a target that need not exist. */
+static bool make_junction(Str link, Str target) {
+    ExecCmd *cmd =
+        exec_command_v(a, S("cmd"), 5, S("/c"), S("mklink"), S("/J"), link, target);
+    Error e = BURROW_NO_ERROR;
+    (void)exec_cmd_combined_output(cmd, a, &e);
+    if (BURROW_FAILED(e))
+        return false;
+    OsFileInfo li = os_lstat(a, link, &e);
+    return BURROW_OK(e) && (li.vt->mode(li.data) & OS_MODE_IRREGULAR) != 0;
+}
+#endif
+
+/* Not in Go: a junction is a link to Root, so one that leads out of the root
+ * is an escape, and Mkdir and MkdirAll do not make the missing target of one.
+ * Go checks this in its consistency tests (GO-2026-6604). */
+static void TestRootJunction(TestingT *t) {
+#if !defined(BURROW_OS_WINDOWS)
+    testing_t_skip_v(t, "junctions are a Windows thing");
+#else
+    Str dir = temp_dir(t);
+    Str root = join(dir, S("root"));
+    Str outside = join(dir, S("outside"));
+    Str absent = join(dir, S("absent"));
+    mkdir_d(t, root);
+    mkdir_d(t, outside);
+    write_file(t, join(outside, S("secret")), S("x"), 0666);
+    if (!make_junction(join(root, S("j")), outside) ||
+        !make_junction(join(root, S("dangling")), absent))
+        testing_t_skip_v(t, "junctions do not work here");
+
+    Error e = BURROW_NO_ERROR;
+    OsRoot *r = os_open_root(a, root, &e);
+    if (BURROW_FAILED(e))
+        testing_t_fatalf_v(t, "OpenRoot: %s", error_text(e));
+    testing_t_cleanup(t, BURROW_FN(Func, root_free_fn, r));
+
+    (void)os_root_stat(r, a, S("j"), &e);
+    if (BURROW_OK(e))
+        testing_t_errorf_v(t, "root.Stat(\"j\") = nil, want error");
+    e = BURROW_NO_ERROR;
+    OsFile *f = os_root_open(r, a, S("j/secret"), &e);
+    if (BURROW_OK(e)) {
+        os_file_free(f);
+        testing_t_errorf_v(t, "root.Open(\"j/secret\") = nil, want error");
+    }
+
+    static const char *const names[] = {"dangling", "dangling/sub"};
+    for (int i = 0; i < 2; i++) {
+        Str name = str_from_cstr(names[i]);
+        if (BURROW_OK(os_root_mkdir(r, name, 0777)))
+            testing_t_errorf_v(t, "root.Mkdir(%q) = nil, want error", name);
+        if (BURROW_OK(os_root_mkdir_all(r, name, 0777)))
+            testing_t_errorf_v(t, "root.MkdirAll(%q) = nil, want error", name);
+        e = BURROW_NO_ERROR;
+        (void)os_lstat(a, absent, &e);
+        if (!os_is_not_exist(e))
+            testing_t_fatalf_v(t, "after %q, the junction target %s exists", name,
+                               absent);
+    }
+#endif
+}
+
 #define TESTS(X)                                                                       \
     X(TestRootOpen_File)                                                               \
     X(TestRootOpen_Directory)                                                          \
@@ -1147,7 +1216,8 @@ static void setup(void) {
     X(TestRootRemoveDot)                                                               \
     X(TestRootWriteReadFile)                                                           \
     X(TestRootName)                                                                    \
-    X(TestRootFS)
+    X(TestRootFS)                                                                      \
+    X(TestRootJunction)
 
 static int os_root_main(TestingM *m) {
     setup();

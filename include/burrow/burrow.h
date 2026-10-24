@@ -145,6 +145,7 @@
 #include "burrow/image/gif.h"
 #include "burrow/image/jpeg.h"
 #include "burrow/image/png.h"
+#include "burrow/index/suffixarray.h"
 #include "burrow/io.h"
 #include "burrow/io/fs.h"
 #include "burrow/iter.h"

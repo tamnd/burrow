@@ -35,6 +35,21 @@ Int burrow__suffixarray_set_max_data32(Int n) {
     return old;
 }
 
+/* Not in Go: TestNew32 and TestNew64 call text_32 and text_64 through these. */
+bool burrow__suffixarray_text_32(Alloc *a, Slice text, Slice sa);
+bool burrow__suffixarray_text_32(Alloc *a, Slice text, Slice sa) {
+    SaisBytes t = {(const Byte *)text.p, text.len};
+    SaisInt32s s = {(int32_t *)sa.p, sa.len};
+    return text_32(a, t, s);
+}
+
+bool burrow__suffixarray_text_64(Alloc *a, Slice text, Slice sa);
+bool burrow__suffixarray_text_64(Alloc *a, Slice text, Slice sa) {
+    SaisBytes t = {(const Byte *)text.p, text.len};
+    SaisInt64s s = {(int64_t *)sa.p, sa.len};
+    return text_64(a, t, s);
+}
+
 /* [][]int, for FindAllIndex. */
 static const Type sx_ints_desc = {
     {NULL, 0},
@@ -178,6 +193,13 @@ static const Str sx_err_corrupted__text = {(const Byte *)"suffixarray: data corr
                                            27};
 static const Error sx_err_corrupted = {&burrow_sentinel_error_vt,
                                        &sx_err_corrupted__text};
+
+/* Not in Go: TestIssue53352 and TestIndexCorruption compare with errCorrupted
+ * through this. */
+Error burrow__suffixarray_err_corrupted(void);
+Error burrow__suffixarray_err_corrupted(void) {
+    return sx_err_corrupted;
+}
 
 /* readSlice reads data[:n] from r and returns n; maxIndex is the length of the
  * suffix array. It uses buf to buffer the read. */

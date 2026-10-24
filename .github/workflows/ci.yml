@@ -544,6 +544,24 @@ jobs:
       - run: cmake --build build -j4
       - run: ctest --test-dir build --output-on-failure
 
+  # The hardened build, make HARDENED=1, which docs/guides/building.md says a
+  # program facing the internet should use, so it had better pass the tests.
+  # gcc and clang both, since they put the bounds checks in on their own terms.
+  # The CMake build is only built, to check that the option still works.
+  hardened:
+    name: hardened (${{ matrix.cc }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+    strategy:
+      fail-fast: false
+      matrix:
+        cc: [gcc, clang]
+    steps:
+      - uses: actions/checkout@v7
+      - run: make -j4 CC=${{ matrix.cc }} HARDENED=1 test
+      - run: cmake -S . -B build-cmake -DCMAKE_C_COMPILER=${{ matrix.cc }} -DCMAKE_BUILD_TYPE=Release -DBURROW_HARDENED=ON -DBURROW_BUILD_TESTS=OFF
+      - run: cmake --build build-cmake -j4
+
   # The SQLite driver under examples/sqlite, the one program in the repository
   # that links a library burrow does not have. Its tests and the demo's output
   # run on Linux with Debian's SQLite and on macOS with the system's.

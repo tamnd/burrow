@@ -44,6 +44,13 @@ option(BURROW_ENABLE_BOEHM "Link the Boehm collector and enable the gc backend" 
 # file that reads the header has to agree about that.
 option(BURROW_PORTABLE_CONTEXT "Use ucontext or Fibers instead of the context switch assembly" OFF)
 
+# The hardened build, for a program that faces the internet, as make HARDENED=1
+# is. It defines BURROW_HARDENED, which lowers the HTTP server's header limits,
+# and with gcc and clang it turns on their bounds and object size checks in
+# trap mode. MSVC has nothing like those for a release build, so there it is
+# the definition alone. See docs/guides/building.md.
+option(BURROW_HARDENED "Lower the HTTP server's header limits and turn on the compiler's bounds checks" OFF)
+
 execute_process(
     COMMAND git describe --always --dirty --match v[0-9]*
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}
@@ -78,6 +85,13 @@ function(burrow_compile_settings target)
     endif()
     if(BURROW_ENABLE_BOEHM)
         target_compile_definitions(${target} PRIVATE BURROW_ENABLE_BOEHM=1)
+    endif()
+    if(BURROW_HARDENED)
+        target_compile_definitions(${target} PRIVATE BURROW_HARDENED=1)
+        if(NOT MSVC)
+            target_compile_options(${target} PRIVATE
+                "$<$<COMPILE_LANGUAGE:C>:-fsanitize=bounds,object-size;-fsanitize-undefined-trap-on-error>")
+        endif()
     endif()
 endfunction()
 
@@ -149,6 +163,12 @@ target_include_directories(burrow PUBLIC
 # the library was.
 if(BURROW_PORTABLE_CONTEXT)
     target_compile_definitions(burrow PUBLIC BURROW_PORTABLE_CONTEXT=1)
+endif()
+
+# PUBLIC too, so that HTTP_DEFAULT_MAX_HEADER_BYTES in a program that links
+# burrow is the limit the library's server keeps.
+if(BURROW_HARDENED)
+    target_compile_definitions(burrow PUBLIC BURROW_HARDENED=1)
 endif()
 
 # Threads. This is the one find_package in the file and it is not a feature

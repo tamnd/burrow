@@ -927,10 +927,13 @@ static void TestProfileWriteTo(TestingT *t) {
     /* One call site for both, since a compiler can make each call to add_there
      * a jump to pprof_profile_add, which leaves the call site as the frame
      * that tells the stacks apart. The bound is volatile so the loop can't be
-     * unrolled into two call sites. */
+     * unrolled into two call sites. In the hardened clang build, where
+     * -fsanitize=bounds checks vals[i], the loop still gave two call sites,
+     * so the values go through a pointer, which that check leaves alone. */
     volatile int n = 3;
+    Int *v = vals;
     for (int i = 1; i < n; i++)
-        add_there(p, &vals[i]);
+        add_there(p, v + i);
     if (pprof_profile_count(p) != 3)
         testing_t_errorf_v(t, "Count = %d, want 3", pprof_profile_count(p));
 

@@ -16,6 +16,10 @@
  * edwards25519_table.c, which Go's code printed, so they also check that the C
  * gives the same limbs as Go and not just the same numbers.
  *
+ * TestEdwards25519Allocations, from Go's
+ * src/crypto/internal/fips140test/edwards25519_test.go, has nothing to count,
+ * as nothing in edwards25519.h allocates.
+ *
  * Copyright 2017 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found

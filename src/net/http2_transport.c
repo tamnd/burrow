@@ -3498,6 +3498,25 @@ static Error h2c_write_request(h2c_Stream *cs) {
     return err;
 }
 
+/* Not in Go: closes cc if it is a connection that closes once idle, has had
+ * a stream, and has no streams or reservations left. forgetStreamID leaves a
+ * connection open while a request holds a reservation on it. When that
+ * request then finds the connection unusable, as a single-use one is once it
+ * has had a stream, it gives the reservation back and tries another, and
+ * nothing would close this one. TestTransportDisableKeepAlives_Concurrency
+ * hung on that. */
+static void h2c_close_if_spent(h2c_Conn *cc) {
+    sync_mutex_lock(&cc->mu);
+    bool close_conn = !cc->closed && h2c_close_on_idle_locked(cc) &&
+                      cc->next_stream_id > 1 && cc->streams_reserved == 0 &&
+                      map_len(cc->streams) == 0;
+    if (close_conn)
+        cc->closed = true;
+    sync_mutex_unlock(&cc->mu);
+    if (close_conn)
+        h2c_close_conn(cc);
+}
+
 /* cleanupWriteRequest performs post-request tasks.
  *
  * If err (the result of writeRequest) is an error and the stream is not
@@ -3509,6 +3528,7 @@ static void h2c_cleanup_write_request(h2c_Stream *cs, Error err) {
         /* We were canceled before creating the stream, so return our
          * reservation. */
         h2c_decr_stream_reservations(cc);
+        h2c_close_if_spent(cc);
     }
 
     /* TODO: write h12Compare test showing whether

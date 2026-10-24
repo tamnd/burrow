@@ -16,9 +16,12 @@
 #include "burrow/declare.h"
 #include "burrow/mem/arena.h"
 #include "burrow/panic.h"
+#include "burrow/proc.h"
+#include "burrow/sync.h"
 #include "burrow/testing.h"
 
 #include <stdint.h>
+#include <string.h>
 
 /* A named type that declare.h has no macro for. */
 #define NAMED_DESC(Name, kind, elem, key, len)                                         \
@@ -417,6 +420,33 @@ BURROW_MAP_TYPE_DEFINE(IntRPtrMap, Int, RPtr);
 BURROW_MAP_TYPE_DEFINE(RPtrRPtrMap, RPtr, RPtr);
 BURROW_SLICE_TYPE_DEFINE(IntRMapSlice, IntRMap);
 
+/* Not in Go: a goroutine's stack here does not grow, and how deep these
+ * recursive values go is up to rand, so their checks run on a goroutine with a
+ * stack big enough for any depth they will reach. */
+typedef struct DeepCheck {
+    Any f;
+    SyncWaitGroup wg;
+} DeepCheck;
+
+static void deepCheckBody(void *env) {
+    DeepCheck *d = env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    (void)quick_check(arena_allocator(&ar), d->f, NULL);
+    arena_free(&ar);
+    sync_wait_group_done(&d->wg);
+}
+
+static void deepCheck(TestingT *t, Any f) {
+    DeepCheck d;
+    memset(&d, 0, sizeof d);
+    d.f = f;
+    sync_wait_group_add(&d.wg, 1);
+    if (!go_stack(BURROW_FN(Func, deepCheckBody, &d), (size_t)64 << 20))
+        testing_t_fatalf_v(t, "go_stack failed");
+    sync_wait_group_wait(&d.wg);
+}
+
 BURROW_FUNC(RecursiveFn, bool, R r);
 #define RECURSIVE_SIG(IN, OUT) IN(0, R) OUT(bool)
 BURROW_FUNC_TYPE_DEFINE(RecursiveFn, RECURSIVE_SIG);
@@ -430,12 +460,8 @@ static bool recursive(void *env, R r) {
 /* Recursive data structures didn't terminate.
  * Issues 8818 and 11148. */
 static void TestRecursive(TestingT *t) {
-    (void)t;
-    Arena ar;
-    arena_init(&ar, NULL, 0);
     RecursiveFn f = {recursive, NULL};
-    (void)quick_check(arena_allocator(&ar), BURROW_ANY(TYPE_OF(RecursiveFn), &f), NULL);
-    arena_free(&ar);
+    deepCheck(t, BURROW_ANY(TYPE_OF(RecursiveFn), &f));
 }
 
 /* struct{}, which C cannot declare, and func(struct{}) bool, which is called
@@ -505,13 +531,8 @@ static bool mutuallyRecursive(void *env, A a) {
 }
 
 static void TestMutuallyRecursive(TestingT *t) {
-    (void)t;
-    Arena ar;
-    arena_init(&ar, NULL, 0);
     MutuallyRecursiveFn f = {mutuallyRecursive, NULL};
-    (void)quick_check(arena_allocator(&ar),
-                      BURROW_ANY(TYPE_OF(MutuallyRecursiveFn), &f), NULL);
-    arena_free(&ar);
+    deepCheck(t, BURROW_ANY(TYPE_OF(MutuallyRecursiveFn), &f));
 }
 
 /* type Q struct, from TestNonZeroSliceAndMap. */

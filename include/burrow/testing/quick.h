@@ -19,6 +19,11 @@
  * arena. Go's -quickchecks flag is left out, since burrow's testing does not
  * read flags it was not built with, so the default count is always 100.
  *
+ * A value of a recursive type is made as deep as Go would make it, which rand
+ * decides, and a goroutine's stack does not grow the way Go's does. Checking a
+ * function that takes one can need a goroutine started with go_stack and a
+ * bigger stack than the default.
+ *
  * Copyright 2009 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found

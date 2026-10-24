@@ -4051,6 +4051,12 @@ static void TestProtocolErrorAfterGoAway(TestingT *t) {
     if (h2t_start(&st, t, h2t_discard_body_handler, NULL) && h2t_greet(&st) &&
         h2t_write_headers(&st, 1, h2t_encode_header(&st, kv, 4), false, true) &&
         h2t_write_data(&st, 1, false, "some ", 5) &&
+        /* Not in Go: Go's readFrame waits for the bubble to go quiet, so the
+         * server has handled the end of the flush that sent greet's frames
+         * before the GOAWAY comes. If it hasn't, the GOAWAY it owes waits for
+         * that flush, and the window update's FLOW_CONTROL_ERROR becomes its
+         * code. Waiting for the server to stay quiet stands in for that. */
+        h2t_want_idle(&st) &&
         /* A GOAWAY with no error, then a window update that overflows. The
          * server should close the connection. */
         !h2t_failed(

@@ -1103,6 +1103,11 @@ extern const Error burrow__http2_err_handler_panicked;
 extern const Error burrow__http2_err_handler_wrote_too_much;
 extern const Error burrow__http2_err_missing_required_cipher;
 
+/* connHeaders: the connection-specific header fields, which the server
+ * rejects in a request and the transport deletes from a response. */
+enum { HTTP2_NCONN_HEADERS = 5 };
+extern const Str burrow__http2_conn_headers[HTTP2_NCONN_HEADERS];
+
 /* Server.ServeConn as net/http calls it: serves HTTP/2 on c until the
  * connection is done, closes c, and returns. ctx is the base context of the
  * requests. saw_client_preface says the caller already read the preface. */

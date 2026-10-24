@@ -1081,6 +1081,10 @@ void pal_exit(int32_t code) {
     _exit((int)code);
 }
 
+bool pal_exit_started(void) {
+    return false;
+}
+
 const char *const *pal_environ(void) {
 #if defined(BURROW_OS_DARWIN)
     /* environ is only there for executables on macOS, and a shared library

@@ -41,6 +41,7 @@
 #include "burrow/type.h"
 
 #include "aes_internal.h"
+#include "alias_internal.h"
 #include "fips140_module.h"
 #include "internal.h"
 
@@ -785,21 +786,13 @@ CRYPTO_FIPS_TEXT void burrow__aes_decrypt_blocks(const AesBlock *b, Byte *dst,
 
 /* ------------------------------------------------------------------ Block */
 
-/* Go's alias.InexactOverlap on two runs of n bytes. */
-CRYPTO_FIPS_TEXT static bool aes_inexact_overlap(const void *x, const void *y, Int n) {
-    uintptr_t a = (uintptr_t)x;
-    uintptr_t b = (uintptr_t)y;
-    if (a == b)
-        return false;
-    return a <= b + (uintptr_t)(n - 1) && b <= a + (uintptr_t)(n - 1);
-}
-
 CRYPTO_FIPS_TEXT static void aes_check(Slice dst, Slice src) {
     if (src.len < AES_BLOCK_SIZE)
         panic_str(BURROW_S("crypto/aes: input not full block"));
     if (dst.len < AES_BLOCK_SIZE)
         panic_str(BURROW_S("crypto/aes: output not full block"));
-    if (aes_inexact_overlap(dst.p, src.p, AES_BLOCK_SIZE))
+    if (burrow__alias_inexact_overlap(slice_sub(dst, 0, AES_BLOCK_SIZE),
+                                      slice_sub(src, 0, AES_BLOCK_SIZE)))
         panic_str(BURROW_S("crypto/aes: invalid buffer overlap"));
 }
 

@@ -17,6 +17,7 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "alias_internal.h"
 #include "fips140only_internal.h"
 
 #include <stdint.h>
@@ -154,22 +155,13 @@ void rc4_cipher_reset(Rc4Cipher *c) {
     c->j = 0;
 }
 
-/* Go's alias.InexactOverlap on two runs of n bytes. */
-static bool rc4_inexact_overlap(const void *x, const void *y, Int n) {
-    uintptr_t a = (uintptr_t)x;
-    uintptr_t b = (uintptr_t)y;
-    if (a == b)
-        return false;
-    return a <= b + (uintptr_t)(n - 1) && b <= a + (uintptr_t)(n - 1);
-}
-
 void rc4_cipher_xor_key_stream(Rc4Cipher *c, Slice dst, Slice src) {
     if (src.len == 0)
         return;
     /* Go's _ = dst[len(src)-1]. */
     if (dst.len < src.len)
         runtime_index_out_of_range(src.len - 1, dst.len);
-    if (rc4_inexact_overlap(dst.p, src.p, src.len))
+    if (burrow__alias_inexact_overlap(slice_sub(dst, 0, src.len), src))
         panic_str(BURROW_S("crypto/rc4: invalid buffer overlap"));
     uint8_t i = c->i, j = c->j;
     Byte *d = (Byte *)dst.p;

@@ -27,6 +27,7 @@
 #include "burrow/type.h"
 
 #include "aes_internal.h"
+#include "alias_internal.h"
 #include "fips140_module.h"
 #include "fips140only_internal.h"
 
@@ -35,18 +36,6 @@
 
 /* The most bytes of key stream CTR and OFB make at once. */
 #define CIPHER_STREAM_BUFFER 512
-
-/* Go's alias.InexactOverlap on two runs of n bytes. */
-CRYPTO_FIPS_TEXT static bool cipher_inexact_overlap(const void *x, const void *y,
-                                                    Int n) {
-    if (n <= 0)
-        return false;
-    uintptr_t a = (uintptr_t)x;
-    uintptr_t b = (uintptr_t)y;
-    if (a == b)
-        return false;
-    return a <= b + (uintptr_t)(n - 1) && b <= a + (uintptr_t)(n - 1);
-}
 
 CRYPTO_FIPS_TEXT static Slice cipher_bytes(Byte *p, Int n) {
     return slice_from(p, n, n, TYPE_BYTE);
@@ -89,7 +78,7 @@ CRYPTO_FIPS_TEXT static void cipher_cbc_check(const CipherCbc *x, Slice dst,
         panic_str(BURROW_S("crypto/cipher: input not full blocks"));
     if (dst.len < src.len)
         panic_str(BURROW_S("crypto/cipher: output smaller than input"));
-    if (cipher_inexact_overlap(dst.p, src.p, src.len))
+    if (burrow__alias_inexact_overlap(slice_sub(dst, 0, src.len), src))
         panic_str(BURROW_S("crypto/cipher: invalid buffer overlap"));
 }
 
@@ -322,7 +311,7 @@ CRYPTO_FIPS_TEXT static void cipher_aes_ctr_xor(void *self, Slice dst, Slice src
     CipherAesCtr *c = (CipherAesCtr *)self;
     if (dst.len < src.len)
         panic_str(BURROW_S("crypto/aes: len(dst) < len(src)"));
-    if (cipher_inexact_overlap(dst.p, src.p, src.len))
+    if (burrow__alias_inexact_overlap(slice_sub(dst, 0, src.len), src))
         panic_str(BURROW_S("crypto/aes: invalid buffer overlap"));
     cipher_aes_ctr_xor_at(c, (Byte *)dst.p, (const Byte *)src.p, src.len, c->offset);
     uint64_t next = c->offset + (uint64_t)src.len;
@@ -339,7 +328,7 @@ CRYPTO_FIPS_TEXT bool burrow__aes_ctr_xor_key_stream_at(CipherStream s, Slice ds
         return false;
     if (dst.len < src.len)
         panic_str(BURROW_S("crypto/aes: len(dst) < len(src)"));
-    if (cipher_inexact_overlap(dst.p, src.p, src.len))
+    if (burrow__alias_inexact_overlap(slice_sub(dst, 0, src.len), src))
         panic_str(BURROW_S("crypto/aes: invalid buffer overlap"));
     cipher_aes_ctr_xor_at((CipherAesCtr *)s.data, (Byte *)dst.p, (const Byte *)src.p,
                           src.len, offset);
@@ -380,7 +369,7 @@ CRYPTO_FIPS_TEXT static void cipher_ctr_xor(void *self, Slice dst, Slice src) {
     CipherCtr *x = (CipherCtr *)self;
     if (dst.len < src.len)
         panic_str(BURROW_S("crypto/cipher: output smaller than input"));
-    if (cipher_inexact_overlap(dst.p, src.p, src.len))
+    if (burrow__alias_inexact_overlap(slice_sub(dst, 0, src.len), src))
         panic_str(BURROW_S("crypto/cipher: invalid buffer overlap"));
     Byte *d = (Byte *)dst.p;
     Byte *s = (Byte *)src.p;
@@ -465,7 +454,7 @@ CRYPTO_FIPS_TEXT static void cipher_ofb_xor(void *self, Slice dst, Slice src) {
     CipherOfb *x = (CipherOfb *)self;
     if (dst.len < src.len)
         panic_str(BURROW_S("crypto/cipher: output smaller than input"));
-    if (cipher_inexact_overlap(dst.p, src.p, src.len))
+    if (burrow__alias_inexact_overlap(slice_sub(dst, 0, src.len), src))
         panic_str(BURROW_S("crypto/cipher: invalid buffer overlap"));
     Byte *d = (Byte *)dst.p;
     Byte *s = (Byte *)src.p;
@@ -522,7 +511,7 @@ CRYPTO_FIPS_TEXT static void cipher_cfb_xor(void *self, Slice dst, Slice src) {
     CipherCfb *x = (CipherCfb *)self;
     if (dst.len < src.len)
         panic_str(BURROW_S("crypto/cipher: output smaller than input"));
-    if (cipher_inexact_overlap(dst.p, src.p, src.len))
+    if (burrow__alias_inexact_overlap(slice_sub(dst, 0, src.len), src))
         panic_str(BURROW_S("crypto/cipher: invalid buffer overlap"));
     Int bs = x->block_size;
     Byte *d = (Byte *)dst.p;

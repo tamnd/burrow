@@ -16,6 +16,7 @@
 #include "burrow/slice.h"
 #include "burrow/type.h"
 
+#include "alias_internal.h"
 #include "des_internal.h"
 #include "fips140only_internal.h"
 
@@ -472,21 +473,13 @@ typedef struct TripleDesCipher {
     DesCipher cipher1, cipher2, cipher3;
 } TripleDesCipher;
 
-/* Go's alias.InexactOverlap on two runs of n bytes. */
-static bool des_inexact_overlap(const void *x, const void *y, Int n) {
-    uintptr_t a = (uintptr_t)x;
-    uintptr_t b = (uintptr_t)y;
-    if (a == b)
-        return false;
-    return a <= b + (uintptr_t)(n - 1) && b <= a + (uintptr_t)(n - 1);
-}
-
 static void des_check(Slice dst, Slice src) {
     if (src.len < DES_BLOCK_SIZE)
         panic_str(BURROW_S("crypto/des: input not full block"));
     if (dst.len < DES_BLOCK_SIZE)
         panic_str(BURROW_S("crypto/des: output not full block"));
-    if (des_inexact_overlap(dst.p, src.p, DES_BLOCK_SIZE))
+    if (burrow__alias_inexact_overlap(slice_sub(dst, 0, DES_BLOCK_SIZE),
+                                      slice_sub(src, 0, DES_BLOCK_SIZE)))
         panic_str(BURROW_S("crypto/des: invalid buffer overlap"));
 }
 

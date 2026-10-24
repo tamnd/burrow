@@ -28,6 +28,7 @@
 #include "burrow/type.h"
 
 #include "aes_internal.h"
+#include "alias_internal.h"
 #include "fips140_module.h"
 #include "fips140only_internal.h"
 #include "internal.h"
@@ -71,23 +72,6 @@ typedef struct CipherGcm {
 
 CRYPTO_FIPS_TEXT static Slice gcm_bytes(Byte *p, Int n) {
     return slice_from(p, n, n, TYPE_BYTE);
-}
-
-/* Go's alias.InexactOverlap and alias.AnyOverlap on runs of bytes. */
-CRYPTO_FIPS_TEXT static bool gcm_any_overlap(const void *x, Int xn, const void *y,
-                                             Int yn) {
-    if (xn <= 0 || yn <= 0)
-        return false;
-    uintptr_t a = (uintptr_t)x;
-    uintptr_t b = (uintptr_t)y;
-    return a <= b + (uintptr_t)(yn - 1) && b <= a + (uintptr_t)(xn - 1);
-}
-
-CRYPTO_FIPS_TEXT static bool gcm_inexact_overlap(const void *x, Int xn, const void *y,
-                                                 Int yn) {
-    if (xn <= 0 || yn <= 0 || x == y)
-        return false;
-    return gcm_any_overlap(x, xn, y, yn);
 }
 
 /* Go's sliceForAppend: dst with n more bytes on the end, in place when its
@@ -527,10 +511,10 @@ CRYPTO_FIPS_TEXT static Slice gcm_seal_after_indicator(const CipherGcm *g, Alloc
     Slice ret = gcm_slice_for_append(a, dst, n, &out);
     if (out == NULL)
         return ret;
-    if (gcm_inexact_overlap(out, n, plaintext.p, plaintext.len))
+    if (burrow__alias_inexact_overlap(gcm_bytes(out, n), plaintext))
         panic_str(
             BURROW_S("crypto/cipher: invalid buffer overlap of output and input"));
-    if (gcm_any_overlap(out, n, additional_data.p, additional_data.len))
+    if (burrow__alias_any_overlap(gcm_bytes(out, n), additional_data))
         panic_str(BURROW_S(
             "crypto/cipher: invalid buffer overlap of output and additional data"));
     gcm_seal_into(g, out, (const Byte *)nonce.p, nonce.len, (const Byte *)plaintext.p,
@@ -568,10 +552,10 @@ CRYPTO_FIPS_TEXT static Slice gcm_open(void *self, Alloc *a, Slice dst, Slice no
         BURROW_OUT(err, burrow_err_out_of_memory);
         return ret;
     }
-    if (gcm_inexact_overlap(out, n, ciphertext.p, ciphertext.len))
+    if (burrow__alias_inexact_overlap(gcm_bytes(out, n), ciphertext))
         panic_str(
             BURROW_S("crypto/cipher: invalid buffer overlap of output and input"));
-    if (gcm_any_overlap(out, n, additional_data.p, additional_data.len))
+    if (burrow__alias_any_overlap(gcm_bytes(out, n), additional_data))
         panic_str(BURROW_S(
             "crypto/cipher: invalid buffer overlap of output and additional data"));
     if (g->aes != NULL)
@@ -617,17 +601,17 @@ CRYPTO_FIPS_TEXT static Slice gcm_random_seal(void *self, Alloc *a, Slice dst,
     Slice ret = gcm_slice_for_append(a, dst, n, &out);
     if (out == NULL)
         return ret;
-    if (gcm_inexact_overlap(out, n, plaintext.p, plaintext.len))
+    if (burrow__alias_inexact_overlap(gcm_bytes(out, n), plaintext))
         panic_str(
             BURROW_S("crypto/cipher: invalid buffer overlap of output and input"));
-    if (gcm_any_overlap(out, n, additional_data.p, additional_data.len))
+    if (burrow__alias_any_overlap(gcm_bytes(out, n), additional_data))
         panic_str(BURROW_S(
             "crypto/cipher: invalid buffer overlap of output and additional data"));
     Byte *ct = out + GCM_STANDARD_NONCE_SIZE;
     const Byte *pt = (const Byte *)plaintext.p;
     /* plaintext[:0] as dst puts the ciphertext twelve bytes after the plaintext,
      * which overlaps it without being it, so the plaintext moves first. */
-    if (gcm_any_overlap(out, n, plaintext.p, plaintext.len)) {
+    if (burrow__alias_any_overlap(gcm_bytes(out, n), plaintext)) {
         memmove(ct, plaintext.p, (size_t)plaintext.len);
         pt = ct;
     }
@@ -659,10 +643,10 @@ CRYPTO_FIPS_TEXT static Slice gcm_random_open(void *self, Alloc *a, Slice dst,
         BURROW_OUT(err, burrow_err_out_of_memory);
         return ret;
     }
-    if (gcm_inexact_overlap(out, n, ciphertext.p, ciphertext.len))
+    if (burrow__alias_inexact_overlap(gcm_bytes(out, n), ciphertext))
         panic_str(
             BURROW_S("crypto/cipher: invalid buffer overlap of output and input"));
-    if (gcm_any_overlap(out, n, additional_data.p, additional_data.len))
+    if (burrow__alias_any_overlap(gcm_bytes(out, n), additional_data))
         panic_str(BURROW_S(
             "crypto/cipher: invalid buffer overlap of output and additional data"));
     Byte nonce_copy[GCM_STANDARD_NONCE_SIZE];
@@ -672,7 +656,7 @@ CRYPTO_FIPS_TEXT static Slice gcm_random_open(void *self, Alloc *a, Slice dst,
     /* Any overlap here means out is ciphertext, so it has room for the whole of
      * it, and the AEAD contract lets everything up to its capacity be written.
      * The nonce is kept aside and the rest moved down to where out starts. */
-    if (gcm_any_overlap(out, n, ciphertext.p, ciphertext.len)) {
+    if (burrow__alias_any_overlap(gcm_bytes(out, n), ciphertext)) {
         memcpy(nonce_copy, in, GCM_STANDARD_NONCE_SIZE);
         nc = nonce_copy;
         memmove(out, in + GCM_STANDARD_NONCE_SIZE, (size_t)in_len);

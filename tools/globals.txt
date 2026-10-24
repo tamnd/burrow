@@ -253,6 +253,7 @@ global	src/pal/net_windows.c	wsa_once	netpoller	Windows only. InitOnceExecuteOnc
 global	src/pal/net_windows.c	wsa_start_rc	netpoller	Windows only. What WSAStartup said, written once inside wsa_once and only read after it.
 global	src/pal/proc_windows.c	env_once	package-vars	Windows only. InitOnceExecuteOnce, which is the synchronisation for env_list below.
 global	src/pal/proc_windows.c	env_list	package-vars	Windows only. Written once inside env_once and only read after it, so every reader sees the finished list.
+global	src/pal/proc_windows.c	exit_started	fatal-handler	Windows only. Set with a release by pal_exit and read with an acquire by runtime_throw. It only ever goes from 0 to 1, and a thread that misses the store prints a message the process was about to lose anyway.
 global	src/hash/crc32.c	ieee_table8	tables	Filled inside ieee_once and only read after it.
 global	src/hash/crc32.c	ieee_once	tables	A SyncOnce, which is the synchronisation for ieee_table8.
 global	src/hash/crc32.c	castagnoli_table8	tables	Filled inside castagnoli_once and only read after it.

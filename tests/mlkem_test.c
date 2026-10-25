@@ -1,5 +1,5 @@
-/* Derived from Go's src/crypto/mlkem/mlkem_test.go, mlkem_wycheproof_test.go and
- * src/crypto/internal/fips140/mlkem/field_test.go.
+/* Derived from Go's src/crypto/mlkem/mlkem_test.go, mlkem_wycheproof_test.go,
+ * src/crypto/internal/fips140/mlkem/field_test.go and cast_test.go.
  * Go source: go1.27.1.
  *
  * The Wycheproof vectors Go fetches as a module are in mlkem_test_gen.h, which
@@ -825,6 +825,36 @@ static void TestMLKEMSemiExpandedDecapsWycheproof(TestingT *t) {
     arena_free(&ar);
 }
 
+typedef struct {
+    TestingT *t;
+    bool rejected, not_rejected;
+} RejectionOutcome;
+
+static void rejection_outcome(void *env, int compare) {
+    RejectionOutcome *o = env;
+    if (compare == 1) {
+        testing_t_log_v(o->t, "non-rejection path hit");
+        o->not_rejected = true;
+    } else {
+        testing_t_log_v(o->t, "rejection path hit");
+        o->rejected = true;
+    }
+}
+
+static void TestCASTRejectionPaths(TestingT *t) {
+    RejectionOutcome o = {t, false, false};
+    MlkemRejectionHook hook = {rejection_outcome, &o};
+
+    Error err = burrow__mlkem_fips140_cast(&hook);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+
+    if (!o.rejected)
+        testing_t_error_v(t, "rejection path not hit");
+    if (!o.not_rejected)
+        testing_t_error_v(t, "non-rejection path not hit");
+}
+
 /* ---------------------------------------------------------------- burrow */
 
 /* The ML-KEM-768 known answer test of Go's cast.go. */
@@ -1179,6 +1209,7 @@ static void BenchmarkRoundTrip(TestingB *b) {
     X(TestMLKEMEncapsWycheproof)                                                       \
     X(TestMLKEMDecapsWycheproof)                                                       \
     X(TestMLKEMSemiExpandedDecapsWycheproof)                                           \
+    X(TestCASTRejectionPaths)                                                          \
     X(TestCAST)                                                                        \
     X(TestInterfaces)                                                                  \
     X(TestErrors)                                                                      \

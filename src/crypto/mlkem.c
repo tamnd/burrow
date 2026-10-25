@@ -16,6 +16,7 @@
 
 #include "burrow/core.h"
 #include "burrow/crypto.h"
+#include "burrow/crypto/sha256.h"
 #include "burrow/crypto/subtle.h"
 #include "burrow/error.h"
 #include "burrow/mem.h"
@@ -697,9 +698,11 @@ CRYPTO_FIPS_TEXT static void mlkem_kem_encaps(const MlkemView *v, Byte key[32], 
 
 /* ML-KEM.Decaps_internal, FIPS 203, Algorithm 18: the shared key in c. A c
  * that does not encrypt again to itself gives the implicit rejection key
- * instead, chosen in constant time. */
+ * instead, chosen in constant time. hook, if it is not NULL, is told how the
+ * compare came out, as Go's testingOnlyRejectionOutcome is. */
 CRYPTO_FIPS_TEXT static void mlkem_kem_decaps(const MlkemView *v, Byte key[32],
-                                              const Byte *c) {
+                                              const Byte *c,
+                                              const MlkemRejectionHook *hook) {
     burrow__fips140_record_approved();
     Int csize = mlkem_ciphertext_size(v);
     Byte m[32];
@@ -723,11 +726,26 @@ CRYPTO_FIPS_TEXT static void mlkem_kem_decaps(const MlkemView *v, Byte key[32],
     Int eq = subtle_constant_time_compare(
         slice_from((void *)(uintptr_t)c, csize, csize, TYPE_BYTE),
         slice_from(c1, csize, csize, TYPE_BYTE));
+    if (hook != NULL)
+        hook->fn(hook->env, (int)eq);
     subtle_constant_time_copy(
         eq, slice_from(key, MLKEM_SHARED_KEY_SIZE, MLKEM_SHARED_KEY_SIZE, TYPE_BYTE),
         slice_from(gg, MLKEM_SHARED_KEY_SIZE, MLKEM_SHARED_KEY_SIZE, TYPE_BYTE));
     memset(m, 0, sizeof m);
     memset(gg, 0, sizeof gg);
+}
+
+/* dk in the expanded NIST encoding: s, then the encapsulation key, then H(ek)
+ * and z, into p. */
+CRYPTO_FIPS_TEXT static void mlkem_expanded_encode(const MlkemView *v, Byte *p) {
+    for (int i = 0; i < v->k; i++) {
+        mlkem_poly_byte_encode(p, &v->s[i]);
+        p += MLKEM_ENCODING_SIZE12;
+    }
+    mlkem_ek_bytes(v, p);
+    p += mlkem_ek_size(v);
+    memcpy(p, v->h, 32);
+    memcpy(p + 32, v->z, 32);
 }
 
 /* ------------------------------------------------------------ the API */
@@ -776,6 +794,12 @@ CRYPTO_FIPS_RODATA static const Byte mlkem_cast_z[32] = {
     0x37, 0x38, 0x39, 0x3a, 0x3b, 0x3c, 0x3d, 0x3e, 0x3f, 0x40,
 };
 
+CRYPTO_FIPS_RODATA static const Byte mlkem_cast_dk_hash[32] = {
+    0xa1, 0x32, 0x4a, 0x71, 0xf5, 0x7e, 0x26, 0x85, 0x37, 0x7e, 0x4f,
+    0x7d, 0xe2, 0xd1, 0xf0, 0x58, 0x53, 0x8e, 0x08, 0x7e, 0xe3, 0x9b,
+    0x48, 0x2b, 0x3d, 0xbf, 0x96, 0xf9, 0xf7, 0x69, 0xc7, 0x85,
+};
+
 CRYPTO_FIPS_RODATA static const Byte mlkem_cast_m[32] = {
     0x41, 0x42, 0x43, 0x44, 0x45, 0x46, 0x47, 0x48, 0x49, 0x4a, 0x4b,
     0x4c, 0x4d, 0x4e, 0x4f, 0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56,
@@ -788,22 +812,53 @@ CRYPTO_FIPS_RODATA static const Byte mlkem_cast_k[32] = {
     0xee, 0x4e, 0x79, 0x37, 0x32, 0x39, 0x6d, 0xf7, 0xaa, 0x48,
 };
 
+CRYPTO_FIPS_RODATA static const Byte mlkem_cast_kr[32] = {
+    0x01, 0xa1, 0x03, 0x3a, 0x2e, 0x68, 0x33, 0x80, 0x7f, 0xd3, 0x91,
+    0x80, 0xbe, 0x3b, 0x4f, 0x0a, 0x1f, 0x6f, 0x50, 0x51, 0x67, 0x56,
+    0x9d, 0x0e, 0x5e, 0x5e, 0x1f, 0xdb, 0x52, 0xa9, 0x10, 0xec,
+};
+
+/* fips140CAST covers both the successful and the implicit rejection paths, as
+ * required by IG 10.3.A, Resolution 14, and as tested by TestCASTRejectionPath.
+ * It tests only one parameter set as allowed by Note22. It compares dk and not
+ * ek, because ek is part of dk, as allowed by the same Resolution. It compares
+ * dk with an expected hash to avoid embedding several kilobytes of test vectors
+ * in every binary, as allowed by GeneralNote7. */
 CRYPTO_FIPS_TEXT static Error mlkem_cast(void *arg) {
-    (void)arg;
+    const MlkemRejectionHook *hook = arg;
     MlkemDecapsulationKey768 dk;
     memset(&dk, 0, sizeof dk);
     MlkemView v = mlkem_view_dk768(&dk);
     mlkem_kem_key_gen(&v, mlkem_cast_d, mlkem_cast_z);
+    Byte expanded[MLKEM_DECAPSULATION_KEY_SIZE768];
+    mlkem_expanded_encode(&v, expanded);
+    Sha256Sum256Ret h = sha256_sum256(
+        slice_from(expanded, sizeof expanded, sizeof expanded, TYPE_BYTE));
+    memset(expanded, 0, sizeof expanded);
+    if (memcmp(h.a, mlkem_cast_dk_hash, sizeof h.a) != 0) {
+        memset(&dk, 0, sizeof dk);
+        return errors_new(error_allocator(), BURROW_S("unexpected private key hash"));
+    }
     Byte c[MLKEM_CIPHERTEXT_SIZE768];
+    memset(c, 0, sizeof c);
     Byte ke[MLKEM_SHARED_KEY_SIZE], kd[MLKEM_SHARED_KEY_SIZE];
+    mlkem_kem_decaps(&v, kd, c, hook);
+    if (memcmp(kd, mlkem_cast_kr, sizeof kd) != 0) {
+        memset(&dk, 0, sizeof dk);
+        return errors_new(error_allocator(), BURROW_S("unexpected rejection result"));
+    }
     MlkemView ev = mlkem_view_ek768(&dk.ek);
     mlkem_kem_encaps(&ev, ke, c, mlkem_cast_m);
-    mlkem_kem_decaps(&v, kd, c);
+    mlkem_kem_decaps(&v, kd, c, hook);
     memset(&dk, 0, sizeof dk);
     if (memcmp(ke, mlkem_cast_k, sizeof ke) != 0 ||
         memcmp(kd, mlkem_cast_k, sizeof kd) != 0)
         return errors_new(error_allocator(), BURROW_S("unexpected result"));
     return BURROW_NO_ERROR;
+}
+
+CRYPTO_FIPS_TEXT Error burrow__mlkem_fips140_cast(const MlkemRejectionHook *hook) {
+    return mlkem_cast((void *)(uintptr_t)hook);
 }
 
 CRYPTO_FIPS_TEXT static void mlkem_self_test_once(void *env) {
@@ -830,7 +885,7 @@ CRYPTO_FIPS_TEXT static Error mlkem_pct(void *arg) {
     burrow__crypto_rand_system(slice_from(m, sizeof m, sizeof m, TYPE_BYTE));
     mlkem_kem_encaps(v, k, c, m);
     mlkem_fips_self_test();
-    mlkem_kem_decaps(v, k1, c);
+    mlkem_kem_decaps(v, k1, c, NULL);
     Int eq = subtle_constant_time_compare(slice_from(k, 32, 32, TYPE_BYTE),
                                           slice_from(k1, 32, 32, TYPE_BYTE));
     memset(m, 0, sizeof m);
@@ -882,7 +937,7 @@ CRYPTO_FIPS_TEXT static Slice mlkem_decapsulate(const MlkemView *v, Alloc *a,
         return slice_nil(TYPE_BYTE);
     }
     Byte key[MLKEM_SHARED_KEY_SIZE];
-    mlkem_kem_decaps(v, key, (const Byte *)ciphertext.p);
+    mlkem_kem_decaps(v, key, (const Byte *)ciphertext.p, NULL);
     Slice k = mlkem_bytes(a, key, MLKEM_SHARED_KEY_SIZE);
     memset(key, 0, sizeof key);
     if (k.p == NULL) {
@@ -925,17 +980,8 @@ CRYPTO_FIPS_TEXT static bool mlkem_parse_expanded(const MlkemView *v, Slice b,
 CRYPTO_FIPS_TEXT static Slice mlkem_expanded_bytes(const MlkemView *v, Alloc *a) {
     Int n = (Int)v->k * MLKEM_ENCODING_SIZE12 + mlkem_ek_size(v) + 32 + 32;
     Slice b = slice_make(mlkem_alloc(a), TYPE_BYTE, n, n);
-    if (b.p == NULL)
-        return b;
-    Byte *p = (Byte *)b.p;
-    for (int i = 0; i < v->k; i++) {
-        mlkem_poly_byte_encode(p, &v->s[i]);
-        p += MLKEM_ENCODING_SIZE12;
-    }
-    mlkem_ek_bytes(v, p);
-    p += mlkem_ek_size(v);
-    memcpy(p, v->h, 32);
-    memcpy(p + 32, v->z, 32);
+    if (b.p != NULL)
+        mlkem_expanded_encode(v, (Byte *)b.p);
     return b;
 }
 

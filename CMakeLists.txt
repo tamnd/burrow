@@ -298,7 +298,13 @@ if(BURROW_BUILD_TESTS)
         # before ctest's --timeout in CI would kill it, so the log names the
         # test that was running and has every goroutine's stack, where ctest
         # alone prints nothing.
-        add_test(NAME ${test_name} COMMAND ${test_name} -test.timeout=540s)
+        # testing_test checks that a test has no deadline when no timeout is
+        # given, so it runs without one.
+        if(test_name STREQUAL "testing_test")
+            add_test(NAME ${test_name} COMMAND ${test_name})
+        else()
+            add_test(NAME ${test_name} COMMAND ${test_name} -test.timeout=540s)
+        endif()
     endforeach()
 
     # embed_test's variables are in a file burrow-gen embed writes, and the test

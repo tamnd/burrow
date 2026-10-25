@@ -77,9 +77,16 @@ int64_t pal_dl_open(const char *path, char *msg, size_t cap) {
         wdl_message(msg, cap, s, strlen(s));
         return 0;
     }
+    /* A file that is not a library makes the loader put up a dialog and wait
+     * for someone to close it, which on a machine with nobody at it is
+     * forever, so the thread's error mode turns that off for the one call. */
+    DWORD mode = 0;
+    BOOL quiet = SetThreadErrorMode(SEM_FAILCRITICALERRORS, &mode);
     HMODULE h = LoadLibraryExW(w, NULL, 0);
+    DWORD code = h == NULL ? GetLastError() : 0;
+    if (quiet)
+        SetThreadErrorMode(mode, NULL);
     if (h == NULL) {
-        DWORD code = GetLastError();
         char buf[600];
         int64_t n = pal_errno_message((int64_t)code, buf, (int64_t)sizeof buf, NULL);
         if (n < 0) {

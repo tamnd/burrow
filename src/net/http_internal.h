@@ -242,6 +242,11 @@ bool burrow__http_body_did_early_close(void *body);
 bool burrow__http_body_remains(void *body);
 void burrow__http_body_set_do_early_close(void *body, bool on);
 
+/* body.discardTrailer, when rc is a body read_transfer made, as Go's
+ * r.(*body) has it. The trailer is still read, so the connection can be used
+ * again, but is not put in the message. */
+void burrow__http_body_discard_trailer(IoReadCloser rc);
+
 /* body.Close, which is nothing for a NULL body. */
 BURROW_BORROWS(ret) Error burrow__http_body_close(void *body);
 
@@ -548,6 +553,12 @@ void burrow__http_transport_free_conn(HttpTransport *t, NetConn c);
  * with no proxy. HTTP/2 connections stay in the pool while they are in use. */
 Int burrow__http_transport_idle_conn_count_for_testing(HttpTransport *t, Str scheme,
                                                        Str addr);
+
+/* Not in Go: how long t drains a body closed early, in place of Go's
+ * maxPostCloseReadTime, for the tests that run on a real clock. Set it before
+ * t is used. */
+void burrow__http_transport_set_post_close_read_time_for_testing(HttpTransport *t,
+                                                                 Duration d);
 
 /* The pieces of the server the HTTP/2 server shares: serverHandler.ServeHTTP,
  * doKeepAlives, and the header value limit. */

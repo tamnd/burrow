@@ -227,6 +227,12 @@ typedef struct burrow__Recover {
     struct burrow__Recover **chain;
     burrow__DeferScope *scopes;
     burrow__Panic *panics;
+#if BURROW_ASAN && !BURROW_CC_MSVC
+    /* The frame of the call that opened the block, which is just below the one
+     * that wrote BURROW_TRY. Only the address sanitizer needs it, and why is in
+     * panic. */
+    void *frame;
+#endif
 } burrow__Recover;
 
 /* Everything a goroutine knows about panicking. A field of the goroutine, and a

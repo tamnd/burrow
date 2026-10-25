@@ -45,6 +45,10 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if BURROW_ASAN && !BURROW_CC_MSVC
+#include <sanitizer/asan_interface.h>
+#endif
+
 /* Read on the way out and written once during startup. It is a plain pointer
  * rather than an atomic because the atomics layer does not exist yet and
  * because the documented contract is to install it before there is a second
@@ -326,6 +330,10 @@ void burrow__recover_open(burrow__Recover *r) {
 
     st->recovers = r;
 
+#if BURROW_ASAN && !BURROW_CC_MSVC
+    r->frame = __builtin_frame_address(0);
+#endif
+
     /* Storage for the value is deliberately not touched, the same as a scope's
      * array of calls. A block that never catches anything writes none of it. */
 }
@@ -543,6 +551,32 @@ static Any stash(burrow__Recover *r, Any v) {
     return v;
 }
 
+#if BURROW_ASAN && !BURROW_CC_MSVC
+/* The frames between here and the block a panic jumps to, made addressable
+ * again before the jump.
+ *
+ * The address sanitizer poisons a frame's redzones on the way in and a block's
+ * variables when the block ends, and clears both on the way out. A frame that
+ * a longjmp leaves never goes out that way, so the sanitizer's longjmp hook
+ * clears the stack from where it is to the top. It refuses to when the stack
+ * is bigger than it expects, and says so with "ASan is ignoring requested
+ * __asan_handle_no_return". A goroutine can have a stack that big, and the
+ * go/parser depth tests ask for 1GB. The poison is left behind, and the next
+ * call that reaches that far down the stack reports a stack-buffer-overflow or
+ * a stack-use-after-scope on memory that is its own.
+ *
+ * Not inlined, so that this frame is below panic's, and panic's frame is
+ * cleared as well. The frame of the block itself is above the range, and is
+ * left alone. */
+BURROW_NOINLINE static void unpoison_jumped(const burrow__Recover *r) {
+    char *lo = __builtin_frame_address(0);
+    char *hi = r->frame;
+
+    if (lo < hi)
+        __asan_unpoison_memory_region(lo, (size_t)(hi - lo));
+}
+#endif
+
 /* Not inlined, because the trace of an unrecovered panic is walked from this
  * frame and a copy of it somewhere else is a frame the search below would not
  * recognise. */
@@ -636,6 +670,9 @@ BURROW_NOINLINE void panic(Any v) {
     r->chain = NULL;
     st->printing = false;
 
+#if BURROW_ASAN && !BURROW_CC_MSVC
+    unpoison_jumped(r);
+#endif
     BURROW_LONGJMP(r->jb);
 }
 

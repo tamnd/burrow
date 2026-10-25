@@ -17,6 +17,8 @@ C programmers hand roll a worse version of `strings` in every project. They reac
 
 ## What it looks like
 
+[The tour](docs/tour.md) has four whole programs that count words, read and write JSON, split work over goroutines and serve HTTP. Here is a smaller one.
+
 <!-- not compiled: uses strings_to_upper and fmt_println, and the strings and fmt packages come in a later milestone -->
 ```c
 #define BURROW_SHORT 1

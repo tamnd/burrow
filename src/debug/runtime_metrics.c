@@ -8,7 +8,7 @@
  *
  * Derived from Go's src/runtime/metrics/description.go, sample.go and
  * value.go, and from src/runtime/metrics.go and histogram.go.
- * Go source: go1.27.1.
+ * Go source: go1.27.3.
  *
  * Copyright 2020 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -88,6 +88,7 @@ MetricsFloat64Histogram *metrics_value_float64_histogram(MetricsValue v) {
     X("httplaxcontentlength", "net/http")                                              \
     X("httpmuxgo121", "net/http")                                                      \
     X("httpservecontentkeepheaders", "net/http")                                       \
+    X("httpservecontentmaxranges", "net/http")                                         \
     X("installgoroot", "go/build")                                                     \
     X("multipartmaxheaders", "mime/multipart")                                         \
     X("multipartmaxparts", "mime/multipart")                                           \

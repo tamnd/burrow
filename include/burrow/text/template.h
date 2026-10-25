@@ -181,11 +181,13 @@ BURROW_BORROWS(ret, t) TextTemplate *text_template_option(TextTemplate *t, Slice
  * at all. Structs are always true. */
 bool text_template_is_true(Any val, bool *ok);
 
-/* Must: t, or a panic with err when it failed, for initialising a template in
- * one expression:
+/* Must: t, or a panic with err when it failed. Go wraps the call in it, but
+ * in C the order a call's arguments are evaluated in is unspecified, so err
+ * could be read before the call inside sets it. Call it on its own line:
  *
- *     TextTemplate *t = text_template_must(
- *         text_template_parse(text_template_new(a, BURROW_S("x")), text, &err), err);
+ *     TextTemplate *t =
+ *         text_template_parse(text_template_new(a, BURROW_S("x")), text, &err);
+ *     t = text_template_must(t, err);
  */
 BURROW_BORROWS(ret, t) TextTemplate *text_template_must(TextTemplate *t, Error err);
 

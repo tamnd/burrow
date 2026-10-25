@@ -79,9 +79,12 @@ static Slice fill(Alloc *a, const BigInt *x, Int n) {
     return big_int_fill_bytes(x, slice_make(a, TYPE_BYTE, n, n));
 }
 
-static void fatal_if_err(TestingT *t, const void *p, Error err) {
-    if (p == NULL || BURROW_FAILED(err))
-        testing_t_fatalf_v(t, "%s", error_text(err));
+/* Not in Go: err is a pointer, and not the value, because the call that sets it
+ * is another argument, and C leaves the order of the two unspecified. Through
+ * the pointer, it is read after the call has run. */
+static void fatal_if_err(TestingT *t, const void *p, const Error *err) {
+    if (p == NULL || BURROW_FAILED(*err))
+        testing_t_fatalf_v(t, "%s", error_text(*err));
 }
 
 /* ------------------------------------------------------------ Equivalents */
@@ -108,10 +111,10 @@ static void equivalents(void *env, TestingT *t) {
     NistecPoint p1, p2, p3, p4, p5, p6;
     c->double_(&p1, &p);
     c->add(&p2, &p, &p);
-    fatal_if_err(t, c->scalar_mult(&p3, &p, two, &err), err);
-    fatal_if_err(t, c->scalar_base_mult(&p4, two, &err), err);
-    fatal_if_err(t, c->scalar_mult(&p5, &p, n_plus_two, &err), err);
-    fatal_if_err(t, c->scalar_base_mult(&p6, n_plus_two, &err), err);
+    fatal_if_err(t, c->scalar_mult(&p3, &p, two, &err), &err);
+    fatal_if_err(t, c->scalar_base_mult(&p4, two, &err), &err);
+    fatal_if_err(t, c->scalar_mult(&p5, &p, n_plus_two, &err), &err);
+    fatal_if_err(t, c->scalar_base_mult(&p6, n_plus_two, &err), &err);
 
     Slice b1 = point_bytes(a, c, &p1);
     if (!bytes_equal(b1, point_bytes(a, c, &p2)))
@@ -150,8 +153,8 @@ static void check_scalar(void *env, TestingT *t) {
 
     NistecPoint g, p1, p2;
     c->set_generator(&g);
-    fatal_if_err(t, c->scalar_base_mult(&p1, scalar, &err), err);
-    fatal_if_err(t, c->scalar_mult(&p2, &g, scalar, &err), err);
+    fatal_if_err(t, c->scalar_base_mult(&p1, scalar, &err), &err);
+    fatal_if_err(t, c->scalar_mult(&p2, &g, scalar, &err), &err);
     Slice b1 = point_bytes(a, c, &p1);
     Slice b2 = point_bytes(a, c, &p2);
     if (!bytes_equal(b1, b2))
@@ -179,7 +182,7 @@ static void check_scalar(void *env, TestingT *t) {
     big_int_sub(&d, &n, &d);
     big_int_mod(&d, &d, &n);
     NistecPoint g1;
-    fatal_if_err(t, c->scalar_base_mult(&g1, fill(a, &d, scalar.len), &err), err);
+    fatal_if_err(t, c->scalar_base_mult(&g1, fill(a, &d, scalar.len), &err), &err);
     c->add(&g1, &g1, &p1);
     if (!bytes_equal(point_bytes(a, c, &g1), inf))
         testing_t_errorf_v(t, "[N - k]G + [k]G != ∞");
@@ -264,13 +267,14 @@ static void compressed(void *env, TestingT *t) {
             ((uint8_t *)k.p)[0] &= 1;
 
         NistecPoint p, q;
-        fatal_if_err(t, c->scalar_base_mult(&p, k, &err), err);
+        fatal_if_err(t, c->scalar_base_mult(&p, k, &err), &err);
         uint8_t comp[NISTEC_MAX_POINT_BYTES];
         Int n = c->bytes_compressed(&p, comp);
         if (n != 1 + size)
             testing_t_fatalf_v(t, "compressed encoding is %d bytes", (int)n);
         c->point_new(&q);
-        fatal_if_err(t, c->set_bytes(&q, slice_from(comp, n, n, TYPE_BYTE), &err), err);
+        fatal_if_err(t, c->set_bytes(&q, slice_from(comp, n, n, TYPE_BYTE), &err),
+                     &err);
         if (!bytes_equal(point_bytes(a, c, &p), point_bytes(a, c, &q)))
             testing_t_errorf_v(t,
                                "scalar %d: decoding the compressed encoding gives "
@@ -285,7 +289,7 @@ static void compressed(void *env, TestingT *t) {
     if (c->bytes_compressed(&inf, comp) != 1 || comp[0] != 0)
         testing_t_errorf_v(t, "compressed infinity is not one zero byte");
     c->set_generator(&q);
-    fatal_if_err(t, c->set_bytes(&q, slice_from(comp, 1, 1, TYPE_BYTE), &err), err);
+    fatal_if_err(t, c->set_bytes(&q, slice_from(comp, 1, 1, TYPE_BYTE), &err), &err);
     if (!bytes_equal(point_bytes(a, c, &q), infinity_bytes(a, c)))
         testing_t_errorf_v(t, "decoding infinity does not give infinity");
 

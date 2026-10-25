@@ -2337,10 +2337,13 @@ static void TestEnsurePipelineContains(TestingT *t) {
     for (Int i = 0; i < NELEM(pipeline_tests); i++) {
         const PipelineTest *test = &pipeline_tests[i];
         Error err = BURROW_NO_ERROR;
-        TextTemplate *tmpl = text_template_must(
-            text_template_parse(text_template_new(a, BURROW_S("test")), test->input,
-                                &err),
-            err);
+        /* Not in Go: Go wraps the Parse call in Must. In this file the parse is a
+         * statement of its own, here and below, since C leaves the order of a
+         * call's arguments unspecified, and err could be read before the parse
+         * sets it. */
+        TextTemplate *tmpl = text_template_parse(text_template_new(a, BURROW_S("test")),
+                                                 test->input, &err);
+        tmpl = text_template_must(tmpl, err);
         ParseNode first = BURROW_AT(ParseNode, tmpl->tree->root->nodes, 0);
         if (*first != PARSE_NODE_ACTION) {
             testing_t_errorf_v(t, "First node is not an action: %s", test->input);
@@ -2573,18 +2576,15 @@ static void TestIdempotentExecute(TestingT *t) {
     arena_init(&ar, heap_allocator(), 0);
     Alloc *a = arena_allocator(&ar);
     Error err = BURROW_NO_ERROR;
-    HtmlTemplate *tmpl = html_template_must(
-        html_template_parse(
-            html_template_new(a, BURROW_STR_EMPTY),
-            BURROW_S("{{define \"main\"}}<body>{{template \"hello\"}}</body>{{end}}"),
-            &err),
-        err);
-    html_template_must(
-        html_template_parse(
-            tmpl,
-            BURROW_S("{{define \"hello\"}}Hello, {{\"Ladies & Gentlemen!\"}}{{end}}"),
-            &err),
-        err);
+    HtmlTemplate *tmpl = html_template_parse(
+        html_template_new(a, BURROW_STR_EMPTY),
+        BURROW_S("{{define \"main\"}}<body>{{template \"hello\"}}</body>{{end}}"),
+        &err);
+    tmpl = html_template_must(tmpl, err);
+    html_template_parse(
+        tmpl, BURROW_S("{{define \"hello\"}}Hello, {{\"Ladies & Gentlemen!\"}}{{end}}"),
+        &err);
+    html_template_must(tmpl, err);
     StringsBuilder got = STRINGS_BUILDER(a);
     /* Ensure that "hello" produces the same output when executed twice. */
     Str want = BURROW_S("Hello, Ladies &amp; Gentlemen!");
@@ -2620,10 +2620,10 @@ static void BenchmarkEscapedExecute(TestingB *b) {
     arena_init(&ar, heap_allocator(), 0);
     Alloc *a = arena_allocator(&ar);
     Error err = BURROW_NO_ERROR;
-    HtmlTemplate *tmpl = html_template_must(
+    HtmlTemplate *tmpl =
         html_template_parse(html_template_new(a, BURROW_S("t")),
-                            BURROW_S("<a onclick=\"alert('{{.}}')\">{{.}}</a>"), &err),
-        err);
+                            BURROW_S("<a onclick=\"alert('{{.}}')\">{{.}}</a>"), &err);
+    tmpl = html_template_must(tmpl, err);
     Str data = BURROW_S("foo & 'bar' & baz");
     Arena out;
     arena_init(&out, heap_allocator(), 0);
@@ -2646,14 +2646,13 @@ static void TestOrphanedTemplate(TestingT *t) {
     arena_init(&ar, heap_allocator(), 0);
     Alloc *a = arena_allocator(&ar);
     Error err = BURROW_NO_ERROR;
-    HtmlTemplate *t1 = html_template_must(
+    HtmlTemplate *t1 =
         html_template_parse(html_template_new(a, BURROW_S("foo")),
-                            BURROW_S("<a href=\"{{.}}\">link1</a>"), &err),
-        err);
-    HtmlTemplate *t2 = html_template_must(
-        html_template_parse(html_template_new_associated(t1, BURROW_S("foo")),
-                            BURROW_S("bar"), &err),
-        err);
+                            BURROW_S("<a href=\"{{.}}\">link1</a>"), &err);
+    t1 = html_template_must(t1, err);
+    HtmlTemplate *t2 = html_template_parse(
+        html_template_new_associated(t1, BURROW_S("foo")), BURROW_S("bar"), &err);
+    t2 = html_template_must(t2, err);
     StringsBuilder b = STRINGS_BUILDER(a);
     Str want_error = BURROW_S("template: \"foo\" is an incomplete or empty template");
     Str js = BURROW_S("javascript:alert(1)");
@@ -2693,9 +2692,9 @@ static void TestAliasedParseTreeDoesNotOverescape(TestingT *t) {
     Str want = BURROW_S("&lt;baz&gt;");
     /* Templates "foo" and "bar" both alias the same underlying parse tree. */
     Error err = BURROW_NO_ERROR;
-    HtmlTemplate *tpl = html_template_must(
-        html_template_parse(html_template_new(a, BURROW_S("foo")), tmpl_text, &err),
-        err);
+    HtmlTemplate *tpl =
+        html_template_parse(html_template_new(a, BURROW_S("foo")), tmpl_text, &err);
+    tpl = html_template_must(tpl, err);
     html_template_add_parse_tree(tpl, BURROW_S("bar"), tpl->tree, &err);
     if (BURROW_FAILED(err)) {
         testing_t_errorf_v(t, "AddParseTree error: %v", err);
@@ -2769,11 +2768,10 @@ static void TestIssue81821(TestingT *t) {
     Alloc *a = arena_allocator(&ar);
     StringsBuilder buf = STRINGS_BUILDER(a);
     Error err = BURROW_NO_ERROR;
-    HtmlTemplate *tmpl = html_template_must(
-        html_template_parse(html_template_new(a, BURROW_S("test")),
-                            BURROW_S("<script>const s = `${1}${/{{.}}/g}`</script>"),
-                            &err),
-        err);
+    HtmlTemplate *tmpl = html_template_parse(
+        html_template_new(a, BURROW_S("test")),
+        BURROW_S("<script>const s = `${1}${/{{.}}/g}`</script>"), &err);
+    tmpl = html_template_must(tmpl, err);
     Str input = BURROW_S("x/.exec(alert(1))}");
     err = html_template_execute(tmpl, strings_builder_as_io_writer(&buf),
                                 BURROW_ANY(TYPE_STRING, &input));
@@ -2884,9 +2882,9 @@ static void BenchmarkTemplateSpecialTags(TestingB *b) {
     Alloc *a = arena_allocator(&ar);
     for (Int i = 0; i < testing_b_n(b); i++) {
         Error err = BURROW_NO_ERROR;
-        HtmlTemplate *tmpl = html_template_must(
-            html_template_parse(html_template_new(a, BURROW_S("foo")), html, &err),
-            err);
+        HtmlTemplate *tmpl =
+            html_template_parse(html_template_new(a, BURROW_S("foo")), html, &err);
+        tmpl = html_template_must(tmpl, err);
         StringsBuilder buf = STRINGS_BUILDER(a);
         err = html_template_execute(tmpl, strings_builder_as_io_writer(&buf),
                                     BURROW_ANY(TYPE_OF(NameGift), &r));

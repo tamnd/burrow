@@ -1778,6 +1778,10 @@ typedef struct HttpTransport {
         Int head, len, cap;
     } dials;
     SyncWaitGroup live;
+    /* Not in Go: how long a body closed early is drained for, set only by
+     * burrow__http_transport_set_post_close_read_time_for_testing. 0 is Go's
+     * maxPostCloseReadTime. */
+    Duration post_close_read_time;
 } HttpTransport;
 
 /* Transport.RoundTrip. Sends req and gives back its response, as an

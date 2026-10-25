@@ -361,8 +361,9 @@ typedef struct HbBody {
     bool do_early_close; /* Close stops early */
     bool saw_eof;
     bool closed;
-    bool early_close; /* Close came before the end of src */
-    Func on_hit_eof;  /* called when the end has been read, nil for none */
+    bool early_close;  /* Close came before the end of src */
+    bool drop_trailer; /* if true, do not populate the trailer */
+    Func on_hit_eof;   /* called when the end has been read, nil for none */
 } HbBody;
 
 /* seeUpcomingDoubleCRLF. Peeks until bufio's buffer is full, looking for the
@@ -425,6 +426,12 @@ static Error hb_read_trailer(HbBody *b) {
             return hb_error(&hb_text_trailer_eof);
         return err;
     }
+    /* When we are automatically draining a response body, let the trailer
+     * still be parsed above (so connection can be reused). However, do not
+     * actually populate b.hdr.Trailer. Doing so is racy as we do not own b.hdr
+     * anymore when automatic draining occurs. */
+    if (b->drop_trailer)
+        return BURROW_NO_ERROR;
     return hb_merge_set_header(b->trailer, hdr);
 }
 
@@ -573,6 +580,15 @@ bool burrow__http_body_remains(void *body) {
     bool v = !b->saw_eof;
     sync_mutex_unlock(&b->mu);
     return v;
+}
+
+void burrow__http_body_discard_trailer(IoReadCloser rc) {
+    if (rc.vt != &hb_body_vt)
+        return;
+    HbBody *b = (HbBody *)rc.data;
+    sync_mutex_lock(&b->mu);
+    b->drop_trailer = true;
+    sync_mutex_unlock(&b->mu);
 }
 
 void burrow__http_body_set_do_early_close(void *body, bool on) {

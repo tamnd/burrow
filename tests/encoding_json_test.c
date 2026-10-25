@@ -4,6 +4,10 @@
  * Every expected output and error below is what go1.27.1 printed for the same
  * types written in Go, with the "main." in the type names dropped.
  *
+ * The tests from Go's v2_encode_test.go and v2_decode_test.go are ported from
+ * go1.27.3. TestUnsupportedValueErrorValue, TestStringKindTextMarshalerMapKey
+ * and the two 1e1000 cases in TestPrefilled came with go1.27.2.
+ *
  * Copyright 2026 The burrow Authors. All rights reserved.
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
@@ -259,6 +263,161 @@ static void TestMarshalErrors(TestingT *t) {
     const JsonUnsupportedTypeError *ute = (const JsonUnsupportedTypeError *)errors_as(
         err, TYPE_JSON_UNSUPPORTED_TYPE_ERROR);
     CHECK(ute != NULL && ute->type == TYPE_OF(ChanInt));
+    arena_free(&ar);
+}
+
+/* ------------------------------------------------- from Go's v2_encode_test.go */
+
+BURROW_NAMED_TYPE(NamedFloat, double, KIND_FLOAT64);
+BURROW_MAP_TYPE(StrFloatMap, Str, double);
+BURROW_SLICE_TYPE(NamedFloats, NamedFloat);
+#define F_FIELDS(FIELD, T) FIELD(T, double, F, "")
+BURROW_STRUCT(FloatField, F_FIELDS);
+
+typedef struct UnsupportedValueCase {
+    int line;
+    Any in;
+    const Type *want_type;
+    double want;
+} UnsupportedValueCase;
+
+static void unsupported_value_case(void *env, TestingT *t) {
+    const UnsupportedValueCase *tt = env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    (void)json_marshal(a, tt->in, &err);
+    arena_free(&ar);
+    const JsonUnsupportedValueError *uve = (const JsonUnsupportedValueError *)errors_as(
+        err, TYPE_JSON_UNSUPPORTED_VALUE_ERROR);
+    if (uve == NULL) {
+        Str got = BURROW_FAILED(err) && err.vt->self_type != NULL
+                      ? err.vt->self_type->name
+                      : BURROW_S("<nil>");
+        testing_t_fatalf_v(t, "%s:%d: Marshal error:\n\tgot:  %s\n\twant: %s",
+                           "encoding_json_test.c", tt->line, got,
+                           "*json.UnsupportedValueError");
+    }
+    Any got = uve->value;
+    if (got.t != tt->want_type) {
+        Str gt = got.t == NULL ? BURROW_S("<nil>") : got.t->name;
+        testing_t_fatalf_v(t, "%s:%d: UnsupportedValueError.Value.Type = %s, want %s",
+                           "encoding_json_test.c", tt->line, gt, tt->want_type->name);
+    }
+    double gf =
+        got.t->size == 4 ? (double)*(const float *)got.data : *(const double *)got.data;
+    /* equalFloat */
+    bool equal = gf == tt->want || math_is_nan(gf) == math_is_nan(tt->want);
+    if (!equal)
+        testing_t_fatalf_v(t, "%s:%d: UnsupportedValueError.Value.Float = %v, want %v",
+                           "encoding_json_test.c", tt->line, gf, tt->want);
+}
+
+/* Issue 81176: UnsupportedValueError.Value should hold the NaN or ±Inf value. */
+static void TestUnsupportedValueErrorValue(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    NamedFloat nan = math_nan(), pinf = math_inf(1);
+    double ninf = math_inf(-1), inf = math_inf(1);
+    StrFloatMap m = map_make(a, TYPE_STRING, TYPE_FLOAT64, 0);
+    Str x = BURROW_S("x");
+    map_set(m, &x, &inf);
+    NamedFloats sl = slice_append(a, slice_nil(TYPE_OF(NamedFloat)), &nan, 1);
+    FloatField st = {ninf};
+    const UnsupportedValueCase tests[] = {
+        {__LINE__, BURROW_ANY(TYPE_OF(NamedFloat), &nan), TYPE_OF(NamedFloat), nan},
+        {__LINE__, BURROW_ANY(TYPE_FLOAT64, &ninf), TYPE_FLOAT64, ninf},
+        {__LINE__, BURROW_ANY(TYPE_OF(NamedFloat), &pinf), TYPE_OF(NamedFloat), pinf},
+        {__LINE__, BURROW_ANY(TYPE_OF(StrFloatMap), &m), TYPE_FLOAT64, inf},
+        {__LINE__, BURROW_ANY(TYPE_OF(NamedFloats), &sl), TYPE_OF(NamedFloat), nan},
+        {__LINE__, BURROW_ANY(TYPE_OF(FloatField), &st), TYPE_FLOAT64, ninf},
+    };
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++)
+        testing_t_run(t, BURROW_S(""),
+                      BURROW_FN(TestingTFunc, unsupported_value_case,
+                                (void *)(uintptr_t)&tests[i]));
+    arena_free(&ar);
+}
+
+/* textMarshalerString is a string kind that implements encoding.TextMarshaler. */
+typedef Str TextMarshalerString;
+
+static Slice text_marshaler_string_marshal_text(TextMarshalerString *s, Alloc *a,
+                                                Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    Slice b = slice_append(a, slice_nil(TYPE_BYTE), "X_", 2);
+    return slice_append(a, b, s->p, s->len);
+}
+
+static Slice text_marshaler_string_append_text(TextMarshalerString *s, Alloc *a,
+                                               Slice b, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    b = slice_append(a, b, "X_", 2);
+    return slice_append(a, b, s->p, s->len);
+}
+
+#define TMS_METHODS(M, T)                                                              \
+    M(T, AppendText, text_marshaler_string_append_text, ENCODING_SIG_APPEND_TEXT)      \
+    M(T, MarshalText, text_marshaler_string_marshal_text, ENCODING_SIG_MARSHAL_TEXT)
+BURROW_METHODS_DEFINE(TextMarshalerString, TMS_METHODS);
+
+/* Not const, since a named string borrows the ops of string, which the test
+ * copies in before it runs. */
+static Type burrow_type_TextMarshalerString = {
+    BURROW_S_INIT("textMarshalerString"),
+    {NULL, 0},
+    KIND_STRING,
+    (uint32_t)sizeof(TextMarshalerString),
+    _Alignof(TextMarshalerString),
+    0,
+    (uint16_t)(sizeof burrow__methods_TextMarshalerString /
+               sizeof burrow__methods_TextMarshalerString[0]),
+    NULL,
+    burrow__methods_TextMarshalerString,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
+static const Type tms_map = {
+    BURROW_S_INIT(""),
+    {NULL, 0},
+    KIND_MAP,
+    (uint32_t)sizeof(Map *),
+    _Alignof(Map *),
+    0,
+    0,
+    NULL,
+    NULL,
+    &burrow_type_TextMarshalerString,
+    &burrow_type_TextMarshalerString,
+    0,
+    0,
+    NULL,
+};
+
+/* Issue 81355: string-kind map keys are used directly even if the key type
+ * implements encoding.TextMarshaler. MarshalText is still called for values. */
+static void TestStringKindTextMarshalerMapKey(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    burrow_type_TextMarshalerString.ops = TYPE_STRING->ops;
+    Map *m = map_make(a, &burrow_type_TextMarshalerString,
+                      &burrow_type_TextMarshalerString, 0);
+    TextMarshalerString k = BURROW_S("foo"), v = BURROW_S("bar");
+    map_set(m, &k, &v);
+    Error err = BURROW_NO_ERROR;
+    Slice got = json_marshal(a, BURROW_ANY(&tms_map, &m), &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "Marshal error: %v", err);
+    const char *want = "{\"foo\":\"X_bar\"}";
+    if (!str_eq(q(got), cs(want)))
+        testing_t_errorf_v(t, "Marshal:\n\tgot:  %s\n\twant: %s", q(got), want);
     arena_free(&ar);
 }
 
@@ -555,6 +714,125 @@ static void TestCompactIndent(TestingT *t) {
     arena_free(&ar);
 }
 
+/* ---------------------------------------------- from Go's v2_decode_test.go */
+
+#define XYZ_FIELDS(FIELD, T)                                                           \
+    FIELD(T, Any, X, "") FIELD(T, Any, Y, "") FIELD(T, Any, Z, "")
+BURROW_STRUCT(XYZ, XYZ_FIELDS);
+BURROW_MAP_TYPE(StrAnyMap, Str, Any);
+BURROW_ARRAY_TYPE(Int1, Int, 1);
+
+typedef struct PrefilledCase {
+    int line;
+    const char *in;
+    Any ptr;
+    Any out;
+    bool has_err;
+    const char *err_value;
+    const Type *err_type;
+    int64_t err_offset;
+} PrefilledCase;
+
+static void prefilled_case(void *env, TestingT *t) {
+    const PrefilledCase *tt = env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Str ptrstr = fmt_sprintf_v(a, "%v", tt->ptr);
+    Str in = cs(tt->in);
+    Error err =
+        json_unmarshal(a, bytes_of(a, tt->in), tt->ptr); /* tt.ptr edited here */
+    if (!reflect_deep_equal(tt->ptr, tt->out))
+        testing_t_errorf_v(t, "%s:%d: Unmarshal(%#q, %T):\n\tgot:  %v\n\twant: %v",
+                           "encoding_json_test.c", tt->line, in, ptrstr, tt->ptr,
+                           tt->out);
+    /* Not in Go: Go compares the errors with reflect.DeepEqual. This compares
+     * the UnmarshalTypeError fields one by one, and prints the error Go's want
+     * would print. */
+    const JsonUnmarshalTypeError *te = BURROW_FAILED(err)
+                                           ? (const JsonUnmarshalTypeError *)errors_as(
+                                                 err, TYPE_JSON_UNMARSHAL_TYPE_ERROR)
+                                           : NULL;
+    bool equal = tt->has_err
+                     ? te != NULL && str_eq(te->value, cs(tt->err_value)) &&
+                           te->type == tt->err_type && te->offset == tt->err_offset &&
+                           te->struct_name.len == 0 && te->field.len == 0 &&
+                           !BURROW_FAILED(te->err)
+                     : !BURROW_FAILED(err);
+    if (!equal) {
+        Str got = BURROW_FAILED(err) ? error_text(err) : BURROW_S("<nil>");
+        Str want =
+            tt->has_err
+                ? fmt_sprintf_v(a, "json: cannot unmarshal %s into Go value of type %s",
+                                tt->err_value, tt->err_type->name)
+                : BURROW_S("<nil>");
+        testing_t_errorf_v(t,
+                           "%s:%d: Unmarshal(%#q, %T) error:\n\tgot:  %v\n\twant: %v",
+                           "encoding_json_test.c", tt->line, in, ptrstr, got, want);
+    }
+    arena_free(&ar);
+}
+
+static void TestPrefilled(TestingT *t) {
+    /* Values here change, cannot reuse table across runs. */
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    float f3 = 3;
+    int16_t i4 = 4;
+    double z = 1.5, one = 1, two = 2, pi = MATH_PI, pi2 = MATH_PI, zero = 0, zero2 = 0;
+
+    XYZ xyz = {{TYPE_FLOAT32, &f3}, {TYPE_INT16, &i4}, {TYPE_FLOAT64, &z}};
+    XYZ xyz_out = {{TYPE_FLOAT64, &one}, {TYPE_FLOAT64, &two}, {TYPE_FLOAT64, &z}};
+
+    Str kx = BURROW_S("X"), ky = BURROW_S("Y"), kz = BURROW_S("Z");
+    Any mx = {TYPE_FLOAT32, &f3}, my = {TYPE_INT16, &i4}, mz = {TYPE_FLOAT64, &z};
+    StrAnyMap m = map_make(a, TYPE_STRING, TYPE_ANY, 0);
+    map_set(m, &kx, &mx);
+    map_set(m, &ky, &my);
+    map_set(m, &kz, &mz);
+    Any ox = {TYPE_FLOAT64, &one}, oy = {TYPE_FLOAT64, &two};
+    StrAnyMap m_out = map_make(a, TYPE_STRING, TYPE_ANY, 0);
+    map_set(m_out, &kx, &ox);
+    map_set(m_out, &ky, &oy);
+    map_set(m_out, &kz, &mz);
+
+    Int i1 = 1, i2 = 2, i23[] = {2, 3};
+    Ints s1 = slice_append(a, slice_nil(TYPE_INT), &i1, 1);
+    Ints s1b = slice_append(a, slice_nil(TYPE_INT), &i1, 1);
+    Ints s2 = slice_append(a, slice_nil(TYPE_INT), &i2, 1);
+    Ints s23 = slice_append(a, slice_nil(TYPE_INT), i23, 2);
+
+    Int1 a1 = {{1}}, a1_out = {{2}};
+    Int2 a2 = {{1, 2}}, a2_out = {{3, 0}};
+
+    Any any0 = {TYPE_FLOAT64, &zero}, any0_out = {TYPE_FLOAT64, &zero2};
+
+    const PrefilledCase tests[] = {
+        {__LINE__, "{\"X\": 1, \"Y\": 2}", BURROW_ANY(TYPE_OF(XYZ), &xyz),
+         BURROW_ANY(TYPE_OF(XYZ), &xyz_out), false, NULL, NULL, 0},
+        {__LINE__, "{\"X\": 1, \"Y\": 2}", BURROW_ANY(TYPE_OF(StrAnyMap), &m),
+         BURROW_ANY(TYPE_OF(StrAnyMap), &m_out), false, NULL, NULL, 0},
+        {__LINE__, "[2]", BURROW_ANY(TYPE_OF(Ints), &s1),
+         BURROW_ANY(TYPE_OF(Ints), &s2), false, NULL, NULL, 0},
+        {__LINE__, "[2, 3]", BURROW_ANY(TYPE_OF(Ints), &s1b),
+         BURROW_ANY(TYPE_OF(Ints), &s23), false, NULL, NULL, 0},
+        {__LINE__, "[2, 3]", BURROW_ANY(TYPE_OF(Int1), &a1),
+         BURROW_ANY(TYPE_OF(Int1), &a1_out), false, NULL, NULL, 0},
+        {__LINE__, "[3]", BURROW_ANY(TYPE_OF(Int2), &a2),
+         BURROW_ANY(TYPE_OF(Int2), &a2_out), false, NULL, NULL, 0},
+        {__LINE__, "1e1000", BURROW_ANY(TYPE_FLOAT64, &pi),
+         BURROW_ANY(TYPE_FLOAT64, &pi2), true, "number 1e1000", TYPE_FLOAT64, 6},
+        {__LINE__, "1e1000", BURROW_ANY(TYPE_ANY, &any0),
+         BURROW_ANY(TYPE_ANY, &any0_out), true, "number 1e1000", TYPE_FLOAT64, 6},
+    };
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++)
+        testing_t_run(
+            t, BURROW_S(""),
+            BURROW_FN(TestingTFunc, prefilled_case, (void *)(uintptr_t)&tests[i]));
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestMarshal)                                                                     \
     X(TestMarshalIndent)                                                               \
@@ -564,6 +842,9 @@ static void TestCompactIndent(TestingT *t) {
     X(TestUnmarshal)                                                                   \
     X(TestNumber)                                                                      \
     X(TestValid)                                                                       \
-    X(TestCompactIndent)
+    X(TestCompactIndent)                                                               \
+    X(TestUnsupportedValueErrorValue)                                                  \
+    X(TestStringKindTextMarshalerMapKey)                                               \
+    X(TestPrefilled)
 
 TESTING_MAIN(TESTS)

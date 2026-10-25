@@ -141,7 +141,7 @@ zlib_reader_free(rc);
 
 That prints `zlib: invalid dictionary` and then `hello, hello`. `zlib_reader_as_resetter` gives a `ZlibResetter`, which points a reader at a new stream and dictionary without allocating again.
 
-The writer makes the same bytes as Go's at every level, with and without a dictionary, with one exception. At levels 7 to 9 with a dictionary, when the first block does not compress and ends up stored, Go 1.27 writes the dictionary into that stored block as if it were data, so the stream does not read back as what was written, even with Go's own reader. burrow makes the same choices Go does and leaves the dictionary out of that block, so its stream is the dictionary's length shorter than Go's and reads back correctly. The same goes for `flate_new_writer_dict`.
+The writer makes the same bytes as Go's at every level, with and without a dictionary, and so does `flate_new_writer_dict`.
 
 ## gzip
 

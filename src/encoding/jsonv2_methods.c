@@ -320,6 +320,7 @@ Error burrow__jsonv2_marshal_methods(JsontextEncoder *e, const Type *t, void *p,
             continue;
         switch (k) {
         case JV_M_MARSHAL_JSON_TO: {
+            /* Do not call MarshalJSONTo on unaddressable values and map keys. */
             if (legacy && jt_e_need_name(e->st.last))
                 continue;
             bool skip = false;
@@ -331,6 +332,7 @@ Error burrow__jsonv2_marshal_methods(JsontextEncoder *e, const Type *t, void *p,
             return err;
         }
         case JV_M_MARSHAL_JSON:
+            /* Do not call MarshalJSON on unaddressable values and map keys. */
             if (legacy && jt_e_need_name(e->st.last))
                 continue;
             {
@@ -340,8 +342,16 @@ Error burrow__jsonv2_marshal_methods(JsontextEncoder *e, const Type *t, void *p,
                                                    &c);
             }
         case JV_M_APPEND_TEXT:
+            /* Do not call AppendText on unaddressable values and map keys of
+             * string kind. */
+            if (legacy && jt_e_need_name(e->st.last) && t->kind == KIND_STRING)
+                continue;
             return jv_marshal_text(e, t, p, m, true);
         default:
+            /* Do not call MarshalText on unaddressable values and map keys of
+             * string kind. */
+            if (legacy && jt_e_need_name(e->st.last) && t->kind == KIND_STRING)
+                continue;
             return jv_marshal_text(e, t, p, m, false);
         }
     }
@@ -476,6 +486,7 @@ Error burrow__jsonv2_unmarshal_methods(JsontextDecoder *d, const Type *t, void *
             continue;
         switch (k) {
         case JV_M_UNMARSHAL_JSON_FROM: {
+            /* Do not call UnmarshalJSONFrom on map keys. */
             if (legacy && jt_e_need_name(d->st.last))
                 continue;
             bool skip = false;
@@ -487,6 +498,7 @@ Error burrow__jsonv2_unmarshal_methods(JsontextDecoder *d, const Type *t, void *
             return err;
         }
         case JV_M_UNMARSHAL_JSON:
+            /* Do not call UnmarshalJSON on map keys. */
             if (legacy && jt_e_need_name(d->st.last))
                 continue;
             {

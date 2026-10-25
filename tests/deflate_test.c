@@ -663,10 +663,10 @@ static void TestReaderDict(TestingT *t) {
     Slice data = inflate_dict(a, bytes_buffer_bytes(&b), BS("hello world"), &err);
     if (BURROW_FAILED(err))
         testing_t_fatalf_v(t, "%s", error_text(err));
+    Str want = BURROW_S("hello again world");
     if (!bytes_eq(data, BS("hello again world")))
         testing_t_fatalf_v(t, "read returned %q want %q",
-                           str_from_bytes(bp(data), data.len),
-                           BURROW_S("hello again world"));
+                           str_from_bytes(bp(data), data.len), want);
     flate_writer_free(w);
     arena_free(&ar);
 }
@@ -1502,9 +1502,7 @@ static void TestGoStreamsExact(TestingT *t) {
 
 /* Every generated vector: what Go's writer made of each input at each level,
  * written in one go, in small and large pieces, with flushes, after a
- * dictionary, and a byte at a time. Each one also has to read back. One that
- * the generator marks as a Go bug, whose output Go's own reader does not
- * give the input back from, has to differ from Go's instead of matching it. */
+ * dictionary, and a byte at a time. Each one also has to read back. */
 static void TestGoVectors(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -1519,7 +1517,7 @@ static void TestGoVectors(TestingT *t) {
             last = v->input;
         }
         Slice got = flate_pattern(a, v->level, v->pattern, in);
-        if (matches(got, v->len, v->sha256) == v->go_bug)
+        if (!matches(got, v->len, v->sha256))
             testing_t_errorf_v(
                 t, "input %d, level %d, pattern %d: got %d bytes, Go made %d", v->input,
                 v->level, v->pattern, (int)got.len, (int)v->len);
@@ -1577,11 +1575,11 @@ static void TestWriterInterfaces(TestingT *t) {
     arena_free(&ar);
 }
 
-/* Go 1.27.1 at levels 7 to 9 sends a short dictionary out as data when the
- * block after it is stored, which is what happens to input that does not
- * compress: Go's writer makes 70028 bytes of this, 11 of them the dictionary,
- * and its reader gives back the dictionary and then the input. Here the
- * dictionary stays out, before and after a Reset. See dict_end in deflate.c. */
+/* Not in Go: Go 1.27.1 at levels 7 to 9 sent a short dictionary out as data
+ * when the block after it was stored, which is what happens to input that does
+ * not compress (go.dev/issue/80538). Its writer made 70028 bytes of this, 11
+ * of them the dictionary; since go1.27.2 it makes 70017. The dictionary has to
+ * stay out before and after a Reset. */
 static void TestDictStoredBlock(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -1609,6 +1607,64 @@ static void TestDictStoredBlock(TestingT *t) {
                                    round, (int)back.len);
         }
         flate_writer_free(w);
+    }
+    arena_free(&ar);
+}
+
+typedef struct {
+    Alloc *a;
+    Slice data, dict;
+    int level;
+} LeakDictCase;
+
+static void leak_dict_level(void *env, TestingT *t) {
+    const LeakDictCase *c = env;
+    BytesBuffer b = BYTES_BUFFER(c->a);
+    Error err;
+    FlateWriter *w = flate_new_writer_dict(c->a, bytes_buffer_as_io_writer(&b),
+                                           c->level, c->dict, &err);
+    if (w == NULL)
+        testing_t_fatalf_v(t, "NewWriterDict: %s", error_text(err));
+    flate_writer_write(w, c->data, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "Write: %s", error_text(err));
+    err = flate_writer_close(w);
+    flate_writer_free(w);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "Close: %s", error_text(err));
+    BytesReader br;
+    bytes_reader_reset(&br, bytes_buffer_bytes(&b));
+    IoReadCloser rc =
+        flate_new_reader_dict(c->a, bytes_reader_as_io_reader(&br), c->dict);
+    Slice got = io_read_all(c->a, io_read_closer_as_io_reader(rc), &err);
+    flate_reader_free(rc);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "NewReaderDict: %s", error_text(err));
+    if (!bytes_equal(got, c->data)) {
+        bool emitted = bytes_has_prefix(got, c->dict);
+        testing_t_errorf_v(t,
+                           "round trip mismatch: got %d bytes, want %d (dictionary "
+                           "emitted: %v)",
+                           (int)got.len, (int)c->data.len, emitted);
+    }
+    if (bytes_reader_len(&br) != 0)
+        testing_t_errorf_v(t, "compressed stream not fully consumed: %d bytes left",
+                           (int)bytes_reader_len(&br));
+}
+
+/* TestNonCompressedBlockDoesntLeakDict checks that the dictionary isn't sent
+ * when sending a non-compressed block. See https://go.dev/issue/80538 */
+static void TestNonCompressedBlockDoesntLeakDict(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    LeakDictCase c = {a, slice_make(a, TYPE_BYTE, 763, 763), BS("0123456789abcdefghij"),
+                      0};
+    Error err;
+    math_rand_rand_read(math_rand_new(a, math_rand_new_source(a, 42)), c.data, &err);
+    for (c.level = 0; c.level <= FLATE_BEST_COMPRESSION; c.level++) {
+        Str name = fmt_sprintf_v(a, "level=%d", c.level);
+        testing_t_run(t, name, BURROW_FN(TestingTFunc, leak_dict_level, &c));
     }
     arena_free(&ar);
 }
@@ -1662,6 +1718,7 @@ static void TestWriterNoMemory(TestingT *t) {
     X(TestInvalidLevel)                                                                \
     X(TestWriterInterfaces)                                                            \
     X(TestWriterNoMemory)                                                              \
-    X(TestDictStoredBlock)
+    X(TestDictStoredBlock)                                                             \
+    X(TestNonCompressedBlockDoesntLeakDict)
 
 TESTING_MAIN(TESTS)

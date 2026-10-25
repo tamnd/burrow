@@ -548,6 +548,89 @@ const Jsonv2SemanticError *burrow__jsonv2_as_semantic(Error err) {
     return (const Jsonv2SemanticError *)err.data;
 }
 
+/* internal.ValueError wraps the error with a Go value relevant to the error.
+ * This is only used for v1 compatibility purposes. The only values it is
+ * given are floats, so the value is kept in the box, as a float32 or a
+ * float64 by the size of its type. */
+typedef struct JvValueBox {
+    const Type *type;
+    union {
+        float f32;
+        double f64;
+    } val;
+    Error err;
+} JvValueBox;
+
+static Str jv_value_message(const void *self) {
+    return error_text(((const JvValueBox *)self)->err);
+}
+
+static Error jv_value_unwrap(const void *self) {
+    return ((const JvValueBox *)self)->err;
+}
+
+static const Type jv_value_desc = {
+    {(const Byte *)"ValueError", 10},
+    {(const Byte *)"encoding/json/internal", 22},
+    KIND_STRUCT,
+    (uint32_t)sizeof(JvValueBox),
+    (uint16_t)_Alignof(JvValueBox),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0x6a767665U, /* "jvve" */
+    NULL,
+};
+
+static Error jv_value_clone(const void *self, Alloc *a);
+
+static const ErrorVT jv_value_vt = {
+    &jv_value_desc, jv_value_message, jv_value_unwrap, NULL, NULL, NULL, jv_value_clone,
+};
+
+static Error jv_value_build(Alloc *a, const JvValueBox *v) {
+    JvValueBox *box =
+        (JvValueBox *)mem_alloc_nozero(a, sizeof *box, _Alignof(JvValueBox));
+    if (box == NULL)
+        return burrow_err_out_of_memory;
+    *box = *v;
+    return (Error){&jv_value_vt, box};
+}
+
+static Error jv_value_clone(const void *self, Alloc *a) {
+    JvValueBox copy = *(const JvValueBox *)self;
+    copy.err = error_retain(a, copy.err);
+    return jv_value_build(a, &copy);
+}
+
+Error burrow__jsonv2_value_error_float(const Type *t, double fv, Error err) {
+    JvValueBox v;
+    memset(&v, 0, sizeof v);
+    v.type = t;
+    if (t->size == 4)
+        v.val.f32 = (float)fv;
+    else
+        v.val.f64 = fv;
+    v.err = err;
+    return jv_value_build(error_allocator(), &v);
+}
+
+bool burrow__jsonv2_as_value_error(Error err, const Type **t, double *fv) {
+    for (; BURROW_FAILED(err); err = errors_unwrap(err)) {
+        if (err.vt != &jv_value_vt)
+            continue;
+        const JvValueBox *v = (const JvValueBox *)err.data;
+        *t = v->type;
+        *fv = v->type->size == 4 ? (double)v->val.f32 : v->val.f64;
+        return true;
+    }
+    return false;
+}
+
 /* The JSON Pointer the coder is at, in a heap buffer. */
 static JsonBuf jv_enc_pointer(JsontextEncoder *e, int where) {
     JsonBuf b = jv_heap_buf();

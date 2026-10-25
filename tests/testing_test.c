@@ -316,6 +316,14 @@ static void child_multi(void *env, TestingT *t) {
     testing_t_log_v(t, "one\ntwo");
 }
 
+/* The last test of the "chatty with recursion" case in Go's sub_test.go logs
+ * the four markers test2json frames its output with. Since go1.27.2 they are
+ * only escaped when the output is for test2json. */
+static void child_marks(void *env, TestingT *t) {
+    (void)env;
+    testing_t_log_v(t, "\x16\x0f\x0e\x1b");
+}
+
 static void child_panic(void *env, TestingT *t) {
     (void)env;
     (void)t;
@@ -736,6 +744,8 @@ static int run_child(const char *scenario) {
     } else if (strcmp(scenario, "panic") == 0) {
         tests[n++] = (TestingInternalTest){BURROW_S("TestPass"), {child_pass, NULL}};
         tests[n++] = (TestingInternalTest){BURROW_S("TestPanic"), {child_panic, NULL}};
+    } else if (strcmp(scenario, "marks") == 0) {
+        tests[n++] = (TestingInternalTest){BURROW_S("TestMarks"), {child_marks, NULL}};
     } else if (strcmp(scenario, "sleep") == 0) {
         tests[n++] = (TestingInternalTest){BURROW_S("TestSleep"), {child_sleep, NULL}};
     } else {
@@ -1052,6 +1062,19 @@ static const Scenario scenarios[] = {
      "\x16=== RUN   TestPass\n"
      "    testing_test.c:N: hello\n"
      "\x16--- PASS: TestPass (0.00s)\n"
+     "\x16=== NAME  \n"
+     "\x16PASS\n",
+     false},
+    {"-test.v", "marks", 0,
+     "=== RUN   TestMarks\n"
+     "    testing_test.c:N: \x16\x0f\x0e\x1b\n"
+     "--- PASS: TestMarks (0.00s)\n"
+     "PASS\n",
+     false},
+    {"-test.v=test2json", "marks", 0,
+     "\x16=== RUN   TestMarks\n"
+     "    testing_test.c:N: \x1b\x16\x1b\x0f\x1b\x0e\x1b\x1b\n"
+     "\x16--- PASS: TestMarks (0.00s)\n"
      "\x16=== NAME  \n"
      "\x16PASS\n",
      false},

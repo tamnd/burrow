@@ -11,7 +11,7 @@
 /* The same prototypes burrow/context.h declares. Repeating one is legal C and
  * the compiler rejects the pair if they ever disagree. */
 // doc: questions
-bool context_deadline(Context c, int64_t *when);
+bool context_deadline(Context c, Time *deadline);
 Chan *context_done(Context c);
 Error context_err(Context c);
 Any context_value(Context c, Any key);
@@ -277,9 +277,9 @@ typedef struct MyState {
     Int answer;
 } MyState;
 
-static bool my_deadline(void *self, int64_t *when) {
+static bool my_deadline(void *self, Time *deadline) {
     (void)self;
-    (void)when;
+    (void)deadline;
     return false;
 }
 

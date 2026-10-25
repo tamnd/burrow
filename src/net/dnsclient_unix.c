@@ -373,21 +373,16 @@ static Error du_round_trip(NetResolver *r, Alloc *sa, Alloc *ma, Context ctx,
                            Str network, Str server, Duration timeout, uint16_t id,
                            const DnsmsgQuestion *q, Slice udp_req, Slice tcp_req,
                            DnsmsgParser *p, DnsmsgHeader *h) {
-    /* The context's deadline, or timeout from now when that is sooner. */
-    int64_t now = burrow_nanotime();
-    int64_t when = now + timeout;
-    int64_t parent;
-    if (context_deadline(ctx, &parent) && parent < when)
-        when = parent;
-    Time deadline = time_add(time_now(), when - now);
-
     Error err = BURROW_NO_ERROR;
     NetConn c;
     bool packet = false;
     ContextCancelFunc cancel;
-    Context dctx = context_with_deadline(sa, ctx, when, &cancel);
+    Context dctx =
+        context_with_deadline(sa, ctx, time_add(time_now(), timeout), &cancel);
     if (dctx.vt == NULL)
         return burrow_err_out_of_memory;
+    Time deadline;
+    bool has_deadline = context_deadline(dctx, &deadline);
     /* Resolver.dial: the Resolver's Dial, or a zero Dialer's. */
     if (r->dial.f != NULL)
         c = BURROW_CALLF(r->dial, sa, dctx, network, server, &packet, &err);
@@ -399,7 +394,8 @@ static Error du_round_trip(NetResolver *r, Alloc *sa, Alloc *ma, Context ctx,
         return burrow__net_map_err(err);
     if (net_conn_as_udp_conn(c) != NULL)
         packet = true;
-    (void)c.vt->set_deadline(c.data, deadline);
+    if (has_deadline && !time_is_zero(deadline))
+        (void)c.vt->set_deadline(c.data, deadline);
     if (packet)
         err = du_packet_round_trip(c, ma, id, q, udp_req, p, h);
     else

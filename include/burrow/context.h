@@ -91,16 +91,13 @@ struct ContextVT {
 
     /* Go's Deadline() (deadline time.Time, ok bool).
      *
-     * False means there is no deadline and *when is not written. True means
-     * *when is the instant the work should be given up on, as a reading of the
-     * monotonic clock in nanoseconds, comparable with burrow_nanotime.
+     * Deadline returns the time when work done on behalf of this context
+     * should be canceled. Deadline returns ok==false when no deadline is
+     * set. Successive calls to Deadline return the same results.
      *
-     * Go's is a time.Time and this will be one too once burrow has the calendar
-     * half of the time package. Until then it is the monotonic reading, which is
-     * the part every caller actually uses: a deadline is compared against now
-     * and subtracted from now, and both of those want the clock that cannot go
-     * backwards. */
-    bool (*deadline)(void *self, int64_t *when);
+     * Not in Go: ok is the result, and *deadline is not written when it is
+     * false. */
+    bool (*deadline)(void *self, Time *deadline);
 
     /* Go's Done() <-chan struct{}.
      *
@@ -208,7 +205,7 @@ Context context_todo(void);
  * interface value. They stop the program on a nil Context rather than crashing
  * in the indirect call, because a nil context is a bug in the caller and the
  * message is worth more than the segfault. */
-bool context_deadline(Context c, int64_t *when);
+bool context_deadline(Context c, Time *deadline);
 BURROW_BORROWS(ret, c) Chan *context_done(Context c);
 BURROW_BORROWS(ret, c) Error context_err(Context c);
 BURROW_BORROWS(ret, c) Any context_value(Context c, Any key);
@@ -346,18 +343,19 @@ BURROW_OWNS(ret) Context context_without_cancel(Alloc *a, Context parent);
 BURROW_OWNS(ret) Context context_after_func(Alloc *a, Context parent, Func f,
                                             StopFunc *stop);
 
-/* context.WithDeadline(parent, when).
+/* context.WithDeadline(parent, d).
  *
- * Returns a copy of parent that is cancelled when the returned function is
- * called, when the parent is cancelled, or when the clock reaches when,
- * whichever happens first. Err is context_deadline_exceeded in the last case
- * and context_canceled in the other two.
+ * WithDeadline returns a derived context that points to the parent context
+ * but has the deadline adjusted to be no later than d. If the parent's
+ * deadline is already earlier than d, WithDeadline(parent, d) is semantically
+ * equivalent to parent. The returned Context.Done channel is closed when
+ * the deadline expires, when the returned cancel function is called,
+ * or when the parent context's Done channel is closed, whichever happens first.
  *
- * when is a reading of the monotonic clock in nanoseconds, the same thing
- * context_deadline hands back and the same thing burrow_nanotime returns, so a
- * deadline three seconds out is burrow_nanotime() + 3 * TIME_SECOND. Go takes a
- * time.Time and this takes one too once burrow has the calendar half of the time
- * package. Most callers want context_with_timeout below and never write this.
+ * d is measured with time_until, so a Time from time_now carries its
+ * monotonic reading here and a change to the wall clock does not move the
+ * deadline. Most callers want context_with_timeout below and never write
+ * this.
  *
  * A deadline that has already gone by cancels the context before this returns,
  * which is Go's rule: what comes back is a real context whose done channel is
@@ -376,11 +374,12 @@ BURROW_OWNS(ret) Context context_after_func(Alloc *a, Context parent, Func f,
  * A nil Context is returned when the allocator will not give out the context,
  * its done channel or the timer, and *cancel is then a function that does
  * nothing. Panics on a nil parent, with Go's message. */
-BURROW_OWNS(ret) Context context_with_deadline(Alloc *a, Context parent, int64_t when,
+BURROW_OWNS(ret) Context context_with_deadline(Alloc *a, Context parent, Time d,
                                                ContextCancelFunc *cancel);
 
-/* context.WithTimeout(parent, d). The deadline measured from now, which is what
- * almost every caller has:
+/* context.WithTimeout(parent, timeout). WithTimeout returns
+ * WithDeadline(parent, time.Now().Add(timeout)), which is what almost every
+ * caller has:
  *
  *     ContextCancelFunc cancel;
  *     Context ctx = context_with_timeout(a, parent, 5 * TIME_SECOND, &cancel);
@@ -391,16 +390,15 @@ BURROW_OWNS(ret) Context context_with_deadline(Alloc *a, Context parent, int64_t
  *     context_release(ctx);
  *
  * A duration of zero or less is a deadline in the past, so the context comes
- * back already cancelled rather than never firing. A duration long enough to run
- * off the end of an int64 is clamped to the last instant there is, about 292
- * years out, which is nobody's timeout and is still not a wrong answer.
+ * back already cancelled rather than never firing.
  *
  * Everything else is context_with_deadline. */
-BURROW_OWNS(ret) Context context_with_timeout(Alloc *a, Context parent, Duration d,
+BURROW_OWNS(ret) Context context_with_timeout(Alloc *a, Context parent,
+                                              Duration timeout,
                                               ContextCancelFunc *cancel);
 
-/* context.WithDeadlineCause(parent, when, cause) and
- * context.WithTimeoutCause(parent, d, cause).
+/* context.WithDeadlineCause(parent, d, cause) and
+ * context.WithTimeoutCause(parent, timeout, cause).
  *
  * The same two constructors with a reason attached to the deadline, so that
  * code underneath can tell one timeout from another:
@@ -423,12 +421,12 @@ BURROW_OWNS(ret) Context context_with_timeout(Alloc *a, Context parent, Duration
  *
  * Everything else is context_with_deadline and context_with_timeout, including
  * the requirement to call these from a goroutine. */
-BURROW_OWNS(ret) Context context_with_deadline_cause(Alloc *a, Context parent,
-                                                     int64_t when, Error cause,
+BURROW_OWNS(ret) Context context_with_deadline_cause(Alloc *a, Context parent, Time d,
+                                                     Error cause,
                                                      ContextCancelFunc *cancel);
 
 BURROW_OWNS(ret) Context context_with_timeout_cause(Alloc *a, Context parent,
-                                                    Duration d, Error cause,
+                                                    Duration timeout, Error cause,
                                                     ContextCancelFunc *cancel);
 
 /* context.WithValue(parent, key, val).

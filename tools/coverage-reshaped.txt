@@ -13,12 +13,6 @@
 # back, because that is what context_release frees, and stop is an out parameter.
 context: func AfterFunc: the registration is returned so it can be freed, stop comes back through a pointer
 
-# include/burrow/context.h: burrow does not have the calendar half of time yet,
-# so a deadline is a reading of the monotonic clock in nanoseconds. Both take a
-# Time once it exists.
-context: func WithDeadline: the deadline is monotonic nanoseconds until time.Time is ported
-context: func WithDeadlineCause: the deadline is monotonic nanoseconds until time.Time is ported
-
 # include/burrow/error.h: errors_as returns the typed pointer, or NULL, which is
 # the shape Go added AsType to get, and takes the target as a type descriptor
 # because C has no pointer to an interface type to pass instead.

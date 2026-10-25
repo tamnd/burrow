@@ -335,7 +335,7 @@ typedef struct TimerCtx {
 
     /* Set once, before the node is visible to anybody, and read without the
      * lock. Go keeps the deadline in the node the same way. */
-    int64_t when;
+    Time deadline;
 
     /* Under c.mu. NULL when the deadline had already gone by, and NULL again
      * once whoever cancelled has disarmed it. */
@@ -404,24 +404,24 @@ typedef struct WithoutCancelCtx {
 
 /* ------------------------------------------------------------- the vtables */
 
-static bool empty_deadline(void *self, int64_t *when);
+static bool empty_deadline(void *self, Time *deadline);
 static Chan *empty_done(void *self);
 static Error empty_err(void *self);
 static Any empty_value(void *self, Any key);
 
-static bool cancel_deadline(void *self, int64_t *when);
+static bool cancel_deadline(void *self, Time *deadline);
 static Chan *cancel_done(void *self);
 static Error cancel_err(void *self);
 static Any cancel_value(void *self, Any key);
 
-static bool timer_deadline(void *self, int64_t *when);
+static bool timer_deadline(void *self, Time *deadline);
 
-static bool without_cancel_deadline(void *self, int64_t *when);
+static bool without_cancel_deadline(void *self, Time *deadline);
 static Chan *without_cancel_done(void *self);
 static Error without_cancel_err(void *self);
 static Any without_cancel_value(void *self, Any key);
 
-static bool value_deadline(void *self, int64_t *when);
+static bool value_deadline(void *self, Time *deadline);
 static Chan *value_done(void *self);
 static Error value_err(void *self);
 static Any value_value(void *self, Any key);
@@ -490,9 +490,9 @@ static void nonnil(Context c) {
  * pointer, which is undefined whether or not the check would have panicked
  * first, and the sanitizer says so. */
 
-bool context_deadline(Context c, int64_t *when) {
+bool context_deadline(Context c, Time *deadline) {
     nonnil(c);
-    return c.vt->deadline(c.data, when);
+    return c.vt->deadline(c.data, deadline);
 }
 
 Chan *context_done(Context c) {
@@ -551,9 +551,9 @@ Any context_value(Context c, Any key) {
 
 /* --------------------------------------------------------- Background and TODO */
 
-static bool empty_deadline(void *self, int64_t *when) {
+static bool empty_deadline(void *self, Time *deadline) {
     (void)self;
-    (void)when;
+    (void)deadline;
     return false;
 }
 
@@ -586,8 +586,8 @@ Context context_todo(void) {
 
 /* ---------------------------------------------------------------- WithValue */
 
-static bool value_deadline(void *self, int64_t *when) {
-    return context_deadline(((ValueCtx *)self)->parent, when);
+static bool value_deadline(void *self, Time *deadline) {
+    return context_deadline(((ValueCtx *)self)->parent, deadline);
 }
 
 static Chan *value_done(void *self) {
@@ -631,8 +631,8 @@ Context context_with_value(Alloc *a, Context parent, Any key, Any val) {
 
 /* --------------------------------------------------------------- WithCancel */
 
-static bool cancel_deadline(void *self, int64_t *when) {
-    return context_deadline(((CancelCtx *)self)->parent, when);
+static bool cancel_deadline(void *self, Time *deadline) {
+    return context_deadline(((CancelCtx *)self)->parent, deadline);
 }
 
 static Chan *cancel_done(void *self) {
@@ -1091,9 +1091,9 @@ Error context_cause(Context c) {
  * join, so cancellation really does stop here, and context_cause answers
  * nothing rather than reaching past it for the parent's reason. */
 
-static bool without_cancel_deadline(void *self, int64_t *when) {
+static bool without_cancel_deadline(void *self, Time *deadline) {
     (void)self;
-    (void)when;
+    (void)deadline;
     return false;
 }
 
@@ -1270,8 +1270,8 @@ Context context_after_func(Alloc *a, Context parent, Func f, StopFunc *stop) {
  * runtime is a race. A leaked node on the way out of memory is the least of
  * what is going wrong by then. */
 
-static bool timer_deadline(void *self, int64_t *when) {
-    *when = ((TimerCtx *)self)->when;
+static bool timer_deadline(void *self, Time *deadline) {
+    *deadline = ((TimerCtx *)self)->deadline;
     return true;
 }
 
@@ -1293,7 +1293,7 @@ static void deadline_reached(void *env) {
     cancel_ctx_release(c);
 }
 
-Context context_with_deadline_cause(Alloc *a, Context parent, int64_t when, Error cause,
+Context context_with_deadline_cause(Alloc *a, Context parent, Time d, Error cause,
                                     ContextCancelFunc *cancel) {
     Context none = {NULL, NULL};
 
@@ -1315,8 +1315,8 @@ Context context_with_deadline_cause(Alloc *a, Context parent, int64_t when, Erro
      * one. Go hands the whole job to WithCancel here and uses the same strict
      * comparison, so two contexts with the same instant on them both get a
      * timer. */
-    int64_t parent_when = 0;
-    if (context_deadline(parent, &parent_when) && parent_when < when)
+    Time cur;
+    if (context_deadline(parent, &cur) && time_before(cur, d))
         return context_with_cancel(a, parent, cancel);
 
     if (cancel != NULL)
@@ -1340,7 +1340,7 @@ Context context_with_deadline_cause(Alloc *a, Context parent, int64_t when, Erro
     c->done = done;
     c->refs = 1;
     c->timed = true;
-    t->when = when;
+    t->deadline = d;
     t->deadline_cause = cause;
 
     if (!propagate_cancel(c, parent)) {
@@ -1361,7 +1361,7 @@ Context context_with_deadline_cause(Alloc *a, Context parent, int64_t when, Erro
      * here as well, as Go's cancel(true, ...) does, because propagate_cancel
      * may have just put it there, and once the error is set no later cancel or
      * release takes it out again. */
-    Duration left = when - burrow_nanotime();
+    Duration left = time_until(d);
     if (left <= 0) {
         cancel_node(c, true, context_deadline_exceeded, t->deadline_cause);
         return out;
@@ -1402,35 +1402,20 @@ Context context_with_deadline_cause(Alloc *a, Context parent, int64_t when, Erro
     return out;
 }
 
-Context context_with_deadline(Alloc *a, Context parent, int64_t when,
+Context context_with_deadline(Alloc *a, Context parent, Time d,
                               ContextCancelFunc *cancel) {
-    return context_with_deadline_cause(a, parent, when, BURROW_NO_ERROR, cancel);
+    return context_with_deadline_cause(a, parent, d, BURROW_NO_ERROR, cancel);
 }
 
-/* now + d, with the two constructors that take a duration sharing the one
- * conversion to an instant rather than each doing it slightly differently. */
-static int64_t context_deadline_from(Duration d) {
-    int64_t now = burrow_nanotime();
-
-    /* Without the signed overflow, which is undefined rather than negative. A
-     * reading of this clock is never below zero, so the only end that can be
-     * run off is the far one, and a timeout that lands 292 years out is one
-     * nobody meant. */
-    if (d > 0 && d > INT64_MAX - now)
-        return INT64_MAX;
-    return now + d;
-}
-
-Context context_with_timeout_cause(Alloc *a, Context parent, Duration d, Error cause,
-                                   ContextCancelFunc *cancel) {
-    return context_with_deadline_cause(a, parent, context_deadline_from(d), cause,
+Context context_with_timeout_cause(Alloc *a, Context parent, Duration timeout,
+                                   Error cause, ContextCancelFunc *cancel) {
+    return context_with_deadline_cause(a, parent, time_add(time_now(), timeout), cause,
                                        cancel);
 }
 
-Context context_with_timeout(Alloc *a, Context parent, Duration d,
+Context context_with_timeout(Alloc *a, Context parent, Duration timeout,
                              ContextCancelFunc *cancel) {
-    return context_with_deadline_cause(a, parent, context_deadline_from(d),
-                                       BURROW_NO_ERROR, cancel);
+    return context_with_deadline(a, parent, time_add(time_now(), timeout), cancel);
 }
 
 /* --------------------------------------------------------------------- free */

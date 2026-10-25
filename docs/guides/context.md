@@ -10,7 +10,7 @@ Nothing in it is complicated on its own. A context is two words, it answers four
 
 <!-- example: ../examples/context/context.c#questions -->
 ```c
-bool context_deadline(Context c, int64_t *when);
+bool context_deadline(Context c, Time *deadline);
 Chan *context_done(Context c);
 Error context_err(Context c);
 Any context_value(Context c, Any key);
@@ -23,6 +23,8 @@ These are Go's `Deadline`, `Done`, `Err` and `Value`, in Go's order, and they ar
 `context_done` answers `NULL` for a context that is never cancelled, which is what `context_background` is. A `NULL` channel blocks forever and is never ready, exactly as Go's nil channel does, so a `select` on `context_done` is correct without asking which of the two it got.
 
 `context_err` answers no error while the done channel is open, and afterwards it is `context_canceled` or `context_deadline_exceeded` and never changes again. Check it after the done channel fires, not instead of waiting on it.
+
+`context_deadline_exceeded` satisfies `net.Error` with `Timeout()` true in Go, so that code written against the network package treats it as a timeout rather than a hard failure. Here `net_is_error` and `net_error_timeout` both say yes to it, which is Go's TestDeadlineExceededSupportsTimeout, run in tests/net_dns_test.c.
 
 `context_value` walks up the tree until it finds the key or runs out of parents, so a lookup costs one comparison per context in between. It is not a map.
 
@@ -106,7 +108,7 @@ context_release(ctx);
 
 `context_with_timeout` is `context.WithTimeout` and is the one almost every caller wants. Five seconds later the done channel closes on its own, `context_err` is `context_deadline_exceeded`, and everything derived from this context stops with it.
 
-`context_with_deadline` is `context.WithDeadline` and takes the instant rather than the duration, for the case where several things share one deadline. The instant is a reading of the monotonic clock, which is what `burrow_nanotime` returns and what `context_deadline` hands back, so `burrow_nanotime() + 3 * TIME_SECOND` is a deadline three seconds out. Go takes a `time.Time` and this will too once burrow has a calendar.
+`context_with_deadline` is `context.WithDeadline` and takes the instant rather than the duration, for the case where several things share one deadline. The instant is a `Time`, the same as Go's, so `time_add(time_now(), 3 * TIME_SECOND)` is a deadline three seconds out, and `context_deadline` hands the same `Time` back. A `Time` from `time_now` carries a monotonic reading, and the timer measures the wait with `time_until`, so a change to the wall clock does not move the deadline.
 
 Both have to be called from a goroutine. The timer goes into the timer heap of the P the caller is running on, and a thread the runtime did not start has no P, so calling either from your own `main` stops the program rather than silently not firing. Everything else in this package works anywhere.
 
@@ -284,11 +286,7 @@ A cancel walks the subtree once, closing each done channel and setting each erro
 
 ## What Go has that this does not, yet
 
-`context_deadline` answers an `int64_t` on the monotonic clock rather than a `Time`, because burrow has no calendar `Time` yet. It becomes a `Time` when the calendar half of the `time` package lands, and until then `burrow_nanotime` is the reading to compare it against. That is the part every caller actually uses: a deadline gets compared against now and subtracted from now, and both of those want the clock that cannot go backwards.
-
 Go's `afterFuncer` is not ported. It is an unexported interface that lets a parent context arrange its own `AfterFunc` rather than having one hung off it, and it exists for `testing/synctest`, whose contexts have to know about every goroutine waiting on them. It is a fifth method Go can type assert for and `ContextVT` has four slots. It comes back with `synctest` if `synctest` turns out to need it.
-
-`context_deadline_exceeded` satisfies `net.Error` with `Timeout()` true in Go, so that code written against the network package treats it as a timeout rather than a hard failure. There is no `net` package here yet and it is a plain sentinel until there is.
 
 ## See also
 

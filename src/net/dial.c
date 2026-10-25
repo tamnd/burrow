@@ -434,40 +434,28 @@ NetIPAddr *net_resolve_ip_addr(Alloc *a, Str network, Str host, Error *err) {
 
 /* ------------------------------------------------------------- the context */
 
-/* now + d, without going past either end. */
-static int64_t dl_mono_add(int64_t now, int64_t d) {
-    if (d > 0 && now > INT64_MAX - d)
-        return INT64_MAX;
-    if (d < 0 && now < INT64_MIN - d)
-        return INT64_MIN;
-    return now + d;
+static Time dl_min_nonzero_time(Time a, Time b) {
+    if (time_is_zero(a))
+        return b;
+    if (time_is_zero(b) || time_before(a, b))
+        return a;
+    return b;
 }
 
-/* Dialer.deadline: the earliest of now + timeout, the context's deadline and
- * d->deadline, on the monotonic clock, and false when there is none. */
-static bool dl_deadline(const NetDialer *d, Context ctx, int64_t *when) {
-    int64_t now = burrow_nanotime();
-    bool has = false;
-    int64_t earliest = 0;
-    /* Including negative, for historical reasons. */
-    if (d->timeout != 0) {
-        earliest = dl_mono_add(now, d->timeout);
-        has = true;
-    }
-    int64_t c = 0;
-    if (context_deadline(ctx, &c) && (!has || c < earliest)) {
-        earliest = c;
-        has = true;
-    }
-    if (!time_is_zero(d->deadline)) {
-        int64_t t = dl_mono_add(now, time_sub(d->deadline, time_now()));
-        if (!has || t < earliest) {
-            earliest = t;
-            has = true;
-        }
-    }
-    *when = earliest;
-    return has;
+/* deadline returns the earliest of:
+ *   - now+Timeout
+ *   - d.Deadline
+ *   - the context's deadline
+ *
+ * Or zero, if none of Timeout, Deadline, or context's deadline is set. */
+static Time dl_deadline(const NetDialer *d, Context ctx, Time now) {
+    Time earliest = {0, 0, NULL};
+    if (d->timeout != 0) /* including negative, for historical reasons */
+        earliest = time_add(now, d->timeout);
+    Time c;
+    if (context_deadline(ctx, &c))
+        earliest = dl_min_nonzero_time(earliest, c);
+    return dl_min_nonzero_time(earliest, d->deadline);
 }
 
 /* What dialCtx makes: the context the dial runs under, the deadline and
@@ -496,10 +484,10 @@ static void dl_watch_cancel(void *env) {
 static bool dl_ctx_begin(const NetDialer *d, Context ctx, DlCtx *dc) {
     memset(dc, 0, sizeof *dc);
     dc->ctx = ctx;
-    int64_t when = 0;
-    if (dl_deadline(d, ctx, &when)) {
-        int64_t parent = 0;
-        if (!context_deadline(ctx, &parent) || when < parent) {
+    Time when = dl_deadline(d, ctx, time_now());
+    if (!time_is_zero(when)) {
+        Time parent;
+        if (!context_deadline(ctx, &parent) || time_before(when, parent)) {
             dc->deadline_ctx =
                 context_with_deadline(heap_allocator(), ctx, when, &dc->cancel1);
             if (BURROW_CONTEXT_IS_NIL(dc->deadline_ctx))
@@ -686,14 +674,15 @@ static NetConn dl_dial_single(const DlSys *sd, Alloc *a, Context ctx, const DlAd
     return c;
 }
 
-Error burrow__net_partial_deadline(int64_t now, int64_t deadline, Int addrs_remaining,
-                                   int64_t *out) {
+Error burrow__net_partial_deadline(Time now, Time deadline, Int addrs_remaining,
+                                   Time *out) {
     *out = deadline;
-    if (deadline == 0)
+    if (time_is_zero(deadline))
         return BURROW_NO_ERROR;
-    int64_t remaining = deadline - now;
+    Duration remaining = time_sub(deadline, now);
     if (remaining <= 0) {
-        *out = 0;
+        Time zero = {0, 0, NULL};
+        *out = zero;
         return burrow__net_err_timeout;
     }
     /* Tentatively allocate equal time to each remaining address. */
@@ -701,7 +690,7 @@ Error burrow__net_partial_deadline(int64_t now, int64_t deadline, Int addrs_rema
     /* If the time per address is too short, steal from the end of the list. */
     if (timeout < DL_SANE_MINIMUM)
         timeout = remaining < DL_SANE_MINIMUM ? remaining : DL_SANE_MINIMUM;
-    *out = now + timeout;
+    *out = time_add(now, timeout);
     return BURROW_NO_ERROR;
 }
 
@@ -724,11 +713,11 @@ static NetConn dl_dial_serial(const DlSys *sd, Alloc *a, Context ctx, const DlAd
         Context dctx = ctx;
         Context sub = {NULL, NULL};
         ContextCancelFunc cancel = {NULL, NULL};
-        int64_t deadline = 0;
+        Time deadline;
         if (context_deadline(ctx, &deadline)) {
-            int64_t partial = 0;
-            Error pe = burrow__net_partial_deadline(burrow_nanotime(), deadline, n - i,
-                                                    &partial);
+            Time partial;
+            Error pe =
+                burrow__net_partial_deadline(time_now(), deadline, n - i, &partial);
             if (BURROW_FAILED(pe)) {
                 /* Ran out of time. */
                 if (BURROW_OK(first))
@@ -736,7 +725,7 @@ static NetConn dl_dial_serial(const DlSys *sd, Alloc *a, Context ctx, const DlAd
                                                  sd->d->local_addr, dl_addr(ra), pe);
                 break;
             }
-            if (partial < deadline) {
+            if (time_before(partial, deadline)) {
                 sub = context_with_deadline(heap_allocator(), ctx, partial, &cancel);
                 if (BURROW_CONTEXT_IS_NIL(sub)) {
                     BURROW_OUT(err, burrow_err_out_of_memory);

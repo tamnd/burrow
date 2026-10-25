@@ -161,15 +161,6 @@ void tls_listener_free(NetListener l) {
     mem_free(tl->a, tl, sizeof *tl, _Alignof(TlsListener));
 }
 
-/* Not in Go: now + d on the monotonic clock, without going past either end. */
-static int64_t tls_mono_add(int64_t now, int64_t d) {
-    if (d > 0 && now > INT64_MAX - d)
-        return INT64_MAX;
-    if (d < 0 && now < INT64_MIN - d)
-        return INT64_MIN;
-    return now + d;
-}
-
 /* Not in Go: the contexts dial puts over the caller's, and their cancels,
  * which Go defers. */
 typedef struct TlsDialCtx {
@@ -216,10 +207,8 @@ static TlsConn *tls_dial_ctx(Alloc *a, Context ctx, const NetDialer *net_dialer,
     }
 
     if (!time_is_zero(net_dialer->deadline)) {
-        int64_t when =
-            tls_mono_add(burrow_nanotime(), time_sub(net_dialer->deadline, time_now()));
-        dc.deadline_ctx =
-            context_with_deadline(heap_allocator(), ctx, when, &dc.cancel2);
+        dc.deadline_ctx = context_with_deadline(heap_allocator(), ctx,
+                                                net_dialer->deadline, &dc.cancel2);
         if (BURROW_CONTEXT_IS_NIL(dc.deadline_ctx)) {
             tls_dial_ctx_end(&dc);
             BURROW_OUT(err, burrow_err_out_of_memory);

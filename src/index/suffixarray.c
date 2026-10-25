@@ -175,9 +175,15 @@ static Int sx_write_slice(IoWriter w, Slice buf, burrow__SuffixarrayInts data,
     Int n = 0;
     Int p = BINARY_MAX_VARINT_LEN64;
     Int m = sx_ints_len(&data);
-    for (; n < m && p + BINARY_MAX_VARINT_LEN64 <= buf.len; n++)
-        p += binary_put_uvarint(slice_sub(buf, p, buf.len),
-                                (uint64_t)sx_ints_get(&data, n));
+    for (; n < m && p + BINARY_MAX_VARINT_LEN64 <= buf.len; n++) {
+        /* Not in Go: buf is never empty, but clang's analyzer thinks buf[p:]
+         * can be NULL and reports a NULL dereference in binary_put_uvarint
+         * unless it is checked. */
+        Slice rest = slice_sub(buf, p, buf.len);
+        if (rest.p == NULL)
+            runtime_panic(BURROW_S("suffixarray: no buffer to write with"));
+        p += binary_put_uvarint(rest, (uint64_t)sx_ints_get(&data, n));
+    }
 
     /* update buffer size */
     binary_put_varint(buf, (int64_t)p);

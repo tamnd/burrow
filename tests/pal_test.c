@@ -489,6 +489,12 @@ static void TestADescriptorWithSomethingOnItComesBackReady(TestingT *t) {
     PalErrno err = PAL_OK;
     CHECK(pal_poll_add(poller, rd, tag, &err));
     CHECK_INT_EQ(err, PAL_OK);
+#if defined(BURROW_OS_COSMO) || defined(BURROW_OS_WASI)
+    /* The poll(2) backend only looks for what has been armed, as pal.h says,
+     * and the runtime arms before every wait. */
+    CHECK(pal_poll_arm(poller, rd, PAL_POLL_READ, &err));
+    CHECK_INT_EQ(err, PAL_OK);
+#endif
 
     CHECK(write(wr, "x", 1) == 1);
 
@@ -522,6 +528,12 @@ static void TestALookWithNothingToSeeComesBackEmpty(TestingT *t) {
 static void TestABreakEndsAWaitAndIsNeverReportedAsAnEvent(TestingT *t) {
     PalPollEvent events[8];
     PalErrno err = PAL_OK;
+
+#if defined(BURROW_OS_WASI)
+    /* wasip1 has one thread, so a break has nobody to wake and does nothing,
+     * as netpollBreak does in Go's netpoll_wasip1.go. */
+    testing_t_skip_v(t, "a break does nothing on wasip1");
+#endif
 
     CHECK(pal_poll_break(poller, &err));
     CHECK_INT_EQ(err, PAL_OK);

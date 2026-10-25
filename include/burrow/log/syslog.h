@@ -63,6 +63,9 @@ extern "C" {
  * SYSLOG_LOG_EMERG; the default facility is SYSLOG_LOG_KERN. */
 typedef Int SyslogPriority;
 
+/* Not in Go: the severities and the facilities are one enum here, where Go has
+ * two const blocks, because MSVC warns when values of two different enums are
+ * combined with |, and that is how a priority is made. */
 enum {
     /* Severity.
      *
@@ -76,9 +79,7 @@ enum {
     SYSLOG_LOG_NOTICE = 5,
     SYSLOG_LOG_INFO = 6,
     SYSLOG_LOG_DEBUG = 7,
-};
 
-enum {
     /* Facility.
      *
      * From /usr/include/sys/syslog.h.

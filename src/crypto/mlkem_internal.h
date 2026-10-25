@@ -106,4 +106,15 @@ BURROW_OWNS(ret) Slice burrow__mlkem_encapsulate_internal768(
 BURROW_OWNS(ret) Slice burrow__mlkem_encapsulate_internal1024(
     const MlkemEncapsulationKey1024 *ek, Alloc *a, const Byte m[32], Slice *ciphertext);
 
+/* Go's testingOnlyRejectionOutcome, passed down instead of set: fn is called
+ * with env and the result of the constant time compare in each Decapsulate. */
+typedef struct MlkemRejectionHook {
+    void (*fn)(void *env, int compare);
+    void *env;
+} MlkemRejectionHook;
+
+/* fips140CAST, the ML-KEM-768 self-test, run directly with hook, which can be
+ * NULL. */
+Error burrow__mlkem_fips140_cast(const MlkemRejectionHook *hook);
+
 #endif /* BURROW_SRC_CRYPTO_MLKEM_INTERNAL_H */

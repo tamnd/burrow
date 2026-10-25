@@ -1,4 +1,4 @@
-/* Derived from Go's src/internal/pkgbits/pkgbits_test.go. Go source: go1.27.1.
+/* Derived from Go's src/internal/pkgbits/pkgbits_test.go. Go source: go1.27.3.
  *
  * Copyright 2024 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -16,7 +16,7 @@
 #define NELEM(x) ((Int)(sizeof(x) / sizeof((x)[0])))
 
 static void TestRoundTrip(TestingT *t) {
-    static const PbVersion versions[] = {PB_V0, PB_V1, PB_V2, PB_V3};
+    static const PbVersion versions[] = {PB_V0, PB_V1, PB_V2, PB_V3, PB_V4, PB_V5};
     for (Int i = 0; i < NELEM(versions); i++) {
         Arena ar;
         arena_init(&ar, NULL, 0);
@@ -50,6 +50,8 @@ _Static_assert(PB_V0 == 0, "V0");
 _Static_assert(PB_V1 == 1, "V1");
 _Static_assert(PB_V2 == 2, "V2");
 _Static_assert(PB_V3 == 3, "V3");
+_Static_assert(PB_V4 == 4, "V4");
+_Static_assert(PB_V5 == 5, "V5");
 
 typedef struct VfPair {
     PbVersion v;
@@ -69,6 +71,8 @@ static void TestVersions(TestingT *t) {
         {PB_V1, PB_FIELD_DERIVED_INFO_NEEDED},
         {PB_V2, PB_FIELD_ALIAS_TYPE_PARAM_NAMES},
         {PB_V3, PB_FIELD_COMPACT_COMP_LITERALS},
+        {PB_V4, PB_FIELD_GENERIC_METHODS},
+        {PB_V5, PB_FIELD_PRESERVE_METHOD_ORDER},
     };
     for (Int i = 0; i < NELEM(has); i++) {
         if (!burrow__pb_version_has(has[i].v, has[i].f))
@@ -87,6 +91,15 @@ static void TestVersions(TestingT *t) {
         {PB_V0, PB_FIELD_COMPACT_COMP_LITERALS},
         {PB_V1, PB_FIELD_COMPACT_COMP_LITERALS},
         {PB_V2, PB_FIELD_COMPACT_COMP_LITERALS},
+        {PB_V0, PB_FIELD_GENERIC_METHODS},
+        {PB_V1, PB_FIELD_GENERIC_METHODS},
+        {PB_V2, PB_FIELD_GENERIC_METHODS},
+        {PB_V3, PB_FIELD_GENERIC_METHODS},
+        {PB_V0, PB_FIELD_PRESERVE_METHOD_ORDER},
+        {PB_V1, PB_FIELD_PRESERVE_METHOD_ORDER},
+        {PB_V2, PB_FIELD_PRESERVE_METHOD_ORDER},
+        {PB_V3, PB_FIELD_PRESERVE_METHOD_ORDER},
+        {PB_V4, PB_FIELD_PRESERVE_METHOD_ORDER},
     };
     for (Int i = 0; i < NELEM(has_not); i++) {
         if (burrow__pb_version_has(has_not[i].v, has_not[i].f))

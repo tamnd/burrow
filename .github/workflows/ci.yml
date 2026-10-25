@@ -708,6 +708,8 @@ jobs:
   # Every declaration in Go's API files mapped to its C name and looked for in
   # the headers. The packages in tools/coverage-done.txt have to be complete,
   # and the rest are reported so the number is a trend rather than a surprise.
+  # docs/cheatsheet.md is made from the same mapping and Go's doc comments, so
+  # it is checked here, where there is a Go tree to read them from.
   coverage-gate:
     name: coverage against go1.27.3
     runs-on: ubuntu-latest
@@ -720,6 +722,8 @@ jobs:
           cache: false
       - name: how much of the standard library exists
         run: tools/burrow-coverage
+      - name: the cheatsheet is up to date
+        run: tools/burrow-cheatsheet --check
 
   # The go/printer gate from the P4 milestone: a gofmt built on burrow and Go's
   # own over the whole of $GOROOT/src, agreeing byte for byte. See

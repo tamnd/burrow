@@ -396,6 +396,33 @@ signal_reset_v(0); /* SIGHUP stays ignored, as in Go */
 
 The signals arrive on a thread the package starts the first time it is used, so the channels are sent to and the contexts are cancelled from that thread. There are three differences from Go. Go's runtime catches every signal from the start, while here a signal nobody has asked for keeps its C default, so `SIGUSR1` sent before `signal_notify` or after `signal_stop` ends the program. The signals the runtime uses for panics, such as `SIGSEGV`, can be passed to `signal_notify` but never arrive. And contexts have no String, so the one from `signal_notify_context` cannot name its signals. On Windows, Ctrl-C and Ctrl-Break arrive as `os_interrupt`, and closing the console, logging off and shutting down arrive as `SIGTERM`.
 
+## Plugins
+
+`burrow/plugin.h` is Go's `plugin`. A plugin here is any shared library, a `.so`, a `.dylib` or a `.dll`, and `plugin_open` loads it with `dlopen`, or `LoadLibraryExW` on Windows. Opening the same file again gives back the same `Plugin`, and a plugin is never closed, as in Go. `plugin_lookup` finds a symbol by its C name and gives its address, which you cast to what you know is there, since a shared library does not say what type its symbols have. Here there is no greeter.so next to the program, so it stops at the first error:
+
+<!-- example: ../examples/os/plugin.c#open -->
+```c
+Error err = BURROW_NO_ERROR;
+Plugin *p = plugin_open(BURROW_S("./greeter.so"), &err);
+if (BURROW_FAILED(err)) {
+    /* plugin.Open("./greeter.so"): realpath failed */
+    printf(BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(err)));
+    return 0;
+}
+PluginSymbol sym = plugin_lookup(p, BURROW_S("greet"), &err);
+if (BURROW_FAILED(err)) {
+    printf(BURROW_STR_FMT "\n", BURROW_STR_ARG(error_text(err)));
+    return 0;
+}
+union {
+    PluginSymbol object;
+    GreetFunc fn;
+} u = {sym};
+u.fn("gopher");
+```
+
+On Linux the loader is reached through weak references, so a program does not need `-ldl` to link. With a glibc older than 2.34, add `-ldl` or `plugin_open` fails.
+
 ## Errors
 
 A failure on a path is an `OsPathError`, which is io/fs's `PathError`, holding the operation, the path and the system's error number as a `SyscallErrno`. Rename, link and symlink fail with an `OsLinkError`, which has both names. The text is Go's:

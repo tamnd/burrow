@@ -52,7 +52,7 @@ If you need to do something blocking per entry, copy what you need out during th
 
 Go's `plugin` package requires Go's dynamic linking and, more importantly, type identity that holds across separately compiled objects. C has neither.
 
-burrow gives you `plugin_open` and `plugin_lookup` backed by `dlopen` and `LoadLibrary`. Type identity checks become descriptor hash checks, which catch a mismatched struct layout but will not catch two structurally identical types that were meant to be distinct. If you rely on `plugin` for type safety rather than for loading code, burrow is weaker than Go and you should know that before you depend on it.
+burrow gives you `plugin_open` and `plugin_lookup` backed by `dlopen` and `LoadLibraryExW`, and a plugin is any shared library. There are no type checks at all. A shared library does not say what type its symbols are, so `plugin_lookup` gives you an address and the cast you put on it is your promise about what is there. If you rely on `plugin` for type safety rather than for loading code, burrow is weaker than Go and you should know that before you depend on it.
 
 ### `weak.Pointer`, `runtime.SetFinalizer`, `runtime.AddCleanup`
 

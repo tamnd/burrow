@@ -1,0 +1,446 @@
+#!/usr/bin/env python3
+# burrow-cheatsheet: docs/cheatsheet.md, every function, function-like macro
+# and variable in burrow's public headers on one line each.
+#
+#     tools/burrow-cheatsheet            write docs/cheatsheet.md
+#     tools/burrow-cheatsheet --check    fail if docs/cheatsheet.md is stale
+#
+# A line is the declaration as the header has it, with the BURROW_ annotations
+# taken out and the white space made single, and then a sentence. Where the
+# function or variable has a Go original, the sentence is Go's synopsis of it:
+# the first sentence of its doc comment, cut where go/doc's firstSentence cuts
+# it. Where it has none, like arena_init or chan_make, it is the first sentence
+# of the comment just above the declaration in the header, if there is one. The
+# Go original is found by the naming rules, read from tools/burrow-coverage, so
+# the two tools always agree on what maps to what.
+#
+# The page is grouped by header, in the order the headers sort, and within a
+# header the declarations come in the order they are declared. A name declared
+# twice, in the branches of an #if, is listed once, the first time. Names that
+# begin with burrow__ or an underscore are burrow's own internals and are left
+# out.
+#
+# WHAT IT DOES NOT DO
+#
+# Go's Synopsis runs the sentence through its doc comment parser. This takes
+# the brackets off a doc link like [Reader] or [io.EOF], which is what that
+# parser prints for one, and otherwise leaves the text alone. A synopsis that
+# isn't a paragraph, like a comment that starts with a code block, is left
+# empty here, as Go leaves it.
+#
+# A macro is listed when it is spelled in lower case and takes arguments, the
+# way http_handle_func is, since that is a function as far as a caller can
+# tell. Types, constants and the other macros aren't listed.
+#
+# It needs Python 3 and GOROOT pointing at the Go tree burrow tracks, or a Go
+# toolchain on PATH, the same as tools/burrow-coverage. The page names the Go
+# version it was made from.
+#
+# Copyright 2026 The burrow Authors. All rights reserved.
+# Use of this source code is governed by a BSD-style licence that can be found
+# in the LICENSE file.
+
+import argparse
+import difflib
+import glob
+import importlib.machinery
+import importlib.util
+import os
+import re
+import sys
+
+PROG = "burrow-cheatsheet"
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+
+
+def load_coverage():
+    # Loading it would otherwise leave a .pyc in tools/__pycache__.
+    sys.dont_write_bytecode = True
+    loader = importlib.machinery.SourceFileLoader("burrow_coverage", os.path.join(HERE, "burrow-coverage"))
+    spec = importlib.util.spec_from_loader("burrow_coverage", loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+# ------------------------------------------------------------ the headers
+
+
+class CDecl:
+    def __init__(self, name, text, comment):
+        self.name = name
+        self.text = text
+        self.comment = comment
+
+
+def read_header(path):
+    """The functions and variables at file scope, each with the comment that
+    ends just above it, if no blank line comes between them."""
+    with open(path) as fh:
+        src = fh.read()
+    out = []
+    i, n = 0, len(src)
+    chunk = []
+    pending = None  # the last comment, while it still counts as just above
+    comment = None  # the comment of the declaration being read
+    newlines = 0
+    depth = 0
+    bol = True
+    while i < n:
+        c = src[i]
+        if src.startswith("/*", i):
+            j = src.find("*/", i + 2)
+            j = n if j < 0 else j + 2
+            if depth == 0:
+                if "".join(chunk).strip():
+                    chunk.append(" ")
+                else:
+                    pending, newlines = src[i:j], 0
+            i = j
+            continue
+        if src.startswith("//", i):
+            j = src.find("\n", i)
+            i = n if j < 0 else j
+            continue
+        if c in "\"'":
+            j = i + 1
+            while j < n and src[j] != c:
+                j += 2 if src[j] == "\\" else 1
+            if depth == 0:
+                chunk.append(src[i : j + 1])
+            i = j + 1
+            bol = False
+            continue
+        if bol and c == "#":
+            # A preprocessor line, with its continuations. It separates a
+            # comment from what follows, and a declaration never spans one.
+            start = i
+            while i < n:
+                j = src.find("\n", i)
+                j = n if j < 0 else j
+                if j > i and src[j - 1] == "\\":
+                    i = j + 1
+                    continue
+                i = j
+                break
+            m = MACRO.match(src[start:i])
+            if m and depth == 0 and not "".join(chunk).strip():
+                out.append(CDecl(m.group(1), "#define %s(%s)" % (m.group(1), ", ".join(x.strip() for x in m.group(2).split(","))), pending))
+            pending = None
+            continue
+        if c == "\n":
+            bol = True
+            newlines += 1
+            if newlines >= 2:
+                pending = None
+            if depth == 0:
+                chunk.append(c)
+            i += 1
+            continue
+        if c in " \t\r\f\v":
+            if depth == 0:
+                chunk.append(c)
+            i += 1
+            continue
+        bol = False
+        if depth:
+            depth += {"{": 1, "}": -1}.get(c, 0)
+            i += 1
+            continue
+        if not "".join(chunk).strip():
+            comment, pending = pending, None
+        if c == "{":
+            text = "".join(chunk)
+            if re.search(r'extern\s*"C"\s*$', text):
+                chunk = []
+                i += 1
+                continue
+            add_decl(out, text, comment)
+            chunk, comment, depth = [], None, 1
+        elif c == ";":
+            add_decl(out, "".join(chunk), comment)
+            chunk, comment = [], None
+        elif c == "}":
+            chunk, comment = [], None
+        else:
+            chunk.append(c)
+        i += 1
+    return out
+
+
+# A function that is a macro, spelled in lower case like the functions are.
+# The upper case ones are burrow's own macros, like BURROW_S, and aren't
+# functions.
+MACRO = re.compile(r"^#\s*define\s+([a-z][a-z0-9_]*)\(\s*([^)]*?)\s*\)")
+
+ANNOTATION = re.compile(r"\bBURROW_(?:OWNS|BORROWS|RETAINS|STATIC|API|NODISCARD|NORETURN|PRINTF|DEPRECATED)\b\s*(\([^()]*\))?")
+
+
+def add_decl(out, text, comment):
+    text = " ".join(ANNOTATION.sub(" ", text).split())
+    if not text or text.startswith("typedef"):
+        return
+    text = re.sub(r"^(?:static\s+)?(?:inline\s+)?", "", text)
+    text = re.sub(r"\(\s+", "(", re.sub(r"\s+\)", ")", text))
+    text = re.sub(r"\s\*\s+(?=\w)", " *", text)
+    if "=" in text:
+        return
+    m = re.match(r"^extern\s+(?!\")(.*?)\b(\w+)\s*(\[[^\]]*\])?$", text)
+    if m and m.group(1).strip():
+        out.append(CDecl(m.group(2), text, comment))
+        return
+    m = re.match(r"^(.*?)\b(\w+)\s*\((.*)\)$", text, re.S)
+    if not m or not m.group(1).strip() or not re.search(r"\w", m.group(1)):
+        return
+    if text.startswith("extern"):
+        return
+    out.append(CDecl(m.group(2), text, comment))
+
+
+# ------------------------------------------------------------ Go's doc comments
+
+
+GO_FUNC = re.compile(r"^func\s+(?:\(\s*(?:\w+\s+)?\*?(\w+)(?:\[[^\]]*\])?\s*\)\s*)?(\w+)\s*[\[(]")
+GO_VAR = re.compile(r"^var\s+(\w+(?:\s*,\s*\w+)*)\b")
+GO_SPEC = re.compile(r"^\t(\w+(?:\s*,\s*\w+)*)\s*(?:=|[\w*\[])")
+DIRECTIVE = re.compile(r"^//(?:go:|line |export |extern )")
+
+
+def go_docs(goroot, pkg, cache):
+    """(receiver type or "", name) to the doc comment, for the funcs, methods
+    and vars of one package."""
+    if pkg in cache:
+        return cache[pkg]
+    docs = {}
+    methods = {}  # name to the receiver types that declare it, doc or not
+    for f in sorted(glob.glob(os.path.join(goroot, "src", pkg, "*.go"))):
+        if f.endswith("_test.go"):
+            continue
+        with open(f, encoding="utf-8") as fh:
+            lines = fh.read().split("\n")
+        doc = []
+        in_var = False
+        in_type = None
+        for line in lines:
+            stripped = line.lstrip("\t")
+            if stripped.startswith("//"):
+                if not DIRECTIVE.match(stripped):
+                    doc.append(stripped[3:] if stripped.startswith("// ") else stripped[2:])
+                continue
+            if in_type is not None:
+                if line.startswith("}"):
+                    in_type = None
+                else:
+                    m = re.match(r"^\t(\w+)", line)
+                    if m and doc:
+                        docs.setdefault((in_type, m.group(1)), "\n".join(doc))
+            elif in_var:
+                if line.startswith(")"):
+                    in_var = False
+                else:
+                    m = GO_SPEC.match(line)
+                    if m and doc:
+                        for name in re.split(r"\s*,\s*", m.group(1)):
+                            docs.setdefault(("", name), "\n".join(doc))
+            elif line.startswith("var ("):
+                in_var = True
+            elif re.match(r"^type \w+(?:\[[^\]]*\])? (?:struct|interface) \{$", line):
+                in_type = re.match(r"^type (\w+)", line).group(1)
+            else:
+                m = GO_FUNC.match(line)
+                if m and m.group(1):
+                    methods.setdefault(m.group(2), set()).add(m.group(1))
+                if m and doc:
+                    docs.setdefault((m.group(1) or "", m.group(2)), "\n".join(doc))
+                m = GO_VAR.match(line)
+                if m and doc:
+                    for name in re.split(r"\s*,\s*", m.group(1)):
+                        docs.setdefault(("", name), "\n".join(doc))
+            doc = []
+    cache[pkg] = (docs, methods)
+    return docs, methods
+
+
+def first_sentence(s):
+    # Go's firstSentence from go/doc/synopsis.go: the sentence ends after the
+    # first period followed by space and not preceded by exactly one uppercase
+    # letter.
+    ppp = pp = p = ""
+    for i, q in enumerate(s):
+        if q in "\n\r\t":
+            q = " "
+        if q == " " and p == "." and (not pp.isupper() or ppp.isupper()):
+            return s[:i]
+        if p in ("。", "．"):
+            return s[:i]
+        ppp, pp, p = pp, p, q
+    return s
+
+
+def synopsis(text):
+    para = []
+    for line in text.split("\n"):
+        if not line.strip():
+            if para:
+                break
+            continue
+        if not para and (line.startswith((" ", "\t")) or re.match(r"^(?:[-*+•]|\d+[.)])\s", line)):
+            return ""
+        para.append(line)
+    s = first_sentence("\n".join(para))
+    if s.lower().startswith(("copyright", "all rights", "author")):
+        return ""
+    s = re.sub(r"(^|[\s(,;:\"'])\[(\*?[A-Za-z_][\w.]*)\]", r"\1\2", s)
+    return " ".join(s.split())
+
+
+def c_synopsis(comment):
+    body = comment[2:-2] if comment.endswith("*/") else comment[2:]
+    lines = []
+    for line in body.split("\n"):
+        line = re.sub(r"^\s*\*(?!/)\s?", "", line)
+        lines.append(line.strip())
+    text = "\n".join(lines).strip()
+    if text.startswith("-") or re.match(r"^[A-Z ]+$", text.split("\n")[0]):
+        return ""
+    para = text.split("\n\n")[0]
+    return " ".join(first_sentence(para).split())
+
+
+def escape(s):
+    # An underscore inside a word, like the one in tar_reader_next, is never
+    # emphasis on GitHub, so only the others are escaped.
+    s = re.sub(r"([\\`*<>\[\]])", r"\\\1", s)
+    return re.sub(r"(?<![A-Za-z0-9])_|_(?![A-Za-z0-9])", r"\\_", s)
+
+
+# ------------------------------------------------------------ the page
+
+
+def go_version(goroot):
+    try:
+        with open(os.path.join(goroot, "VERSION")) as fh:
+            return fh.readline().strip()
+    except OSError:
+        raise SystemExit("%s: no VERSION file in %s" % (PROG, goroot))
+
+
+def build(cov, goroot):
+    decls = cov.read_api(os.path.join(goroot, "api"), cov.TARGETS)
+    origin = {}
+    for pkg in sorted(decls):
+        for d in decls[pkg]:
+            if not re.match(r"^(?:func |method |var |type \w+\S* (?:struct|interface), \w)", d.text):
+                continue
+            cov.map_decl(d)
+            if d.owner is not None:
+                # A field or an interface method, which C may have as a
+                # function: a getter, or the method called through the value.
+                m = re.match(r"^type (\w+)\S* (?:struct|interface), (\w+)", d.key)
+                if m and d.alternative:
+                    origin.setdefault(d.alternative, (pkg, m.group(1), m.group(2), False))
+                continue
+            if d.cname is None:
+                continue
+            m = re.match(r"^method \(\*?(\w+)", d.key)
+            recv = m.group(1) if m else ""
+            name = re.match(r"^(?:func|var) (\w+)$", d.key)
+            name = name.group(1) if name else d.key.rsplit(" ", 1)[1]
+            origin.setdefault(d.cname, (pkg, recv, name, bool(recv)))
+
+    cache = {}
+    sections = []
+    for path in cov.header_files(None):
+        rel = os.path.relpath(path, os.path.join(ROOT, "include")).replace(os.sep, "/")
+        seen = set()
+        rows = []
+        pkgs = set()
+        for c in read_header(path):
+            if c.name in seen or c.name.startswith(("burrow_", "_")) or "__" in c.name:
+                continue
+            seen.add(c.name)
+            text = ""
+            o = origin.get(c.name)
+            if o is not None:
+                docs, methods = go_docs(goroot, o[0], cache)
+                doc = docs.get((o[1], o[2]))
+                have = methods.get(o[2], set())
+                if doc is None and o[3] and o[1] not in have and len(have) == 1:
+                    # A method Go promotes from an embedded type, like T.Fail,
+                    # which is common.Fail. Only when the type doesn't declare
+                    # it itself and one type in the package does.
+                    doc = docs.get((next(iter(have)), o[2]))
+                if doc is not None:
+                    text = synopsis(doc)
+                    if text:
+                        pkgs.add(o[0])
+            if not text and c.comment:
+                text = c_synopsis(c.comment)
+            rows.append("- `%s`%s" % (c.text, " – " + escape(text) if text else ""))
+        if rows:
+            sections.append((rel, sorted(pkgs), rows))
+
+    count = sum(len(r) for _, _, r in sections)
+    out = [
+        "# Cheatsheet",
+        "",
+        "Every function, function-like macro and variable in burrow's public headers, %d of them, one line each, "
+        "grouped by header. "
+        "Each line is the declaration, without its lifetime annotations, and a sentence about it. "
+        "Where the function or variable has a Go original, the sentence is the first one of Go's doc comment for it. "
+        "Where it has none, the sentence comes from the comment above it in the header." % count,
+        "",
+        "This page is generated by `tools/burrow-cheatsheet` from the headers and from Go's sources at %s, "
+        "and CI fails if it falls behind them, so edit those and run the tool rather than editing this." % go_version(goroot),
+        "",
+    ]
+    for rel, pkgs, rows in sections:
+        out.append("## %s" % rel)
+        out.append("")
+        if pkgs:
+            names = ", ".join("`%s`" % p for p in pkgs)
+            out.append(
+                "The sentences taken from Go are reproduced from the doc comments of Go's %s package%s, "
+                "Copyright 2009 The Go Authors, BSD-3-Clause." % (names, "s" if len(pkgs) > 1 else "")
+            )
+            out.append("")
+        out.extend(rows)
+        out.append("")
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
+def main():
+    p = argparse.ArgumentParser(prog=PROG, description="docs/cheatsheet.md from the headers and Go's doc comments.")
+    p.add_argument("--check", action="store_true", help="fail if the file is not what the tool would write")
+    p.add_argument("-o", "--output", default=os.path.join(ROOT, "docs", "cheatsheet.md"), help="the file to write or check")
+    args = p.parse_args()
+
+    cov = load_coverage()
+    goroot = cov.goroot()
+    page = build(cov, goroot)
+    if args.check:
+        try:
+            with open(args.output, encoding="utf-8") as fh:
+                have = fh.read()
+        except OSError:
+            have = ""
+        if have != page:
+            diff = list(difflib.unified_diff(have.splitlines(), page.splitlines(), "committed", "generated", lineterm="", n=0))
+            for line in diff[:40]:
+                print(line)
+            print(
+                "%s: %s is out of date. Run tools/burrow-cheatsheet with GOROOT at %s and commit the result."
+                % (PROG, os.path.relpath(args.output), go_version(goroot)),
+                file=sys.stderr,
+            )
+            return 1
+        return 0
+    with open(args.output, "w", encoding="utf-8") as fh:
+        fh.write(page)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

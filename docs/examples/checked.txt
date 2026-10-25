@@ -65,3 +65,4 @@ docs/guides/trace.md
 docs/tour.md
 docs/guides/from-go.md
 docs/guides/porting.md
+docs/guides/from-c.md

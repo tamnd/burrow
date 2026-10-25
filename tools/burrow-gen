@@ -195,6 +195,7 @@
 # in the LICENSE file.
 
 import argparse
+import concurrent.futures
 import ctypes
 import glob
 import hashlib
@@ -1245,26 +1246,21 @@ def doc_run(root, cc, sanitize):
             return 0, ["the amalgamation does not compile:\n" + r.stderr]
         warn = ["-Wall", "-Wextra", "-Werror", "-Wno-unused-parameter"]
         problems = []
-        work = os.path.join(tmp, "work")
-        for ex in examples:
-            # Each program starts in an empty directory of its own, so one that
-            # makes files can make them without cleaning up after itself.
-            shutil.rmtree(work, ignore_errors=True)
-            os.makedirs(work)
+
+        def build(i, ex):
             rel = os.path.relpath(ex, root)
-            exe = os.path.join(tmp, "ex")
+            exe = os.path.join(tmp, "ex%d" % i)
             srcs = [ex]
             with open(ex) as f:
                 embeds = EMBED_MACRO.search(f.read())
             if embeds:
                 # A program with BURROW_EMBED_ in it gets its variables from
                 # burrow-gen embed, the way a build that uses it would.
-                gen = os.path.join(tmp, "ex_embed.c")
+                gen = os.path.join(tmp, "ex%d_embed.c" % i)
                 try:
                     run_embed(argparse.Namespace(source=ex, output=gen, dir=None, mode="auto", deps=None, include=None))
                 except Error as e:
-                    problems.append("%s: burrow-gen embed failed: %s" % (rel, e))
-                    continue
+                    return None, "%s: burrow-gen embed failed: %s" % (rel, e)
                 srcs.append(gen)
             r = subprocess.run(
                 [cc] + flags + warn + ["-I" + inc, "-I" + tmp] + srcs + [obj, "-lm", "-o", exe],
@@ -1272,33 +1268,57 @@ def doc_run(root, cc, sanitize):
                 text=True,
             )
             if r.returncode:
-                problems.append("%s does not compile:\n%s" % (rel, r.stderr.rstrip()))
-                continue
-            try:
-                r = subprocess.run([exe], capture_output=True, text=True, timeout=60, cwd=work)
-            except subprocess.TimeoutExpired:
-                problems.append("%s did not finish in a minute" % rel)
-                continue
-            if r.returncode:
-                problems.append("%s exited %d:\n%s" % (rel, r.returncode, (r.stdout + r.stderr).rstrip()))
-                continue
-            with open(ex) as f:
-                m = DOC_OUTPUT.search(f.read())
-            if m:
-                # Both sides are trimmed, as go test does with an example's
-                # output, so a program that starts with a blank line matches.
-                want = [l.rstrip() for l in m.group(1).strip().split("\n")]
-                got = [l.rstrip() for l in r.stdout.strip().split("\n")] if r.stdout.strip() else []
-                if want == [""]:
-                    want = []
-                # A test's run time, as testing prints it, is whatever the
-                # machine took, so "(0.00s)" in the comment matches any.
-                want = [TEST_ELAPSED.sub("(TIME)", l) for l in want]
-                got = [TEST_ELAPSED.sub("(TIME)", l) for l in got]
-                if got != want:
-                    problems.append(
-                        "%s printed something else.\nwant:\n%s\ngot:\n%s" % (rel, "\n".join(want), "\n".join(got))
-                    )
+                return None, "%s does not compile:\n%s" % (rel, r.stderr.rstrip())
+            return exe, None
+
+        # The programs compile side by side, which is where the time goes, but
+        # run one at a time, since some of them measure time or sleep and a
+        # loaded machine would make those flaky. Builds stay a few programs
+        # ahead of the one running, so the binaries never pile up on disk.
+        jobs = os.cpu_count() or 1
+        with concurrent.futures.ThreadPoolExecutor(max_workers=jobs) as pool:
+            built = {}
+            work = os.path.join(tmp, "work")
+            for i, ex in enumerate(examples):
+                for j in range(i, min(i + 2 * jobs, len(examples))):
+                    if j not in built:
+                        built[j] = pool.submit(build, j, examples[j])
+                rel = os.path.relpath(ex, root)
+                exe, problem = built.pop(i).result()
+                if problem is not None:
+                    problems.append(problem)
+                    continue
+                # Each program starts in an empty directory of its own, so one
+                # that makes files can make them without cleaning up after itself.
+                shutil.rmtree(work, ignore_errors=True)
+                os.makedirs(work)
+                try:
+                    r = subprocess.run([exe], capture_output=True, text=True, timeout=60, cwd=work)
+                except subprocess.TimeoutExpired:
+                    problems.append("%s did not finish in a minute" % rel)
+                    continue
+                finally:
+                    os.remove(exe)
+                if r.returncode:
+                    problems.append("%s exited %d:\n%s" % (rel, r.returncode, (r.stdout + r.stderr).rstrip()))
+                    continue
+                with open(ex) as f:
+                    m = DOC_OUTPUT.search(f.read())
+                if m:
+                    # Both sides are trimmed, as go test does with an example's
+                    # output, so a program that starts with a blank line matches.
+                    want = [l.rstrip() for l in m.group(1).strip().split("\n")]
+                    got = [l.rstrip() for l in r.stdout.strip().split("\n")] if r.stdout.strip() else []
+                    if want == [""]:
+                        want = []
+                    # A test's run time, as testing prints it, is whatever the
+                    # machine took, so "(0.00s)" in the comment matches any.
+                    want = [TEST_ELAPSED.sub("(TIME)", l) for l in want]
+                    got = [TEST_ELAPSED.sub("(TIME)", l) for l in got]
+                    if got != want:
+                        problems.append(
+                            "%s printed something else.\nwant:\n%s\ngot:\n%s" % (rel, "\n".join(want), "\n".join(got))
+                        )
         return len(examples), problems
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

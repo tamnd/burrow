@@ -39,6 +39,15 @@ static Error port(Str s) {
     return BURROW_NO_ERROR;
 }
 
+static Error save(Str path, Slice data) {
+    // doc: write-file
+    Error err = os_write_file(path, data, 0644);
+    if (BURROW_FAILED(err))
+        return err;
+    // doc: end
+    return BURROW_NO_ERROR;
+}
+
 static void port_or_zero(Str s) {
     // doc: call-null
     Int n = strconv_atoi(s, NULL);
@@ -54,6 +63,8 @@ int main(void) {
     printf("failed: %.*s\n", (int)msg.len, (const char *)msg.p);
     port_or_zero(BURROW_S("http"));
     printf("digits %lld\n", (long long)parse_digits(BURROW_S("42"), NULL));
+    err = save(BURROW_S("hello.txt"), BURROW_B("hello\n"));
+    printf("saved: %s\n", BURROW_OK(err) ? "yes" : "no");
     return 0;
 }
 
@@ -62,4 +73,5 @@ port 8080
 failed: strconv.Atoi: parsing "http": invalid syntax
 port 0
 digits 42
+saved: yes
 */

@@ -69,19 +69,19 @@ static Error plg_error(const Str *parts, int n) {
     return e;
 }
 
-Plugin *plugin_open(Str name, Error *err) {
+Plugin *plugin_open(Str path, Error *err) {
     BURROW_OUT(err, BURROW_NO_ERROR);
     Alloc *heap = heap_allocator();
-    char *rel = str_to_cstr(heap, name);
+    char *rel = str_to_cstr(heap, path);
     if (rel == NULL) {
         BURROW_OUT(err, burrow_err_out_of_memory);
         return NULL;
     }
     char full[PLG_PATH_CAP];
     bool found = pal_dl_realpath(rel, full, sizeof full, NULL);
-    mem_free(heap, rel, (size_t)name.len + 1, 1);
+    mem_free(heap, rel, (size_t)path.len + 1, 1);
     if (!found) {
-        Str parts[3] = {BURROW_S("plugin.Open(\""), name,
+        Str parts[3] = {BURROW_S("plugin.Open(\""), path,
                         BURROW_S("\"): realpath failed")};
         BURROW_OUT(err, plg_error(parts, 3));
         return NULL;
@@ -104,7 +104,7 @@ Plugin *plugin_open(Str name, Error *err) {
     char msg[512];
     int64_t h = pal_dl_open(full, msg, sizeof msg);
     if (h == 0) {
-        Str parts[4] = {BURROW_S("plugin.Open(\""), name, BURROW_S("\"): "),
+        Str parts[4] = {BURROW_S("plugin.Open(\""), path, BURROW_S("\"): "),
                         str_from_cstr(msg)};
         BURROW_OUT(err, plg_error(parts, 4));
         return NULL;

@@ -382,7 +382,7 @@ Error quick_check_equal_error_as_error(const QuickCheckEqualError *s, Alloc *a) 
 
 /* ------------------------------------------------------------------ Config */
 
-static const QuickConfig default_config;
+static const QuickConfig default_config = {0};
 
 /* getRand returns the *rand.Rand to use for a given Config. NULL when a runs
  * out. */

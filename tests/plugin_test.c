@@ -138,7 +138,7 @@ static Str other_spelling(Alloc *a, Str path) {
         i = j;
 #endif
     Byte *p = (Byte *)mem_alloc(a, (size_t)path.len + 2, 1);
-    if (p == NULL || i < 0)
+    if (p == NULL || i < 0 || i >= path.len)
         return path;
     memcpy(p, path.p, (size_t)i + 1);
     p[i + 1] = '.';

@@ -171,7 +171,7 @@ jobs:
         run: |
           cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
           cmake --build build --config Release
-          ctest --test-dir build -C Release --output-on-failure
+          ctest --test-dir build -C Release --output-on-failure --timeout 600
 
       # The build runs four compilers at once, which is about as many cores as
       # the hosted runners have. The tests still run one binary at a time.

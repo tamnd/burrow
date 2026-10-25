@@ -294,7 +294,17 @@ if(BURROW_BUILD_TESTS)
             target_compile_options(${test_name} PRIVATE /utf-8)
             target_compile_definitions(${test_name} PRIVATE _CRT_SECURE_NO_WARNINGS)
         endif()
-        add_test(NAME ${test_name} COMMAND ${test_name})
+        # A test that hangs gets stopped by its own -test.timeout a minute
+        # before ctest's --timeout in CI would kill it, so the log names the
+        # test that was running and has every goroutine's stack, where ctest
+        # alone prints nothing.
+        # testing_test checks that a test has no deadline when no timeout is
+        # given, so it runs without one.
+        if(test_name STREQUAL "testing_test")
+            add_test(NAME ${test_name} COMMAND ${test_name})
+        else()
+            add_test(NAME ${test_name} COMMAND ${test_name} -test.timeout=540s)
+        endif()
     endforeach()
 
     # embed_test's variables are in a file burrow-gen embed writes, and the test

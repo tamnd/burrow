@@ -64,3 +64,4 @@ docs/guides/reflect.md
 docs/guides/trace.md
 docs/tour.md
 docs/guides/from-go.md
+docs/guides/porting.md

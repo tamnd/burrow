@@ -147,3 +147,4 @@ runtime/metrics
 index/suffixarray
 plugin
 log/syslog
+net/textproto

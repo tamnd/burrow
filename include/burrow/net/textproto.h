@@ -19,8 +19,8 @@
  * the call is given. An arena per message is the easy way to hold it. The
  * reader and writer themselves come from the allocator they were made with.
  *
- * Go's Dial needs the net package, which is not ported yet. textproto_new_conn
- * takes any IoReadWriteCloser in the meantime.
+ * textproto_dial dials with net_dial, and textproto_new_conn takes any
+ * IoReadWriteCloser.
  *
  * Copyright 2010 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -39,6 +39,7 @@
 #include "burrow/io.h"
 #include "burrow/map.h"
 #include "burrow/mem.h"
+#include "burrow/net.h"
 #include "burrow/own.h"
 #include "burrow/slice.h"
 #include "burrow/sync.h"
@@ -337,17 +338,32 @@ typedef struct TextprotoConn {
     TextprotoPipeline pipeline;
     IoReadWriteCloser conn;
     Alloc *a;
+    /* Not in Go: the connection textproto_dial made, which conn reads and
+     * writes through and textproto_conn_free gives back. Zero for a Conn from
+     * textproto_new_conn. */
+    NetConn dialed;
 } TextprotoConn;
 
 /* textproto.NewConn. The Conn and its buffered reader and writer come from a,
  * and NULL when a says no. */
 BURROW_OWNS(ret) TextprotoConn *textproto_new_conn(Alloc *a, IoReadWriteCloser conn);
 
+/* Dial connects to the given address on the given network using net_dial
+ * and then returns a new Conn for the connection.
+ *
+ * Not in Go: the Conn and the connection both come from a, and
+ * textproto_conn_free gives back both. */
+BURROW_OWNS(ret) TextprotoConn *textproto_dial(Alloc *a, Str network, Str addr,
+                                               Error *err);
+
 /* Conn.Close, which closes the connection. It does not free c. */
 BURROW_STATIC(ret) Error textproto_conn_close(TextprotoConn *c);
 
 /* Gives back c and its buffers without closing the connection. NULL is
- * fine. */
+ * fine.
+ *
+ * Not in Go: a Conn from textproto_dial also closes and gives back the
+ * connection it made. */
 void textproto_conn_free(TextprotoConn *c);
 
 /* Conn.Cmd. Waits for its turn, sends the formatted line, and returns the id

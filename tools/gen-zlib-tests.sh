@@ -1,9 +1,10 @@
 #!/bin/sh
 # Regenerates tests/zlib_test_gen.h: what Go's compress/zlib writer makes of a
 # set of inputs at every level, with no dictionary, an empty one and a short
-# one, for tests/zlib_test.c to match byte for byte. Each vector also says
-# whether Go's reader gets the input back from it, which for a few it does not:
-# see dict_end in src/compress/deflate.c.
+# one, for tests/zlib_test.c to match byte for byte. Go 1.27.1 sent a short
+# dictionary out as data at levels 7 to 9 when the block after it was stored,
+# so its reader did not get the input back (go.dev/issue/80538). go1.27.2
+# fixed that, and the generator stops if any vector does not read back.
 #
 # The DEFLATE inside is compress/flate's, whose output can differ between
 # amd64 and arm64 (tools/gen-flate-writer-tests.sh says why), so on another
@@ -115,7 +116,6 @@ typedef struct ZlibVector {
     int dict;
     long long len;
     const char *sha256;
-    bool go_bug; /* Go's output does not read back */
 } ZlibVector;
 
 static const ZlibVector zlib_vectors[] = {
@@ -140,7 +140,10 @@ static const ZlibVector zlib_vectors[] = {
 					got, err := io.ReadAll(zr)
 					ok = err == nil && bytes.Equal(got, input(in))
 				}
-				fmt.Fprintf(&w, "    {%d, %d, %d, %d, \"%x\", %t},\n", in, level, d, buf.Len(), sha256.Sum256(buf.Bytes()), !ok)
+				if !ok {
+					panic(fmt.Sprintf("input %d, level %d, dict %d does not read back", in, level, d))
+				}
+				fmt.Fprintf(&w, "    {%d, %d, %d, %d, \"%x\"},\n", in, level, d, buf.Len(), sha256.Sum256(buf.Bytes()))
 			}
 		}
 	}

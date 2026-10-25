@@ -1215,8 +1215,9 @@ static void write_line(TestingT *c, Str b, bool err_begin, bool err_end) {
         b = str_from_bytes(b.p, b.len - 1);
         tail = BURROW_S("\n");
     }
+    /* Escape the framing marker. */
     for (Int i = 0; i < b.len; i++) {
-        if (is_mark(b.p[i]))
+        if (json && is_mark(b.p[i]))
             buf_str(&line, BURROW_S("\x1b"));
         buf_append(&line, &b.p[i], 1);
     }

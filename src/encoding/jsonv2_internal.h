@@ -50,6 +50,12 @@ Error burrow__jsonv2_semantic_new(const Jsonv2SemanticError *e);
 /* The SemanticError inside err, when err is one, or NULL. */
 const Jsonv2SemanticError *burrow__jsonv2_as_semantic(Error err);
 
+/* internal.ValueError for a float: err with fv, of the float type t, beside
+ * it, in the error arena. burrow__jsonv2_as_value_error finds one in err's
+ * chain and gives back t and the value. */
+Error burrow__jsonv2_value_error_float(const Type *t, double fv, Error err);
+bool burrow__jsonv2_as_value_error(Error err, const Type **t, double *fv);
+
 /* errors.New in the error arena, for messages built at run time. */
 Error burrow__jsonv2_errorf(Str msg);
 

@@ -1101,10 +1101,11 @@ static Error jv_marshal_float(JsontextEncoder *e, const Type *t, void *p,
             Str v = burrow__json_isnan(fv) ? JV_LIT("NaN")
                     : fv > 0               ? JV_LIT("+Inf")
                                            : JV_LIT("-Inf");
-            return burrow__jsonv2_marshal_error_before(
-                e, t,
-                burrow__jsonv2_errorf_in(error_allocator(), "unsupported value: %s",
-                                         v));
+            Error err =
+                burrow__jsonv2_errorf_in(error_allocator(), "unsupported value: %s", v);
+            if (JV_GET(mo, JSONFLAG_REPORT_ERRORS_WITH_LEGACY_SEMANTICS))
+                err = burrow__jsonv2_value_error_float(t, fv, err);
+            return burrow__jsonv2_marshal_error_before(e, t, err);
         }
         return jsontext_encoder_write_token(e, jsontext_float(fv));
     }
@@ -1189,9 +1190,11 @@ static Error jv_unmarshal_float(JsontextDecoder *d, const Type *t, void *p,
     number: {
         Error perr = BURROW_NO_ERROR;
         double fv = strconv_parse_float(s, bits, &perr);
-        jv_set_float(t, p, fv);
-        if (BURROW_FAILED(perr))
+        if (BURROW_FAILED(perr)) {
             r = burrow__jsonv2_unmarshal_error_after_value(d, t, jv_unwrap(perr));
+            goto done;
+        }
+        jv_set_float(t, p, fv);
         goto done;
     }
     default:
@@ -2734,6 +2737,8 @@ static Error jv_unmarshal_any_value(JsontextDecoder *d, JsontextOptions *uo, Any
         }
         Error perr = BURROW_NO_ERROR;
         double fv = strconv_parse_float(str_from_bytes(val.p, val.len), 64, &perr);
+        if (BURROW_FAILED(perr))
+            fv = 0.0;
         if (!jv_box(d, TYPE_FLOAT64, &fv, out))
             return burrow_err_out_of_memory;
         if (BURROW_FAILED(perr))

@@ -62,3 +62,4 @@ docs/guides/sql-driver.md
 docs/guides/sql.md
 docs/guides/reflect.md
 docs/guides/trace.md
+docs/tour.md

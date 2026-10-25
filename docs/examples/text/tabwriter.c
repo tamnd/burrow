@@ -1,15 +1,4 @@
-#include <stdio.h>
-
 #include "burrow/burrow.h"
-
-/* Standard output as an IoWriter, until os.Stdout arrives. */
-static Int stdout_write(void *self, Slice p, Error *err) {
-    (void)self;
-    (void)err;
-    return (Int)fwrite(p.p, 1, (size_t)p.len, stdout);
-}
-
-static const IoWriterVT stdout_vt = {NULL, stdout_write};
 
 static void table(Alloc *a, IoWriter out) {
     // doc: table
@@ -54,7 +43,7 @@ int main(void) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
-    IoWriter out = {&stdout_vt, NULL};
+    IoWriter out = os_file_as_io_writer(os_stdout);
     table(a, out);
     right(a, out);
     elastic(a, out);

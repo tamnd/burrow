@@ -215,3 +215,34 @@ The default slog logger, which `slog_info_v` and the other functions without `lo
 `slog_new_log_logger` goes the other way for a single logger. It makes a `LogLogger` whose lines become records at a level you choose, for code that only knows how to write to a `LogLogger`.
 
 With `add_source` set, a handler writes the file and line of the call, which the `_v` macros pass along from `__FILE__` and `__LINE__`. The plain functions under them, which take a `Slice` of `Any`, have only what `runtime_caller` can find, and that doesn't include file names yet.
+
+## The system log
+
+`burrow/log/syslog.h` is Go's `log/syslog`. `syslog_dial` connects to a syslog server over the network you name, and `syslog_new` finds the local daemon on a Unix socket. The priority combines a facility and a severity, and each message goes out with it, a timestamp, the host name, the tag and the process ID. Here the server is a UDP socket in the same program:
+
+<!-- example: ../examples/log/syslog.c#dial -->
+```c
+SyslogWriter *w = syslog_dial(a, BURROW_S("udp"), addr,
+                              SYSLOG_LOG_WARNING | SYSLOG_LOG_DAEMON,
+                              BURROW_S("demotag"), &err);
+if (BURROW_FAILED(err))
+    log_fatal_v(err);
+IoWriter out = syslog_writer_as_io_writer(w);
+fmt_fprintf_v(out, "This is a daemon warning with demotag.");
+err = syslog_writer_emerg(
+    w, BURROW_S("And this is a daemon emergency with demotag."));
+if (BURROW_FAILED(err))
+    log_fatal_v(err);
+syslog_writer_free(w);
+```
+
+The server gets this, less the timestamp, host name, tag and pid in the middle of each line:
+
+```text
+<28> This is a daemon warning with demotag.
+<24> And this is a daemon emergency with demotag.
+```
+
+`syslog_writer_emerg` and the other severity functions keep the facility from the dial and use their own severity, which is why the second line is 24, `SYSLOG_LOG_DAEMON` with `SYSLOG_LOG_EMERG`. When a write fails, the writer connects again and tries once more. `syslog_new_logger` gives a `LogLogger` that writes to the local daemon, and `syslog_logger_free` frees it along with its writer.
+
+The package builds everywhere, unlike Go's, which leaves it out on Windows and Plan 9. Where nothing listens on the usual Unix sockets, which includes Windows and recent macOS, `syslog_new` fails with "Unix syslog delivery error".

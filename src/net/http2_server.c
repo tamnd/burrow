@@ -2186,8 +2186,8 @@ static HttpRequest *h2s_new_writer_and_request(h2s_Conn *sc, h2s_Stream *st,
     req->method = method;
     req->url = u;
     req->remote_addr = str_clone(ra, sc->remote_addr);
-    if (sc->has_tls_state && str_eq(scheme, BURROW_S("https")))
-        req->tls = &sc->tls_state; /* nil if not scheme https */
+    if (sc->has_tls_state)
+        req->tls = &sc->tls_state;
     req->header = header;
     req->request_uri = request_uri;
     req->proto = BURROW_S("HTTP/2.0");

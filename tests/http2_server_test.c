@@ -17,6 +17,10 @@
  * TestServer_HeaderTableSizeDuringWrite came with go1.27.2 (GO-2026-6617, CL
  * 847313).
  *
+ * TestServer_Request_TLS came with go1.27.3. Go's tester talks TLS unless the
+ * server's Protocols include UnencryptedHTTP2, and so does this one when a
+ * test gives it Protocols. Without them it still uses h2c, as above.
+ *
  * The PING at the end of TestServer_Send_RstStream_After_Bogus_WindowUpdate,
  * and the handler writes in TestServerSettingsFlowControlUpdateBeyondLimit and
  * TestServerSettingsFlowControlUpdateWithinLimit, came with go1.27.2
@@ -30,12 +34,15 @@
 #include "check.h"
 
 #include "../src/net/http2.h"
+#include "../src/net/http_internal.h"
 #include "../src/xnet/hpack.h"
 
 #include "burrow/burrow.h"
 #include "burrow/bytes.h"
 #include "burrow/chan.h"
 #include "burrow/context.h"
+#include "burrow/crypto/tls.h"
+#include "burrow/fmt.h"
 #include "burrow/io.h"
 #include "burrow/log.h"
 #include "burrow/map.h"
@@ -179,6 +186,16 @@ typedef struct H2tTester {
     bool wfailed;
     bool wbusy; /* a chunk of wbuf is being written to cc */
     SyncWaitGroup wwg;
+    /* Not in Go: what an encrypted tester needs. The certificate is made in
+     * tls_ar. ctls is the client's end, which cc is when it isn't NULL. The
+     * server frees its own end. */
+    Arena tls_ar;
+    bool has_tls_ar;
+    TlsCertificate cert;
+    Str next_protos[1];
+    TlsConfig srv_tls;
+    TlsConfig cli_tls;
+    TlsConn *ctls;
 } H2tTester;
 
 static Int h2t_out_write(void *self, Slice p, Error *err) {
@@ -242,13 +259,55 @@ static void h2t_serve_job(void *env) {
 
 /* What newServerTester's options set on the server. h2 is its HTTP/2 config,
  * which can be NULL and has to last until h2t_close. The server logs to log
- * when it isn't NULL, as Go's tester logs to serverLogBuf. */
+ * when it isn't NULL, as Go's tester logs to serverLogBuf. protocols, when it
+ * isn't NULL, is the server's Protocols, and the tester talks TLS to it unless
+ * they include UnencryptedHTTP2, as Go's does. */
 typedef struct H2tServerOpts {
     const HttpHTTP2Config *h2;
     Int max_header_bytes;
     Duration idle_timeout;
     BytesBuffer *log;
+    const HttpProtocols *protocols;
 } H2tServerOpts;
+
+static Slice h2t_bytes_of(Str s) {
+    return slice_from((void *)(uintptr_t)s.p, s.len, s.len, TYPE_BYTE);
+}
+
+/* Not in Go: the TLS ends of the tester's pipe, which Go makes with
+ * tls.Client and tls.Server in newServerTester. The server's end goes to the
+ * listener. */
+static bool h2t_start_tls(H2tTester *st) {
+    arena_init(&st->tls_ar, NULL, 0);
+    st->has_tls_ar = true;
+    Alloc *ta = arena_allocator(&st->tls_ar);
+    Error err = BURROW_NO_ERROR;
+    st->cert =
+        tls_x509_key_pair(ta, h2t_bytes_of(burrow__http_testcert_localhost_cert),
+                          h2t_bytes_of(burrow__http_testcert_localhost_key), &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_error_v(st->t, err);
+        return false;
+    }
+    st->next_protos[0] = BURROW_S("h2");
+    Slice next_protos = slice_from(st->next_protos, 1, 1, TYPE_STRING);
+    st->srv_tls.certificates = slice_from(&st->cert, 1, 1, TYPE_TLS_CERTIFICATE);
+    st->srv_tls.insecure_skip_verify = true;
+    st->srv_tls.next_protos = next_protos;
+    st->srv.tls_config = &st->srv_tls;
+    st->cli_tls.insecure_skip_verify = true;
+    st->cli_tls.next_protos = next_protos;
+    NetConn scw = {&h2t_sc_vt, &st->scw};
+    TlsConn *stls = tls_server(st->a, scw, &st->srv_tls);
+    st->ctls = tls_client(st->a, st->cc, &st->cli_tls);
+    if (stls == NULL || st->ctls == NULL) {
+        tls_conn_free(stls);
+        testing_t_errorf_v(st->t, "no memory for the TLS conns");
+        return false;
+    }
+    st->ol.conn = tls_conn_as_net_conn(stls);
+    return true;
+}
 
 /* newServerTester, with the options o sets when it isn't NULL. The server's
  * log goes nowhere, as optQuiet has it. */
@@ -258,8 +317,12 @@ static bool h2t_start_server(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *
     st->t = t;
     st->a = heap_allocator();
     st->hbuf = BYTES_BUFFER(st->a);
-    http_protocols_set_http1(&st->protos, true);
-    http_protocols_set_unencrypted_http2(&st->protos, true);
+    if (o != NULL && o->protocols != NULL) {
+        st->protos = *o->protocols;
+    } else {
+        http_protocols_set_http1(&st->protos, true);
+        http_protocols_set_unencrypted_http2(&st->protos, true);
+    }
     st->srv.protocols = &st->protos;
     if (o != NULL) {
         st->srv.http2 = o->h2;
@@ -280,7 +343,17 @@ static bool h2t_start_server(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *
     st->scw.conn = st->sc;
     st->ol.conn.vt = &h2t_sc_vt;
     st->ol.conn.data = &st->scw;
+    if (!http_protocols_unencrypted_http2(st->protos) && !h2t_start_tls(st))
+        return false;
     (void)sync_wait_group_go(&st->wg, BURROW_FN(Func, h2t_serve_job, st));
+    if (st->ctls != NULL) {
+        Error herr = tls_conn_handshake(st->ctls);
+        st->cc = tls_conn_as_net_conn(st->ctls);
+        if (BURROW_FAILED(herr)) {
+            testing_t_errorf_v(t, "client TLS handshake: %v", herr);
+            return false;
+        }
+    }
     st->wcond = SYNC_COND(sync_mutex_locker(&st->wmu));
     st->wbuf = BYTES_BUFFER(st->a);
     if (!sync_wait_group_go(&st->wwg, BURROW_FN(Func, h2t_out_job, st))) {
@@ -307,7 +380,7 @@ static bool h2t_start_server(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *
 
 static bool h2t_start_config(H2tTester *st, TestingT *t, H2tHandlerFn fn, void *env,
                              const HttpHTTP2Config *h2) {
-    H2tServerOpts o = {h2, 0, 0, NULL};
+    H2tServerOpts o = {h2, 0, 0, NULL, NULL};
     return h2t_start_server(st, t, fn, env, &o);
 }
 
@@ -340,10 +413,13 @@ static void h2t_close(H2tTester *st) {
         burrow__hpack_encoder_free(st->enc);
     bytes_buffer_free(&st->hbuf);
     bytes_buffer_free(&st->wbuf);
+    tls_conn_free(st->ctls);
     if (st->sc.data != NULL)
         net_pipe_free(st->sc);
     if (st->lg != NULL)
         log_logger_free(st->a, st->lg);
+    if (st->has_tls_ar)
+        arena_free(&st->tls_ar);
 }
 
 static bool h2t_failed(H2tTester *st, const char *what, Error err) {
@@ -684,6 +760,100 @@ static void h2t_want_body_eof(TestingT *t, HttpRequest *r) {
     Int n = r->body.vt->reader.read(r->body.data, slice_from(b, 1, 1, TYPE_BYTE), &err);
     if (n != 0 || !errors_is(err, io_eof))
         testing_t_errorf_v(t, "Read = %d, %v; want 0, EOF", n, err);
+}
+
+/* TestServer_Request_TLS: what the handler got for Request.TLS. */
+typedef struct H2tGotTLS {
+    Chan *got; /* of bool */
+    bool has_tls;
+    TlsConnectionState state;
+} H2tGotTLS;
+
+static void h2t_tls_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)w;
+    H2tGotTLS *g = (H2tGotTLS *)env;
+    g->has_tls = r->tls != NULL;
+    if (r->tls != NULL)
+        g->state = *r->tls;
+    bool v = true;
+    chan_send(g->got, &v);
+}
+
+typedef struct H2tTLSCase {
+    bool unencrypted;
+    Str scheme;
+} H2tTLSCase;
+
+static void h2t_request_tls(void *env, TestingT *t) {
+    const H2tTLSCase *c = (const H2tTLSCase *)env;
+    H2tGotTLS g;
+    memset(&g, 0, sizeof g);
+    g.got = chan_make(heap_allocator(), TYPE_BOOL, 1);
+    if (g.got == NULL)
+        FATALF("no memory");
+    HttpProtocols protos;
+    memset(&protos, 0, sizeof protos);
+    http_protocols_set_http2(&protos, !c->unencrypted);
+    http_protocols_set_unencrypted_http2(&protos, c->unencrypted);
+    H2tServerOpts o = {NULL, 0, 0, NULL, &protos};
+    H2tTester st;
+    if (h2t_start_server(&st, t, h2t_tls_handler, &g, &o) && h2t_greet(&st)) {
+        Str headers[8] = {BURROW_S_INIT(":method"), BURROW_S_INIT("CONNECT"),
+                          BURROW_S_INIT(":authority"),
+                          BURROW_S_INIT("example.com:443")};
+        size_t n = 4;
+        if (c->scheme.len != 0) {
+            Str get[8] = {BURROW_S_INIT(":method"),    BURROW_S_INIT("GET"),
+                          BURROW_S_INIT(":authority"), BURROW_S_INIT("example.com"),
+                          BURROW_S_INIT(":scheme"),    c->scheme,
+                          BURROW_S_INIT(":path"),      BURROW_S_INIT("/")};
+            memcpy(headers, get, sizeof get);
+            n = 8;
+        }
+        if (h2t_write_headers(&st, 1, h2t_encode_header_raw(&st, headers, n), true,
+                              true)) {
+            bool v;
+            (void)chan_recv(g.got, &v);
+            /* Not in Go: Errorf where Go has Fatalf, so that the tester
+             * still closes. */
+            Any state = BURROW_ANY(TYPE_TLS_CONNECTION_STATE, &g.state);
+            if (c->unencrypted) {
+                if (g.has_tls)
+                    testing_t_errorf_v(
+                        t, "Request.TLS = %v; want nil for an unencrypted connection",
+                        state);
+            } else if (!g.has_tls) {
+                testing_t_errorf_v(t, "Request.TLS = nil; want TLS connection state");
+            } else if (!g.state.handshake_complete ||
+                       !str_eq(g.state.negotiated_protocol, BURROW_S("h2"))) {
+                testing_t_errorf_v(
+                    t, "Request.TLS = %+v; want completed HTTP/2 TLS handshake", state);
+            }
+        }
+    }
+    h2t_close(&st);
+    chan_free(g.got);
+}
+
+static void TestServer_Request_TLS(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    static const Str schemes[] = {BURROW_S_INIT("https"), BURROW_S_INIT("http"),
+                                  BURROW_S_INIT("")};
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    for (int u = 0; u < 2; u++) {
+        bool unencrypted = u == 1;
+        for (size_t i = 0; i < sizeof schemes / sizeof schemes[0]; i++) {
+            Str name = schemes[i];
+            if (name.len == 0)
+                name = BURROW_S("CONNECT");
+            H2tTLSCase c = {unencrypted, schemes[i]};
+            Str sub = fmt_sprintf_v(a, "unencrypted=%t/%s", unencrypted, name);
+            (void)testing_t_run(t, sub, BURROW_FN(TestingTFunc, h2t_request_tls, &c));
+        }
+    }
+    arena_free(&ar);
 }
 
 static bool h2t_write_get(H2tTester *st) {
@@ -3357,7 +3527,7 @@ static bool h2t_read_until_closed(H2tTester *st, uint32_t *last_id) {
 static void TestServerContinuationFlood(TestingT *t) {
     SKIP_WITHOUT_THREADS(t);
     H2tTester st;
-    H2tServerOpts o = {NULL, 4096, 0, NULL};
+    H2tServerOpts o = {NULL, 4096, 0, NULL, NULL};
     if (h2t_start_server(&st, t, NULL, NULL, &o) && h2t_greet(&st) &&
         h2t_write_headers(&st, 1, h2t_encode_header(&st, NULL, 0), true, false)) {
         bool ok = true;
@@ -4572,7 +4742,7 @@ static void TestServerIdleTimeout(TestingT *t) {
     SKIP_WITHOUT_THREADS(t);
     if (testing_short())
         testing_t_skip_v(t, "skipping in short mode");
-    H2tServerOpts o = {NULL, 0, 500 * TIME_MILLISECOND, NULL};
+    H2tServerOpts o = {NULL, 0, 500 * TIME_MILLISECOND, NULL, NULL};
     H2tTester st;
     if (h2t_start_server(&st, t, NULL, NULL, &o) && h2t_greet(&st))
         (void)h2t_want_go_away(&st, 0, HTTP2_ERR_CODE_NO);
@@ -4590,7 +4760,7 @@ static void TestServerIdleTimeout_AfterRequest(TestingT *t) {
     if (testing_short())
         testing_t_skip_v(t, "skipping in short mode");
     static const Duration request_timeout = 2 * TIME_SECOND;
-    H2tServerOpts o = {NULL, 0, 1 * TIME_SECOND, NULL};
+    H2tServerOpts o = {NULL, 0, 1 * TIME_SECOND, NULL, NULL};
     H2tTester st;
     /* A request that takes twice the idle timeout, which mustn't fire while
      * the request is going. It starts again once the request is done. */
@@ -4832,7 +5002,7 @@ static void TestNoErrorLoggedOnPostAfterGOAWAY(TestingT *t) {
     SKIP_WITHOUT_THREADS(t);
     static const Str kv[] = {S_(":method"), S_("POST"), S_("content-length"), S_("12")};
     BytesBuffer log = BYTES_BUFFER(heap_allocator());
-    H2tServerOpts o = {NULL, 0, 0, &log};
+    H2tServerOpts o = {NULL, 0, 0, &log, NULL};
     H2tTester st;
     SyncWaitGroup shutdown = {0};
     if (h2t_start_server(&st, t, NULL, NULL, &o) && h2t_greet(&st) &&
@@ -4950,6 +5120,7 @@ static void TestServer_Headers_HalfCloseRemote(TestingT *t) {
 
 #define TESTS(X)                                                                       \
     X(TestServer)                                                                      \
+    X(TestServer_Request_TLS)                                                          \
     X(TestServer_Request_Get)                                                          \
     X(TestServer_Request_Get_PathSlashes)                                              \
     X(TestServer_Request_Post_NoContentLength_EndStream)                               \

@@ -4,6 +4,70 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API, and none of it has been through a security review yet.
 
+## v0.3.3 (2026-10-26)
+
+The FIPS 140-3 structure in crypto, TLS across net/http, the security fixes from go1.27.2 and go1.27.3 (#601), the rest of those two releases, the first guides, and the cookbook.
+
+### Security
+
+- The fixes from go1.27.2 and go1.27.3, ported one PR each (#601): the limit on the ranges in a Range header (#607), closing the connection after a CONNECT (#608), counting the Trailer declaration against the header limits (#609), the MIME memory limit on the first line (#610), the double refund of HTTP/2 flow control for a reset stream (#611), applying HTTP/2 header table size changes before the next frame write (#613), validating ECH outer extension references (#614), and resetting the JS context in html/template expressions with `yield` treated as a keyword (#615), distrusting a handful of intermediates in crypto/x509 (#616), deleting malformed framing headers from HTTP/2 responses (#632), treating junctions as links in `os.Root` on Windows (#617), and keeping HTTP/2 stream send windows as a delta from the initial window so a SETTINGS change doesn't walk every stream (#640).
+
+### Added
+
+- FIPS 140-3: the module sections and integrity check (#573), the self-tests (#574), the service indicator (#577), turning the mode on from GODEBUG (#582), refusing what Go refuses under `fips140=only` (#590), `crypto/rand` reading from the CTR_DRBG in FIPS mode (#587), `fips140tls` and the TLS policy (#593), TestFIPS140 and TestVersion (#594), the module's SSH KDF and the XAES tests (#595), `P256OrdInverse` (#596), and the alias package with TestAliasing (#625). burrow is not FIPS validated, and no validation claim is made.
+- The counter nonce AEADs from `gcm_nonces.go` (#592).
+- Go's ACVP module wrapper, for the hashes, KDFs, AES, CMAC and DRBGs (#626), for ML-KEM, EdDSA, ECDSA, ECDH and ML-DSA (#628), and for RSA and KTS-IFC, with TestACVP, which runs BoringSSL's acvptool on Go's test data (#638).
+- TestBetterTLS, which runs Netflix's BetterTLS name constraint suite against crypto/x509 (#641).
+- The testing package prints every goroutine when a test times out (#619).
+- `crypto/x509` verifies with CryptoAPI on Windows (#575) and SecTrust on macOS and iOS (#585), as Go's `systemVerify` does.
+- `net/http`: `ServeTLS` and `ListenAndServeTLS` (#599) and TLS in the Transport (#602). `httptest` has the TLS server (#603), `net/smtp` has `StartTLS` (#604), and `net/http/cgi` passes on the request's TLS state (#605).
+- The request smuggling regression tests from `serve_test.go` (#606).
+- `io/ioutil` (#645), `testing/quick` (#649), `Handle` and `Incomplete` in `runtime/cgo` (#648), `runtime/metrics` (#653), `index/suffixarray` (#654), `Open` and `Lookup` in `plugin` (#655), and `log/syslog` (#656).
+- `textproto_dial`, which puts net/textproto at 100 percent (#674), and the `httpservecontentmaxranges` count in runtime/metrics (#664).
+- The hardened build, `make HARDENED=1` or `-DBURROW_HARDENED=ON`, which turns on the compiler's bounds checks in trap mode and lowers the HTTP server's default header limits (#644).
+- `tools/check-errout.py`, run by `make check`, which checks that a function taking `Error *err` writes it on every return (#612).
+
+### Changed
+
+- `error_retain` on the x509 verify errors and `tls.CertificateVerificationError` copies the certificates in them (#600).
+- The changes in go1.27.2 and go1.27.3 that aren't security fixes: testing, compress/flate and encoding/json, with the vectors made again by go1.27.3 (#661), the ML-KEM CAST checking the expanded key's hash and the implicit rejection result (#662), go/internal/gcimporter reading pkgbits V5 and keeping methods in source order (#663), and net/http draining only a body closed early and setting `Request.TLS` on any HTTP/2 TLS request (#666).
+- Context deadlines are a `Time`, as in Go, so net and tls no longer convert between two clocks (#677).
+- `burrow_go_version()`, the platform root URLs and CI's Go jobs move to go1.27.3 (#669).
+
+### Fixed
+
+- Reader and writer methods, and crypto/tls functions, that left `err` unset on success (#598, #599). This is what made TestServeTLS hang (#597).
+- The functions in net and mime that take `Error *err` write it on every return (#637).
+- A spent single-use HTTP/2 connection is closed when its last reservation goes (#623).
+- The amalgamation and the MSVC build on main (#620).
+- Tests that failed now and then on a loaded machine: two testing_test cases (#622), TestServerResetStreamUnreadBody/unstarted_handler (#618), TestServerSendDataAfterRequestBodyClose (#624), TestProtocolErrorAfterGoAway (#630) and TestServer_HeaderTableSizeDuringWrite (#635). TestDeltaProfile is skipped on arm, as Go does (#636).
+- A test program given a bad `-test.run` pattern now ends with `pal_exit`, as Go's does with `os.Exit`, rather than with the C library's `exit`, which once printed a stray line on windows-msvc (#629).
+- A throw on Windows after `pal_exit` has started to end the process now waits to be stopped, rather than writing half a `fatal error:` line (#652, fixes #370).
+- Under ASan, a panic unpoisons the frames it jumps over before it calls `longjmp` (#658, fixes #657).
+- `tests/pal_test.c` and `tests/http_fs_test.c` include `burrow/netpoll.h`, so the poller tests and the http_fs tests that need a real server run again. They had been compiled out (#659).
+- `cgo_handle_value` says who owns what it returns, and runtime/cgo's globals are in `tools/globals.txt` (#650, #651).
+- `database/sql` waits for the goroutines that hold a DB, Tx or Rows before freeing it, so LSan no longer reports them (#588, fixes #578).
+- Tests that set `err` in one argument and read it in another, which C evaluates in no fixed order (#679), and TestPipeline in net/textproto with `-test.count` (#674).
+- TestProfBufDoubleWakeup freed its buffer before the writer was done (#591), and TestDeltaProfile leaked its arena when it skipped (#589).
+
+### CI and tools
+
+- A failed dudect check is measured again and the CI runner's CPU is printed (#586), and the dudect checks were added (#572).
+- The cosmopolitan job's go commands are built without cgo, since TestACVP's `go build` can't compile package net's cgo with cosmocc (#642).
+- The lint job leaves the ACVP test's embedded files to `burrow-gen` (#631).
+- The cmake build runs ioutil_test from the source tree, where its test data is (#646).
+- The boehm job builds with four jobs (#576), and the musl and s390x images are kept in the Actions cache (#583).
+- windows-msvc, clang-tidy, cosmopolitan, wasip1 and the docs examples pass on main again, after #649, #654, #655, #656 and #659 broke them. ctest also gets a ten minute timeout per test, so a hung test fails on its own instead of taking the windows-msvc job with it (#667).
+- `burrow-gen doc --run` builds the examples in parallel and still runs them one at a time, which takes the macOS docs job from about 11 minutes to 7 (#681).
+
+### Docs
+
+- The default HTTP limits in the net guide (#584).
+- tests/edwards25519_test.c says why TestEdwards25519Allocations isn't ported (#639).
+- The tour (#668), the cheatsheet (#670), and the guides for people coming from Go (#672) and from C (#675) and for porting a package (#673).
+- The goroutines guide describes preemption as it works now (#676), four guides no longer say os isn't ported (#671), and the tabwriter example writes to `os_stdout` (#678).
+- The cookbook: 60 short programs that each do one common job, with a page each in `docs/cookbook` (#680).
+
 ## v0.3.2 (2026-10-21)
 
 crypto/tls, which is the main part of P3 (#5), and the first tools that check the constant-time code.

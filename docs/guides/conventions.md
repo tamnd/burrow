@@ -101,7 +101,7 @@ It writes through the pointer if there is one and does nothing if there is not. 
 
 Some functions have nothing useful to return, and those return the `Error` directly, which makes the common check read the way it should.
 
-<!-- not compiled: os is not ported yet, so os_write_file does not exist -->
+<!-- example: ../examples/conventions/results.c#write-file -->
 ```c
 Error err = os_write_file(path, data, 0644);
 if (BURROW_FAILED(err))
@@ -114,18 +114,19 @@ And some have no result in Go at all, but can fail to allocate here, where in Go
 
 ### Three or more
 
-Go returns three meaningful values rarely, and where it does the port gets a named struct rather than a third pointer.
+Most functions with three results keep the rule. `strings_cut` returns the part before the separator and hands back the part after it and whether it was found through two pointers. Where none of the results is the one to return, as with the year, month and day from Go's `Time.Date`, the port gets a named struct instead:
 
-<!-- example: ../examples/conventions/zero.c#cut -->
+<!-- not compiled: the declaration in burrow/time.h, shown for reference -->
 ```c
-typedef struct StringsCutRet {
-    Str before;
-    Str after;
-    bool found;
-} StringsCutRet;
+typedef struct TimeDateRet {
+    Int year;
+    TimeMonth month;
+    Int day;
+} TimeDateRet;
+TimeDateRet time_date_of(Time t);
 ```
 
-Slightly verbose, and better than four out parameters in a row where transposing two of them still compiles.
+Slightly verbose, and better than three out parameters in a row where transposing two of them still compiles.
 
 ## See also
 

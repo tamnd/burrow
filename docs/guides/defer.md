@@ -21,9 +21,9 @@ static Error count_lines(const char *path, Int *lines) {
 }
 ```
 
-burrow's `os` package is not ported yet, so the examples on this page open files with stdio, and `close_file` is a two line wrapper around `fclose` in the shape a deferred call takes. Nothing about the pattern changes when `os_open` arrives.
+The examples on this page open files with stdio, and `close_file` is a two line wrapper around `fclose` in the shape a deferred call takes. Nothing about the pattern changes with `os_open`.
 
-The close runs when control leaves the block, and it does not matter how control leaves: falling off the end, `return`, `break`, `continue`, a `goto` out, or a panic once panic lands.
+The close runs when control leaves the block, and it does not matter how control leaves: falling off the end, `return`, `break`, `continue`, a `goto` out, or a panic.
 
 That is the whole feature, and it is worth having in C for the same reason it is worth having in Go. The line that opens a thing and the line that closes it are next to each other, so a reader can see both at once, and the early return somebody adds six months from now cannot forget the second one. The usual C answer is a `goto done` at the bottom, which works and which stops working the moment there are two things to unwind and one of them is conditional.
 

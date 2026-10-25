@@ -133,7 +133,7 @@ if (pe != NULL)
     printf("failed on line %lld\n", (long long)pe->line);
 ```
 
-`ParseError` there is a struct declared with `BURROW_STRUCT`, so `TYPE_OF(ParseError)` is its descriptor, and its vtable names that descriptor in the first slot. When `os` lands, `OsPathError` works the same way.
+`ParseError` there is a struct declared with `BURROW_STRUCT`, so `TYPE_OF(ParseError)` is its descriptor, and its vtable names that descriptor in the first slot. `OsPathError` works the same way.
 
 `void *` converts to any object pointer type in C, so there is no cast at the call site and no way to ask for one type and be handed another. It also drops both of Go's panics, since there is no nil target and no non pointer target left to complain about. The outermost matching error wins, the same as Go, and a miss gives `NULL` rather than a guess.
 

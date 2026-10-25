@@ -27,7 +27,7 @@ jobs:
       # A contributor without Go installed gets the weaker shape checks.
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27.1"
+          go-version: "1.27.3"
           cache: false
 
       - name: No banned libc functions
@@ -152,7 +152,7 @@ jobs:
         name: trust Go's platform test root
         run: |
           curl -fsSL -o "$RUNNER_TEMP/platform_root_cert.pem" \
-            https://raw.githubusercontent.com/golang/go/go1.27.1/src/crypto/x509/platform_root_cert.pem
+            https://raw.githubusercontent.com/golang/go/go1.27.3/src/crypto/x509/platform_root_cert.pem
           sudo security add-trusted-cert -d -r trustRoot \
             -k /Library/Keychains/System.keychain "$RUNNER_TEMP/platform_root_cert.pem"
 
@@ -161,7 +161,7 @@ jobs:
         shell: pwsh
         run: |
           Invoke-WebRequest -OutFile "$env:RUNNER_TEMP\platform_root_cert.pem" `
-            -Uri https://raw.githubusercontent.com/golang/go/go1.27.1/src/crypto/x509/platform_root_cert.pem
+            -Uri https://raw.githubusercontent.com/golang/go/go1.27.3/src/crypto/x509/platform_root_cert.pem
           certutil -addstore -f Root "$env:RUNNER_TEMP\platform_root_cert.pem"
 
       # MSVC has no make and no business pretending to. It gets the CMake path,
@@ -696,7 +696,7 @@ jobs:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27.1"
+          go-version: "1.27.3"
           cache: false
       - name: install the libraries to check against
         if: runner.os == 'Linux'
@@ -709,14 +709,14 @@ jobs:
   # the headers. The packages in tools/coverage-done.txt have to be complete,
   # and the rest are reported so the number is a trend rather than a surprise.
   coverage-gate:
-    name: coverage against go1.27.1
+    name: coverage against go1.27.3
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27.1"
+          go-version: "1.27.3"
           cache: false
       - name: how much of the standard library exists
         run: tools/burrow-coverage
@@ -726,14 +726,14 @@ jobs:
   # tools/check-gofmt.sh. The Go release is the one burrow tracks, since
   # gofmt's output changes now and then between releases.
   gofmt-gate:
-    name: gofmt against go1.27.1
+    name: gofmt against go1.27.3
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27.1"
+          go-version: "1.27.3"
           cache: false
       - name: format $GOROOT/src with both
         run: make -j"$(nproc)" gofmt-gate
@@ -743,14 +743,14 @@ jobs:
   # other jobs build these tests too, but their Go, if any, is not go1.27, so
   # the tests that need its sources skip there.
   gotypes-gate:
-    name: go/types against go1.27.1
+    name: go/types against go1.27.3
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27.1"
+          go-version: "1.27.3"
           cache: false
       - name: build the tests
         run: make -j"$(nproc)" build/tests/go_types_stdlib_test build/tests/go_types_check_test build/tests/go_importer_test
@@ -769,14 +769,14 @@ jobs:
   # every disagreement found so far, and then each target gets a minute of new
   # inputs.
   differential-fuzz:
-    name: differential fuzz against go1.27.1
+    name: differential fuzz against go1.27.3
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
-          go-version: "1.27.1"
+          go-version: "1.27.3"
           cache: false
       - name: replay the corpus
         run: make fuzz-replay

@@ -567,7 +567,7 @@ struct tp_Trip {
     Chan *gone;         /* closed when the caller has returned */
     Chan *write_err_ch; /* bool, after wl_err is set */
     Chan *continue_ch;  /* bool, or NULL without "Expect: 100-continue" */
-    Chan *wait_body;    /* bool, whether the body was read to its end */
+    Chan *wait_body;    /* Int, a TP_BODY_ outcome */
     Chan *rl_done;      /* closed when the read loop is done with the trip */
     Chan *wl_done;      /* closed when the write loop is done with the trip */
     HttpResponse *res;
@@ -2353,11 +2353,20 @@ struct tp_Body {
     bool fn_ran; /* under mu */
 };
 
-/* fn. err is nil for a Close at the end of the body. */
+/* What waitForBodyRead carries. Go sends the error itself, and the read loop
+ * only asks whether it is io.EOF, errClosedEarly or something else. */
+enum {
+    TP_BODY_EOF,          /* io.EOF */
+    TP_BODY_CLOSED_EARLY, /* errClosedEarly */
+    TP_BODY_ERR           /* any other error */
+};
+
+/* fn, called on the final non-nil error from Read. */
 static Error tp_body_fn(tp_Body *b, Error err) {
     tp_PConn *pc = b->tr->pc;
     bool is_eof = tp_same(err, io_eof);
-    chan_send(b->tr->wait_body, &is_eof);
+    Int outcome = is_eof ? TP_BODY_EOF : TP_BODY_ERR;
+    chan_send(b->tr->wait_body, &outcome);
     if (is_eof) {
         tp_wait(pc->eofc);
     } else if (BURROW_FAILED(err)) {
@@ -2412,11 +2421,16 @@ static Error tp_body_close(void *self) {
     }
     b->closed = true;
     Error err;
-    if (!tp_same(b->rerr, io_eof)) {
-        /* earlyCloseFn. */
-        bool f = false;
-        chan_send(b->tr->wait_body, &f);
+    if (BURROW_OK(b->rerr)) {
+        /* earlyCloseFn, which leaves fn not to run. */
+        b->fn_ran = true;
+        Int outcome = TP_BODY_CLOSED_EARLY;
+        chan_send(b->tr->wait_body, &outcome);
         tp_wait(b->tr->pc->eofc);
+        err = BURROW_NO_ERROR;
+    } else if (!tp_same(b->rerr, io_eof)) {
+        /* Read already returned this error and readLoop gave up the
+         * connection. Draining would only read the same error again. */
         err = BURROW_NO_ERROR;
     } else {
         err = tp_body_condfn(b, b->body.vt->closer.close(b->body.data));
@@ -2843,6 +2857,10 @@ typedef struct tp_Drain {
 
 static void tp_drain_job(void *env) {
     tp_Drain *d = (tp_Drain *)env;
+    /* When we drain the body and (hopefully) reach EOF, we might
+     * potentially need to deal with trailers. Make sure they are discarded
+     * so the connection can actually be reused. */
+    burrow__http_body_discard_trailer(d->body);
     Error e = BURROW_NO_ERROR;
     (void)io_copy_n(tp_alloc(d->t), io_discard, io_read_closer_as_io_reader(d->body),
                     TP_MAX_POST_CLOSE_READ_BYTES + 1, &e);
@@ -3011,23 +3029,31 @@ static void tp_read_loop(void *env) {
         /* Wait for the caller to read the body to its end, or close it, or
          * give up, before reading on. The response is not freed before the
          * read loop is done with the trip. */
-        bool body_eof = false;
-        SelectCase cases[3] = {BURROW_RECV(tr->wait_body, &body_eof),
+        Int outcome = TP_BODY_ERR;
+        SelectCase cases[3] = {BURROW_RECV(tr->wait_body, &outcome),
                                BURROW_RECV(context_done(tr->ctx), NULL),
                                BURROW_RECV(pc->closech, NULL)};
         switch (chan_select(cases, 3)) {
         case 0: {
-            bool try_drain =
-                !body_eof && resp->content_length <= TP_MAX_POST_CLOSE_READ_BYTES;
             bool v = true;
-            if (try_drain) {
+            if (outcome == TP_BODY_EOF) {
+                alive = alive && !pc->saw_eof && tp_pc_wrote_request(pc) &&
+                        tp_rl_try_put_idle(pc, tr, &close_err);
                 chan_send(pc->eofc, &v);
-                body_eof = tp_maybe_drain_body(pc, body->body, close_err);
+            } else if (outcome == TP_BODY_CLOSED_EARLY) {
+                /* Read resp before signaling eofc: the send lets the caller's
+                 * Close return, and resp belongs to the caller after that. */
+                bool try_drain =
+                    alive && resp->content_length <= TP_MAX_POST_CLOSE_READ_BYTES;
+                chan_send(pc->eofc, &v);
+                if (try_drain && tp_maybe_drain_body(pc, body->body, close_err))
+                    alive = alive && !pc->saw_eof && tp_pc_wrote_request(pc) &&
+                            tp_rl_try_put_idle(pc, tr, &close_err);
+                else
+                    alive = false;
+            } else {
+                alive = false;
             }
-            alive = alive && body_eof && !pc->saw_eof && tp_pc_wrote_request(pc) &&
-                    tp_rl_try_put_idle(pc, tr, &close_err);
-            if (!try_drain && body_eof)
-                chan_send(pc->eofc, &v);
             break;
         }
         case 1:
@@ -3103,7 +3129,7 @@ static tp_Trip *tp_trip_new(HttpTransport *t, tp_Call *call, tp_PConn *pc) {
     tr->resc = chan_make(a, TYPE_BOOL, 0);
     tr->gone = chan_make(a, TYPE_BOOL, 0);
     tr->write_err_ch = chan_make(a, TYPE_BOOL, 1);
-    tr->wait_body = chan_make(a, TYPE_BOOL, 2);
+    tr->wait_body = chan_make(a, TYPE_INT, 1);
     tr->rl_done = chan_make(a, TYPE_BOOL, 0);
     tr->wl_done = chan_make(a, TYPE_BOOL, 0);
     if (tr->resc == NULL || tr->gone == NULL || tr->write_err_ch == NULL ||

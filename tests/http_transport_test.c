@@ -960,6 +960,507 @@ static void TestTransportCONNECTRejected(TestingT *t) {
     arena_free(&ar);
 }
 
+/* ------------------------------------------------ draining a response body */
+
+/* TestTransportResponseBodyDrainReadAndClose and
+ * TestTransportResponseBodyDrainDropsTrailers are newer than go1.27.1: they
+ * came with go1.27.2's fixes for go.dev/issue/81404 and 81511 and for the
+ * trailer of a drained body. Go runs them under synctest with
+ * newHTTP1TransportTest, as TestTransportCONNECTRejected above. Not in Go: a
+ * loopback listener plays example.tld, peer_dial notes what the transport
+ * dials and dials the listener, and the test does the server's side of the
+ * connection itself. Where Go waits for the bubble to go quiet, the test
+ * sleeps a little before a Close that should find a Read in flight, and waits
+ * for the transport to have the connection back in its pool before the next
+ * request. */
+
+typedef struct Peer {
+    NetListener ln;
+    Str ln_addr;
+    SyncMutex mu;     /* guards network and addr, which peer_dial writes */
+    char network[16]; /* what the transport dialed */
+    char addr[64];
+    Arena ar;
+} Peer;
+
+static NetConn peer_dial(void *env, Context ctx, Str network, Str addr, Error *err) {
+    Peer *p = (Peer *)env;
+    sync_mutex_lock(&p->mu);
+    copy_cstr(p->network, sizeof p->network, network);
+    copy_cstr(p->addr, sizeof p->addr, addr);
+    sync_mutex_unlock(&p->mu);
+    NetDialer d;
+    memset(&d, 0, sizeof d);
+    return net_dialer_dial_context(&d, heap_allocator(), ctx, BURROW_S("tcp"),
+                                   p->ln_addr, err);
+}
+
+/* newHTTP1TransportTest, with tr dialing p. */
+static bool peer_listen(TestingT *t, Peer *p, HttpTransport *tr) {
+    memset(p, 0, sizeof *p);
+    arena_init(&p->ar, heap_allocator(), 0);
+    Error err = BURROW_NO_ERROR;
+    p->ln =
+        net_listen(heap_allocator(), BURROW_S("tcp"), BURROW_S("127.0.0.1:0"), &err);
+    if (BURROW_FAILED(err)) {
+        err = BURROW_NO_ERROR;
+        p->ln =
+            net_listen(heap_allocator(), BURROW_S("tcp6"), BURROW_S("[::1]:0"), &err);
+    }
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "listen: %v", err);
+        arena_free(&p->ar);
+        return false;
+    }
+    NetAddr laddr = p->ln.vt->addr(p->ln.data);
+    p->ln_addr = laddr.vt->string(laddr.data, arena_allocator(&p->ar));
+    memset(tr, 0, sizeof *tr);
+    tr->dial_context = BURROW_FN(HttpDialContextFunc, peer_dial, p);
+    return true;
+}
+
+/* The test's side of the connection. */
+typedef struct PeerConn {
+    NetConn conn;
+    BufioReader *br;
+} PeerConn;
+
+/* tt.wantDial("tcp", "example.tld:80").connect(). Not in Go: the deadline,
+ * which keeps a test from hanging on a connection that the transport does not
+ * use. */
+static bool peer_accept(TestingT *t, Peer *p, PeerConn *c) {
+    Error err = BURROW_NO_ERROR;
+    c->conn = p->ln.vt->accept(p->ln.data, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "accept: %v", err);
+        return false;
+    }
+    sync_mutex_lock(&p->mu);
+    Str network = cs(p->network), addr = cs(p->addr);
+    if (!str_eq(network, cs("tcp")) || !str_eq(addr, cs("example.tld:80")))
+        testing_t_errorf_v(t, "dialed %q %q, want %q %q", network, addr, cs("tcp"),
+                           cs("example.tld:80"));
+    sync_mutex_unlock(&p->mu);
+    (void)c->conn.vt->set_deadline(c->conn.data,
+                                   time_add(time_now(), 10 * TIME_SECOND));
+    c->br = bufio_new_reader(arena_allocator(&p->ar), net_conn_as_io_reader(c->conn));
+    if (c->br == NULL) {
+        testing_t_errorf_v(t, "bufio_new_reader: out of memory");
+        net_conn_free(c->conn);
+        return false;
+    }
+    return true;
+}
+
+/* conn.readRequest, giving the request's path. */
+static bool peer_read_request(TestingT *t, Peer *p, PeerConn *c, Str *path) {
+    Alloc *a = arena_allocator(&p->ar);
+    Error err = BURROW_NO_ERROR;
+    HttpRequest *req = http_read_request(a, c->br, &err);
+    if (req == NULL) {
+        testing_t_errorf_v(t, "reading the request: %v", err);
+        return false;
+    }
+    *path = str_clone(a, req->url->path);
+    http_request_free(req);
+    return true;
+}
+
+/* conn.writeMessage, with msg already joined by CRLF. */
+static bool peer_write(TestingT *t, PeerConn *c, const char *msg) {
+    Error err = BURROW_NO_ERROR;
+    Str s = cs(msg);
+    (void)c->conn.vt->writer.write(
+        c->conn.data, slice_from((void *)(uintptr_t)s.p, s.len, s.len, TYPE_BYTE),
+        &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "conn write: %v", err);
+        return false;
+    }
+    return true;
+}
+
+/* conn.wantClosed. */
+static void peer_want_closed(TestingT *t, PeerConn *c) {
+    Error err = BURROW_NO_ERROR;
+    Slice got = bufio_reader_peek(c->br, 32, &err);
+    if (got.len != 0 || !errors_is(err, io_eof)) {
+        Str gs = str_from_bytes(got.p, got.len);
+        testing_t_errorf_v(t, "read from conn: %q; expect conn to be closed", gs);
+    }
+}
+
+/* tt.roundTrip, in a goroutine of its own. */
+typedef struct PeerRT {
+    HttpTransport *tr;
+    HttpRequest *req;
+    HttpResponse *res;
+    Error err; /* in ar */
+    Arena ar;
+    SyncWaitGroup wg;
+} PeerRT;
+
+static void peer_rt_job(void *env) {
+    PeerRT *rt = (PeerRT *)env;
+    Error err = BURROW_NO_ERROR;
+    rt->res = http_round_tripper_round_trip(http_transport_as_round_tripper(rt->tr),
+                                            rt->req, &err);
+    rt->err = error_retain(arena_allocator(&rt->ar), err);
+}
+
+static bool peer_round_trip(TestingT *t, PeerRT *rt, HttpTransport *tr, Str url) {
+    memset(rt, 0, sizeof *rt);
+    arena_init(&rt->ar, heap_allocator(), 0);
+    rt->tr = tr;
+    Error err = BURROW_NO_ERROR;
+    rt->req = http_new_request(arena_allocator(&rt->ar), BURROW_S("GET"), url,
+                               (IoReader){0}, &err);
+    if (rt->req == NULL) {
+        testing_t_errorf_v(t, "NewRequest: %v", err);
+        arena_free(&rt->ar);
+        return false;
+    }
+    sync_wait_group_go(&rt->wg, BURROW_FN(Func, peer_rt_job, rt));
+    return true;
+}
+
+/* rt.response. */
+static HttpResponse *peer_rt_response(TestingT *t, PeerRT *rt) {
+    sync_wait_group_wait(&rt->wg);
+    if (rt->res == NULL)
+        testing_t_errorf_v(t, "RoundTrip: %v", rt->err);
+    return rt->res;
+}
+
+/* rt.wantStatus. */
+static void peer_rt_want_status(TestingT *t, PeerRT *rt, Int want) {
+    HttpResponse *res = peer_rt_response(t, rt);
+    if (res != NULL && res->status_code != want)
+        testing_t_errorf_v(t, "got response status %v, want %v", res->status_code,
+                           want);
+}
+
+/* Not in Go: what the round trip leaves, once it is done. */
+static void peer_rt_free(PeerRT *rt) {
+    sync_wait_group_wait(&rt->wg);
+    if (rt->res != NULL) {
+        close_body(rt->res);
+        http_response_free(rt->res);
+    }
+    http_request_free(rt->req);
+    arena_free(&rt->ar);
+}
+
+/* With the listener closed first, a round trip still dialing it fails, so
+ * that rt can be waited for. rt may be NULL. */
+static void peer_free(Peer *p, HttpTransport *tr, PeerRT *rt) {
+    net_listener_free(p->ln);
+    if (rt != NULL)
+        peer_rt_free(rt);
+    http_transport_free(tr);
+    arena_free(&p->ar);
+}
+
+/* Not in Go: in place of synctest.Wait before the next request, wait for the
+ * transport to have the connection back in its pool. */
+static void peer_wait_idle(HttpTransport *tr) {
+    Time deadline = time_add(time_now(), 10 * TIME_SECOND);
+    while (burrow__http_transport_idle_conn_count_for_testing(
+               tr, BURROW_S("http"), BURROW_S("example.tld:80")) == 0 &&
+           time_before(time_now(), deadline))
+        time_sleep(TIME_MILLISECOND);
+}
+
+/* The next request, which should come on the same connection. */
+static void peer_want_reuse(TestingT *t, Peer *p, PeerConn *c, HttpTransport *tr) {
+    peer_wait_idle(tr);
+    PeerRT rt;
+    if (!peer_round_trip(t, &rt, tr, BURROW_S("http://example.tld/next")))
+        return;
+    Str got = {0};
+    if (peer_read_request(t, p, c, &got)) {
+        if (!str_eq(got, BURROW_S("/next")))
+            testing_t_errorf_v(t, "request path = %q, want /next", got);
+        else if (peer_write(t, c,
+                            "HTTP/1.1 200 OK\r\n"
+                            "Content-Length: 0\r\n"
+                            "\r\n"))
+            peer_rt_want_status(t, &rt, 200);
+    }
+    /* Not in Go: a round trip that is still waiting ends when the test's side
+     * of the connection closes. */
+    (void)net_tcp_conn_close_write(net_conn_as_tcp_conn(c->conn));
+    peer_rt_free(&rt);
+}
+
+typedef struct DrainCase {
+    const char *name;
+    bool read;
+    bool close_early;
+    bool close_after_read;
+    bool server_truncate;
+    const Error *want_read_err; /* NULL for nil */
+    const Error *want_close_err;
+    bool want_reuse;
+} DrainCase;
+
+static const DrainCase drain_cases[] = {
+    /* go.dev/issue/81404. */
+    {
+        .name = "concurrent early close and read to eof",
+        .read = true,
+        .close_early = true,
+        .want_read_err = &io_eof,
+        .want_reuse = true,
+    },
+    {
+        .name = "concurrent early close and unexpected read error",
+        .read = true,
+        .close_early = true,
+        .server_truncate = true,
+        .want_read_err = &io_err_unexpected_eof,
+        .want_reuse = false,
+    },
+    {
+        .name = "unexpected read error without any close",
+        .read = true,
+        .server_truncate = true,
+        .want_read_err = &io_err_unexpected_eof,
+        .want_reuse = false,
+    },
+    {
+        .name = "unexpected read error followed by close",
+        .read = true,
+        .close_after_read = true,
+        .server_truncate = true,
+        .want_read_err = &io_err_unexpected_eof,
+        /* golang.org/issue/81511: Close does not repeat the Read error. */
+        .want_close_err = NULL,
+        .want_reuse = false,
+    },
+    {
+        .name = "early close without any read",
+        .read = false,
+        .close_early = true,
+        .want_reuse = true,
+    },
+    {
+        .name = "read all then close",
+        .read = true,
+        .close_after_read = true,
+        .want_read_err = &io_eof,
+        .want_reuse = true,
+    },
+};
+
+static bool drain_err_is(Error err, const Error *want) {
+    return want == NULL ? BURROW_OK(err) : errors_is(err, *want);
+}
+
+static Error drain_want(const Error *want) {
+    return want == NULL ? BURROW_NO_ERROR : *want;
+}
+
+/* The Read in its goroutine. */
+typedef struct DrainRead {
+    HttpResponse *res;
+    Error err; /* in ar */
+    Arena ar;
+    SyncWaitGroup wg;
+} DrainRead;
+
+static void drain_read_job(void *env) {
+    DrainRead *r = (DrainRead *)env;
+    Byte buf[1];
+    Error err = BURROW_NO_ERROR;
+    (void)r->res->body.vt->reader.read(r->res->body.data,
+                                       slice_from(buf, 1, 1, TYPE_BYTE), &err);
+    r->err = error_retain(arena_allocator(&r->ar), err);
+}
+
+static void drain_close(TestingT *t, HttpResponse *res, const Error *want) {
+    Error err = res->body.vt->closer.close(res->body.data);
+    if (!drain_err_is(err, want)) {
+        Error w = drain_want(want);
+        testing_t_errorf_v(t, "Close = %v, want %v", err, w);
+    }
+}
+
+static void drain_case(void *env, TestingT *t) {
+    const DrainCase *tc = (const DrainCase *)env;
+    need_tcp(t);
+    Peer p;
+    HttpTransport tr;
+    if (!peer_listen(t, &p, &tr))
+        return;
+    PeerRT rt;
+    PeerConn conn;
+    Str path = {0};
+    if (!peer_round_trip(t, &rt, &tr, BURROW_S("http://example.tld/"))) {
+        peer_free(&p, &tr, NULL);
+        return;
+    }
+    if (!peer_accept(t, &p, &conn)) {
+        peer_free(&p, &tr, &rt);
+        return;
+    }
+    if (!peer_read_request(t, &p, &conn, &path) ||
+        !peer_write(t, &conn,
+                    "HTTP/1.1 200 OK\r\n"
+                    "Transfer-Encoding: chunked\r\n"
+                    "\r\n"))
+        goto out;
+    HttpResponse *res = peer_rt_response(t, &rt);
+    if (res == NULL)
+        goto out;
+
+    DrainRead dr;
+    memset(&dr, 0, sizeof dr);
+    arena_init(&dr.ar, heap_allocator(), 0);
+    dr.res = res;
+    if (tc->read) {
+        sync_wait_group_go(&dr.wg, BURROW_FN(Func, drain_read_job, &dr));
+        /* Wait for the Read to block on chunk data. */
+        time_sleep(100 * TIME_MILLISECOND);
+    }
+
+    if (tc->close_early)
+        drain_close(t, res, tc->want_close_err);
+
+    if (tc->server_truncate)
+        (void)net_tcp_conn_close_write(net_conn_as_tcp_conn(conn.conn));
+    else
+        (void)peer_write(t, &conn,
+                         "0\r\n"
+                         "\r\n");
+
+    if (tc->read) {
+        sync_wait_group_wait(&dr.wg);
+        if (!drain_err_is(dr.err, tc->want_read_err)) {
+            Error w = drain_want(tc->want_read_err);
+            testing_t_errorf_v(t, "Read = %v, want %v", dr.err, w);
+        }
+    }
+
+    if (tc->close_after_read)
+        drain_close(t, res, tc->want_close_err);
+
+    if (!tc->want_reuse)
+        peer_want_closed(t, &conn);
+    else
+        peer_want_reuse(t, &p, &conn, &tr);
+    arena_free(&dr.ar);
+
+out:
+    /* Not in Go: a round trip that is still waiting ends when the test's side
+     * of the connection closes. */
+    (void)net_tcp_conn_close_write(net_conn_as_tcp_conn(conn.conn));
+    peer_free(&p, &tr, &rt);
+    net_conn_free(conn.conn);
+}
+
+static void TestTransportResponseBodyDrainReadAndClose(TestingT *t) {
+    for (Int i = 0; i < (Int)(sizeof drain_cases / sizeof drain_cases[0]); i++)
+        (void)testing_t_run(
+            t, cs(drain_cases[i].name),
+            BURROW_FN(TestingTFunc, drain_case, (void *)(uintptr_t)&drain_cases[i]));
+}
+
+/* When a response body is automatically drained, it should read the trailer to
+ * make sure the connection is reusable. Additionally, it should not populate
+ * the Response.Trailer: by the time Close returns, Response belongs to the
+ * caller and cannot be written to anymore by the draining goroutine. */
+static void TestTransportResponseBodyDrainDropsTrailers(TestingT *t) {
+    need_tcp(t);
+    Peer p;
+    HttpTransport tr;
+    if (!peer_listen(t, &p, &tr))
+        return;
+    PeerRT rt;
+    PeerConn conn;
+    Str path = {0};
+    if (!peer_round_trip(t, &rt, &tr, BURROW_S("http://example.tld/"))) {
+        peer_free(&p, &tr, NULL);
+        return;
+    }
+    if (!peer_accept(t, &p, &conn)) {
+        peer_free(&p, &tr, &rt);
+        return;
+    }
+    if (!peer_read_request(t, &p, &conn, &path) ||
+        !peer_write(t, &conn,
+                    "HTTP/1.1 200 OK\r\n"
+                    "Transfer-Encoding: chunked\r\n"
+                    "Trailer: X-Test\r\n"
+                    "\r\n"
+                    "5\r\n"
+                    "hello\r\n"))
+        goto out;
+    HttpResponse *res = peer_rt_response(t, &rt);
+    if (res == NULL)
+        goto out;
+
+    Error err = res->body.vt->closer.close(res->body.data);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "Close = %v, want nil", err);
+    if (!peer_write(t, &conn,
+                    "0\r\n"
+                    "X-Test: v\r\n"
+                    "\r\n"))
+        goto out;
+    peer_wait_idle(&tr);
+
+    /* Trailer must not be populated, to avoid racy write, and to be
+     * consistent with how trailers are normally empty when one does not
+     * read to EOF. */
+    Str got = http_header_get(res->trailer, BURROW_S("X-Test"));
+    if (got.len != 0)
+        testing_t_errorf_v(t, "drained response body unexpectedly has populated "
+                              "trailers");
+
+    /* The trailer must still have been consumed from the connection, or
+     * the connection would not be reusable. */
+    peer_want_reuse(t, &p, &conn, &tr);
+
+out:
+    (void)net_tcp_conn_close_write(net_conn_as_tcp_conn(conn.conn));
+    peer_free(&p, &tr, &rt);
+    net_conn_free(conn.conn);
+}
+
+/* TestTransportResponseWriteAfterEarlyClose came with go1.27.2 too. */
+
+static void serve_hello(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)r;
+    Error err = BURROW_NO_ERROR;
+    (void)write_str(w, cs("hello"), &err);
+}
+
+/* After Body.Close returns, the Response belongs to the caller. readLoop
+ * used to read resp.ContentLength after letting Close return; run with
+ * -race. */
+static void TestTransportResponseWriteAfterEarlyClose(TestingT *t) {
+    need_tcp(t);
+    HttpHandlerFunc hf = BURROW_FN(HttpHandlerFunc, serve_hello, NULL);
+    HttptestServer *ts = httptest_new_server(NULL, http_handler_func_as_handler(&hf));
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *res = http_client_get(httptest_server_client(ts), ts->url, &err);
+    if (res == NULL) {
+        httptest_server_free(ts);
+        testing_t_fatal_v(t, err);
+    }
+    err = res->body.vt->closer.close(res->body.data);
+    if (BURROW_FAILED(err)) {
+        http_response_free(res);
+        httptest_server_free(ts);
+        testing_t_fatal_v(t, err);
+    }
+    res->content_length = 0;
+    http_response_free(res);
+    httptest_server_free(ts);
+}
+
 #define TESTS(X)                                                                       \
     X(TestTransportKeepAlives)                                                         \
     X(TestTransportConnectionCloseOnResponse)                                          \
@@ -975,5 +1476,8 @@ static void TestTransportCONNECTRejected(TestingT *t) {
     X(TestTransportNoHost)                                                             \
     X(TestTransportResponseHeaderLength)                                               \
     X(TestTransportRejectsAlphaPort)                                                   \
-    X(TestTransportCONNECTRejected)
+    X(TestTransportCONNECTRejected)                                                    \
+    X(TestTransportResponseBodyDrainReadAndClose)                                      \
+    X(TestTransportResponseBodyDrainDropsTrailers)                                     \
+    X(TestTransportResponseWriteAfterEarlyClose)
 TESTING_MAIN(TESTS)

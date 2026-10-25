@@ -484,6 +484,15 @@ static Error jx_build(Alloc *a, const JxKind *k, const void *e) {
     }
     memcpy(box + jx_msg_offset(k), &m, sizeof(m));
     burrow__jsonbuf_free(&msg);
+    if (k == &jx_unsupported_value_kind) {
+        /* The value is the float in the box, not the one it was copied from. */
+        Any v;
+        memcpy(&v, box + offsetof(JsonUnsupportedValueError, value), sizeof v);
+        if (v.data != NULL) {
+            v.data = box + offsetof(JsonUnsupportedValueError, num);
+            memcpy(box + offsetof(JsonUnsupportedValueError, value), &v, sizeof v);
+        }
+    }
     return (Error){k->vt, box};
 }
 
@@ -607,7 +616,19 @@ Error burrow__json_transform_marshal_error(Error err) {
         Str prefix = JV_LIT("unsupported value: ");
         if (jx_has_prefix(s, prefix))
             s = str_from_bytes(s.p + prefix.len, s.len - prefix.len);
-        JsonUnsupportedValueError uve = {s};
+        JsonUnsupportedValueError uve;
+        memset(&uve, 0, sizeof uve);
+        uve.str = s;
+        const Type *vt = NULL;
+        double fv = 0;
+        if (burrow__jsonv2_as_value_error(se->err, &vt, &fv)) {
+            uve.value.t = vt;
+            if (vt->size == 4)
+                uve.num.f32 = (float)fv;
+            else
+                uve.num.f64 = fv;
+            uve.value.data = &uve.num;
+        }
         Error r = jx_new(&jx_unsupported_value_kind, &uve);
         burrow__jsonbuf_free(&b);
         return r;

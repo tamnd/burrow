@@ -262,6 +262,161 @@ static void TestMarshalErrors(TestingT *t) {
     arena_free(&ar);
 }
 
+/* ------------------------------------------------- from Go's v2_encode_test.go */
+
+BURROW_NAMED_TYPE(NamedFloat, double, KIND_FLOAT64);
+BURROW_MAP_TYPE(StrFloatMap, Str, double);
+BURROW_SLICE_TYPE(NamedFloats, NamedFloat);
+#define F_FIELDS(FIELD, T) FIELD(T, double, F, "")
+BURROW_STRUCT(FloatField, F_FIELDS);
+
+typedef struct UnsupportedValueCase {
+    int line;
+    Any in;
+    const Type *want_type;
+    double want;
+} UnsupportedValueCase;
+
+static void unsupported_value_case(void *env, TestingT *t) {
+    const UnsupportedValueCase *tt = env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    (void)json_marshal(a, tt->in, &err);
+    arena_free(&ar);
+    const JsonUnsupportedValueError *uve = (const JsonUnsupportedValueError *)errors_as(
+        err, TYPE_JSON_UNSUPPORTED_VALUE_ERROR);
+    if (uve == NULL) {
+        Str got = BURROW_FAILED(err) && err.vt->self_type != NULL
+                      ? err.vt->self_type->name
+                      : BURROW_S("<nil>");
+        testing_t_fatalf_v(t, "%s:%d: Marshal error:\n\tgot:  %s\n\twant: %s",
+                           "encoding_json_test.c", tt->line, got,
+                           "*json.UnsupportedValueError");
+    }
+    Any got = uve->value;
+    if (got.t != tt->want_type) {
+        Str gt = got.t == NULL ? BURROW_S("<nil>") : got.t->name;
+        testing_t_fatalf_v(t, "%s:%d: UnsupportedValueError.Value.Type = %s, want %s",
+                           "encoding_json_test.c", tt->line, gt, tt->want_type->name);
+    }
+    double gf =
+        got.t->size == 4 ? (double)*(const float *)got.data : *(const double *)got.data;
+    /* equalFloat */
+    bool equal = gf == tt->want || math_is_nan(gf) == math_is_nan(tt->want);
+    if (!equal)
+        testing_t_fatalf_v(t, "%s:%d: UnsupportedValueError.Value.Float = %v, want %v",
+                           "encoding_json_test.c", tt->line, gf, tt->want);
+}
+
+/* Issue 81176: UnsupportedValueError.Value should hold the NaN or ±Inf value. */
+static void TestUnsupportedValueErrorValue(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    NamedFloat nan = math_nan(), pinf = math_inf(1);
+    double ninf = math_inf(-1), inf = math_inf(1);
+    StrFloatMap m = map_make(a, TYPE_STRING, TYPE_FLOAT64, 0);
+    Str x = BURROW_S("x");
+    map_set(m, &x, &inf);
+    NamedFloats sl = slice_append(a, slice_nil(TYPE_OF(NamedFloat)), &nan, 1);
+    FloatField st = {ninf};
+    const UnsupportedValueCase tests[] = {
+        {__LINE__, BURROW_ANY(TYPE_OF(NamedFloat), &nan), TYPE_OF(NamedFloat), nan},
+        {__LINE__, BURROW_ANY(TYPE_FLOAT64, &ninf), TYPE_FLOAT64, ninf},
+        {__LINE__, BURROW_ANY(TYPE_OF(NamedFloat), &pinf), TYPE_OF(NamedFloat), pinf},
+        {__LINE__, BURROW_ANY(TYPE_OF(StrFloatMap), &m), TYPE_FLOAT64, inf},
+        {__LINE__, BURROW_ANY(TYPE_OF(NamedFloats), &sl), TYPE_OF(NamedFloat), nan},
+        {__LINE__, BURROW_ANY(TYPE_OF(FloatField), &st), TYPE_FLOAT64, ninf},
+    };
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++)
+        testing_t_run(t, BURROW_S(""),
+                      BURROW_FN(TestingTFunc, unsupported_value_case,
+                                (void *)(uintptr_t)&tests[i]));
+    arena_free(&ar);
+}
+
+/* textMarshalerString is a string kind that implements encoding.TextMarshaler. */
+typedef Str TextMarshalerString;
+
+static Slice text_marshaler_string_marshal_text(TextMarshalerString *s, Alloc *a,
+                                                Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    Slice b = slice_append(a, slice_nil(TYPE_BYTE), "X_", 2);
+    return slice_append(a, b, s->p, s->len);
+}
+
+static Slice text_marshaler_string_append_text(TextMarshalerString *s, Alloc *a,
+                                               Slice b, Error *err) {
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    b = slice_append(a, b, "X_", 2);
+    return slice_append(a, b, s->p, s->len);
+}
+
+#define TMS_METHODS(M, T)                                                              \
+    M(T, AppendText, text_marshaler_string_append_text, ENCODING_SIG_APPEND_TEXT)      \
+    M(T, MarshalText, text_marshaler_string_marshal_text, ENCODING_SIG_MARSHAL_TEXT)
+BURROW_METHODS_DEFINE(TextMarshalerString, TMS_METHODS);
+
+/* Not const, since a named string borrows the ops of string, which the test
+ * copies in before it runs. */
+static Type burrow_type_TextMarshalerString = {
+    BURROW_S_INIT("textMarshalerString"),
+    {NULL, 0},
+    KIND_STRING,
+    (uint32_t)sizeof(TextMarshalerString),
+    _Alignof(TextMarshalerString),
+    0,
+    (uint16_t)(sizeof burrow__methods_TextMarshalerString /
+               sizeof burrow__methods_TextMarshalerString[0]),
+    NULL,
+    burrow__methods_TextMarshalerString,
+    NULL,
+    NULL,
+    0,
+    0,
+    NULL,
+};
+
+static const Type tms_map = {
+    BURROW_S_INIT(""),
+    {NULL, 0},
+    KIND_MAP,
+    (uint32_t)sizeof(Map *),
+    _Alignof(Map *),
+    0,
+    0,
+    NULL,
+    NULL,
+    &burrow_type_TextMarshalerString,
+    &burrow_type_TextMarshalerString,
+    0,
+    0,
+    NULL,
+};
+
+/* Issue 81355: string-kind map keys are used directly even if the key type
+ * implements encoding.TextMarshaler. MarshalText is still called for values. */
+static void TestStringKindTextMarshalerMapKey(TestingT *t) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    burrow_type_TextMarshalerString.ops = TYPE_STRING->ops;
+    Map *m = map_make(a, &burrow_type_TextMarshalerString,
+                      &burrow_type_TextMarshalerString, 0);
+    TextMarshalerString k = BURROW_S("foo"), v = BURROW_S("bar");
+    map_set(m, &k, &v);
+    Error err = BURROW_NO_ERROR;
+    Slice got = json_marshal(a, BURROW_ANY(&tms_map, &m), &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatalf_v(t, "Marshal error: %v", err);
+    const char *want = "{\"foo\":\"X_bar\"}";
+    if (!str_eq(q(got), cs(want)))
+        testing_t_errorf_v(t, "Marshal:\n\tgot:  %s\n\twant: %s", q(got), want);
+    arena_free(&ar);
+}
+
 /* ---------------------------------------------------------------- unmarshal */
 
 typedef struct UnmarshalCase {
@@ -564,6 +719,8 @@ static void TestCompactIndent(TestingT *t) {
     X(TestUnmarshal)                                                                   \
     X(TestNumber)                                                                      \
     X(TestValid)                                                                       \
-    X(TestCompactIndent)
+    X(TestCompactIndent)                                                               \
+    X(TestUnsupportedValueErrorValue)                                                  \
+    X(TestStringKindTextMarshalerMapKey)
 
 TESTING_MAIN(TESTS)

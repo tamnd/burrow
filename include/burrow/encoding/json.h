@@ -289,10 +289,17 @@ BURROW_OWNS(ret) Str
 json_unsupported_type_error_error(const JsonUnsupportedTypeError *e, Alloc *a);
 
 /* json.UnsupportedValueError. Marshal met a value JSON has no way to write,
- * NaN or an infinity, or a cycle. Go's Value field has not been filled in
- * since v1 moved onto v2 and is left out here. */
+ * NaN or an infinity, or a cycle. value is Go's Value field as an Any: for NaN
+ * or an infinity it is the float, with the type it had, and for a cycle it is
+ * empty. Not in Go: num is where the float is kept, so that value's data
+ * lives as long as the error does. */
 typedef struct JsonUnsupportedValueError {
+    Any value;
     Str str;
+    union {
+        float f32;
+        double f64;
+    } num;
 } JsonUnsupportedValueError;
 
 extern const Type *const TYPE_JSON_UNSUPPORTED_VALUE_ERROR;

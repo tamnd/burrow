@@ -15,6 +15,7 @@
 #include "burrow/map.h"
 #include "burrow/mem.h"
 #include "burrow/mem/heap.h"
+#include "burrow/net.h"
 #include "burrow/panic.h"
 #include "burrow/slice.h"
 #include "burrow/strconv.h"
@@ -1473,24 +1474,58 @@ void textproto_pipeline_end_response(TextprotoPipeline *p, Uint id) {
 
 /* --------------------------------------------------------------------- Conn */
 
-TextprotoConn *textproto_new_conn(Alloc *a, IoReadWriteCloser conn) {
-    TextprotoConn *c = BURROW_NEW(a, TextprotoConn);
-    if (c == NULL)
-        return NULL;
-    c->a = a;
-    c->conn = conn;
+/* Gives c its buffers over conn. False, with c unchanged, when a says no. */
+static bool tp_conn_init(TextprotoConn *c, Alloc *a, IoReadWriteCloser conn) {
     BufioReader *br = bufio_new_reader(a, (IoReader){&conn.vt->reader, conn.data});
     BufioWriter *bw = bufio_new_writer(a, (IoWriter){&conn.vt->writer, conn.data});
     if (br == NULL || bw == NULL) {
         bufio_reader_free(br);
         bufio_writer_free(bw);
-        mem_free(a, c, sizeof *c, _Alignof(TextprotoConn));
-        return NULL;
+        return false;
     }
+    c->a = a;
+    c->conn = conn;
     c->reader.r = br;
     c->reader.a = a;
     c->writer.w = bw;
     c->writer.a = a;
+    return true;
+}
+
+TextprotoConn *textproto_new_conn(Alloc *a, IoReadWriteCloser conn) {
+    TextprotoConn *c = BURROW_NEW(a, TextprotoConn);
+    if (c == NULL)
+        return NULL;
+    if (!tp_conn_init(c, a, conn)) {
+        mem_free(a, c, sizeof *c, _Alignof(TextprotoConn));
+        return NULL;
+    }
+    return c;
+}
+
+TextprotoConn *textproto_dial(Alloc *a, Str network, Str addr, Error *err) {
+    Error e;
+    NetConn nc = net_dial(a, network, addr, &e);
+    if (BURROW_FAILED(e)) {
+        BURROW_OUT(err, e);
+        return NULL;
+    }
+    /* Not in Go: conn reads and writes through c->dialed, so the NetConn has
+     * to live in c rather than on this stack. */
+    TextprotoConn *c = BURROW_NEW(a, TextprotoConn);
+    if (c != NULL) {
+        c->dialed = nc;
+        if (!tp_conn_init(c, a, net_conn_as_io_read_write_closer(&c->dialed))) {
+            mem_free(a, c, sizeof *c, _Alignof(TextprotoConn));
+            c = NULL;
+        }
+    }
+    if (c == NULL) {
+        net_conn_free(nc);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    BURROW_OUT(err, BURROW_NO_ERROR);
     return c;
 }
 
@@ -1504,6 +1539,7 @@ void textproto_conn_free(TextprotoConn *c) {
     tp_reader_release(&c->reader);
     bufio_reader_free(c->reader.r);
     bufio_writer_free(c->writer.w);
+    net_conn_free(c->dialed);
     mem_free(c->a, c, sizeof *c, _Alignof(TextprotoConn));
 }
 

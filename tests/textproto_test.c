@@ -8,6 +8,7 @@
  * bytes with runtime.MemStats and here counts them with a Track allocator
  * over the test's arena, which frees what the headers hold.
  * TestConn and TestPipeline are new, since Go tests those through net/smtp.
+ * TestDial is new too: Go has no test of Dial.
  * TestReadMIMEHeaderShortLimitLongLine is newer than go1.27.1: it comes with
  * the go1.27.2 fix for GO-2026-6608, CL 847307.
  *
@@ -27,7 +28,10 @@
 #include "burrow/io.h"
 #include "burrow/map.h"
 #include "burrow/mem/arena.h"
+#include "burrow/mem/heap.h"
 #include "burrow/mem/track.h"
+#include "burrow/net.h"
+#include "burrow/netpoll.h"
 #include "burrow/panic.h"
 #include "burrow/proc.h"
 #include "burrow/strings.h"
@@ -37,6 +41,10 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+
+#if defined(BURROW_NETPOLL_READINESS) && !defined(BURROW_OS_WASI)
+#define HAVE_SOCKETS 1
+#endif
 
 #define S BURROW_S
 
@@ -909,6 +917,48 @@ static void TestConn(TestingT *t) {
     ARENA_END;
 }
 
+/* Not in Go: Dial over a loopback listener, and a Dial that fails. */
+static void TestDial(TestingT *t) {
+#if !defined(HAVE_SOCKETS)
+    testing_t_skip_v(t, "sockets here need the readiness poll FD");
+#else
+    ARENA_BEGIN;
+    Error err = BURROW_NO_ERROR;
+    NetListener ln = net_listen(heap_allocator(), S("tcp"), S("127.0.0.1:0"), &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    NetAddr la = ln.vt->addr(ln.data);
+    Str addr = la.vt->string(la.data, a);
+
+    TextprotoConn *c = textproto_dial(a, S("tcp"), addr, &err);
+    if (c == NULL || BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    NetConn srv = ln.vt->accept(ln.data, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    (void)srv.vt->writer.write(srv.data, slice_from_str(a, S("220 ready\r\n")), &err);
+    CHECK(BURROW_OK(err));
+
+    Str msg;
+    Int code = textproto_conn_read_code_line(c, a, 220, &msg, &err);
+    CHECK(code == 220 && str_is(msg, "ready") && BURROW_OK(err));
+    CHECK(BURROW_OK(textproto_conn_printf_line_v(c, "QUIT")));
+    Byte buf[6];
+    Int n = io_read_full((IoReader){&srv.vt->reader, srv.data},
+                         slice_from(buf, sizeof buf, sizeof buf, TYPE_BYTE), &err);
+    CHECK(n == 6 && memcmp(buf, "QUIT\r\n", 6) == 0 && BURROW_OK(err));
+    CHECK(BURROW_OK(textproto_conn_close(c)));
+    textproto_conn_free(c);
+    net_conn_free(srv);
+    net_listener_free(ln);
+
+    /* The listener is gone, so nothing answers at addr. */
+    c = textproto_dial(a, S("tcp"), addr, &err);
+    CHECK(c == NULL && BURROW_FAILED(err));
+    ARENA_END;
+#endif
+}
+
 #define PIPE_WORKERS 16
 
 static TextprotoPipeline pipe_p;
@@ -942,6 +992,11 @@ static void end_out_of_turn(void *env) {
 }
 
 static void TestPipeline(TestingT *t) {
+    /* With -test.count the test runs again in the same process, and the last
+     * run's ids and log are still there. */
+    TextprotoPipeline fresh = {0};
+    pipe_p = fresh;
+    pipe_n = 0;
     pipe_main(NULL);
     CHECK(pipe_n == PIPE_WORKERS);
     for (Int i = 0; i < pipe_n; i++)
@@ -1004,6 +1059,7 @@ static void TestTrim(TestingT *t) {
     X(TestDotWriterCloseNoWrite)                                                       \
     X(TestDotWriterClosedByPrintfLine)                                                 \
     X(TestConn)                                                                        \
+    X(TestDial)                                                                        \
     X(TestPipeline)                                                                    \
     X(TestTrim)
 TESTING_MAIN(TESTS)

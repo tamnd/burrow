@@ -661,8 +661,7 @@ static void TestExampleNewReader(TestingT *t) {
 /* ------------------------------------------------------------ burrow's own */
 
 /* What Go's writer makes, byte for byte, at every level with every kind of
- * dictionary, and each of those reads back. The few that Go gets wrong, which
- * the generator marks, come out without the dictionary Go sent as data. */
+ * dictionary, and each of those reads back. */
 static void TestGoVectors(TestingT *t) {
     Arena ar;
     arena_init(&ar, NULL, 0);
@@ -679,14 +678,7 @@ static void TestGoVectors(TestingT *t) {
         Slice got = deflate_all(a, v->level, dict, in);
         char hex[65];
         sha_hex(got, hex);
-        if (v->go_bug) {
-            /* Go sent the dictionary out in a stored block as well, so the
-             * right output is exactly that much shorter. */
-            if (got.len != v->len - dict.len || strcmp(hex, v->sha256) == 0)
-                testing_t_errorf_v(
-                    t, "input %d, level %d, dict %d: got %d bytes, want %d", v->input,
-                    v->level, v->dict, (int)got.len, (int)(v->len - dict.len));
-        } else if (got.len != v->len || strcmp(hex, v->sha256) != 0) {
+        if (got.len != v->len || strcmp(hex, v->sha256) != 0) {
             testing_t_errorf_v(t,
                                "input %d, level %d, dict %d: got %d bytes, Go made %d",
                                v->input, v->level, v->dict, (int)got.len, (int)v->len);

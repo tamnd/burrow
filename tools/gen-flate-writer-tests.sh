@@ -179,9 +179,9 @@ func dictFor(pattern int) []byte {
 }
 
 // Whether Go's reader gives back in from what Go's writer made of it. Go
-// 1.27.1 sends the dictionary out as data at levels 7 to 9 when a block of
-// input that does not compress follows it, and those vectors are marked so
-// that the C test checks it reads back instead of matching it.
+// 1.27.1 sent the dictionary out as data at levels 7 to 9 when a block of
+// input that does not compress followed it (go.dev/issue/80538). go1.27.2
+// fixed that, and the generator stops if any vector does not read back.
 func readsBack(z, dict, in []byte) bool {
 	got, err := io.ReadAll(flate.NewReaderDict(bytes.NewReader(z), dict))
 	return err == nil && bytes.Equal(got, in)
@@ -239,7 +239,7 @@ func main() {
  * in the LICENSE file. */
 
 `)
-	w.WriteString("typedef struct FlateVector {\n    int input;\n    int level;\n    int pattern;\n    Int len;\n    const char *sha256;\n    bool go_bug; /* Go's output does not read back */\n} FlateVector;\n\n")
+	w.WriteString("typedef struct FlateVector {\n    int input;\n    int level;\n    int pattern;\n    Int len;\n    const char *sha256;\n} FlateVector;\n\n")
 	w.WriteString("static const FlateVector flate_vectors[] = {\n")
 	for id := 0; id < numInputs; id++ {
 		in := input(id)
@@ -249,8 +249,10 @@ func main() {
 			}
 			for level := -2; level <= 9; level++ {
 				got := run(level, pattern, in)
-				bug := !readsBack(got, dictFor(pattern), in)
-				fmt.Fprintf(w, "    {%d, %d, %d, %d, \"%s\", %t},\n", id, level, pattern, len(got), sum(got), bug)
+				if !readsBack(got, dictFor(pattern), in) {
+					panic(fmt.Sprintf("input %d, level %d, pattern %d does not read back", id, level, pattern))
+				}
+				fmt.Fprintf(w, "    {%d, %d, %d, %d, \"%s\"},\n", id, level, pattern, len(got), sum(got))
 			}
 		}
 	}

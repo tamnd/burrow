@@ -1,7 +1,7 @@
 /* internal/pkgbits: reading and writing the Unified IR bitstream.
  *
  * Derived from Go's src/internal/pkgbits/decoder.go, encoder.go, version.go,
- * syncmarker_string.go and support.go. Go source: go1.27.1.
+ * syncmarker_string.go and support.go. Go source: go1.27.3.
  *
  * Copyright 2021 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -65,6 +65,7 @@ static const PbVersion pb_introduced[PB_NUM_FIELDS] = {
     [PB_FIELD_ALIAS_TYPE_PARAM_NAMES] = PB_V2,
     [PB_FIELD_COMPACT_COMP_LITERALS] = PB_V3,
     [PB_FIELD_GENERIC_METHODS] = PB_V4,
+    [PB_FIELD_PRESERVE_METHOD_ORDER] = PB_V5,
 };
 
 static const PbVersion pb_removed[PB_NUM_FIELDS] = {

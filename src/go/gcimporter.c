@@ -2,7 +2,7 @@
  * into go/types packages.
  *
  * Derived from Go's src/go/internal/gcimporter/gcimporter.go, support.go and
- * ureader.go. Go source: go1.27.1.
+ * ureader.go. Go source: go1.27.3.
  *
  * As in Go, export data that is not well formed panics. Not in Go: everything
  * the importer makes comes from the allocator it is given.
@@ -650,9 +650,26 @@ static void gci_obj(GciReader *r, Slice *targs, TypesObject *obj) {
         BURROW_AT(TypesType, *targs, i) = gci_typ(r);
 }
 
-static TypesFunc *gci_method(GciReader *r) {
+typedef struct GciIndexedMethod {
+    Int index; /* (or -1 in V4) */
+    TypesFunc *fn;
+} GciIndexedMethod;
+
+static int gci_compare_method_index(void *env, const void *x, const void *y) {
+    (void)env;
+    const GciIndexedMethod *a = *(const GciIndexedMethod *const *)x;
+    const GciIndexedMethod *b = *(const GciIndexedMethod *const *)y;
+    return (a->index > b->index) - (a->index < b->index);
+}
+
+/* The index comes back through idx, -1 when the version has no method order. */
+static TypesFunc *gci_method(GciReader *r, Int *idx) {
     Alloc *a = r->p->a;
     burrow__pb_sync(&r->d, PB_SYNC_METHOD);
+    *idx = -1;
+    if (burrow__pb_version_has(burrow__pb_decoder_version(&r->d),
+                               PB_FIELD_PRESERVE_METHOD_ORDER))
+        *idx = burrow__pb_len(&r->d);
     TokenPos pos = gci_pos(r);
     TypesPackage *pkg;
     Str name = gci_selector(r, &pkg);
@@ -792,11 +809,29 @@ static TypesPackage *gci_obj_idx(GciPkgReader *pr, PbIndex idx, Str *name) {
 
             types_named_set_underlying(named, underlying);
 
-            for (Int i = 0, n = burrow__pb_len(&r.d); i < n; i++)
-                types_named_add_method(named, gci_method(&r));
-
             if (burrow__pb_version_has(v, PB_FIELD_GENERIC_METHODS)) {
-                for (Int i = 0, n = burrow__pb_len(&r.d); i < n; i++) {
+                /* V4 (go1.27.0) emitted all non-generic methods before all
+                 * generic ones, discarding source order: a bug
+                 * (go.dev/issue/81188). V5 (go1.27.x) fixes it by emitting an
+                 * explicit index along with each method. */
+
+                /* ordinary methods */
+                Int nord = burrow__pb_len(&r.d);
+                gci_assert(nord <= r.d.data.len); /* Not in Go: bounds first */
+                GciIndexedMethod *ord = gci_alloc(a, (size_t)nord * sizeof *ord,
+                                                  _Alignof(GciIndexedMethod));
+                for (Int i = 0; i < nord; i++)
+                    ord[i].fn = gci_method(&r, &ord[i].index);
+
+                /* generic methods */
+                Int ngen = burrow__pb_len(&r.d);
+                gci_assert(ngen <= r.d.data.len); /* Not in Go: bounds first */
+                Int nmethods = nord + ngen;
+                GciIndexedMethod *methods = gci_alloc(
+                    a, (size_t)nmethods * sizeof *methods, _Alignof(GciIndexedMethod));
+                for (Int i = 0; i < nord; i++)
+                    methods[i] = ord[i];
+                for (Int i = nord; i < nmethods; i++) {
                     /* Careful: objIdx is used to read in package-scoped
                      * declarations, which methods are not. Instead, decode it
                      * here. This makes it easier to associate it with the type
@@ -813,12 +848,33 @@ static TypesPackage *gci_obj_idx(GciPkgReader *pr, PbIndex idx, Str *name) {
                     Str mname = gci_selector(&mr, &pkg);
                     Slice rtparams = gci_type_param_names(&mr, true);
                     TypesVar *recv = gci_param(&mr, TYPES_RECV_VAR);
+                    Int method_idx = -1;
+                    if (burrow__pb_version_has(burrow__pb_decoder_version(&mr.d),
+                                               PB_FIELD_PRESERVE_METHOD_ORDER))
+                        method_idx = burrow__pb_len(&mr.d);
                     Slice tparams = gci_type_param_names(&mr, false);
                     TypesSignature *sig = gci_signature(&mr, recv, rtparams, tparams);
 
                     gci_retire_reader(pr, &mr);
+                    methods[i].index = method_idx;
+                    methods[i].fn = types_new_func(a, mpos, pkg, mname, sig);
+                }
+
+                Slice order = gci_ptrs(a, nmethods);
+                for (Int i = 0; i < nmethods; i++)
+                    BURROW_AT(GciIndexedMethod *, order, i) = &methods[i];
+                if (burrow__pb_version_has(v, PB_FIELD_PRESERVE_METHOD_ORDER))
+                    slices_sort_func(order,
+                                     (SlicesCmpFunc){gci_compare_method_index, NULL});
+
+                for (Int i = 0; i < nmethods; i++)
                     types_named_add_method(named,
-                                           types_new_func(a, mpos, pkg, mname, sig));
+                                           BURROW_AT(GciIndexedMethod *, order, i)->fn);
+
+            } else {
+                for (Int i = 0, n = burrow__pb_len(&r.d); i < n; i++) {
+                    Int unused;
+                    types_named_add_method(named, gci_method(&r, &unused));
                 }
             }
             break;

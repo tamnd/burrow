@@ -16,6 +16,7 @@
 #include "burrow/pal.h"
 
 #include "burrow/atomic.h"
+#include "burrow/netpoll.h"
 #include "burrow/thread.h"
 
 #include "check.h"
@@ -454,9 +455,10 @@ static int64_t poller = PAL_INVALID_HANDLE;
 
 /* A pipe, or the test gives up rather than reporting a failure that is not
  * about the code under test. */
-static void open_pipe(int *rd, int *wr) {
+static void open_pipe(TestingT *t, int *rd, int *wr) {
     int fds[2];
-    CHECK(pipe(fds) == 0);
+    if (pipe(fds) != 0)
+        testing_t_skip_v(t, "no pipe here");
     *rd = fds[0];
     *wr = fds[1];
 }
@@ -464,9 +466,13 @@ static void open_pipe(int *rd, int *wr) {
 static void TestThereIsOnePollerAndASecondAskIsRefused(TestingT *t) {
     PalErrno err = PAL_OK;
 
-    poller = pal_poll_create(&err);
-    CHECK(poller != PAL_INVALID_HANDLE);
-    CHECK_INT_EQ(err, PAL_OK);
+    /* With -test.count the tests run again in the same process, and the poller
+     * the first run made is still there, so only the first run makes it. */
+    if (poller == PAL_INVALID_HANDLE) {
+        poller = pal_poll_create(&err);
+        CHECK(poller != PAL_INVALID_HANDLE);
+        CHECK_INT_EQ(err, PAL_OK);
+    }
 
     /* Not a limitation to work around. Nothing in the PAL allocates, so the
      * poller is static storage, and a second one would have nowhere to live. */
@@ -477,7 +483,7 @@ static void TestThereIsOnePollerAndASecondAskIsRefused(TestingT *t) {
 
 static void TestADescriptorWithSomethingOnItComesBackReady(TestingT *t) {
     int rd, wr;
-    open_pipe(&rd, &wr);
+    open_pipe(t, &rd, &wr);
 
     void *tag = (void *)(uintptr_t)0x1234;
     PalErrno err = PAL_OK;
@@ -588,7 +594,7 @@ static void TestAHandleThatIsNotThePollerIsRefused(TestingT *t) {
 
 static void TestTheWakeupsOwnTagCannotBeUsedAsAUserPointer(TestingT *t) {
     int rd, wr;
-    open_pipe(&rd, &wr);
+    open_pipe(t, &rd, &wr);
 
     /* The all ones pointer is what a readiness backend registers its own
      * wakeup with, so a caller cannot have it. pal.h says so and this is the

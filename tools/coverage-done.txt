@@ -145,3 +145,4 @@ io/ioutil
 runtime/cgo
 runtime/metrics
 index/suffixarray
+plugin

@@ -196,6 +196,7 @@
 #include "burrow/panic.h"
 #include "burrow/path.h"
 #include "burrow/path/filepath.h"
+#include "burrow/plugin.h"
 #include "burrow/proc.h"
 #include "burrow/reflect.h"
 #include "burrow/regexp.h"

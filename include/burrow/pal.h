@@ -1752,10 +1752,34 @@ BURROW_STATIC(ret) void *pal_proc_address(uintptr_t module, const char *name,
  *
  * For plugin and for the cgo-free paths that have to reach a system library at
  * runtime, which on macOS is how anything outside libSystem is reached at all.
- * Not implemented yet. */
-int64_t pal_dl_open(const char *path, PalErrno *err);
+ * dlopen and dlsym on POSIX, LoadLibraryExW and GetProcAddress on Windows. On
+ * Linux they are weak references, the way resolve_posix.c reaches res_search,
+ * so that a program does not need -ldl on a glibc older than 2.34, where they
+ * live in libdl. There, and in a static program that did not pull them in, the
+ * calls fail with ENOSYS, as they do on wasip1, js and Cosmopolitan. */
+
+/* path with every symbolic link, ".", ".." and extra separator resolved, as
+ * realpath(3) gives it, into out, which holds cap bytes including the NUL that
+ * ends it. On Windows it is GetFullPathNameW, which leaves links alone, and
+ * the file has to be there. False with the error when there is no such file
+ * or the answer does not fit, which is PAL_ERANGE. */
+bool pal_dl_realpath(const char *path, char *out, size_t cap, PalErrno *err);
+
+/* dlopen of path with RTLD_NOW | RTLD_GLOBAL, which is what Go's plugin
+ * package asks for, or LoadLibraryExW. It returns the handle, or 0 with the
+ * reason in msg, which holds cap bytes and always ends with a NUL. The reason
+ * is what dlerror said, or on Windows the system's message for the error. */
+int64_t pal_dl_open(const char *path, char *msg, size_t cap);
+
+/* dlsym, or GetProcAddress: the address of the symbol name in the library
+ * handle, which stays good until the library is closed. NULL with PAL_ENOENT
+ * when there is no such symbol. dlsym can find a symbol whose address is NULL,
+ * and that is NULL with PAL_OK. */
 BURROW_BORROWS(ret, handle) void *pal_dl_sym(int64_t handle, const char *name,
                                              PalErrno *err);
+
+/* dlclose, or FreeLibrary. The plugin package never calls it, since a Go
+ * plugin cannot be closed. */
 bool pal_dl_close(int64_t handle, PalErrno *err);
 
 /* ---------------------------------------------------------------------- user

@@ -60,7 +60,7 @@ runtime_main(BURROW_FN(Func, run, NULL));
 
 A zero or negative argument only asks. The default is the number of processors the machine has, which under a container CPU limit or a cpuset is not the number this process may use. Go reconciles those and burrow does not yet, so a program in a container with a fraction of a core should set this itself.
 
-One limitation, and it is temporary. Changing the number while the scheduler is running means taking Ps away from threads that are using them, which is stopping the world, which needs preemption, which is deliberately the last piece of the runtime to be built. So a call with a positive argument while `runtime_main` is running changes nothing and returns the current value. Call it before and it does what Go does.
+One limitation. Changing the number while the scheduler is running means taking Ps away from threads that are using them, which is stopping the world. burrow can ask a goroutine to give way, but it can't make one that is between safe points do it, so there is no bound on how long stopping the world would take. So a call with a positive argument while `runtime_main` is running changes nothing and returns the current value. Call it before and it does what Go does.
 
 ## Yielding
 
@@ -71,7 +71,9 @@ runtime_gosched();
 
 `runtime.Gosched`. It puts this goroutine back on the run queue and gives the thread to something else, and it comes straight back if there is nothing else to run.
 
-Until preemption lands this is the only thing that lets a compute loop share a thread. A loop with no call in it that blocks and no call to this holds its thread until it finishes, and if every thread is held that way, nothing else in the program runs. That is the same bug that used to hang a Go program before Go 1.14, and it has the same fix, which is on the list.
+It always goes through the scheduler, which is a stack switch and a trip through the global run queue. A loop that only wants to give way when something else is waiting should call `runtime_preempt_point` instead. That reads one field and returns, and only yields on the turn where the scheduler has asked it to.
+
+The scheduler asks a goroutine to give way once it has held a processor for ten milliseconds, which is Go's number. Go can then stop the goroutine wherever it is. burrow can't, so the goroutine gives way at its next safe point: a send, a receive, a select, starting a goroutine, or waiting for something. A loop that passes none of those holds its thread until it finishes, and if every thread is held that way, nothing else in the program runs. That is the bug that used to hang a Go program before Go 1.14. Here the fix is one call to `runtime_preempt_point` inside the loop.
 
 ## Ending one
 
@@ -170,17 +172,13 @@ A thread that finds nothing gives its P up and looks again before parking. Doing
 
 `runtime_gosched` from a goroutine puts it on the global queue rather than the local one, which is Go's behaviour and matters for fairness. `sched_ready` puts the woken goroutine in `runnext`, which is also Go's, for the cache.
 
-One more thread exists than you might count from `runtime_gomaxprocs`, and it is the monitor, which Go calls `sysmon`. It holds no P, so it is the only part of the scheduler that can look around while everything else is busy, and today the one thing it looks for is a timer that has come due on a P nobody is holding. That should never happen, because a thread going idle already sleeps with the earliest deadline anywhere as its own, and this is the thing that notices when it has. It wakes on a timer that starts at 20 microseconds and stretches to 10 milliseconds while a program stays quiet, and if every P is idle with no timer anywhere it stops waking at all until a P is taken. So an idle burrow program is genuinely idle and this thread does not show up in a profile of one.
+One more thread exists than you might count from `runtime_gomaxprocs`, and it is the monitor, which Go calls `sysmon`. It holds no P, so it is the only part of the scheduler that can look around while everything else is busy, and it looks for three things. One is a goroutine that has held its P for ten milliseconds, which it asks to give way. Another is a network event that nobody has polled for in ten milliseconds, which only happens when every thread is busy. The third is a timer that has come due on a P nobody is holding. That last one should never happen, because a thread going idle already sleeps with the earliest deadline anywhere as its own, and this is the thing that notices when it has. It wakes on a timer that starts at 20 microseconds and stretches to 10 milliseconds while a program stays quiet, and if every P is idle with no timer anywhere it stops waking at all until a P is taken. So an idle burrow program is genuinely idle and this thread does not show up in a profile of one.
 
-## What is not here yet
+## What is different from Go
 
-Three things, all of them on the P0 milestone.
+Preemption is cooperative, as [Yielding](#yielding) says. A goroutine gives way at a safe point and nowhere else, so a long computation that never calls into burrow should call `runtime_preempt_point` from time to time.
 
-The netpoller, which is what makes a blocked read give its thread up instead of holding it. Channels and `select`, which are the interface most of this exists to support. And preemption, which is what stops a goroutine that never yields from holding a thread forever.
-
-Timers have landed. `sched_park` can come back on its own after a while now, which is what [guides/time.md](time.md) is built on.
-
-Until preemption lands, a goroutine that runs a long computation should call `runtime_gosched` from time to time. It is one function call and it costs about two hundred nanoseconds.
+Changing `runtime_gomaxprocs` while `runtime_main` is running does nothing, for the reason given under [How many run at once](#how-many-run-at-once).
 
 ## See also
 

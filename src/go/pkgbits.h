@@ -1,7 +1,7 @@
 /* internal/pkgbits: the bitstream the gc compiler writes a package's export
  * data in, the Unified IR format, and reads it back with.
  *
- * Derived from Go's src/internal/pkgbits. Go source: go1.27.1.
+ * Derived from Go's src/internal/pkgbits. Go source: go1.27.3.
  *
  * The data is a header, a table of where each element ends, and the elements
  * themselves, grouped by section. Every element starts with a table of the
@@ -47,6 +47,9 @@ enum {
     PB_V2,     /* removes unused legacy fields, type parameters on aliases */
     PB_V3,     /* a more compact format for composite literal element lists */
     PB_V4,     /* generic methods as standalone function objects */
+    /* V5: encodes the index of methods to preserve relative order of nongeneric
+     * and generic methods (go.dev/issue/81188). */
+    PB_V5,
     PB_NUM_VERSIONS
 };
 
@@ -61,6 +64,9 @@ enum {
     PB_FIELD_DERIVED_INFO_NEEDED, /* deprecated: a type is derived */
     PB_FIELD_COMPACT_COMP_LITERALS,
     PB_FIELD_GENERIC_METHODS,
+    /* Method index is encoded to preserve relative order of nongeneric and
+     * generic methods. */
+    PB_FIELD_PRESERVE_METHOD_ORDER,
     PB_NUM_FIELDS
 };
 

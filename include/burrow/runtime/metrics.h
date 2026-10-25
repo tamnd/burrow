@@ -1,7 +1,7 @@
 /* Derived from Go's src/runtime/metrics: doc.go, description.go, histogram.go,
  * sample.go and value.go, and the bucket boundaries and the readers in
  * src/runtime/metrics.go and src/runtime/histogram.go.
- * Go source: go1.27.1.
+ * Go source: go1.27.3.
  *
  * Copyright 2020 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -340,6 +340,11 @@
  *         The number of non-default behaviors executed
  *         by the net/http package due to a non-default
  *         GODEBUG=httpservecontentkeepheaders=... setting.
+ *
+ *     /godebug/non-default-behavior/httpservecontentmaxranges:events
+ *         The number of non-default behaviors executed
+ *         by the net/http package due to a non-default
+ *         GODEBUG=httpservecontentmaxranges=... setting.
  *
  *     /godebug/non-default-behavior/installgoroot:events
  *         The number of non-default behaviors executed by the go/build

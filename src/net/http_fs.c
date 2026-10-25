@@ -671,7 +671,8 @@ Int burrow__http_parse_range(Alloc *a, Str s, int64_t size, burrow__HttpRange **
         if (s.p[i] == ',')
             max++;
     /* Go counts the non-default uses of httpservecontentmaxranges here for
-     * runtime/metrics, which burrow does not have. */
+     * runtime/metrics. burrow doesn't count GODEBUG uses, and its
+     * runtime/metrics reports each of those counts as 0. */
     if (max > burrow__http_max_content_ranges())
         return 0; /* ignore header with too many ranges */
     burrow__HttpRange *ranges = (burrow__HttpRange *)mem_alloc(

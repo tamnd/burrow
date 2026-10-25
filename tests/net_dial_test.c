@@ -228,40 +228,53 @@ static void TestDialLocal(TestingT *t) {
 }
 
 static void TestDialerPartialDeadline(TestingT *t) {
-    const int64_t now = 1000 * TIME_SECOND;
-    const int64_t no_deadline = 0;
+    Time now = time_date(2000, TIME_JANUARY, 1, 0, 0, 0, 0, time_utc_loc);
+    Time no_deadline = {0, 0, NULL};
     struct {
-        int64_t now;
-        int64_t deadline;
+        Time now;
+        Time deadline;
         Int addrs;
-        int64_t expect_deadline;
-        bool expect_timeout;
+        Time expect_deadline;
+        Error expect_err;
     } cases[] = {
         /* Regular division. */
-        {now, now + 12 * TIME_SECOND, 1, now + 12 * TIME_SECOND, false},
-        {now, now + 12 * TIME_SECOND, 2, now + 6 * TIME_SECOND, false},
-        {now, now + 12 * TIME_SECOND, 3, now + 4 * TIME_SECOND, false},
+        {now, time_add(now, 12 * TIME_SECOND), 1, time_add(now, 12 * TIME_SECOND),
+         BURROW_NO_ERROR},
+        {now, time_add(now, 12 * TIME_SECOND), 2, time_add(now, 6 * TIME_SECOND),
+         BURROW_NO_ERROR},
+        {now, time_add(now, 12 * TIME_SECOND), 3, time_add(now, 4 * TIME_SECOND),
+         BURROW_NO_ERROR},
         /* Bump against the 2-second sane minimum. */
-        {now, now + 12 * TIME_SECOND, 999, now + 2 * TIME_SECOND, false},
+        {now, time_add(now, 12 * TIME_SECOND), 999, time_add(now, 2 * TIME_SECOND),
+         BURROW_NO_ERROR},
         /* Total available is now below the sane minimum. */
-        {now, now + 1900 * TIME_MILLISECOND, 999, now + 1900 * TIME_MILLISECOND, false},
+        {now, time_add(now, 1900 * TIME_MILLISECOND), 999,
+         time_add(now, 1900 * TIME_MILLISECOND), BURROW_NO_ERROR},
         /* Null deadline. */
-        {now, no_deadline, 1, no_deadline, false},
+        {now, no_deadline, 1, no_deadline, BURROW_NO_ERROR},
         /* Step the clock forward and cross the deadline. */
-        {now - 1 * TIME_MILLISECOND, now, 1, now, false},
-        {now + 0 * TIME_MILLISECOND, now, 1, no_deadline, true},
-        {now + 1 * TIME_MILLISECOND, now, 1, no_deadline, true},
+        {time_add(now, -1 * TIME_MILLISECOND), now, 1, now, BURROW_NO_ERROR},
+        {time_add(now, 0 * TIME_MILLISECOND), now, 1, no_deadline,
+         burrow__net_err_timeout},
+        {time_add(now, 1 * TIME_MILLISECOND), now, 1, no_deadline,
+         burrow__net_err_timeout},
     };
     for (size_t i = 0; i < sizeof cases / sizeof cases[0]; i++) {
-        int64_t got = -1;
-        Error e = burrow__net_partial_deadline(cases[i].now, cases[i].deadline,
-                                               cases[i].addrs, &got);
-        bool timeout = errors_is(e, burrow__net_err_timeout);
-        if (timeout != cases[i].expect_timeout || (BURROW_FAILED(e) && !timeout))
-            testing_t_errorf_v(t, "#%d: got %v", (int)i, e);
-        if (got != cases[i].expect_deadline)
-            testing_t_errorf_v(t, "#%d: got %d; want %d", (int)i, (Int)got,
-                               (Int)cases[i].expect_deadline);
+        Time deadline = {0, 0, NULL};
+        Error err = burrow__net_partial_deadline(cases[i].now, cases[i].deadline,
+                                                 cases[i].addrs, &deadline);
+        bool same = BURROW_OK(cases[i].expect_err)
+                        ? BURROW_OK(err)
+                        : errors_is(err, cases[i].expect_err);
+        if (!same) {
+            Error want = cases[i].expect_err;
+            testing_t_errorf_v(t, "#%d: got %v; want %v", (int)i, err, want);
+        }
+        if (!time_equal(deadline, cases[i].expect_deadline)) {
+            Str got = time_string(deadline, a);
+            Str want = time_string(cases[i].expect_deadline, a);
+            testing_t_errorf_v(t, "#%d: got %s; want %s", (int)i, got, want);
+        }
     }
 }
 

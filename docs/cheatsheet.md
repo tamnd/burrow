@@ -527,7 +527,7 @@ The sentences taken from Go are reproduced from the doc comments of Go's `contex
 - `extern const Error context_deadline_exceeded` – DeadlineExceeded is the error returned by Context.Err when the context is canceled due to its deadline passing.
 - `Context context_background(void)` – Background returns a non-nil, empty Context.
 - `Context context_todo(void)` – TODO returns a non-nil, empty Context.
-- `bool context_deadline(Context c, int64_t *when)` – Deadline returns the time when work done on behalf of this context should be canceled.
+- `bool context_deadline(Context c, Time *deadline)` – Deadline returns the time when work done on behalf of this context should be canceled.
 - `Chan *context_done(Context c)` – Done returns a channel that's closed when work done on behalf of this context should be canceled.
 - `Error context_err(Context c)` – If Done is not yet closed, Err returns nil.
 - `Any context_value(Context c, Any key)` – Value returns the value associated with this context for key, or nil if no value is associated with key.
@@ -536,10 +536,10 @@ The sentences taken from Go are reproduced from the doc comments of Go's `contex
 - `Error context_cause(Context c)` – Cause returns a non-nil error explaining why c was canceled.
 - `Context context_without_cancel(Alloc *a, Context parent)` – WithoutCancel returns a derived context that points to the parent context and is not canceled when parent is canceled.
 - `Context context_after_func(Alloc *a, Context parent, Func f, StopFunc *stop)` – AfterFunc arranges to call f in its own goroutine after ctx is canceled.
-- `Context context_with_deadline(Alloc *a, Context parent, int64_t when, ContextCancelFunc *cancel)` – WithDeadline returns a derived context that points to the parent context but has the deadline adjusted to be no later than d.
-- `Context context_with_timeout(Alloc *a, Context parent, Duration d, ContextCancelFunc *cancel)` – WithTimeout returns WithDeadline(parent, time.Now().Add(timeout)).
-- `Context context_with_deadline_cause(Alloc *a, Context parent, int64_t when, Error cause, ContextCancelFunc *cancel)` – WithDeadlineCause behaves like WithDeadline but also sets the cause of the returned Context when the deadline is exceeded.
-- `Context context_with_timeout_cause(Alloc *a, Context parent, Duration d, Error cause, ContextCancelFunc *cancel)` – WithTimeoutCause behaves like WithTimeout but also sets the cause of the returned Context when the timeout expires.
+- `Context context_with_deadline(Alloc *a, Context parent, Time d, ContextCancelFunc *cancel)` – WithDeadline returns a derived context that points to the parent context but has the deadline adjusted to be no later than d.
+- `Context context_with_timeout(Alloc *a, Context parent, Duration timeout, ContextCancelFunc *cancel)` – WithTimeout returns WithDeadline(parent, time.Now().Add(timeout)).
+- `Context context_with_deadline_cause(Alloc *a, Context parent, Time d, Error cause, ContextCancelFunc *cancel)` – WithDeadlineCause behaves like WithDeadline but also sets the cause of the returned Context when the deadline is exceeded.
+- `Context context_with_timeout_cause(Alloc *a, Context parent, Duration timeout, Error cause, ContextCancelFunc *cancel)` – WithTimeoutCause behaves like WithTimeout but also sets the cause of the returned Context when the timeout expires.
 - `Context context_with_value(Alloc *a, Context parent, Any key, Any val)` – WithValue returns a derived context that points to the parent Context.
 - `void context_release(Context c)` – Gives a context made by one of the With functions back to its allocator, and leaves the Context dangling, so it is the last thing done with one.
 

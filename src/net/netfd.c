@@ -277,11 +277,6 @@ static void nf_cancel_connect(void *env) {
     burrow__sema_release(&c->done, false);
 }
 
-/* A context's deadline, which is a reading of the monotonic clock, as a Time. */
-static Time nf_mono_time(int64_t when) {
-    return time_add(time_now(), when - burrow_nanotime());
-}
-
 /* Whether the channel is closed, without waiting. */
 static bool nf_closed(Chan *c) {
     bool ok = true;
@@ -312,10 +307,9 @@ static Error nf_connect(burrow__NetFD *fd, Context ctx, const PalSockAddr *rsa,
     StopFunc stop = {NULL, NULL};
     Context reg = {NULL, NULL};
     if (done != NULL) {
-        int64_t when = 0;
+        Time when;
         if (context_deadline(ctx, &when)) {
-            e = burrow__pfd_set_deadline(&fd->pfd, nf_mono_time(when),
-                                         BURROW_POLL_WRITE);
+            e = burrow__pfd_set_deadline(&fd->pfd, when, BURROW_POLL_WRITE);
             if (BURROW_FAILED(e))
                 return e;
             timed = true;

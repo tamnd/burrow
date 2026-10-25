@@ -68,7 +68,7 @@ struct cl_Send {
     Context ctx;       /* the deadline's, or nil */
     ContextCancelFunc cancel;
     IoReadCloser rc; /* the body inside */
-    int64_t deadline;
+    Time deadline;
     SyncAtomicBool stopped;
     bool timed; /* whether didTimeout can say true */
 };
@@ -232,7 +232,7 @@ static void cl_send_stop(cl_Send *s) {
 
 /* setRequestCancel's didTimeout. */
 static bool cl_send_did_timeout(const cl_Send *s) {
-    return s->timed && burrow_nanotime() > s->deadline;
+    return s->timed && time_after(time_now(), s->deadline);
 }
 
 static bool cl_is_eof(Error e) {
@@ -283,7 +283,7 @@ static bool cl_known_round_tripper(HttpRoundTripper rt, const HttpRequest *req) 
  * deadline in its context, and gives the response, or NULL and the error with
  * *timed_out saying whether the deadline is why. The body of req is closed on
  * an error. */
-static HttpResponse *cl_send_request(cl_Do *d, HttpRequest *req, int64_t deadline,
+static HttpResponse *cl_send_request(cl_Do *d, HttpRequest *req, Time deadline,
                                      bool *timed_out, Error *err) {
     Alloc *da = arena_allocator(&d->arena);
     HttpRoundTripper rt = cl_transport(d->c);
@@ -307,9 +307,10 @@ static HttpResponse *cl_send_request(cl_Do *d, HttpRequest *req, int64_t deadlin
         req->url->user != NULL &&
         (req->header == NULL ||
          http_header_get(req->header, BURROW_S("Authorization")).len == 0);
+    bool timed = !time_is_zero(deadline);
     HttpRequest *r = req;
     cl_Send *s = NULL;
-    if (req->header == NULL || wants_auth || deadline != 0) {
+    if (req->header == NULL || wants_auth || timed) {
         s = (cl_Send *)mem_alloc(da, sizeof *s, _Alignof(cl_Send));
         if (s == NULL)
             goto oom;
@@ -338,10 +339,10 @@ static HttpResponse *cl_send_request(cl_Do *d, HttpRequest *req, int64_t deadlin
 
     /* setRequestCancel. A context with the deadline, unless the request's own
      * one ends sooner. */
-    if (deadline != 0) {
+    if (timed) {
         Context old = http_request_context(r);
-        int64_t when = 0;
-        bool before = !context_deadline(old, &when) || deadline < when;
+        Time when;
+        bool before = !context_deadline(old, &when) || time_before(deadline, when);
         s->deadline = deadline;
         if (before) {
             s->ctx = context_with_deadline(d->a, old, deadline, &s->cancel);
@@ -404,7 +405,7 @@ static HttpResponse *cl_send_request(cl_Do *d, HttpRequest *req, int64_t deadlin
         }
         resp->body = http_no_body;
     }
-    if (deadline != 0) {
+    if (timed) {
         s->rc = resp->body;
         resp->body = (IoReadCloser){&cl_timer_body_vt, s};
     }
@@ -419,8 +420,8 @@ oom:
 
 /* Client.send. send, with the jar's cookies added to req first and the
  * response's given to the jar after. */
-static HttpResponse *cl_send(cl_Do *d, HttpRequest *req, int64_t deadline,
-                             bool *timed_out, Error *err) {
+static HttpResponse *cl_send(cl_Do *d, HttpRequest *req, Time deadline, bool *timed_out,
+                             Error *err) {
     HttpClient *c = d->c;
     Alloc *da = arena_allocator(&d->arena);
     *timed_out = false;
@@ -822,11 +823,9 @@ static HttpResponse *cl_do(HttpClient *c, HttpRequest *req, HttpRequest *owned,
     d->extra_size = extra_size;
     Alloc *da = arena_allocator(&d->arena);
 
-    int64_t deadline = 0;
-    if (c->timeout > 0) {
-        int64_t now = burrow_nanotime();
-        deadline = c->timeout > INT64_MAX - now ? INT64_MAX : now + c->timeout;
-    }
+    Time deadline = {0, 0, NULL};
+    if (c->timeout > 0)
+        deadline = time_add(time_now(), c->timeout);
 
     /* makeHeadersCopier, with the header as it is before the jar adds to
      * it. */
@@ -916,7 +915,8 @@ static HttpResponse *cl_do(HttpClient *c, HttpRequest *req, HttpRequest *owned,
         resp = cl_send(d, req, deadline, &timed_out, &e);
         if (resp == NULL) {
             /* send closed the body. */
-            if (deadline != 0 && timed_out && !cl_same(e, burrow_err_out_of_memory)) {
+            if (!time_is_zero(deadline) && timed_out &&
+                !cl_same(e, burrow_err_out_of_memory)) {
                 Str text =
                     fmt_sprintf_v(error_allocator(),
                                   "%s (Client.Timeout exceeded while awaiting headers)",

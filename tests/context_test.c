@@ -107,7 +107,7 @@ typedef struct Fake {
     Chan *done;
     Error err;
     bool has_deadline;
-    int64_t when;
+    Time when;
     Any key;
     Any val;
 
@@ -117,12 +117,12 @@ typedef struct Fake {
     bool wrap;
 } Fake;
 
-static bool fake_deadline(void *self, int64_t *when) {
+static bool fake_deadline(void *self, Time *deadline) {
     Fake *f = (Fake *)self;
 
     if (!f->has_deadline)
         return false;
-    *when = f->when;
+    *deadline = f->when;
     return true;
 }
 
@@ -172,11 +172,12 @@ static bool is(Error e, Error want) {
 
 static void TestTheRootIsNeverCancelledAndCarriesNothing(TestingT *t) {
     Context c = context_background();
-    int64_t when = 1234;
+    Time untouched = time_from_unix(1234, 0);
+    Time when = untouched;
 
     CHECK(!BURROW_CONTEXT_IS_NIL(c));
     CHECK(!context_deadline(c, &when));
-    CHECK_INT_EQ(when, 1234); /* untouched, because there is no deadline */
+    CHECK(time_equal(when, untouched)); /* because there is no deadline */
     CHECK(context_done(c) == NULL);
     CHECK(BURROW_OK(context_err(c)));
     CHECK(BURROW_ANY_IS_NIL(context_value(c, REQUEST_ID_KEY)));
@@ -218,7 +219,7 @@ static void TestACancelClosesTheDoneChannelAndSetsTheError(TestingT *t) {
     CHECK_STR_EQ((const char *)error_text(context_err(c)).p, "context canceled");
 
     /* A cancel says nothing about a deadline, so the parent's answer stands. */
-    int64_t when = 0;
+    Time when;
     CHECK(!context_deadline(c, &when));
 
     context_release(c);
@@ -534,14 +535,15 @@ static void TestAWithoutCancelHasNoDeadlineAndNoCause(TestingT *t) {
     ContextCancelCauseFunc cancel;
 
     f.has_deadline = true;
-    f.when = burrow_nanotime() + TIME_SECOND;
+    f.when = time_add(time_now(), TIME_SECOND);
 
     Context req = context_with_cancel_cause(a, fake_context(&f), &cancel);
     Context detached = context_without_cancel(a, req);
 
-    int64_t when = 1234;
+    Time untouched = time_from_unix(1234, 0);
+    Time when = untouched;
     CHECK(!context_deadline(detached, &when));
-    CHECK_INT_EQ(when, 1234);
+    CHECK(time_equal(when, untouched));
 
     BURROW_CALLF(cancel, err_too_slow);
 
@@ -663,7 +665,7 @@ static void TestARegistrationAnswersTheFourQuestionsLikeAnythingElse(TestingT *t
     Int id = 12;
 
     f.has_deadline = true;
-    f.when = burrow_nanotime() + TIME_SECOND;
+    f.when = time_add(time_now(), TIME_SECOND);
 
     Context req = context_with_cancel(a, fake_context(&f), &cancel);
     Context with =
@@ -674,9 +676,9 @@ static void TestARegistrationAnswersTheFourQuestionsLikeAnythingElse(TestingT *t
     /* Go hands back only the stop function and keeps the node to itself. This
      * hands the node back too, because something has to free it, and then it
      * may as well be usable. */
-    int64_t when = 0;
+    Time when;
     CHECK(context_deadline(reg, &when));
-    CHECK_INT_EQ(when, f.when);
+    CHECK(time_equal(when, f.when));
     CHECK(context_done(reg) != NULL);
     CHECK(BURROW_OK(context_err(reg)));
     CHECK_INT_EQ(*(Int *)context_value(reg, REQUEST_ID_KEY).data, 12);
@@ -790,20 +792,21 @@ static void TestADeadlineIsWhateverTheParentSays(TestingT *t) {
     ContextCancelFunc cancel;
 
     f.has_deadline = true;
-    f.when = burrow_nanotime() + TIME_SECOND;
+    f.when = time_add(time_now(), TIME_SECOND);
 
     Context root = fake_context(&f);
     Context with =
         context_with_value(a, root, REQUEST_ID_KEY, BURROW_ANY(TYPE_INT, &id));
     Context cancellable = context_with_cancel(a, with, &cancel);
 
-    int64_t when = 0;
+    Time when;
     CHECK(context_deadline(cancellable, &when));
-    CHECK_INT_EQ(when, f.when);
+    CHECK(time_equal(when, f.when));
 
-    when = 0;
+    Time zero = {0, 0, NULL};
+    when = zero;
     CHECK(context_deadline(with, &when));
-    CHECK_INT_EQ(when, f.when);
+    CHECK(time_equal(when, f.when));
 
     context_release(cancellable);
     context_release(with);
@@ -927,6 +930,7 @@ static void TestTheMonotonicClockOnlyGoesForwards(TestingT *t) {
 
 static Alloc *panic_alloc;
 static Context panic_parent;
+static const Time zero_time = {0, 0, NULL};
 
 /* Something to hand context_after_func in the test below. It never runs, since
  * the call it is passed to panics before the registration exists. */
@@ -951,7 +955,7 @@ static void TestANilParentPanics(TestingT *t) {
     /* The two deadline calls check the parent before they check anything else,
      * which is why these are here and not down with the runtime tests: a nil
      * parent is caught before the missing goroutine is. */
-    CHECK_PANIC((void)context_with_deadline(panic_alloc, panic_parent, 0, NULL),
+    CHECK_PANIC((void)context_with_deadline(panic_alloc, panic_parent, zero_time, NULL),
                 "cannot create context from nil parent");
     CHECK_PANIC(
         (void)context_with_timeout(panic_alloc, panic_parent, TIME_SECOND, NULL),
@@ -969,7 +973,7 @@ static void TestANilParentPanics(TestingT *t) {
         "cannot create context from nil parent");
     CHECK_PANIC((void)context_without_cancel(panic_alloc, panic_parent),
                 "cannot create context from nil parent");
-    CHECK_PANIC((void)context_with_deadline_cause(panic_alloc, panic_parent, 0,
+    CHECK_PANIC((void)context_with_deadline_cause(panic_alloc, panic_parent, zero_time,
                                                   err_too_slow, NULL),
                 "cannot create context from nil parent");
     CHECK_PANIC((void)context_with_timeout_cause(panic_alloc, panic_parent, TIME_SECOND,
@@ -1020,12 +1024,12 @@ static void TestADeadlineOffAGoroutineStopsTheProgram(TestingT *t) {
     CHECK_FATAL(
         (void)context_with_timeout(panic_alloc, panic_parent, TIME_SECOND, NULL),
         "context: a deadline needs a goroutine to put the timer on");
-    CHECK_FATAL((void)context_with_deadline(panic_alloc, panic_parent, 0, NULL),
+    CHECK_FATAL((void)context_with_deadline(panic_alloc, panic_parent, zero_time, NULL),
                 "context: a deadline needs a goroutine to put the timer on");
     CHECK_FATAL((void)context_with_timeout_cause(panic_alloc, panic_parent, TIME_SECOND,
                                                  err_too_slow, NULL),
                 "context: a deadline needs a goroutine to put the timer on");
-    CHECK_FATAL((void)context_with_deadline_cause(panic_alloc, panic_parent, 0,
+    CHECK_FATAL((void)context_with_deadline_cause(panic_alloc, panic_parent, zero_time,
                                                   err_too_slow, NULL),
                 "context: a deadline needs a goroutine to put the timer on");
 }
@@ -1302,8 +1306,9 @@ typedef struct DeadlineResult {
     bool child_done;
     int64_t started;
     int64_t elapsed;
-    int64_t when;
-    int64_t parent_when;
+    Time start;
+    Time when;
+    Time parent_when;
     Error err;
     Error err_after;
     Error parent_err;
@@ -1334,7 +1339,7 @@ static void future_body(void *env) {
 
     ContextCancelFunc cancel;
 
-    dl.started = burrow_nanotime();
+    dl.start = time_now();
 
     Context c = context_with_timeout(rt_alloc, context_background(), DL_NEVER, &cancel);
     if (BURROW_CONTEXT_IS_NIL(c))
@@ -1366,8 +1371,8 @@ static void TestADeadlineAnHourAwayLeavesTheCancelToWin(TestingT *t) {
     /* An hour from the clock reading inside the call, which is at or after the
      * one taken outside it, so the lower bound is exact and the upper bound is
      * however long the call took plus room for a machine having a bad day. */
-    CHECK(dl.when >= dl.started + DL_NEVER);
-    CHECK(dl.when <= dl.started + DL_NEVER + TIME_SECOND);
+    CHECK(!time_before(dl.when, time_add(dl.start, DL_NEVER)));
+    CHECK(!time_after(dl.when, time_add(dl.start, DL_NEVER + TIME_SECOND)));
 
     CHECK(!dl.done_at_once);
     CHECK(BURROW_OK(dl.err));
@@ -1398,7 +1403,7 @@ static void past_body(void *env) {
     /* The same thing said as an instant rather than as a duration, and with no
      * cancel function asked for at all. */
     Context d = context_with_deadline(rt_alloc, context_background(),
-                                      burrow_nanotime() - TIME_SECOND, NULL);
+                                      time_add(time_now(), -TIME_SECOND), NULL);
     if (BURROW_CONTEXT_IS_NIL(d))
         return;
 
@@ -1421,7 +1426,7 @@ static void TestADeadlineThatHasGoneByComesBackAlreadyCancelled(TestingT *t) {
 
     /* It still has the deadline it was given, in the past though it is. */
     CHECK(dl.has_deadline);
-    CHECK(dl.when < burrow_nanotime());
+    CHECK(time_before(dl.when, time_now()));
 
     CHECK(dl.made_child);
     CHECK(dl.child_done);
@@ -1488,7 +1493,8 @@ static void parent_sooner_body(void *env) {
 
     dl.made = context_deadline(p, &dl.parent_when);
 
-    Context c = context_with_deadline(rt_alloc, p, dl.parent_when + TIME_HOUR, &cancel);
+    Context c = context_with_deadline(rt_alloc, p, time_add(dl.parent_when, TIME_HOUR),
+                                      &cancel);
     if (BURROW_CONTEXT_IS_NIL(c)) {
         BURROW_CALLF0(parent_cancel);
         context_release(p);
@@ -1522,7 +1528,7 @@ static void TestAParentThatGivesUpSoonerKeepsTheDeadline(TestingT *t) {
     CHECK(dl.made);
     CHECK(dl.made_child);
     CHECK(dl.has_deadline);
-    CHECK_INT_EQ((Int)dl.when, (Int)dl.parent_when);
+    CHECK(time_equal(dl.when, dl.parent_when));
     CHECK(dl.parent_done);
     CHECK(dl.child_done);
     CHECK(is(dl.child_err, context_deadline_exceeded));
@@ -1629,7 +1635,7 @@ static void TestADeadlineReachesEverythingUnderneathIt(TestingT *t) {
     CHECK(dl.made);
     CHECK(dl.made_child);
     CHECK(dl.has_deadline);
-    CHECK_INT_EQ((Int)dl.when, (Int)dl.parent_when);
+    CHECK(time_equal(dl.when, dl.parent_when));
     CHECK(dl.parent_done);
     CHECK(dl.child_done);
     CHECK(is(dl.child_err, context_deadline_exceeded));
@@ -1803,7 +1809,9 @@ static void far_future_body(void *env) {
     (void)env;
 
     /* The largest duration there is, which is the one that would run off the
-     * end of the clock if the addition were written the obvious way. */
+     * end of the monotonic clock if the addition were written the obvious way.
+     * time_add drops the monotonic reading instead, as Go's Add does. */
+    dl.start = time_now();
     Context c = context_with_timeout(rt_alloc, context_background(), INT64_MAX, NULL);
     if (BURROW_CONTEXT_IS_NIL(c))
         return;
@@ -1824,7 +1832,8 @@ static void TestATimeoutTooBigToAddLandsAtTheEndOfTheClock(TestingT *t) {
 
     CHECK(dl.made);
     CHECK(dl.has_deadline);
-    CHECK_INT_EQ((Int)dl.when, (Int)INT64_MAX);
+    /* Further out than a Duration reaches, so the difference saturates. */
+    CHECK_INT_EQ((Int)time_sub(dl.when, dl.start), (Int)INT64_MAX);
     CHECK(!dl.done_at_once);
     CHECK(BURROW_OK(dl.err));
 }
@@ -1877,8 +1886,8 @@ static void cancel_beats_cause_body(void *env) {
 
     ContextCancelFunc cancel;
     Context c = context_with_deadline_cause(rt_alloc, context_background(),
-                                            burrow_nanotime() + DL_NEVER, err_too_slow,
-                                            &cancel);
+                                            time_add(time_now(), DL_NEVER),
+                                            err_too_slow, &cancel);
     if (BURROW_CONTEXT_IS_NIL(c))
         return;
 
@@ -2208,7 +2217,7 @@ static void past_deadline_child_body(void *env) {
         Arena ar;
         arena_init(&ar, heap_allocator(), 0);
         Context c = context_with_deadline(arena_allocator(&ar), p,
-                                          burrow_nanotime() - TIME_SECOND, NULL);
+                                          time_add(time_now(), -TIME_SECOND), NULL);
         if (BURROW_CONTEXT_IS_NIL(c)) {
             arena_free(&ar);
             context_release(p);

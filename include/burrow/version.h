@@ -41,7 +41,7 @@ int burrow_version_number(void);
  * out of a working tree that was not clean. Same idea as sqlite3_sourceid. */
 BURROW_STATIC(ret) const char *burrow_sourceid(void);
 
-/* The Go release this port was read against, as "go1.27.1 5f0b5b1b". Every
+/* The Go release this port was read against, as "go1.27.3". Every
  * ported file names its upstream source in the same terms, so this is the
  * single number that tells you what to diff against. */
 BURROW_STATIC(ret) const char *burrow_go_version(void);

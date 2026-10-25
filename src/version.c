@@ -14,7 +14,7 @@
 /* Pinned rather than detected. The port is read against one Go release at a
  * time and moving to the next one is a deliberate act with a changelog entry,
  * not something that happens because a developer upgraded their toolchain. */
-#define BURROW_GO_VERSION "go1.27.1"
+#define BURROW_GO_VERSION "go1.27.3"
 
 const char *burrow_version(void) {
     return BURROW_VERSION_STRING;

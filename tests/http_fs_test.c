@@ -35,6 +35,7 @@
 #include "burrow/net/http/httptest.h"
 #include "burrow/net/textproto.h"
 #include "burrow/net/url.h"
+#include "burrow/netpoll.h"
 #include "burrow/os.h"
 #include "burrow/panic.h"
 #include "burrow/path.h"

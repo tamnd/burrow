@@ -1627,19 +1627,20 @@ Error err;
 
 /* Get follows the redirect. */
 Str url = fmt_sprintf_v(a, "%s/old", ts->url);
-show(a, http_client_get(c, url, &err), err);
+HttpResponse *res = http_client_get(c, url, &err);
+show(a, res, err);
 
 /* PostForm encodes the values as the body. */
 UrlValues form = url_values_make(a);
 url_values_set(form, BURROW_S("name"), BURROW_S("gopher"));
 url_values_add(form, BURROW_S("name"), BURROW_S("burrow"));
-show(a, http_client_post_form(c, fmt_sprintf_v(a, "%s/echo", ts->url), form, &err),
-     err);
+res = http_client_post_form(c, fmt_sprintf_v(a, "%s/echo", ts->url), form, &err);
+show(a, res, err);
 
 /* check_redirect can stop at the redirect and hand it back. */
 HttpClient stopping = *c;
 stopping.check_redirect = BURROW_FN(HttpCheckRedirectFunc, stop_here, NULL);
-HttpResponse *res = http_client_get(&stopping, url, &err);
+res = http_client_get(&stopping, url, &err);
 if (res != NULL)
     fmt_printf_v("Location: %s\n",
                  http_header_get(res->header, BURROW_S("Location")));

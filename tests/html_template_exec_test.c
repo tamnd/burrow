@@ -2712,10 +2712,13 @@ static void TestTemplateFuncsAfterClone(TestingT *t) {
         BURROW_S("child"));
 
     Error err = BURROW_NO_ERROR;
-    HtmlTemplate *clone = html_template_must(html_template_clone(orig, a, &err), err);
+    /* Not in Go: two statements where Go has one, so that err is read after the
+     * call that sets it. C leaves the order of a call's arguments unspecified. */
+    HtmlTemplate *clone = html_template_clone(orig, a, &err);
+    clone = html_template_must(clone, err);
     err = BURROW_NO_ERROR;
-    HtmlTemplate *overview_tmpl =
-        html_template_must(html_template_parse(clone, s, &err), err);
+    HtmlTemplate *overview_tmpl = html_template_parse(clone, s, &err);
+    overview_tmpl = html_template_must(overview_tmpl, err);
     StringsBuilder out = STRINGS_BUILDER(a);
     err = html_template_execute(overview_tmpl, strings_builder_as_io_writer(&out),
                                 BURROW_ANY(TYPE_STRING, &want));

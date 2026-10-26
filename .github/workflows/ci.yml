@@ -425,12 +425,15 @@ jobs:
       # Windows puts its own headers in an order of their own, and one file with
       # every source in it is where that goes wrong first, so the same file is
       # cross compiled for it too. The windows jobs above run the real thing.
+      # Only the win32 thread model, since burrow uses Windows threads there, and
+      # the package that pulls in both is twice the download from a mirror that
+      # has been slow enough to time the job out.
       - name: for windows, with mingw
         if: runner.os == 'Linux'
         run: |
-          sudo apt-get update && sudo apt-get install -y gcc-mingw-w64-x86-64
-          x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-parameter -c dist-a/burrow.c -o burrow-windows.o
-          x86_64-w64-mingw32-gcc -std=c11 -O2 -Idist-a tests/amalgamation/hello.c burrow-windows.o -lws2_32 -o hello.exe
+          sudo apt-get update && sudo apt-get install -y --no-install-recommends gcc-mingw-w64-x86-64-win32
+          x86_64-w64-mingw32-gcc-win32 -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-parameter -c dist-a/burrow.c -o burrow-windows.o
+          x86_64-w64-mingw32-gcc-win32 -std=c11 -O2 -Idist-a tests/amalgamation/hello.c burrow-windows.o -lws2_32 -o hello.exe
 
   # MSVC, natively. The windows-msvc job builds the tree one file at a time
   # through CMake, which never puts windows.h ahead of the rest of burrow, and

@@ -11,7 +11,11 @@ cc -std=c11 -O2 -c burrow.c
 cc -std=c11 -O2 main.c burrow.o -pthread -o main
 ```
 
-On Windows with MinGW, link `-lws2_32` instead of `-pthread`. With MSVC, add `burrow.c` to the project and link `ws2_32.lib`.
+On Windows with MinGW, link `-lws2_32` instead of `-pthread`. With MSVC, add `burrow.c` to the project, compile it with `/std:c11` and `/bigobj`, and link `ws2_32.lib`. `/bigobj` is there because one object file with all of burrow in it has more sections than MSVC's default format allows:
+
+```
+cl /std:c11 /O2 /bigobj main.c burrow.c ws2_32.lib
+```
 
 Your code includes one header:
 

@@ -16,13 +16,15 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#if defined(_WIN32) && !defined(_WIN32_WINNT)
+/* Windows 7, as in the other backends, and before every include for the same
+ * reason. */
+#define _WIN32_WINNT 0x0601
+#endif
+
 #include "burrow/platform.h"
 
 #if defined(BURROW_OS_WINDOWS)
-
-#if !defined(_WIN32_WINNT)
-#define _WIN32_WINNT 0x0601
-#endif
 
 #include "burrow/pal.h"
 

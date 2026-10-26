@@ -239,40 +239,52 @@ story becomes a claim someone can check:
 
 ## 7. Size
 
-Real Go binaries on darwin/arm64, Go 1.27.1, measured:
-
-| Program | Go binary |
-| --- | --- |
-| `print("hi")` (no `fmt`) | 1.7 MB |
-| `fmt.Println("hi")` | 2.3 MB |
-| `net/http` server | 7.8 MB |
-
 Go's floor is high because the runtime, the GC, the scheduler and type metadata
 for everything reachable are always linked. `burrow` has no GC, no
 compiler-emitted metadata, and per-package selection, so it should be
-substantially smaller — that is the one axis where a C port has a structural
+substantially smaller. That is the one axis where a C port has a structural
 advantage rather than a structural compromise.
 
-Projected, stripped, `-O2 --gc-sections`, linux/amd64:
+Measured with `tools/size.sh` on linux/amd64, in bytes. Each program is built
+the way a program using the amalgamation would be, with `-O2
+-ffunction-sections -fdata-sections`, linked with `--gc-sections` and
+stripped. It is built twice, on the full `burrow.c` and on one made with
+`--packages` and the packages listed, which bring in what they need. The Go
+column is the same program in `tools/size` built with Go 1.27.3 and
+`-ldflags="-s -w"`.
 
-| Selection | Target | Go equivalent |
-| --- | --- | --- |
-| `strings`, `strconv`, `time` (no reflect, no goroutines) | ~120 KB | n/a — Go can't unbundle |
-| + `fmt`, `encoding/json`, `log/slog` | ~400 KB | 2.3 MB |
-| + goroutines, `sync`, `os`, `io` | ~650 KB | — |
-| + `net`, `net/http` (h1 only) | ~1.3 MB | — |
-| + `crypto/tls`, `crypto/x509`, h2 | ~2.6 MB | 7.8 MB |
-| Everything, all platforms | ~6 MB | — |
+| Program | `--packages` | gcc 13.3 full | gcc 13.3 picked | clang 18.1 full | clang 18.1 picked | Go |
+| --- | --- | --- | --- | --- | --- | --- |
+| `floor`: strings, strconv, time, no fmt, no goroutines | `strings,strconv,time` | 363,056 | 182,832 | 498,600 | 191,400 | 1,388,704 |
+| `hello`: `fmt.Println("hi")` | `fmt` | 330,096 | 149,872 | 469,752 | 154,360 | 1,507,488 |
+| `worker_pool` from the cookbook | `fmt,sync` | 358,768 | 174,448 | 486,184 | 170,792 | - |
+| `json_config` from the cookbook | `encoding/json,fmt,os` | 1,564,608 | 539,248 | 818,160 | 543,728 | - |
+| `slog_logs` from the cookbook | `log/slog,os` | 1,609,920 | 592,744 | 863,440 | 589,008 | - |
+| `http`: a server with one handler | `net/http,fmt` | 2,097,088 | 1,978,304 | 2,323,016 | 2,134,600 | 5,882,119 |
+| `https`: the same over TLS, with HTTP/2 | `net/http,fmt` | 2,424,768 | 2,305,984 | 2,724,456 | 2,531,944 | 6,373,639 |
 
-These are projections, not measurements, and they are stated as such. The
-numbers get replaced with measured values as packages land, and the table is
-regenerated and diffed on every release so a size regression is visible.
+The whole library, the text, data and bss of `burrow.o` as size(1) prints
+them, is 43,361,117 bytes with gcc and 44,283,760 with clang.
+
+A program built on the full file is bigger because the linker can't drop
+everything nothing calls. gcc puts most string constants into a few shared
+sections, and the linker keeps or drops each of those whole, so one string in
+use keeps the strings of every package. For `floor` that is about 180 KB of
+`.rodata`, while its `.text` is the same both ways. clang leaves more than that
+in the small programs. A program that uses more of the library has fewer
+strings to gain, and `http` is about 2 MB either way. `net/http` needs
+`crypto/tls`, so `http` and `https` start from the same packages.
+
+These replace the projections this section had before, which put the first
+row at about 120 KB, an HTTP/1 server at about 1.3 MB and a TLS server with
+HTTP/2 at about 2.6 MB. Running `tools/size.sh` regenerates the table.
 → [14](14-conformance.md) §7
 
-The `~120 KB` row is the interesting one. It is the configuration that does not
-exist in Go at all — Go cannot give you `time.Parse` and `strconv.ParseFloat`
-without 1.7 MB of runtime — and it is a real reason for someone to choose
-`burrow` over Go rather than merely tolerate it.
+The `floor` row is the interesting one. It is the configuration that does not
+exist in Go at all. Go cannot give you `time.Parse` and `strconv.ParseFloat`
+without its whole runtime, 1.4 MB here, and `burrow` does it in 183 KB. That is
+a real reason for someone to choose `burrow` over Go rather than merely
+tolerate it.
 
 ## 8. Versioning and release
 

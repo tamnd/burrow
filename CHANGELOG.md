@@ -4,6 +4,29 @@ Every release gets a section here and the release workflow refuses to publish a 
 
 Versions are `0.MINOR.PATCH` until 1.0. The minor number goes up when a milestone finishes and the patch number goes up for everything in between. Nothing before 1.0 is a stable API, and none of it has been through a security review yet.
 
+## v0.3.4 (2026-10-27)
+
+burrow.c builds with MSVC from a plain `cl` line, a package left out of a `--packages` build no longer runs its FIPS self-test, and the size table in the docs is measured.
+
+### Fixed
+
+- burrow.c compiles and links with MSVC: rpcndr.h's `small` and `hyper` macros are undefined after winsock2.h, the generator writes its output as UTF-8, `iface_windows.c` defines `_WIN32_WINNT` before its includes, and `random_windows.c` asks MSVC to link advapi32. building.md says to compile with `/bigobj` (#688).
+- The FIPS self-tests for HKDF, PBKDF2 and TLS run only when their packages are in the build, as Go runs a CAST from its package's init (#683).
+- `net/http`: `close_idle_connections` returns once the goroutines serving the connections it closed have ended, so a program can return straight after it without LSan reporting the connection (#690, fixes #686).
+- The FreeBSD poller test accepts one event or two from a pipe, since FreeBSD pipes are bidirectional (#689).
+
+### CI and tools
+
+- A new job builds and runs `tests/amalgamation/hello.c` with MSVC, and `burrow-gen amalgamate` rejects a lifted feature macro that a file defines after an include (#688).
+- `check-amalg.sh` links and runs hello for each single package build (#683).
+- The release workflow publishes only when its tests pass, and the release test job gets 40 minutes (#684).
+- The amalgamation job installs only the win32 mingw compiler (#693).
+
+### Docs
+
+- `tools/size.sh` measures the size table, and 15-build-deploy.md and building.md have the measured numbers in place of the projections (#685).
+- The README's last five code blocks come from programs that CI compiles and runs, and its Status section says where each milestone is (#692).
+
 ## v0.3.3 (2026-10-26)
 
 The FIPS 140-3 structure in crypto, TLS across net/http, the security fixes from go1.27.2 and go1.27.3 (#601), the rest of those two releases, the first guides, and the cookbook.

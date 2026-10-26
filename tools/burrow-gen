@@ -1081,7 +1081,7 @@ def run_amalgamate(args):
 
     os.makedirs(args.out, exist_ok=True)
     for name, text in (("burrow.h", htext), ("burrow.c", ctext), ("burrow-manifest.json", mtext)):
-        with open(os.path.join(args.out, name), "w", newline="\n") as f:
+        with open(os.path.join(args.out, name), "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
 
     return len(public) + len(private), len(sources)

@@ -1797,7 +1797,9 @@ BURROW_BORROWS(ret, t) HttpRoundTripper
 http_transport_as_round_tripper(HttpTransport *t);
 
 /* Transport.CloseIdleConnections. Closes the connections that are idle now,
- * but not ones in use. */
+ * but not ones in use. Not in Go: it returns once the goroutines that served
+ * the connections it closed have ended, so a program can return straight after
+ * it without leaving one of them holding a connection. */
 void http_transport_close_idle_connections(HttpTransport *t);
 
 /* Transport.CancelRequest. Cancels a request in flight, which Go deprecates

@@ -522,6 +522,7 @@ struct burrow__HttpPConn {
     Chan *closech;         /* closed when the connection is */
     Chan *write_err_ch;    /* bool, whether the last request went out */
     Chan *write_loop_done; /* closed when the write loop ends */
+    Chan *read_loop_done;  /* closed when the read loop ends */
     Chan *eofc;            /* the read loop's, see tp_read_loop */
     Str key;               /* in arena */
     Str proxy_auth;        /* in arena, under mu, and cleared on close */
@@ -537,6 +538,7 @@ struct burrow__HttpPConn {
 
     /* Under t->idle_mu. */
     TimeTimer *idle_timer;
+    tp_PConn *closing_next; /* see http_transport_close_idle_connections */
     tp_PConn *lru_prev, *lru_next;
     Time idle_at;
     bool in_lru;
@@ -974,6 +976,7 @@ static void tp_pc_free(tp_PConn *pc) {
     chan_free(pc->closech);
     chan_free(pc->write_err_ch);
     chan_free(pc->write_loop_done);
+    chan_free(pc->read_loop_done);
     chan_free(pc->eofc);
     time_timer_free(pc->idle_timer);
     arena_free(&pc->arena);
@@ -2143,11 +2146,12 @@ static tp_PConn *tp_dial_conn(HttpTransport *t, Context ctx, const tp_ConnectMet
     pc->closech = chan_make(a, TYPE_BOOL, 0);
     pc->write_err_ch = chan_make(a, TYPE_BOOL, 1);
     pc->write_loop_done = chan_make(a, TYPE_BOOL, 0);
+    pc->read_loop_done = chan_make(a, TYPE_BOOL, 0);
     pc->eofc = chan_make(a, TYPE_BOOL, 0);
     Str addr = tp_cm_addr(pa, cm);
     if (pc->key.len == 0 || addr.len == 0 || pc->reqch == NULL || pc->writech == NULL ||
         pc->closech == NULL || pc->write_err_ch == NULL ||
-        pc->write_loop_done == NULL || pc->eofc == NULL) {
+        pc->write_loop_done == NULL || pc->read_loop_done == NULL || pc->eofc == NULL) {
         e = burrow_err_out_of_memory;
         goto fail;
     }
@@ -3090,6 +3094,7 @@ static void tp_read_loop(void *env) {
     uintptr_t q = 0;
     while (chan_try_recv(pc->reqch, &q, NULL))
         tp_trip_rl_release((tp_Trip *)q);
+    chan_close(pc->read_loop_done);
     tp_pc_unref(pc);
 }
 
@@ -3925,6 +3930,7 @@ void http_transport_close_idle_connections(HttpTransport *t) {
     /* A connection in the pool has a read loop, which takes it out under
      * idle_mu, or the pool's reference for HTTP/2, so it is still there while
      * this holds idle_mu. */
+    tp_PConn *closing = NULL;
     sync_mutex_lock(&t->idle_mu);
     t->close_idle = true; /* and close the ones that go idle from now on */
     tp_IdleBucket *b = t->idle;
@@ -3935,12 +3941,32 @@ void http_transport_close_idle_connections(HttpTransport *t) {
             tp_lru_remove(t, pc);
             tp_pc_close(pc, burrow__http_err_close_idle_conns);
             tp_stop_idle_timer(pc);
+            if (!pc->alt) {
+                tp_pc_ref(pc);
+                pc->closing_next = closing;
+                closing = pc;
+            }
             tp_idle_release(pc);
         }
         tp_idle_bucket_trim(t, b);
         b = next;
     }
     sync_mutex_unlock(&t->idle_mu);
+
+    /* Not in Go. The loops of the connections closed above end on their own,
+     * and Go's collector frees each connection when they have. Here a loop
+     * holds the last reference, and a program that returns before the loop
+     * has run leaves the connection to be freed by nobody. So this waits for
+     * them, which is not long: the connection is closed, so the read loop's
+     * read fails and the write loop sees closech. Not under idle_mu, which the
+     * read loop takes on its way out. */
+    while (closing != NULL) {
+        tp_PConn *pc = closing;
+        closing = pc->closing_next;
+        tp_wait(pc->read_loop_done);
+        tp_wait(pc->write_loop_done);
+        tp_pc_unref(pc);
+    }
 
     /* Dials nobody waits for any more are stopped too. */
     sync_mutex_lock(&t->conns_per_host_mu);

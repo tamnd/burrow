@@ -56,12 +56,15 @@ jobs:
 
   # Everything CI would have run, run again against the tag, because a tag can
   # be pushed at a commit that never saw a pull request.
+  # A job that runs out of time ends as cancelled and not as failed, so the jobs
+  # after this one ask for success. The limit has room over the 35 minutes CI
+  # gives the slowest of these.
   test:
     name: test (${{ matrix.os }})
     needs: verify
     if: ${{ !inputs.backfill }}
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:
@@ -80,7 +83,7 @@ jobs:
   source:
     name: source tarball
     needs: [verify, test]
-    if: ${{ !cancelled() && needs.verify.result == 'success' && needs.test.result != 'failure' }}
+    if: ${{ !cancelled() && needs.verify.result == 'success' && (needs.test.result == 'success' || inputs.backfill) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     permissions:
@@ -112,7 +115,7 @@ jobs:
   binaries:
     name: ${{ matrix.name }}
     needs: [verify, test]
-    if: ${{ !cancelled() && needs.verify.result == 'success' && needs.test.result != 'failure' }}
+    if: ${{ !cancelled() && needs.verify.result == 'success' && (needs.test.result == 'success' || inputs.backfill) }}
     # A backfilled tag may not build everywhere, and what does build is still
     # worth having.
     continue-on-error: ${{ inputs.backfill == true }}
@@ -175,7 +178,7 @@ jobs:
   amalgamation:
     name: amalgamation
     needs: [verify, test]
-    if: ${{ !cancelled() && needs.verify.result == 'success' && needs.test.result != 'failure' }}
+    if: ${{ !cancelled() && needs.verify.result == 'success' && (needs.test.result == 'success' || inputs.backfill) }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     # Tags from before burrow-gen learned to amalgamate have nothing to run

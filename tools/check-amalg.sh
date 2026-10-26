@@ -10,8 +10,8 @@
 # whatever needs it, then with all of them left out at once, and links and runs
 # tests/amalgamation/hello.c against each. It checks that leaving out a package
 # something else needs is an #error that says so, that --packages gives the same
-# bytes twice, and that a file generated for each single package compiles on its
-# own.
+# bytes twice, and that a file generated for each single package builds on its
+# own, links with nothing missing and runs hello.
 #
 # Copyright 2026 The burrow Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style licence that can be found
@@ -128,8 +128,9 @@ for p in $packages; do
 	done
 	rm -rf "$d-again"
 	manifest_packages "$d/burrow-manifest.json" | grep -qx "$p" || fail "--packages $p left out $p"
-	"$CC" -std=c11 -Wall -Wextra -Werror -fsyntax-only "$d/burrow.c" ||
-		fail "--packages $p does not compile"
+	# build links at -O0 without dropping unused sections, so a call into a
+	# package --packages left out is a missing symbol here.
+	build "$d"
 done
 
 if tools/burrow-gen amalgamate --packages no/such --out "$tmp/none" 2>/dev/null; then

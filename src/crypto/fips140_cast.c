@@ -305,13 +305,24 @@ CRYPTO_FIPS_TEXT static void fips_init_run(void) {
         fflush(stderr);
     }
 
+    /* Go runs a package's self-test only when the package is in the program,
+     * because only then does its init function run. HKDF, PBKDF2 and the TLS
+     * key schedules are in packages the module doesn't need, which an
+     * amalgamation can leave out, and then so are their self-tests. The rest
+     * are in packages this one needs, so they are always in. */
+#if !defined(BURROW_OMIT_CRYPTO_HKDF)
     burrow__fips140_cast("HKDF-SHA2-256", burrow__hkdf_cast, NULL);
+#endif
+#if !defined(BURROW_OMIT_CRYPTO_PBKDF2)
     burrow__fips140_cast("PBKDF2", burrow__pbkdf2_cast, NULL);
+#endif
     burrow__fips140_cast("AES-CBC", burrow__aes_cast, NULL);
     burrow__fips140_cast("CounterKDF", burrow__ctrkdf_cast, NULL);
     burrow__fips140_cast("CTR_DRBG", burrow__drbg_cast, NULL);
+#if !defined(BURROW_OMIT_CRYPTO_TLS)
     burrow__fips140_cast("TLSv1.2-SHA2-256", burrow__tls12_cast, NULL);
     burrow__fips140_cast("TLSv1.3-SHA2-256", burrow__tls13_cast, NULL);
+#endif
 }
 
 CRYPTO_FIPS_TEXT void burrow__fips140_init(void) {

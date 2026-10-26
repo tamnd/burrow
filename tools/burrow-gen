@@ -944,6 +944,17 @@ def run_amalgamate(args):
             h.append(" *")
             h.append(" * %s is the other way round: it is left out unless %s is defined." % (p, AMALG_OPT_IN[p]))
     h[-1] += " */"
+    # A package --packages left out is defined as left out, so code that asks
+    # whether a package is in the build gets the same answer from this file as
+    # from the full one with the macro set.
+    dropped = sorted(set(pk.names) - keep)
+    if dropped:
+        h.append("")
+        h.append("/* Left out by --packages. */")
+    for p in dropped:
+        h.append("#ifndef %s" % amalg_omit_macro(p))
+        h.append("#define %s 1" % amalg_omit_macro(p))
+        h.append("#endif")
     for p in sorted(keep):
         if p in AMALG_OPT_IN:
             h.append("#if !defined(%s) && !defined(%s)" % (AMALG_OPT_IN[p], amalg_omit_macro(p)))

@@ -501,13 +501,25 @@ static void TestADescriptorWithSomethingOnItComesBackReady(TestingT *t) {
     PalPollEvent events[8];
     int64_t n = pal_poll_wait(poller, events, 8, 1000000000, &err);
     CHECK_INT_EQ(err, PAL_OK);
-    CHECK_INT_EQ(n, 1);
-    CHECK(events[0].user == tag);
-    CHECK((events[0].ready & PAL_POLL_READY_READ) != 0);
 
-    /* No operation produced these, so there is nothing for them to hold. */
-    CHECK_INT_EQ(events[0].bytes, 0);
-    CHECK_INT_EQ(events[0].status, 0);
+    /* A pipe is two way on FreeBSD, so its read end can be written to as well,
+     * and kqueue reports that as a second event for the same descriptor. What
+     * this test is after is the read, so there is one of those and anything
+     * else is that write. */
+    CHECK(n == 1 || n == 2);
+    int reads = 0;
+    for (int64_t i = 0; i < n && i < 8; i++) {
+        CHECK(events[i].user == tag);
+        if ((events[i].ready & PAL_POLL_READY_READ) != 0)
+            reads++;
+        else
+            CHECK_INT_EQ(events[i].ready, PAL_POLL_READY_WRITE);
+
+        /* No operation produced these, so there is nothing for them to hold. */
+        CHECK_INT_EQ(events[i].bytes, 0);
+        CHECK_INT_EQ(events[i].status, 0);
+    }
+    CHECK_INT_EQ(reads, 1);
 
     CHECK(pal_poll_del(poller, rd, &err));
     CHECK_INT_EQ(err, PAL_OK);

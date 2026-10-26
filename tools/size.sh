@@ -34,16 +34,19 @@ case $(uname) in
 esac
 
 # amalgamate DIR [PACKAGES] writes the pair to DIR and compiles burrow.o
-# there. The programs include burrow/burrow.h, so DIR/include gets one that
-# includes the amalgamated burrow.h.
+# there. The programs include the public headers by their paths under include,
+# and the amalgamated burrow.h has all of them in it, so DIR/include gets a file
+# in place of each one that includes it.
 amalgamate() {
     if [ $# -gt 1 ]; then
         "$root/tools/burrow-gen" amalgamate --packages "$2" --out "$1" > /dev/null
     else
         "$root/tools/burrow-gen" amalgamate --out "$1" > /dev/null
     fi
-    mkdir -p "$1/include/burrow"
-    echo '#include "../../burrow.h"' > "$1/include/burrow/burrow.h"
+    (cd "$root/include" && find burrow -name '*.h') | while read -r h; do
+        mkdir -p "$1/include/$(dirname "$h")"
+        echo "#include \"$1/burrow.h\"" > "$1/include/$h"
+    done
     # shellcheck disable=SC2086
     "$cc" $cflags -c "$1/burrow.c" -o "$1/burrow.o"
 }

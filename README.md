@@ -19,7 +19,7 @@ C programmers hand roll a worse version of `strings` in every project. They reac
 
 [The tour](docs/tour.md) has four whole programs that count words, read and write JSON, split work over goroutines and serve HTTP. Here is a smaller one.
 
-<!-- not compiled: uses strings_to_upper and fmt_println, and the strings and fmt packages come in a later milestone -->
+<!-- example: docs/examples/readme/hello.c#hello -->
 ```c
 #define BURROW_SHORT 1
 #include "burrow.h"
@@ -32,8 +32,8 @@ int main(void) {
     Str body = S("the quick brown fox");
     Slice words = strings_fields(a, body);
 
-    for (int i = 0; i < words.len; i++)
-        fmt_println(AT(Str, words, i));
+    for (Int i = 0; i < words.len; i++)
+        fmt_println_v(AT(Str, words, i));
 
     arena_free(&ar);
     return 0;
@@ -65,7 +65,7 @@ Macros are the one exception and keep a `BURROW_` prefix, because a header that 
 
 Every function that can allocate takes an allocator as its first parameter. Uniformly, mechanically, with no exceptions.
 
-<!-- not compiled: uses the strings package, which comes in a later milestone -->
+<!-- example: docs/examples/readme/files.c#alloc -->
 ```c
 Str upper = strings_to_upper(a, name);
 Slice parts = strings_split(a, path, S("/"));
@@ -267,26 +267,30 @@ int64_t n = io_copy(a, dst, src, &err);
 
 `io_read_full` and `io_read_at_least` are ported line for line from Go's, including the distinction that makes them worth having: an input that ends before anything arrives is `io_eof` and an input that ends halfway through is `io_err_unexpected_eof`, which is the difference between there was no next record and the file is truncated.
 
-The implementations that fill these in live where they live in Go, which is `os` and `bytes`, and neither of those is written yet.
+The implementations that fill these in live where they live in Go, which is `os` and `bytes`.
 
 ## Errors
 
 Go's `error` is an interface with one method, so burrow's is an interface value: a vtable pointer and a data pointer, returned by value, and a zeroed one means nothing went wrong.
 
-<!-- not compiled: uses the os package, which comes in a later milestone -->
+<!-- example: docs/examples/readme/files.c#errors -->
 ```c
-Error err = os_write_file(path, data, 0644);
+Slice data = os_read_file(a, from, &err);
+if (errors_is(err, os_err_not_exist))
+    return NO_ERROR; /* nothing to copy */
 if (FAILED(err))
     return err;
 
-if (errors_is(err, os_err_not_exist)) { ... }
+err = os_write_file(to, data, 0644);
+if (FAILED(err))
+    return err;
 ```
 
 Succeeding costs nothing, since there is no allocation on the happy path and nothing to free. The several hundred sentinels in Go's library, `io.EOF` and friends, are static `const` objects in read only memory here, so comparing against one is two pointer loads and creating one is a line the linker resolves. `errors_is` and `errors_as` are ports of Go's, walk for walk, including the `Unwrap() []error` trees that `errors.Join` builds.
 
 `errors_as` returns the pointer instead of taking one and returning a bool, because in C the pointer is the bool:
 
-<!-- not compiled: uses the os package, which comes in a later milestone -->
+<!-- example: docs/examples/readme/files.c#errors-as -->
 ```c
 const OsPathError *pe = errors_as(err, TYPE_OS_PATH_ERROR);
 ```
@@ -437,20 +441,20 @@ Details: [docs/guides/time.md](docs/guides/time.md).
 
 ## defer
 
-<!-- not compiled: uses the os package, which comes in a later milestone -->
+<!-- example: docs/examples/readme/files.c#defer -->
 ```c
 BURROW_SCOPE {
     OsFile *f = os_open(a, path, &err);
     if (BURROW_FAILED(err))
         return err;
-    BURROW_DEFER(os_file_close, f);
+    BURROW_DEFER(close_file, f);
 
     err = read_header(f);
 }
 BURROW_SCOPE_END;
 ```
 
-The close runs when control leaves the block, however it leaves: off the end, `return`, `break`, `continue`, a `goto` out, or a panic unwinding past it. Calls run last in first out and the argument is read at the line you wrote it on, both of which are Go's.
+`close_file` is a one line wrapper around `os_file_close` in the shape a deferred call takes, which is a function of one `void *`. The close runs when control leaves the block, however it leaves: off the end, `return`, `break`, `continue`, a `goto` out, or a panic unwinding past it. Calls run last in first out and the argument is read at the line you wrote it on, both of which are Go's.
 
 The block is required and a `BURROW_DEFER` outside one does not compile. That is the point of it. A bare `BURROW_DEFER` is possible on GCC and Clang, which have the `cleanup` attribute, and impossible on MSVC, which does not, and a macro that silently leaks on one of three supported platforms is worse than one that costs a line on all three. Inside the block a defer is an ordinary statement and goes wherever a statement goes.
 
@@ -714,7 +718,7 @@ From a checkout, `make` and CMake both build a static library, and `make amalgam
 
 ## Status
 
-Early. The core that every package stands on works, and every example on this page that doesn't need a package from a later milestone compiles and runs in CI, but the packages themselves are still to come.
+Before 1.0, and released as 0.x versions until then. The substrate, the pure packages and the go/\* tools are done. os and time, crypto, and net/http are in and tested, and each milestone below lists what is still open: the rest of `syscall` and the BSD and Cosmopolitan platforms for P2, BoringSSL's runner suite and an external review for P3, and more of Go's server tests plus h2spec for P4. P6 is the hardening pass that comes before 1.0. Every example on this page compiles and runs in CI.
 
 The design is finished and written down in [docs/design](docs/design), twenty documents covering the scope measurement, the C dialect, the core types, the memory model, the scheduler, the reflection layer, the naming rules, every package tier, the conformance strategy, the build and deployment story, the phasing, and the legal position on porting a BSD licensed library.
 

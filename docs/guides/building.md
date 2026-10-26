@@ -60,7 +60,7 @@ cmp check/burrow.c burrow.c
 
 ## Leaving packages out
 
-A package you don't use costs compile time and nothing else, because the linker drops what nothing calls. If the compile time matters, there are two ways to cut it down.
+A package you don't use costs compile time, and it costs some size too. With `-ffunction-sections -fdata-sections` and `--gc-sections` the linker drops the functions and tables nothing reaches, but gcc puts most string constants into a few shared sections, and the linker keeps or drops each of those whole. So a program built on the full `burrow.c` carries the strings of packages it never calls. For `tools/size/floor.c` with gcc 13.3 on linux/amd64 that is about 180 KB, and `tools/size.sh` measures the rest. There are two ways to leave packages out.
 
 The first is to generate a smaller pair. `--packages` takes a comma separated list of import paths and keeps those packages and whatever they need, and nothing else:
 
@@ -68,7 +68,7 @@ The first is to generate a smaller pair. `--packages` takes a comma separated li
 tools/burrow-gen amalgamate --packages context --out dist
 ```
 
-What else came along is listed in `burrow-manifest.json`, and it is always at least sync, sync/atomic, time and unicode/utf8, because the runtime itself uses them. A name that isn't a package is an error that lists the ones that are. The `burrow.h` it writes defines the `BURROW_OMIT_` macro, described next, for each package it left out, so both ways give the same answer to the question of what is in the build.
+What else came along is listed in `burrow-manifest.json`, and it always has encoding, fmt, io, strconv, sync, sync/atomic, time and unicode/utf8, because the runtime itself uses them. A name that isn't a package is an error that lists the ones that are. The `burrow.h` it writes defines the `BURROW_OMIT_` macro, described next, for each package it left out, so both ways give the same answer to the question of what is in the build.
 
 The second works on the full pair you already have. Every package that can be dropped is wrapped in a `BURROW_OMIT_` macro named after its import path, in capitals with the slashes turned into underscores, so `BURROW_OMIT_CONTEXT` or `BURROW_OMIT_UNICODE_UTF8`. Define it for `burrow.c` and for your own files, which in practice means on the compiler command line:
 

@@ -52,8 +52,10 @@ jobs:
           - os: windows-latest
             msvc: true
             shell: bash
-            # Git's bash has a link of its own, ahead of MSVC's on the path.
-            build: PATH="$(dirname "$(command -v cl)"):$PATH" cl /nologo /std:c11 /O2 main.c burrow.c ws2_32.lib /Fe:main.exe
+            # Git's bash has a link of its own, ahead of MSVC's on the path, and
+            # it turns an argument like /O2 into a Windows path, so cl gets its
+            # options with a dash.
+            build: PATH="$(dirname "$(command -v cl)"):$PATH" cl -nologo -std:c11 -O2 main.c burrow.c ws2_32.lib -Fe:main.exe
     # The steps before the compiler is there say bash for themselves.
     defaults:
       run:

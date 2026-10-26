@@ -432,6 +432,26 @@ jobs:
           x86_64-w64-mingw32-gcc -std=c11 -O2 -Wall -Wextra -Werror -Wno-unused-parameter -c dist-a/burrow.c -o burrow-windows.o
           x86_64-w64-mingw32-gcc -std=c11 -O2 -Idist-a tests/amalgamation/hello.c burrow-windows.o -lws2_32 -o hello.exe
 
+  # MSVC, natively. The windows-msvc job builds the tree one file at a time
+  # through CMake, which never puts windows.h ahead of the rest of burrow, and
+  # the one file does. It is built the way docs/guides/building.md says to.
+  amalgamation-msvc:
+    name: amalgamation (windows-latest, msvc)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: on its own
+        shell: pwsh
+        run: |
+          python tools/burrow-gen amalgamate --out dist --source-id ci
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          cl -nologo -std:c11 -O2 -Idist tests/amalgamation/hello.c dist/burrow.c ws2_32.lib -Fe:hello.exe
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+          ./hello.exe
+          if ($LASTEXITCODE -ne 0) { exit 1 }
+
   # Cosmopolitan, which builds one binary that runs as it is on Linux, macOS,
   # Windows and the BSDs. The suite runs under the x86-64 compiler alone, because
   # the archive tool only keeps one architecture's objects and the fat compiler

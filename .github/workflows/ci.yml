@@ -447,7 +447,7 @@ jobs:
         run: |
           python tools/burrow-gen amalgamate --out dist --source-id ci
           if ($LASTEXITCODE -ne 0) { exit 1 }
-          cl -nologo -std:c11 -O2 -Idist tests/amalgamation/hello.c dist/burrow.c ws2_32.lib -Fe:hello.exe
+          cl -nologo -std:c11 -O2 -bigobj -Idist tests/amalgamation/hello.c dist/burrow.c ws2_32.lib -Fe:hello.exe
           if ($LASTEXITCODE -ne 0) { exit 1 }
           ./hello.exe
           if ($LASTEXITCODE -ne 0) { exit 1 }

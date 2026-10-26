@@ -564,7 +564,8 @@ def run_reflect(args):
 #     burrow/burrow.h, go in burrow.h. The rest go at the top of burrow.c.
 #   - A source file's feature macros, the _GNU_SOURCE block before its first
 #     #include, have to come before every system header in the whole file, so
-#     they are lifted to the top of burrow.c. The first file to define one wins.
+#     they are lifted to the top of burrow.c. The first file to define one wins,
+#     and a file that defines one of them later, after an #include, is an error.
 #   - A macro a source file defines is its own, so it is undefined again at the
 #     end of that file. tools/check-statics.sh keeps every other file scope name
 #     unique, which is the rest of what one translation unit needs.
@@ -977,8 +978,13 @@ def run_amalgamate(args):
     c.append("/* ==== feature macros, lifted from the top of each source file ==== */")
     c.append("")
     bodies = []
+    lifted_macros = set()
     for rel in sources:
         lifted, body = amalg_prologue(rel, lines_of(rel))
+        for line in lifted:
+            m = AMALG_DEFINE.match(line)
+            if m:
+                lifted_macros.add(m.group(1))
         if lifted:
             c.append("/* %s */" % rel)
             c.extend(amalg_guard_defines(lifted))
@@ -989,8 +995,17 @@ def run_amalgamate(args):
     # #warning. src/pal/errno_windows.c puts them in that order, but in one file
     # the PAL files before it have already brought in windows.h, so it goes
     # here, after the feature macros and ahead of everything else.
+    #
+    # With MSVC that brings in all of windows.h, rpcndr.h included, and rpcndr.h
+    # defines small as char and hyper as __int64. The files that include
+    # windows.h don't use either word in their code, but in one file everything
+    # comes after it, and burrow has plenty of arrays called small. Nothing
+    # after this needs them, and the header's include guard stops a later
+    # windows header from defining them again.
     c.append("#if defined(_WIN32)")
     c.append("#include <winsock2.h>")
+    c.append("#undef small")
+    c.append("#undef hyper")
     c.append("#endif")
     c.append("")
     c.append("#ifndef BURROW_SOURCE_ID")
@@ -1028,6 +1043,13 @@ def run_amalgamate(args):
                     "%s defines %s, which a header defines too. The amalgamation "
                     "undefines a source file's macros at the end of it, and that "
                     "would take the header's away from every file after it." % (rel, name)
+                )
+            if name in lifted_macros:
+                raise Error(
+                    "%s defines %s after its first #include, and another file sets it "
+                    "ahead of its includes, which puts it at the top of burrow.c. The "
+                    "#undef at the end of this file would take it away from every file "
+                    "after it. Move the #define above the includes." % (rel, name)
                 )
             if name not in own:
                 own.append(name)
@@ -1072,7 +1094,7 @@ def run_amalgamate(args):
 
     os.makedirs(args.out, exist_ok=True)
     for name, text in (("burrow.h", htext), ("burrow.c", ctext), ("burrow-manifest.json", mtext)):
-        with open(os.path.join(args.out, name), "w", newline="\n") as f:
+        with open(os.path.join(args.out, name), "w", encoding="utf-8", newline="\n") as f:
             f.write(text)
 
     return len(public) + len(private), len(sources)

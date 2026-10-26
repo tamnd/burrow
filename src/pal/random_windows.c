@@ -7,9 +7,10 @@
  * crypto/rand used it on Windows for most of that time.
  *
  * BCryptGenRandom is the supported call and is deliberately not used. It lives
- * in bcrypt.dll, which would be a library to link, and burrow links nothing but
- * kernel32 today. That is worth keeping: a single file amalgamation that needs
- * no link line is one of the things this library is for. If Windows ever does
+ * in bcrypt.dll, which would be one more library to link, where this one is in
+ * advapi32, which every Windows toolchain already has. That is worth keeping: a
+ * single file amalgamation that needs a short link line is one of the things
+ * this library is for. If Windows ever does
  * remove this, the answer is a runtime LoadLibrary of bcrypt, which keeps the
  * link line empty and is what PAL rule 1 would have us do anyway.
  *
@@ -30,6 +31,13 @@
 /* The real name, with the signature ntsecapi.h gives it. BOOLEAN rather than
  * BOOL, and ULONG for the length, both of which matter on a 64 bit build. */
 BOOLEAN NTAPI SystemFunction036(PVOID buf, ULONG len);
+
+/* It is exported by advapi32, which MinGW links by default and a bare cl
+ * command line does not. This asks for it from the object file, so building
+ * burrow.c with MSVC still needs nothing on the link line but ws2_32. */
+#if defined(_MSC_VER)
+#pragma comment(lib, "advapi32.lib")
+#endif
 
 /* ULONG is 32 bits on every Windows target, so a request larger than that has
  * to be split. Nobody asks for two gigabytes of randomness in one call, and a

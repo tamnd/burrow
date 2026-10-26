@@ -564,7 +564,8 @@ def run_reflect(args):
 #     burrow/burrow.h, go in burrow.h. The rest go at the top of burrow.c.
 #   - A source file's feature macros, the _GNU_SOURCE block before its first
 #     #include, have to come before every system header in the whole file, so
-#     they are lifted to the top of burrow.c. The first file to define one wins.
+#     they are lifted to the top of burrow.c. The first file to define one wins,
+#     and a file that defines one of them later, after an #include, is an error.
 #   - A macro a source file defines is its own, so it is undefined again at the
 #     end of that file. tools/check-statics.sh keeps every other file scope name
 #     unique, which is the rest of what one translation unit needs.
@@ -977,8 +978,13 @@ def run_amalgamate(args):
     c.append("/* ==== feature macros, lifted from the top of each source file ==== */")
     c.append("")
     bodies = []
+    lifted_macros = set()
     for rel in sources:
         lifted, body = amalg_prologue(rel, lines_of(rel))
+        for line in lifted:
+            m = AMALG_DEFINE.match(line)
+            if m:
+                lifted_macros.add(m.group(1))
         if lifted:
             c.append("/* %s */" % rel)
             c.extend(amalg_guard_defines(lifted))
@@ -1037,6 +1043,13 @@ def run_amalgamate(args):
                     "%s defines %s, which a header defines too. The amalgamation "
                     "undefines a source file's macros at the end of it, and that "
                     "would take the header's away from every file after it." % (rel, name)
+                )
+            if name in lifted_macros:
+                raise Error(
+                    "%s defines %s after its first #include, and another file sets it "
+                    "ahead of its includes, which puts it at the top of burrow.c. The "
+                    "#undef at the end of this file would take it away from every file "
+                    "after it. Move the #define above the includes." % (rel, name)
                 )
             if name not in own:
                 own.append(name)

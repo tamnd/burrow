@@ -595,11 +595,12 @@ struct burrow__HttpCall {
     HttpRequest *orig;
     Context ctx;
     ContextCancelCauseFunc cancel;
-    tp_Trip *trip;    /* the try that gave the response */
-    tp_Track *tracks; /* every body tracker made, freed with the call */
-    Func alt_on_free; /* the alternate round tripper's response's on_free */
-    bool linked;      /* under t->req_mu */
-    HttpRequest req;  /* orig with its body in a tracker */
+    tp_Trip *trip;     /* the try that gave the response */
+    tp_Track *tracks;  /* every body tracker made, freed with the call */
+    Func alt_on_free;  /* the alternate round tripper's response's on_free */
+    Chan *legacy_done; /* closed once awaitLegacyCancel returns, or NULL */
+    bool linked;       /* under t->req_mu */
+    HttpRequest req;   /* orig with its body in a tracker */
 };
 
 /* wantConn: a call to getConn, which a dial and the idle pool race to hand a
@@ -3487,6 +3488,12 @@ static void tp_call_free(tp_Call *call) {
     HttpTransport *t = call->t;
     Alloc *a = tp_alloc(t);
     tp_call_unlink(call);
+    if (call->legacy_done != NULL) {
+        /* Not in Go: awaitLegacyCancel is done before its context goes. */
+        BURROW_CALLF(call->cancel, burrow__http_err_request_done);
+        (void)chan_recv(call->legacy_done, NULL);
+        chan_free(call->legacy_done);
+    }
     context_release(call->ctx);
     while (call->tracks != NULL) {
         tp_Track *k = call->tracks;
@@ -3518,6 +3525,18 @@ static void tp_call_alt_on_free(void *env) {
     if (!BURROW_FUNC_IS_NIL(call->alt_on_free))
         BURROW_CALLF0(call->alt_on_free);
     tp_call_free(call);
+}
+
+/* awaitLegacyCancel. */
+static void tp_await_legacy_cancel(void *env) {
+    tp_Call *call = (tp_Call *)env;
+    SelectCase sc[] = {
+        BURROW_RECV(call->orig->cancel, NULL),
+        BURROW_RECV(context_done(call->ctx), NULL),
+    };
+    if (chan_select(sc, 2) == 0)
+        BURROW_CALLF(call->cancel, burrow__http_err_request_canceled);
+    chan_close(call->legacy_done);
 }
 
 /* ------------------------------------------------------------------- getConn */
@@ -3794,6 +3813,19 @@ static HttpResponse *tp_round_trip_call(HttpTransport *t, tp_Call *call, Error *
         tp_call_free(call);
         BURROW_OUT(err, burrow_err_out_of_memory);
         return NULL;
+    }
+    /* Convert Request.Cancel into context cancellation. */
+    if (orig->cancel != NULL) {
+        call->legacy_done = chan_make(a, TYPE_BOOL, 0);
+        if (call->legacy_done == NULL ||
+            !go(BURROW_FN(Func, tp_await_legacy_cancel, call))) {
+            chan_free(call->legacy_done);
+            call->legacy_done = NULL;
+            tp_close_body(req);
+            tp_call_free(call);
+            BURROW_OUT(err, burrow_err_out_of_memory);
+            return NULL;
+        }
     }
     /* prepareTransportCancel. */
     sync_mutex_lock(&t->req_mu);

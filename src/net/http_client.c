@@ -20,6 +20,7 @@
 #include "../xnet/httpguts.h"
 #include "http_ascii.h"
 
+#include "burrow/chan.h"
 #include "burrow/context.h"
 #include "burrow/core.h"
 #include "burrow/crypto/tls.h"
@@ -34,6 +35,7 @@
 #include "burrow/mem/heap.h"
 #include "burrow/net/http.h"
 #include "burrow/net/url.h"
+#include "burrow/proc.h"
 #include "burrow/slice.h"
 #include "burrow/strings.h"
 #include "burrow/sync/atomic.h"
@@ -71,6 +73,16 @@ struct cl_Send {
     Time deadline;
     SyncAtomicBool stopped;
     bool timed; /* whether didTimeout can say true */
+    /* The timer goroutine setRequestCancel starts for a request with a Cancel
+     * or a round tripper it does not know, and what it needs. */
+    bool legacy;
+    HttpRoundTripper rt;
+    Chan *initial_cancel; /* the user's original Request.Cancel, if any */
+    Chan *cancel_ch;      /* the fork's Cancel */
+    Chan *stop_timer;     /* closed by the stop function */
+    Chan *timer_done;     /* closed once the goroutine returns */
+    TimeTimer *timer;
+    SyncAtomicBool timed_out;
 };
 
 /* A call to Client.do, and everything it keeps until the response it gives is
@@ -226,13 +238,54 @@ static Str cl_type_name(Alloc *a, HttpRoundTripper rt) {
 static void cl_send_stop(cl_Send *s) {
     if (!sync_atomic_bool_compare_and_swap(&s->stopped, false, true))
         return;
+    if (s->legacy)
+        chan_close(s->stop_timer);
     if (!BURROW_FUNC_IS_NIL(s->cancel))
         BURROW_CALLF0(s->cancel);
 }
 
 /* setRequestCancel's didTimeout. */
 static bool cl_send_did_timeout(const cl_Send *s) {
+    if (s->legacy)
+        return sync_atomic_bool_load(&s->timed_out);
     return s->timed && time_after(time_now(), s->deadline);
+}
+
+/* setRequestCancel's doCancel. */
+static void cl_send_do_cancel(cl_Send *s) {
+    /* The second way in the func comment above: */
+    chan_close(s->cancel_ch);
+    /* The first way, used only for RoundTripper implementations written
+     * before Go 1.5 or Go 1.6. Not in Go: a round tripper here can't add a
+     * CancelRequest method, so HttpTransport's is the only one. */
+    HttpTransport *t = burrow__http_as_transport(s->rt);
+    if (t != NULL)
+        http_transport_cancel_request(t, s->fork);
+}
+
+/* The goroutine setRequestCancel starts. */
+static void cl_send_timer(void *env) {
+    cl_Send *s = (cl_Send *)env;
+    TimeTimer *timer = s->timer;
+    SelectCase sc[] = {
+        BURROW_RECV(s->initial_cancel, NULL),
+        BURROW_RECV(time_timer_c(timer), NULL),
+        BURROW_RECV(s->stop_timer, NULL),
+    };
+    switch (chan_select(sc, 3)) {
+    case 0:
+        cl_send_do_cancel(s);
+        (void)time_timer_stop(timer);
+        break;
+    case 1:
+        sync_atomic_bool_store(&s->timed_out, true);
+        cl_send_do_cancel(s);
+        break;
+    default:
+        (void)time_timer_stop(timer);
+        break;
+    }
+    chan_close(s->timer_done);
 }
 
 static bool cl_is_eof(Error e) {
@@ -340,6 +393,7 @@ static HttpResponse *cl_send_request(cl_Do *d, HttpRequest *req, Time deadline,
     /* setRequestCancel. A context with the deadline, unless the request's own
      * one ends sooner. */
     if (timed) {
+        bool known = cl_known_round_tripper(rt, r);
         Context old = http_request_context(r);
         Time when;
         bool before = !context_deadline(old, &when) || time_before(deadline, when);
@@ -350,10 +404,29 @@ static HttpResponse *cl_send_request(cl_Do *d, HttpRequest *req, Time deadline,
                 goto oom;
             r->ctx = s->ctx;
             s->timed = true;
-        } else {
-            /* Go's timer still runs for a round tripper it does not know,
-             * and says it timed out once it fires. */
-            s->timed = !cl_known_round_tripper(rt, r);
+        }
+        if (r->cancel != NULL || !known) {
+            s->rt = rt;
+            s->initial_cancel = r->cancel;
+            s->cancel_ch = chan_make(d->a, TYPE_BOOL, 0);
+            s->stop_timer = chan_make(d->a, TYPE_BOOL, 0);
+            s->timer_done = chan_make(d->a, TYPE_BOOL, 0);
+            s->timer = time_new_timer(d->a, time_until(deadline));
+            if (s->cancel_ch == NULL || s->stop_timer == NULL ||
+                s->timer_done == NULL || s->timer == NULL ||
+                !go(BURROW_FN(Func, cl_send_timer, s))) {
+                chan_free(s->cancel_ch);
+                chan_free(s->stop_timer);
+                chan_free(s->timer_done);
+                time_timer_free(s->timer);
+                s->cancel_ch = NULL;
+                s->stop_timer = NULL;
+                s->timer_done = NULL;
+                s->timer = NULL;
+                goto oom;
+            }
+            r->cancel = s->cancel_ch;
+            s->legacy = true;
         }
     }
 
@@ -478,6 +551,14 @@ static void cl_do_free(cl_Do *d) {
         http_response_free(d->olds[i]);
     for (cl_Send *s = d->sends; s != NULL; s = s->next) {
         cl_send_stop(s);
+        if (s->legacy) {
+            /* Not in Go: the goroutine is done before what it uses goes. */
+            (void)chan_recv(s->timer_done, NULL);
+            chan_free(s->timer_done);
+            chan_free(s->stop_timer);
+            chan_free(s->cancel_ch);
+            time_timer_free(s->timer);
+        }
         context_release(s->ctx);
         http_request_free(s->fork);
     }
@@ -744,6 +825,7 @@ static HttpRequest *cl_redirect_request(cl_Do *d, HttpRequest *req, HttpResponse
     nr->url = u;
     nr->header = http_header_make(na);
     nr->host = host;
+    nr->cancel = ireq->cancel;
     nr->ctx = ireq->ctx;
     if (nr->header == NULL) {
         cl_close_response_body(resp);

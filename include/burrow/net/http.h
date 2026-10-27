@@ -384,6 +384,14 @@ BURROW_FUNC(HttpGetBodyFunc, IoReadCloser, Error *err);
  * to the connection. http_read_request leaves it NULL, and a client does not
  * look at it.
  *
+ * cancel is an optional channel whose closure indicates that the client
+ * request should be regarded as canceled. Not all implementations of
+ * RoundTripper may support Cancel. For server requests, this field is not
+ * applicable. Deprecated: Set the Request's context with
+ * http_new_request_with_context instead. If a Request's Cancel field and
+ * context are both set, it is undefined whether Cancel is respected. It has
+ * to outlive the response's body.
+ *
  * Everything a request read from the wire has, the strings and the header and
  * the URL, lives in the request's own arena until http_request_free. */
 typedef struct HttpRequest {
@@ -404,6 +412,7 @@ typedef struct HttpRequest {
     Str remote_addr;
     Str request_uri;
     const TlsConnectionState *tls;
+    Chan *cancel; /* closed to cancel, NULL for none */
     Str pattern;
     HttpGetBodyFunc get_body;
     Context ctx;

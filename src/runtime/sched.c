@@ -66,6 +66,17 @@
 #include <stddef.h>
 #include <stdint.h>
 
+/* Whether the leak checker that comes with the address sanitizer is told about
+ * the goroutines still alive when runtime_main returns, which left_for_lsan explains.
+ * Not on Windows, where msvc's sanitizer has no leak checker and the fiber owns
+ * the stack anyway. */
+#if BURROW_ASAN && !BURROW_CC_MSVC && !defined(BURROW_MCONTEXT_FIBERS)
+#include <sanitizer/lsan_interface.h>
+#define KEEP_LIVE_FOR_LSAN 1
+#else
+#define KEEP_LIVE_FOR_LSAN 0
+#endif
+
 /* A fiber brings its own stack and there is no call that takes one you already
  * have, so on Windows a goroutine that also mapped a stack would have mapped it
  * for nothing. Worse than nothing: the Windows path commits what it maps, so
@@ -2889,6 +2900,34 @@ static void schedinit(void) {
     }
 }
 
+/* A goroutine that has not finished when main returns is one Go would leave as
+ * it was while the process exits, and what it holds is still in use as far as
+ * the program can tell. Freeing its stack hides that from LeakSanitizer, which
+ * then reports everything only that stack pointed at. Under the sanitizer such
+ * a goroutine is left alone instead: its stack is scanned the way a thread's is
+ * and its G is not counted, so what is reported is what nothing points at. */
+#if KEEP_LIVE_FOR_LSAN
+
+static bool left_for_lsan(burrow__G *g) {
+    if (burrow__atomic_load_acquire_u32(&g->status) == BURROW_GDEAD)
+        return false;
+    if (g->stack.lo != NULL)
+        __lsan_register_root_region(
+            g->stack.lo,
+            (size_t)((unsigned char *)g->stack.hi - (unsigned char *)g->stack.lo));
+    __lsan_ignore_object(g);
+    return true;
+}
+
+#else
+
+static bool left_for_lsan(burrow__G *g) {
+    (void)g;
+    return false;
+}
+
+#endif
+
 /* Gives back everything the run took: the threads, the stacks, the goroutine
  * structs and the gates. Runs on runtime_main's thread with every M joined, so
  * nothing here needs the lock and everything here is allowed to assume it is
@@ -2933,6 +2972,10 @@ static void teardown(void) {
     burrow__G *g = sched.allg;
     while (g != NULL) {
         burrow__G *next = g->allnext;
+        if (left_for_lsan(g)) {
+            g = next;
+            continue;
+        }
         burrow__mcontext_free(&g->ctx);
         stack_give_back(g);
         if (g->timer != NULL)

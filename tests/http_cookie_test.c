@@ -238,7 +238,7 @@ static void TestWriteSetCookies(TestingT *t) {
     ck_log_begin(&logbuf);
     for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
         HttpCookie c = ck_cookie(&tests[i].cookie);
-        Str g = http_cookie_string(a, &c);
+        Str g = http_cookie_string(&c, a);
         if (!str_eq(g, tests[i].raw))
             testing_t_errorf_v(t, "Test %d, expecting:\n%s\nGot:\n%s\n", (int)i,
                                tests[i].raw, g);
@@ -904,7 +904,7 @@ static void TestParseSetCookie(TestingT *t) {
         }
         if (!ck_equal(&got, &tests[i].want))
             testing_t_errorf_v(t, "#%d ParseSetCookie: got %s, want %s", (int)i,
-                               http_cookie_string(a, &got), tests[i].want.raw);
+                               http_cookie_string(&got, a), tests[i].want.raw);
     }
     ARENA_END;
 }
@@ -918,7 +918,7 @@ static void TestCookieHeap(TestingT *t) {
         a, S("id=a3fWa; Expires=Wed, 21 Oct 2015 07:28:00 GMT; Lang=en; Bad=\\"), &err);
     CHECK(BURROW_OK(err));
     CHECK(c.unparsed.len == 2);
-    Str s = http_cookie_string(a, &c);
+    Str s = http_cookie_string(&c, a);
     CHECK(str_eq(s, S("id=a3fWa; Expires=Wed, 21 Oct 2015 07:28:00 GMT")));
     mem_free(a, (void *)(uintptr_t)s.p, (size_t)s.len, 1);
     http_cookie_free(a, &c);
@@ -926,7 +926,7 @@ static void TestCookieHeap(TestingT *t) {
     BytesBuffer logbuf = BYTES_BUFFER(a);
     ck_log_begin(&logbuf);
     HttpCookie d = {.name = T("n"), .value = T("a b;c"), .path = T("/x;y")};
-    s = http_cookie_string(a, &d);
+    s = http_cookie_string(&d, a);
     CHECK(str_eq(s, S("n=\"a bc\"; Path=/xy")));
     (void)ck_log_end(&logbuf);
     bytes_buffer_free(&logbuf);

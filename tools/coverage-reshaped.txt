@@ -119,6 +119,26 @@ mime/multipart: method (*FileHeader) Open: File is one opaque type rather than a
 # multipart_file_header_open does.
 net/http: method (*Request) FormFile: multipart.File is one opaque type rather than an interface
 
+# include/burrow/net/http.h: a Transport, a ResponseController and a Cookie
+# are structs the caller keeps where it likes, so these return them by value,
+# as bufio_new_read_writer does. Hijack fills in the BufioReadWriter the caller
+# passes for the same reason.
+net/http: method (*Transport) Clone: returns the HttpTransport by value
+net/http: func NewResponseController: returns the HttpResponseController by value
+net/http: method (*ResponseController) Hijack: fills in the caller's BufioReadWriter rather than returning a pointer
+net/http: func ParseSetCookie: returns the HttpCookie by value
+net/http: method (*Request) Cookie: returns the HttpCookie by value
+
+# include/burrow/net/http.h: when Go's last result is the ok bool and the
+# others mean nothing without it, the bool is what comes back and the rest go
+# through pointers, so the call can sit in an if.
+net/http: method (*Request) BasicAuth: returns ok, with username and password through pointers
+net/http: func ParseHTTPVersion: returns ok, with major and minor through pointers
+
+# include/burrow/net/http.h: Go returns a closure over fixedURL. Here the
+# HttpProxyFunc's env is u, which has to outlive it.
+net/http: func ProxyURL: returns the HttpProxyFunc with u as its env, so u has to outlive it
+
 # include/burrow/image/color.h: Go's RGBA and the conversion functions have
 # three or four results, and C has one. Each comes back as one struct instead of
 # the first result and pointers for the rest, since every caller wants all of

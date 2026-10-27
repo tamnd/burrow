@@ -245,7 +245,7 @@ static void TestHasToken(TestingT *t) {
 
 static void TestNilHeaderClone(TestingT *t) {
     ARENA_BEGIN;
-    HttpHeader t2 = http_header_clone(a, NULL);
+    HttpHeader t2 = http_header_clone(NULL, a);
     if (t2 != NULL)
         testing_t_errorf_v(t, "cloned header does not match original: got a header; "
                               "want nil");

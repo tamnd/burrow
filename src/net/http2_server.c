@@ -2637,7 +2637,7 @@ static h2s_ResHeaders *h2s_res_headers_copy(Alloc *a, const Http2WriteResHeaders
     r->rh = *src;
     r->rh.trailers = NULL;
     if (src->h != NULL) {
-        r->rh.h = http_header_clone(ra, src->h);
+        r->rh.h = http_header_clone(src->h, ra);
         if (r->rh.h == NULL)
             goto fail;
     }
@@ -2820,7 +2820,7 @@ static void h2s_rws_write_header(h2s_Rws *rws, Int code) {
         bool cl = h2s_hhas(h, BURROW_S("Content-Length"));
         bool te = h2s_hhas(h, BURROW_S("Transfer-Encoding"));
         if (cl || te) {
-            h = http_header_clone(arena_allocator(&rws->arena), h);
+            h = http_header_clone(h, arena_allocator(&rws->arena));
             if (h != NULL) {
                 http_header_del(h, BURROW_S("Content-Length"));
                 http_header_del(h, BURROW_S("Transfer-Encoding"));
@@ -2840,7 +2840,7 @@ static void h2s_rws_write_header(h2s_Rws *rws, Int code) {
     rws->status = code;
     if (rws->handler_header != NULL && map_len(rws->handler_header) > 0)
         rws->snap_header =
-            http_header_clone(arena_allocator(&rws->arena), rws->handler_header);
+            http_header_clone(rws->handler_header, arena_allocator(&rws->arena));
 }
 
 static bool h2s_has_nonempty_trailers(h2s_Rws *rws) {

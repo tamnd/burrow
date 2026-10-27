@@ -1208,7 +1208,7 @@ static HttpHeader sv_response_header(void *self) {
         /* The handler is changing the header after WriteHeader and before
          * the first write, which Go allows for no good reason, so the header
          * sent is the one from WriteHeader. */
-        w->cw.header = http_header_clone(sv_wa(w), w->handler_header);
+        w->cw.header = http_header_clone(w->handler_header, sv_wa(w));
     }
     w->called_header = true;
     return w->handler_header;
@@ -1247,7 +1247,7 @@ static void sv_response_write_header(void *self, Int code) {
     w->status = code;
 
     if (w->called_header && w->cw.header == NULL)
-        w->cw.header = http_header_clone(sv_wa(w), w->handler_header);
+        w->cw.header = http_header_clone(w->handler_header, sv_wa(w));
 
     Str cl = burrow__http_header_get(w->handler_header, BURROW_S("Content-Length"));
     if (cl.len > 0) {

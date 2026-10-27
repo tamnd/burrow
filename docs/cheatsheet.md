@@ -4864,14 +4864,14 @@ The sentences taken from Go are reproduced from the doc comments of Go's `net/ht
 - `void http_header_del(HttpHeader h, Str key)` – Del deletes the values associated with key.
 - `Error http_header_write(HttpHeader h, IoWriter w)` – Write writes a header in wire format.
 - `Error http_header_write_subset(HttpHeader h, IoWriter w, Map *exclude)` – WriteSubset writes a header in wire format.
-- `HttpHeader http_header_clone(Alloc *a, HttpHeader h)` – Clone returns a copy of h or nil if h is nil.
+- `HttpHeader http_header_clone(HttpHeader h, Alloc *a)` – Clone returns a copy of h or nil if h is nil.
 - `Str http_canonical_header_key(Alloc *a, Str s)` – CanonicalHeaderKey returns the canonical format of the header key s.
 - `Time http_parse_time(Alloc *a, Str text, Error *err)` – ParseTime parses a time header (such as the Date: header), trying each of the three formats allowed by HTTP/1.1: TimeFormat, time.RFC850, and time.ANSIC.
 - `extern const Type *const TYPE_HTTP_COOKIE`
 - `Slice http_parse_cookie(Alloc *a, Str line, Error *err)` – ParseCookie parses a Cookie header value and returns all the cookies which were set in it.
 - `HttpCookie http_parse_set_cookie(Alloc *a, Str line, Error *err)` – ParseSetCookie parses a Set-Cookie header value and returns a cookie.
 - `void http_cookie_free(Alloc *a, HttpCookie *c)` – Gives back the unparsed Slice of a cookie from http_parse_set_cookie.
-- `Str http_cookie_string(Alloc *a, const HttpCookie *c)` – String returns the serialization of the cookie for use in a Cookie header (if only Name and Value are set) or a Set-Cookie response header (if other fields are set).
+- `Str http_cookie_string(const HttpCookie *c, Alloc *a)` – String returns the serialization of the cookie for use in a Cookie header (if only Name and Value are set) or a Set-Cookie response header (if other fields are set).
 - `Error http_cookie_valid(const HttpCookie *c)` – Valid reports whether the cookie is valid.
 - `void http_cookie_jar_set_cookies(HttpCookieJar j, const Url *u, Slice cookies)` – SetCookies handles the receipt of the cookies in a reply for the given URL.
 - `Slice http_cookie_jar_cookies(HttpCookieJar j, Alloc *a, const Url *u)` – Cookies returns the cookies to send in a request for the given URL.
@@ -4937,7 +4937,7 @@ The sentences taken from Go are reproduced from the doc comments of Go's `net/ht
 - `#define http_serve_mux_handle_func(mux, pattern, f)` – HandleFunc registers the handler function for the given pattern.
 - `#define http_handle(pattern, h)` – Handle registers the handler for the given pattern in DefaultServeMux.
 - `#define http_handle_func(pattern, f)` – HandleFunc registers the handler function for the given pattern in DefaultServeMux.
-- `HttpHandler http_serve_mux_handler(HttpServeMux *mux, const HttpRequest *r, Alloc *a, Str *pattern)` – Handler returns the handler to use for the given request, consulting r.Method, r.Host, and r.URL.Path.
+- `HttpHandler http_serve_mux_handler(HttpServeMux *mux, Alloc *a, const HttpRequest *r, Str *pattern)` – Handler returns the handler to use for the given request, consulting r.Method, r.Host, and r.URL.Path.
 - `void http_serve_mux_serve_http(HttpServeMux *mux, HttpResponseWriter w, HttpRequest *r)` – ServeHTTP dispatches the request to the handler whose pattern most closely matches the request URL.
 - `HttpHandler http_serve_mux_as_handler(HttpServeMux *mux)` – The mux as a Handler, which calls http_serve_mux_serve_http.
 - `HttpCrossOriginProtection *http_new_cross_origin_protection(Alloc *a)` – NewCrossOriginProtection returns a new CrossOriginProtection value.
@@ -5024,7 +5024,7 @@ The sentences taken from Go are reproduced from the doc comments of Go's `net/ht
 - `HttpTransport http_transport_clone(HttpTransport *t, Alloc *a)` – Clone returns a deep copy of t's exported fields.
 - `void http_transport_free(HttpTransport *t)` – Closes the idle connections and waits for every connection, dial and goroutine the transport has going to end.
 - `extern HttpTransport *const http_default_transport` – DefaultTransport is the default implementation of Transport and is used by DefaultClient.
-- `Url *http_proxy_from_environment(HttpRequest *req, Alloc *a, Error *err)` – ProxyFromEnvironment returns the URL of the proxy to use for a given request, as indicated by the environment variables HTTP_PROXY, HTTPS_PROXY and NO_PROXY (or the lowercase versions thereof).
+- `Url *http_proxy_from_environment(Alloc *a, HttpRequest *req, Error *err)` – ProxyFromEnvironment returns the URL of the proxy to use for a given request, as indicated by the environment variables HTTP_PROXY, HTTPS_PROXY and NO_PROXY (or the lowercase versions thereof).
 - `HttpProxyFunc http_proxy_from_environment_func(void)` – http_proxy_from_environment as the HttpProxyFunc a transport takes.
 - `HttpProxyFunc http_proxy_url(const Url *u)` – ProxyURL returns a proxy function (for use in a Transport) that always returns the same URL.
 - `extern const Error http_err_use_last_response` – ErrUseLastResponse can be returned by Client.CheckRedirect hooks to control how redirects are processed.

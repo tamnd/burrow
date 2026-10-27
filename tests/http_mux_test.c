@@ -303,7 +303,7 @@ static void TestEmptyServeMux(TestingT *t) {
     Url u;
     zero_request(&r, &u, S("GET"), S("example.com"), S("/"));
     Str p;
-    (void)http_serve_mux_handler(mux, &r, a, &p);
+    (void)http_serve_mux_handler(mux, a, &r, &p);
     if (p.len != 0)
         testing_t_errorf_v(t, "got %q, want \"\"", p);
     http_serve_mux_free(mux);
@@ -425,7 +425,7 @@ static void escaped_run(TestingT *t, bool test121) {
             memset(&req, 0, sizeof req);
             req.url = u;
             Str got;
-            (void)http_serve_mux_handler(mux, &req, a, &got);
+            (void)http_serve_mux_handler(mux, a, &req, &got);
             if (!str_eq(got, cs(m->pattern)))
                 testing_t_errorf_v(t, "%s: pattern: got %q, want %q", cs(paths[j]), got,
                                    cs(m->pattern));
@@ -567,7 +567,7 @@ static void TestServeMuxHandler(TestingT *t) {
         Url u;
         zero_request(&r, &u, cs(tests[i].method), cs(tests[i].host), cs(tests[i].path));
         Str pattern;
-        HttpHandler h = http_serve_mux_handler(mux, &r, a, &pattern);
+        HttpHandler h = http_serve_mux_handler(mux, a, &r, &pattern);
         Recorder rr;
         rec_init(t, a, &rr);
         http_handler_serve_http(h, rec_writer(&rr), &r);
@@ -588,7 +588,7 @@ static void TestServeMuxHandlerTrailingSlash(TestingT *t) {
     http_serve_mux_handle(mux, original, http_not_found_handler());
     HttpRequest *r = new_request(t, a, "POST", S("/foo"));
     Str p;
-    (void)http_serve_mux_handler(mux, r, a, &p);
+    (void)http_serve_mux_handler(mux, a, r, &p);
     if (!str_eq(p, original))
         testing_t_errorf_v(t, "got %q, want %q", p, original);
     http_request_free(r);
@@ -655,7 +655,7 @@ static void TestServeMuxHandlerRedirects(TestingT *t) {
             r.method = cs(tests[i].method);
             r.host = cs(tests[i].host);
             r.url = u;
-            HttpHandler h = http_serve_mux_handler(mux, &r, a, NULL);
+            HttpHandler h = http_serve_mux_handler(mux, a, &r, NULL);
             Recorder rr;
             rec_init(t, a, &rr);
             http_handler_serve_http(h, rec_writer(&rr), &r);
@@ -697,7 +697,7 @@ static void TestServeMuxHandlerRedirectPost(TestingT *t) {
     Str req_url = start_url;
     for (retries = 0; retries <= 1; retries++) {
         HttpRequest *r = new_test_request(t, a, "POST", req_url);
-        HttpHandler h = http_serve_mux_handler(mux, r, a, NULL);
+        HttpHandler h = http_serve_mux_handler(mux, a, r, NULL);
         Recorder rr;
         rec_init(t, a, &rr);
         http_handler_serve_http(h, rec_writer(&rr), r);

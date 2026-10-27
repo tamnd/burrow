@@ -42,7 +42,8 @@ static Slice bytes_of(Str s) {
 }
 
 static void write_string(HttpResponseWriter w, Str s) {
-    (void)io_write_string(http_response_writer_as_io_writer(w), s, NULL);
+    Error err = BURROW_NO_ERROR;
+    (void)io_write_string(http_response_writer_as_io_writer(w), s, &err);
 }
 
 /* Testing the newClientServerTest helper itself. */
@@ -187,7 +188,18 @@ static void TestChunkedResponseHeaders(TestingT *t) {
 
 /* ---------------------------------------------------------- h12Compare */
 
-typedef HttpResponse *(*ReqFunc)(HttpClient *c, Str url, Error *err);
+/* Not in Go: env is the test's, since there are no closures. */
+typedef HttpResponse *(*ReqFunc)(void *env, HttpClient *c, Str url, Error *err);
+
+static HttpResponse *req_get(void *env, HttpClient *c, Str url, Error *err) {
+    (void)env;
+    return http_client_get(c, url, err);
+}
+
+static HttpResponse *req_head(void *env, HttpClient *c, Str url, Error *err) {
+    (void)env;
+    return http_client_head(c, url, err);
+}
 
 /* h12Compare is a test that compares HTTP/1 and HTTP/2 behavior
  * against each other.
@@ -213,7 +225,7 @@ typedef struct H12Compare {
 
 static ReqFunc h12_req_func(const H12Compare *tt) {
     if (tt->req_func == NULL)
-        return http_client_get;
+        return req_get;
     return tt->req_func;
 }
 
@@ -313,14 +325,14 @@ static void h12_run(TestingT *t, const H12Compare *tt) {
     ClientServerTest *cst2 = new_client_server_test_func(t, HTTP2_MODE, hf, tt->opts);
 
     Error err = BURROW_NO_ERROR;
-    H12Res res1 = {h12_req_func(tt)(cst1->c, cst1->ts->url, &err), {0}, {0}};
+    H12Res res1 = {h12_req_func(tt)(tt->env, cst1->c, cst1->ts->url, &err), {0}, {0}};
     if (res1.res == NULL) {
         testing_t_errorf_v(t, "HTTP/1 request: %v", err);
         cst_close(cst2);
         cst_close(cst1);
         return;
     }
-    H12Res res2 = {h12_req_func(tt)(cst2->c, cst2->ts->url, &err), {0}, {0}};
+    H12Res res2 = {h12_req_func(tt)(tt->env, cst2->c, cst2->ts->url, &err), {0}, {0}};
     if (res2.res == NULL) {
         testing_t_errorf_v(t, "HTTP/2 request: %v", err);
         cst_close_response(res1.res);
@@ -369,7 +381,7 @@ static void handler_nothing(void *env, HttpResponseWriter w, HttpRequest *r) {
 
 /* Issue 13532 */
 static void TestH12_HeadContentLengthNoBody(TestingT *t) {
-    H12Compare tt = {.req_func = http_client_head, .handler = handler_nothing};
+    H12Compare tt = {.req_func = req_head, .handler = handler_nothing};
     h12_run(t, &tt);
 }
 
@@ -380,7 +392,7 @@ static void handler_small(void *env, HttpResponseWriter w, HttpRequest *r) {
 }
 
 static void TestH12_HeadContentLengthSmallBody(TestingT *t) {
-    H12Compare tt = {.req_func = http_client_head, .handler = handler_small};
+    H12Compare tt = {.req_func = req_head, .handler = handler_small};
     h12_run(t, &tt);
 }
 
@@ -392,7 +404,7 @@ static void handler_large(void *env, HttpResponseWriter w, HttpRequest *r) {
 }
 
 static void TestH12_HeadContentLengthLargeBody(TestingT *t) {
-    H12Compare tt = {.req_func = http_client_head, .handler = handler_large};
+    H12Compare tt = {.req_func = req_head, .handler = handler_large};
     h12_run(t, &tt);
 }
 
@@ -483,7 +495,7 @@ static void handler_head_explicit_len(void *env, HttpResponseWriter w, HttpReque
 
 static void TestH12_Head_ExplicitLen(TestingT *t) {
     H12Compare tt = {
-        .req_func = http_client_head, .handler = handler_head_explicit_len, .env = t};
+        .req_func = req_head, .handler = handler_head_explicit_len, .env = t};
     h12_run(t, &tt);
 }
 
@@ -496,7 +508,7 @@ static void handler_head_implicit_len(void *env, HttpResponseWriter w, HttpReque
 
 static void TestH12_Head_ImplicitLen(TestingT *t) {
     H12Compare tt = {
-        .req_func = http_client_head, .handler = handler_head_implicit_len, .env = t};
+        .req_func = req_head, .handler = handler_head_implicit_len, .env = t};
     h12_run(t, &tt);
 }
 
@@ -538,9 +550,10 @@ static void handler_writes_too_much(void *env, HttpResponseWriter w, HttpRequest
                           fmt_sprintf_v(r->a, "%v", want_body.len));
     (void)http_response_controller_flush(&rc);
     IoWriter ww = http_response_writer_as_io_writer(w);
-    (void)ww.vt->write(ww.data, bytes_of(want_body), NULL);
-    (void)http_response_controller_flush(&rc);
     Error err = BURROW_NO_ERROR;
+    (void)ww.vt->write(ww.data, bytes_of(want_body), &err);
+    (void)http_response_controller_flush(&rc);
+    err = BURROW_NO_ERROR;
     Int n = io_write_string(ww, BURROW_S("x"), &err); /* too many */
     if (BURROW_OK(err))
         err = http_response_controller_flush(&rc);
@@ -562,7 +575,7 @@ static void test_handler_writes_too_much(TestingT *t, TestMode mode, void *env) 
         testing_t_fatal_v(t, err);
 
     Alloc *a = test_arena(t);
-    Slice got_body = io_read_all(a, cst_body(res), NULL);
+    Slice got_body = io_read_all(a, cst_body(res), &err);
     cst_close_response(res);
     if (!bytes_equal(got_body, bytes_of(want_body)))
         testing_t_fatalf_v(t, "got response body: %q; want %q",
@@ -582,6 +595,7 @@ static void handler_auto_gzip(void *env, HttpResponseWriter w, HttpRequest *r) {
         testing_t_errorf_v(t, "%s Accept-Encoding = %q; want gzip", r->proto, ae);
     (void)http_header_set(w.vt->header(w.data), BURROW_S("Content-Encoding"),
                           BURROW_S("gzip"));
+    Error err = BURROW_NO_ERROR;
     GzipWriter *gz = gzip_new_writer(r->a, http_response_writer_as_io_writer(w));
     if (gz == NULL) {
         testing_t_errorf_v(t, "out of memory");
@@ -591,7 +605,7 @@ static void handler_auto_gzip(void *env, HttpResponseWriter w, HttpRequest *r) {
         gzip_writer_as_io_writer(gz),
         BURROW_S("I am some gzipped content. Go go go go go go go go go "
                  "go go go should compress well."),
-        NULL);
+        &err);
     (void)gzip_writer_close(gz);
     gzip_writer_free(gz);
 }
@@ -681,6 +695,7 @@ static void TestH12_ServerEmptyContentLength(TestingT *t) {
 typedef struct H12ReqCL {
     IoReader (*bodyfn)(Alloc *a);
     int64_t want_len;
+    Alloc *a;
 } H12ReqCL;
 
 static IoReader body_four(Alloc *a) {
@@ -716,20 +731,16 @@ static void handler_request_content_length(void *env, HttpResponseWriter w,
                         r->content_length);
 }
 
-/* Not in Go: the test's body function, which the ReqFunc can't take. */
-static const H12ReqCL *h12_req_cl;
-static Alloc *h12_req_cl_alloc;
-
-static HttpResponse *post_body(HttpClient *c, Str url, Error *err) {
-    return http_client_post(c, url, BURROW_S("text/plain"),
-                            h12_req_cl->bodyfn(h12_req_cl_alloc), err);
+static HttpResponse *post_body(void *env, HttpClient *c, Str url, Error *err) {
+    const H12ReqCL *cl = (const H12ReqCL *)env;
+    return http_client_post(c, url, BURROW_S("text/plain"), cl->bodyfn(cl->a), err);
 }
 
 static void check_request_content_length(TestingT *t, void *env, Str proto,
                                          H12Res *res) {
     const H12ReqCL *cl = (const H12ReqCL *)env;
     Str got = http_header_get(res->res->header, BURROW_S("Got-Length"));
-    Str want = fmt_sprint_v(h12_req_cl_alloc, cl->want_len);
+    Str want = fmt_sprint_v(cl->a, cl->want_len);
     if (!str_eq(got, want))
         testing_t_errorf_v(t, "Proto %q got length %q; want %q", proto, got, want);
 }
@@ -739,8 +750,7 @@ static void h12_request_content_length(TestingT *t, IoReader (*bodyfn)(Alloc *a)
     H12ReqCL *cl = (H12ReqCL *)test_alloc(t, sizeof *cl);
     cl->bodyfn = bodyfn;
     cl->want_len = want_len;
-    h12_req_cl = cl;
-    h12_req_cl_alloc = test_arena(t);
+    cl->a = test_arena(t);
     H12Compare tt = {.handler = handler_request_content_length,
                      .req_func = post_body,
                      .check_response = check_request_content_length,

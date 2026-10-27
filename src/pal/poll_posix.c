@@ -57,7 +57,7 @@ typedef struct PollEntry {
 
 /* The table, and one more than the highest descriptor in it, so that a wait
  * looks only as far as it has to. Both under table_mu. */
-static PollEntry table[TABLE];
+static PollEntry poll_table[TABLE];
 static int table_hi;
 
 /* Whether pal_poll_create has run, and the handle it gave back. */
@@ -192,7 +192,7 @@ bool pal_poll_add(int64_t handle, int64_t fd, void *user, PalErrno *err) {
     }
 
     table_lock();
-    PollEntry *e = &table[fd];
+    PollEntry *e = &poll_table[fd];
     if (e->used) {
         table_unlock();
         BURROW_OUT(err, PAL_EEXIST);
@@ -216,7 +216,7 @@ bool pal_poll_del(int64_t handle, int64_t fd, PalErrno *err) {
     }
 
     table_lock();
-    PollEntry *e = &table[fd];
+    PollEntry *e = &poll_table[fd];
     if (!e->used) {
         table_unlock();
         BURROW_OUT(err, PAL_ENOENT);
@@ -225,7 +225,7 @@ bool pal_poll_del(int64_t handle, int64_t fd, PalErrno *err) {
     e->user = NULL;
     e->used = 0;
     e->armed = 0;
-    while (table_hi > 0 && !table[table_hi - 1].used)
+    while (table_hi > 0 && !poll_table[table_hi - 1].used)
         table_hi--;
 #if defined(BURROW_OS_WASI)
     table_unlock();
@@ -252,7 +252,7 @@ bool pal_poll_arm(int64_t handle, int64_t fd, uint32_t mode, PalErrno *err) {
     }
 
     table_lock();
-    PollEntry *e = &table[fd];
+    PollEntry *e = &poll_table[fd];
     if (!e->used) {
         table_unlock();
         BURROW_OUT(err, PAL_ENOENT);
@@ -322,7 +322,7 @@ int64_t pal_poll_wait(int64_t handle, PalPollEvent *out, int64_t cap,
 
     table_lock();
     for (int fd = 0; fd < table_hi; fd++) {
-        uint32_t armed = table[fd].used ? table[fd].armed : 0;
+        uint32_t armed = poll_table[fd].used ? poll_table[fd].armed : 0;
         if (armed == 0)
             continue;
         short events = 0;
@@ -391,7 +391,7 @@ int64_t pal_poll_wait(int64_t handle, PalPollEvent *out, int64_t cap,
         /* The descriptor may have been removed while this was asleep, or
          * removed and added again, in which case what was armed is what
          * counts now. */
-        PollEntry *e = &table[fds[i].fd];
+        PollEntry *e = &poll_table[fds[i].fd];
         if (!e->used)
             continue;
 

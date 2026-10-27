@@ -150,10 +150,13 @@ ifeq ($(OS),Windows_NT)
 endif
 
 # The flags setjmp needs on WASI, the library it is in, and room on the stack
-# the program starts on, which wasm-ld makes 64 KiB unless it is asked.
+# the program starts on, which wasm-ld makes 64 KiB unless it is asked. Also
+# --no-wasm-opt, because clang runs wasm-opt by itself after an optimised link
+# when it finds one on the PATH, and that run drops the function names, so the
+# removelist in WASM_POST names a function wasm-opt can no longer find.
 ifneq ($(WASI),0)
   DEFINES += -mllvm -wasm-enable-sjlj -mexception-handling
-  LDLIBS  += -lsetjmp -Wl,-z,stack-size=8388608
+  LDLIBS  += -lsetjmp -Wl,-z,stack-size=8388608 --no-wasm-opt
 endif
 
 # Forces the portable context switch on a machine that has assembly for it.

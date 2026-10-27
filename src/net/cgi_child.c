@@ -311,6 +311,7 @@ static const HttpResponseWriterVT cc_response_vt = {
     NULL,
     NULL,
     NULL,
+    NULL,
 };
 
 burrow__CgiResponse *burrow__cgi_new_response(Alloc *a, HttpRequest *req,

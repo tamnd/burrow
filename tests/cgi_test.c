@@ -1203,6 +1203,7 @@ static const HttpResponseWriterVT cwr_vt = {
     NULL,
     NULL,
     NULL,
+    NULL,
 };
 
 /* If there's an error copying the child's output to the parent, test

@@ -1952,6 +1952,7 @@ static const HttpResponseWriterVT gzrw_vt = {
     NULL,
     NULL,
     NULL,
+    NULL,
 };
 
 static const Str zipping_contents =

@@ -132,6 +132,7 @@ static const HttpResponseWriterVT ft_populate_response_vt = {
     NULL,
     NULL,
     NULL,
+    NULL,
 };
 
 /* Not in Go, where the collector frees all of it: what http_response_free

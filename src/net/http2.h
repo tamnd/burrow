@@ -1138,6 +1138,10 @@ extern const Error burrow__http2_err_handler_panicked;
 extern const Error burrow__http2_err_handler_wrote_too_much;
 extern const Error burrow__http2_err_missing_required_cipher;
 
+/* Push errors. */
+extern const Error burrow__http2_err_recursive_push;
+extern const Error burrow__http2_err_push_limit_reached;
+
 /* connHeaders: the connection-specific header fields, which the server
  * rejects in a request and the transport deletes from a response. */
 enum { HTTP2_NCONN_HEADERS = 5 };

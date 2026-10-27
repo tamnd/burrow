@@ -21,6 +21,10 @@
  * server's Protocols include UnencryptedHTTP2, and so does this one when a
  * test gives it Protocols. Without them it still uses h2c, as above.
  *
+ * The push tests at the end are from server_push_test.go, and talk TLS, as
+ * Go's do. TestServer_Push_StateTransitions looks at the server's stream
+ * states, so it is not here.
+ *
  * The PING at the end of TestServer_Send_RstStream_After_Bogus_WindowUpdate,
  * and the handler writes in TestServerSettingsFlowControlUpdateBeyondLimit and
  * TestServerSettingsFlowControlUpdateWithinLimit, came with go1.27.2
@@ -5122,6 +5126,747 @@ static void TestServer_Headers_HalfCloseRemote(TestingT *t) {
     chan_free(h.leave);
 }
 
+/* ------------------------------------------------------------------- push */
+
+/* From server_push_test.go. Go's tester talks TLS here, and so does
+ * h2t_start_push. Not in Go: the handlers call Errorf themselves where Go's
+ * send an error on errc, and send true on done when they return. */
+
+typedef struct H2tPush H2tPush;
+typedef void (*H2tPushFn)(H2tPush *p, HttpResponseWriter w, HttpRequest *r, Alloc *a);
+
+struct H2tPush {
+    TestingT *t;
+    H2tPushFn fn;
+    Chan *done;  /* of bool */
+    Chan *ready; /* of bool, for RejectAfterGoAway */
+};
+
+static void h2t_push_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    H2tPush *p = (H2tPush *)env;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    p->fn(p, w, r, arena_allocator(&ar));
+    arena_free(&ar);
+    bool v = true;
+    if (p->done != NULL && !chan_try_send(p->done, &v))
+        testing_t_errorf_v(p->t, "unexpected extra request");
+}
+
+static bool h2t_start_push(H2tTester *st, TestingT *t, H2tPush *p) {
+    HttpProtocols protos;
+    memset(&protos, 0, sizeof protos);
+    http_protocols_set_http2(&protos, true);
+    H2tServerOpts o = {NULL, 0, 0, NULL, &protos};
+    return h2t_start_server(st, t, h2t_push_handler, p, &o);
+}
+
+/* w.(http.Pusher).Push. Not in Go: a writer with no push slot gives an error
+ * where Go's type assertion would panic. */
+static Error h2t_push(HttpResponseWriter w, Str target, const HttpPushOptions *opts) {
+    if (w.vt->push == NULL)
+        return fmt_errorf_v("ResponseWriter is not a Pusher");
+    return w.vt->push(w.data, target, opts);
+}
+
+/* Go's == on two errors. */
+static bool h2t_same_err(Error a, Error b) {
+    return a.vt == b.vt && a.data == b.data;
+}
+
+/* Waits for n handlers to be done, two seconds for each. */
+static void h2t_push_wait(TestingT *t, Chan *done, int n) {
+    for (int k = 0; k < n; k++) {
+        Chan *after = time_after_chan(heap_allocator(), 2 * TIME_SECOND);
+        bool v;
+        SelectCase cases[] = {
+            BURROW_RECV(after, NULL),
+            BURROW_RECV(done, &v),
+        };
+        if (chan_select(cases, 2) == 0)
+            testing_t_errorf_v(t, "timeout waiting for handler %d to finish", k);
+        chan_free(after);
+    }
+}
+
+#define H2T_MAIN_BODY "<html>index page</html>"
+#define H2T_PUSHED_BODY "<html>pushed page</html>"
+#define H2T_USER_AGENT "testagent"
+#define H2T_COOKIE "testcookie"
+
+static const Str h2t_st_url = BURROW_S_INIT("https://dummy.tld");
+
+/* reflect.DeepEqual on two Headers. */
+static bool h2t_header_equal(HttpHeader got, HttpHeader want) {
+    if (map_len(got) != map_len(want))
+        return false;
+    MapIter it = map_iter(want);
+    const void *k;
+    void *v;
+    while (map_next(&it, &k, &v)) {
+        Slice w = http_header_values(want, *(const Str *)k);
+        Slice g = http_header_values(got, *(const Str *)k);
+        if (g.len != w.len)
+            return false;
+        for (Int i = 0; i < w.len; i++) {
+            if (!str_eq(((const Str *)g.p)[i], ((const Str *)w.p)[i]))
+                return false;
+        }
+    }
+    return true;
+}
+
+/* Not in Go: h in wire form, for the messages where Go prints a Header. */
+static Str h2t_header_text(Alloc *a, HttpHeader h) {
+    BytesBuffer b = BYTES_BUFFER(a);
+    (void)http_header_write(h, bytes_buffer_as_io_writer(&b));
+    Slice p = bytes_buffer_bytes(&b);
+    return str_from_bytes(p.p, p.len);
+}
+
+/* checkPromisedReq. */
+static bool h2t_check_promised_req(TestingT *t, HttpRequest *r, Alloc *a,
+                                   const char *what, Str want_method,
+                                   HttpHeader want_h) {
+    if (!str_eq(r->method, want_method)) {
+        testing_t_errorf_v(t, "%s: promised Req.Method=%q, want %q",
+                           str_from_cstr(what), r->method, want_method);
+        return false;
+    }
+    if (!h2t_header_equal(r->header, want_h)) {
+        testing_t_errorf_v(t, "%s: promised Req.Header=%q, want %q",
+                           str_from_cstr(what), h2t_header_text(a, r->header),
+                           h2t_header_text(a, want_h));
+        return false;
+    }
+    Str got_url = fmt_sprintf_v(a, "https://%s", r->host);
+    if (!str_eq(got_url, h2t_st_url)) {
+        testing_t_errorf_v(t, "%s: promised Req.Host=%q, want %q", str_from_cstr(what),
+                           got_url, h2t_st_url);
+        return false;
+    }
+    if (r->body.vt == NULL) {
+        testing_t_errorf_v(t, "%s: nil Body", str_from_cstr(what));
+        return false;
+    }
+    Error err = BURROW_NO_ERROR;
+    Slice buf = io_read_all(a, io_read_closer_as_io_reader(r->body), &err);
+    if (BURROW_FAILED(err) || buf.len != 0) {
+        testing_t_errorf_v(t, "%s: ReadAll(Body)=%q,%v, want '',nil",
+                           str_from_cstr(what), str_from_bytes(buf.p, buf.len), err);
+        return false;
+    }
+    return true;
+}
+
+/* clen outlives the handler, as the header is sent once it returns. */
+static void h2t_set_body_headers(HttpResponseWriter w, Str clen) {
+    HttpHeader h = http_response_writer_header(w);
+    (void)http_header_set(h, BURROW_S("Content-Type"), BURROW_S("text/html"));
+    (void)http_header_set(h, BURROW_S("Content-Length"), clen);
+}
+
+static void h2t_push_success_handler(H2tPush *p, HttpResponseWriter w, HttpRequest *r,
+                                     Alloc *a) {
+    TestingT *t = p->t;
+    Str uri = url_request_uri(r->url, a);
+    if (str_eq(uri, BURROW_S("/"))) {
+        /* Push "/pushed?get" as a GET request, using an absolute URL. */
+        HttpPushOptions opt;
+        memset(&opt, 0, sizeof opt);
+        opt.header = http_header_make(a);
+        (void)http_header_set(opt.header, BURROW_S("User-Agent"),
+                              BURROW_S(H2T_USER_AGENT));
+        Error err = h2t_push(w, fmt_sprintf_v(a, "%s/pushed?get", h2t_st_url), &opt);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "error pushing /pushed?get: %v", err);
+            return;
+        }
+        /* Push "/pushed?head" as a HEAD request, using a path. */
+        memset(&opt, 0, sizeof opt);
+        opt.method = BURROW_S("HEAD");
+        opt.header = http_header_make(a);
+        (void)http_header_set(opt.header, BURROW_S("User-Agent"),
+                              BURROW_S(H2T_USER_AGENT));
+        (void)http_header_set(opt.header, BURROW_S("Cookie"), BURROW_S(H2T_COOKIE));
+        err = h2t_push(w, BURROW_S("/pushed?head"), &opt);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "error pushing /pushed?head: %v", err);
+            return;
+        }
+        h2t_set_body_headers(w, BURROW_S("23")); /* len(mainBody) */
+        http_response_writer_write_header(w, 200);
+        h2t_write_str(w, H2T_MAIN_BODY);
+    } else if (str_eq(uri, BURROW_S("/pushed?get"))) {
+        HttpHeader want_h = http_header_make(a);
+        (void)http_header_set(want_h, BURROW_S("User-Agent"), BURROW_S(H2T_USER_AGENT));
+        if (!h2t_check_promised_req(t, r, a, "/pushed?get", BURROW_S("GET"), want_h))
+            return;
+        h2t_set_body_headers(w, BURROW_S("24")); /* len(pushedBody) */
+        http_response_writer_write_header(w, 200);
+        h2t_write_str(w, H2T_PUSHED_BODY);
+    } else if (str_eq(uri, BURROW_S("/pushed?head"))) {
+        HttpHeader want_h = http_header_make(a);
+        (void)http_header_set(want_h, BURROW_S("User-Agent"), BURROW_S(H2T_USER_AGENT));
+        (void)http_header_set(want_h, BURROW_S("Cookie"), BURROW_S(H2T_COOKIE));
+        if (!h2t_check_promised_req(t, r, a, "/pushed?head", BURROW_S("HEAD"), want_h))
+            return;
+        http_response_writer_write_header(w, 204);
+    } else {
+        testing_t_errorf_v(t, "unknown RequestURL %q", uri);
+    }
+}
+
+/* decodeHeader's pairs, with date left out, against want, which holds n names
+ * and values. */
+static bool h2t_pairs_equal(HpackHeaderFields got, const Str *want, size_t n) {
+    size_t w = 0;
+    for (Int g = 0; g < got.len; g++) {
+        if (str_eq(got.p[g].name, BURROW_S("date")))
+            continue;
+        if (w + 1 >= n || !str_eq(got.p[g].name, want[w]) ||
+            !str_eq(got.p[g].value, want[w + 1]))
+            return false;
+        w += 2;
+    }
+    return w == n;
+}
+
+static Str h2t_pairs_text(Alloc *a, HpackHeaderFields fs) {
+    Str s = BURROW_S("[");
+    for (Int i = 0; i < fs.len; i++) {
+        if (str_eq(fs.p[i].name, BURROW_S("date")))
+            continue;
+        s = fmt_sprintf_v(a, "%s[%s %s]", s, fs.p[i].name, fs.p[i].value);
+    }
+    return fmt_sprintf_v(a, "%s]", s);
+}
+
+typedef enum { H2T_PP, H2T_HEADERS, H2T_DATA } H2tPushWantKind;
+
+typedef struct H2tPushWant {
+    H2tPushWantKind kind;
+    uint32_t promise_id;
+    const Str *h;
+    size_t n;
+    const char *data;
+} H2tPushWant;
+
+/* checkPushPromise, checkHeaders and checkData. */
+static bool h2t_check_push_frame(H2tTester *st, Alloc *a, Http2Frame *f,
+                                 const H2tPushWant *want, Str label) {
+    TestingT *t = st->t;
+    switch (want->kind) {
+    case H2T_PP: {
+        if (f->kind != HTTP2_PUSH_PROMISE_FRAME) {
+            testing_t_errorf_v(t, "%s: got frame type %d; want *PushPromiseFrame",
+                               label, (int)f->header.type);
+            return false;
+        }
+        if (!burrow__http2_push_promise_frame_headers_ended(f)) {
+            testing_t_errorf_v(t, "%s: want END_HEADERS flag in PushPromiseFrame",
+                               label);
+            return false;
+        }
+        if (f->u.push_promise.promise_id != want->promise_id) {
+            testing_t_errorf_v(t, "%s: got PromiseID %d; want %d", label,
+                               (int)f->u.push_promise.promise_id,
+                               (int)want->promise_id);
+            return false;
+        }
+        Error err = BURROW_NO_ERROR;
+        HpackHeaderFields got = burrow__hpack_decoder_decode_full(
+            st->dec, a, burrow__http2_push_promise_frame_header_block_fragment(f),
+            &err);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "%s: hpack decoding error: %v", label, err);
+            return false;
+        }
+        if (!h2t_pairs_equal(got, want->h, want->n)) {
+            testing_t_errorf_v(t, "%s: got promised headers %s", label,
+                               h2t_pairs_text(a, got));
+            return false;
+        }
+        return true;
+    }
+    case H2T_HEADERS:
+        if (f->kind != HTTP2_META_HEADERS_FRAME) {
+            testing_t_errorf_v(t, "%s: got frame type %d; want *HeadersFrame", label,
+                               (int)f->header.type);
+            return false;
+        }
+        if (!h2t_pairs_equal(f->u.meta_headers.fields, want->h, want->n)) {
+            testing_t_errorf_v(t, "%s: got response headers %s", label,
+                               h2t_pairs_text(a, f->u.meta_headers.fields));
+            return false;
+        }
+        return true;
+    case H2T_DATA: {
+        if (f->kind != HTTP2_DATA_FRAME) {
+            testing_t_errorf_v(t, "%s: got frame type %d; want *DataFrame", label,
+                               (int)f->header.type);
+            return false;
+        }
+        Slice d = f->u.data.data;
+        Str got = str_from_bytes(d.p, d.len);
+        if (!str_eq(got, str_from_cstr(want->data))) {
+            testing_t_errorf_v(t, "%s: got response data %q; want %q", label, got,
+                               str_from_cstr(want->data));
+            return false;
+        }
+        return true;
+    }
+    default:
+        break;
+    }
+    return false;
+}
+
+static void TestServer_Push_Success(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    H2tPush p = {t, h2t_push_success_handler, chan_make(heap_allocator(), TYPE_BOOL, 3),
+                 NULL};
+    if (p.done == NULL)
+        FATALF("no memory");
+    H2tTester st;
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    /* Send one request, which should push two responses. */
+    if (h2t_start_push(&st, t, &p) && h2t_greet(&st) && h2t_get_slash(&st)) {
+        Str clen_main = strconv_itoa(a, (Int)strlen(H2T_MAIN_BODY));
+        Str clen_pushed = strconv_itoa(a, (Int)strlen(H2T_PUSHED_BODY));
+        const Str pp_get[] = {S_(":method"),     S_("GET"),         S_(":scheme"),
+                              S_("https"),       S_(":authority"),  S_("dummy.tld"),
+                              S_(":path"),       S_("/pushed?get"), S_("user-agent"),
+                              S_(H2T_USER_AGENT)};
+        const Str pp_head[] = {S_(":method"),  S_("HEAD"),         S_(":scheme"),
+                               S_("https"),    S_(":authority"),   S_("dummy.tld"),
+                               S_(":path"),    S_("/pushed?head"), S_("cookie"),
+                               S_(H2T_COOKIE), S_("user-agent"),   S_(H2T_USER_AGENT)};
+        const Str h_main[] = {S_(":status"),        S_("200"),
+                              S_("content-type"),   S_("text/html"),
+                              S_("content-length"), clen_main};
+        const Str h_pushed[] = {S_(":status"),        S_("200"),
+                                S_("content-type"),   S_("text/html"),
+                                S_("content-length"), clen_pushed};
+        const Str h_head[] = {S_(":status"), S_("204")};
+#define H2T_N(x) (sizeof(x) / sizeof((x)[0]))
+        /* Stream 1 has 2 PUSH_PROMISE + HEADERS + DATA
+         * Stream 2 has HEADERS + DATA
+         * Stream 4 has HEADERS */
+        const H2tPushWant s1[] = {
+            {H2T_PP, 2, pp_get, H2T_N(pp_get), NULL},
+            {H2T_PP, 4, pp_head, H2T_N(pp_head), NULL},
+            {H2T_HEADERS, 0, h_main, H2T_N(h_main), NULL},
+            {H2T_DATA, 0, NULL, 0, H2T_MAIN_BODY},
+        };
+        const H2tPushWant s2[] = {
+            {H2T_HEADERS, 0, h_pushed, H2T_N(h_pushed), NULL},
+            {H2T_DATA, 0, NULL, 0, H2T_PUSHED_BODY},
+        };
+        const H2tPushWant s4[] = {
+            {H2T_HEADERS, 0, h_head, H2T_N(h_head), NULL},
+        };
+        const uint32_t ids[3] = {1, 2, 4};
+        const H2tPushWant *expected[3] = {s1, s2, s4};
+        const size_t nexpected[3] = {H2T_N(s1), H2T_N(s2), H2T_N(s4)};
+#undef H2T_N
+        size_t consumed[3] = {0, 0, 0};
+        for (;;) {
+            size_t left = 0;
+            for (int i = 0; i < 3; i++)
+                left += nexpected[i] - consumed[i];
+            if (left == 0)
+                break;
+            Http2Frame *f = h2t_read_frame(&st);
+            if (f == NULL) {
+                for (int i = 0; i < 3; i++) {
+                    if (consumed[i] < nexpected[i])
+                        testing_t_errorf_v(t, "stream %d: missing %d frames",
+                                           (int)ids[i],
+                                           (int)(nexpected[i] - consumed[i]));
+                }
+                break;
+            }
+            uint32_t id = f->header.stream_id;
+            int s = 0;
+            while (s < 3 && ids[s] != id)
+                s++;
+            Str label = fmt_sprintf_v(a, "stream %d, frame %d", (int)id,
+                                      s < 3 ? (int)consumed[s] : 0);
+            if (s == 3 || consumed[s] == nexpected[s]) {
+                testing_t_errorf_v(t, "%s: unexpected frame type %d", label,
+                                   (int)f->header.type);
+                burrow__http2_frame_free(f);
+                break;
+            }
+            bool ok = h2t_check_push_frame(&st, a, f, &expected[s][consumed[s]], label);
+            burrow__http2_frame_free(f);
+            if (!ok)
+                break;
+            consumed[s]++;
+        }
+        /* Not in Go: Go waits for the handlers before it reads the frames, as
+         * its fake connection holds what the server writes. A net_pipe write
+         * waits for the reader, so the pushed handlers can only finish once
+         * their frames are read. */
+        h2t_push_wait(t, p.done, 3);
+    }
+    h2t_close(&st);
+    arena_free(&ar);
+    chan_free(p.done);
+}
+
+static void h2t_push_no_race_handler(H2tPush *p, HttpResponseWriter w, HttpRequest *r,
+                                     Alloc *a) {
+    Str uri = url_request_uri(r->url, a);
+    if (str_eq(uri, BURROW_S("/"))) {
+        HttpPushOptions opt;
+        memset(&opt, 0, sizeof opt);
+        opt.header = http_header_make(a);
+        (void)http_header_set(opt.header, BURROW_S("User-Agent"),
+                              BURROW_S("testagent"));
+        Error err = h2t_push(w, BURROW_S("/pushed"), &opt);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(p->t, "error pushing: %v", err);
+            return;
+        }
+        http_response_writer_write_header(w, 200);
+    } else if (str_eq(uri, BURROW_S("/pushed"))) {
+        /* Update request header, ensure there is no race. */
+        (void)http_header_set(r->header, BURROW_S("User-Agent"), BURROW_S("newagent"));
+        (void)http_header_set(r->header, BURROW_S("Cookie"), BURROW_S("cookie"));
+        http_response_writer_write_header(w, 200);
+    } else {
+        testing_t_errorf_v(p->t, "unknown RequestURL %q", uri);
+    }
+}
+
+static void TestServer_Push_SuccessNoRace(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    /* Regression test for issue #18326. Ensure the request handler can mutate
+     * pushed request headers without racing with the PUSH_PROMISE write. */
+    H2tPush p = {t, h2t_push_no_race_handler, chan_make(heap_allocator(), TYPE_BOOL, 2),
+                 NULL};
+    if (p.done == NULL)
+        FATALF("no memory");
+    H2tTester st;
+    /* Send one request, which should push one response. */
+    if (h2t_start_push(&st, t, &p) && h2t_greet(&st) && h2t_get_slash(&st))
+        h2t_push_wait(t, p.done, 2);
+    h2t_close(&st);
+    chan_free(p.done);
+}
+
+static void h2t_push_recursive_handler(H2tPush *p, HttpResponseWriter w, HttpRequest *r,
+                                       Alloc *a) {
+    Str base_url = fmt_sprintf_v(a, "https://%s", r->host);
+    if (str_eq(r->url->path, BURROW_S("/"))) {
+        Error err = h2t_push(w, fmt_sprintf_v(a, "%s/push1", base_url), NULL);
+        if (BURROW_FAILED(err))
+            testing_t_errorf_v(p->t, "first Push()=%v, want nil", err);
+    } else if (str_eq(r->url->path, BURROW_S("/push1"))) {
+        Error got = h2t_push(w, fmt_sprintf_v(a, "%s/push2", base_url), NULL);
+        Error want = burrow__http2_err_recursive_push;
+        if (!h2t_same_err(got, want))
+            testing_t_errorf_v(p->t, "Push()=%v, want %v", got, want);
+    } else {
+        testing_t_errorf_v(p->t, "unexpected path: %q", r->url->path);
+    }
+}
+
+static void TestServer_Push_RejectRecursivePush(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    /* Expect two requests, but might get three if there's a bug and the second
+     * push succeeds. */
+    H2tPush p = {t, h2t_push_recursive_handler,
+                 chan_make(heap_allocator(), TYPE_BOOL, 3), NULL};
+    if (p.done == NULL)
+        FATALF("no memory");
+    H2tTester st;
+    if (h2t_start_push(&st, t, &p) && h2t_greet(&st) && h2t_get_slash(&st)) {
+        bool v;
+        (void)chan_recv(p.done, &v);
+        (void)chan_recv(p.done, &v);
+    }
+    h2t_close(&st);
+    chan_free(p.done);
+}
+
+typedef void (*H2tDoPushFn)(TestingT *t, HttpResponseWriter w, HttpRequest *r,
+                            Alloc *a);
+
+static H2tDoPushFn h2t_do_push;
+
+static void h2t_push_single_handler(H2tPush *p, HttpResponseWriter w, HttpRequest *r,
+                                    Alloc *a) {
+    h2t_do_push(p->t, w, r, a);
+}
+
+/* testServer_Push_RejectSingleRequest. */
+static void h2t_push_reject_single_request(TestingT *t, H2tDoPushFn do_push,
+                                           const Http2Setting *settings,
+                                           Int nsettings) {
+    SKIP_WITHOUT_THREADS(t);
+    h2t_do_push = do_push;
+    /* Expect one request, but might get two if there's a bug and the push
+     * succeeds. */
+    H2tPush p = {t, h2t_push_single_handler, chan_make(heap_allocator(), TYPE_BOOL, 2),
+                 NULL};
+    if (p.done == NULL)
+        FATALF("no memory");
+    H2tTester st;
+    if (h2t_start_push(&st, t, &p) && h2t_greet(&st) &&
+        h2t_write_settings(&st, settings, nsettings) && h2t_get_slash(&st)) {
+        bool v;
+        (void)chan_recv(p.done, &v);
+        /* Should not get a PUSH_PROMISE frame. */
+        (void)h2t_want_headers(&st, 1, true, NULL, 0);
+    }
+    h2t_close(&st);
+    chan_free(p.done);
+}
+
+static void h2t_push_if_disabled(TestingT *t, HttpResponseWriter w, HttpRequest *r,
+                                 Alloc *a) {
+    Error got = h2t_push(w, fmt_sprintf_v(a, "https://%s/pushed", r->host), NULL);
+    Error want = http_err_not_supported;
+    if (!h2t_same_err(got, want))
+        testing_t_errorf_v(t, "Push()=%v, want %v", got, want);
+}
+
+static void TestServer_Push_RejectIfDisabled(TestingT *t) {
+    static const Http2Setting s[] = {{HTTP2_SETTING_ENABLE_PUSH, 0}};
+    h2t_push_reject_single_request(t, h2t_push_if_disabled, s, 1);
+}
+
+static void h2t_push_no_concurrent_streams(TestingT *t, HttpResponseWriter w,
+                                           HttpRequest *r, Alloc *a) {
+    Error got = h2t_push(w, fmt_sprintf_v(a, "https://%s/pushed", r->host), NULL);
+    Error want = burrow__http2_err_push_limit_reached;
+    if (!h2t_same_err(got, want))
+        testing_t_errorf_v(t, "Push()=%v, want %v", got, want);
+}
+
+static void TestServer_Push_RejectWhenNoConcurrentStreams(TestingT *t) {
+    static const Http2Setting s[] = {{HTTP2_SETTING_MAX_CONCURRENT_STREAMS, 0}};
+    h2t_push_reject_single_request(t, h2t_push_no_concurrent_streams, s, 1);
+}
+
+static void h2t_push_wrong_scheme(TestingT *t, HttpResponseWriter w, HttpRequest *r,
+                                  Alloc *a) {
+    if (BURROW_OK(h2t_push(w, fmt_sprintf_v(a, "http://%s/pushed", r->host), NULL)))
+        testing_t_errorf_v(t, "Push() should have failed (push target URL is http)");
+}
+
+static void TestServer_Push_RejectWrongScheme(TestingT *t) {
+    h2t_push_reject_single_request(t, h2t_push_wrong_scheme, NULL, 0);
+}
+
+static void h2t_push_missing_host(TestingT *t, HttpResponseWriter w, HttpRequest *r,
+                                  Alloc *a) {
+    (void)r;
+    (void)a;
+    if (BURROW_OK(h2t_push(w, BURROW_S("https:pushed"), NULL)))
+        testing_t_errorf_v(t,
+                           "Push() should have failed (push target URL missing host)");
+}
+
+static void TestServer_Push_RejectMissingHost(TestingT *t) {
+    h2t_push_reject_single_request(t, h2t_push_missing_host, NULL, 0);
+}
+
+static void h2t_push_relative_path(TestingT *t, HttpResponseWriter w, HttpRequest *r,
+                                   Alloc *a) {
+    (void)r;
+    (void)a;
+    if (BURROW_OK(h2t_push(w, BURROW_S("../test"), NULL)))
+        testing_t_errorf_v(
+            t, "Push() should have failed (push target is a relative path)");
+}
+
+static void TestServer_Push_RejectRelativePath(TestingT *t) {
+    h2t_push_reject_single_request(t, h2t_push_relative_path, NULL, 0);
+}
+
+static void h2t_push_forbidden_method(TestingT *t, HttpResponseWriter w, HttpRequest *r,
+                                      Alloc *a) {
+    HttpPushOptions opt;
+    memset(&opt, 0, sizeof opt);
+    opt.method = BURROW_S("POST");
+    if (BURROW_OK(h2t_push(w, fmt_sprintf_v(a, "https://%s/pushed", r->host), &opt)))
+        testing_t_errorf_v(t, "Push() should have failed (cannot promise a POST)");
+}
+
+static void TestServer_Push_RejectForbiddenMethod(TestingT *t) {
+    h2t_push_reject_single_request(t, h2t_push_forbidden_method, NULL, 0);
+}
+
+static void h2t_push_forbidden_header(TestingT *t, HttpResponseWriter w, HttpRequest *r,
+                                      Alloc *a) {
+    HttpPushOptions opt;
+    memset(&opt, 0, sizeof opt);
+    opt.header = http_header_make(a);
+    static const char *const kv[] = {
+        "Content-Length",
+        "10",
+        "Content-Encoding",
+        "gzip",
+        "Trailer",
+        "Foo",
+        "Te",
+        "trailers",
+        "Host",
+        "test.com",
+        ":authority",
+        "test.com",
+    };
+    for (size_t i = 0; i + 1 < sizeof kv / sizeof kv[0]; i += 2)
+        (void)http_header_add(opt.header, str_from_cstr(kv[i]),
+                              str_from_cstr(kv[i + 1]));
+    if (BURROW_OK(h2t_push(w, fmt_sprintf_v(a, "https://%s/pushed", r->host), &opt)))
+        testing_t_errorf_v(t, "Push() should have failed (forbidden headers)");
+}
+
+static void TestServer_Push_RejectForbiddenHeader(TestingT *t) {
+    h2t_push_reject_single_request(t, h2t_push_forbidden_header, NULL, 0);
+}
+
+static void h2t_push_after_go_away_handler(H2tPush *p, HttpResponseWriter w,
+                                           HttpRequest *r, Alloc *a) {
+    bool v;
+    (void)chan_recv(p->ready, &v);
+    Error got = h2t_push(w, fmt_sprintf_v(a, "https://%s/pushed", r->host), NULL);
+    Error want = http_err_not_supported;
+    if (!h2t_same_err(got, want))
+        testing_t_errorf_v(p->t, "Push()=%v, want %v", got, want);
+}
+
+static void TestServer_Push_RejectAfterGoAway(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    H2tPush p = {t, h2t_push_after_go_away_handler,
+                 chan_make(heap_allocator(), TYPE_BOOL, 2),
+                 chan_make(heap_allocator(), TYPE_BOOL, 0)};
+    if (p.done == NULL || p.ready == NULL)
+        FATALF("no memory");
+    H2tTester st;
+    bool readied = false;
+    if (h2t_start_push(&st, t, &p) && h2t_greet(&st) && h2t_get_slash(&st) &&
+        /* Send GOAWAY and wait for it to be processed. */
+        !h2t_failed(
+            &st, "WriteGoAway",
+            burrow__http2_framer_write_go_away(st.fr, 1, HTTP2_ERR_CODE_NO,
+                                               slice_from(NULL, 0, 0, TYPE_BYTE)))) {
+        /* Not in Go, which has synctest.Wait: a PING, whose ACK comes after
+         * the server has read the GOAWAY. The server's own GOAWAY may come
+         * first. */
+        static const Byte ping_data[8] = {1, 2, 3, 4, 5, 6, 7, 8};
+        if (!h2t_failed(&st, "WritePing",
+                        burrow__http2_framer_write_ping(st.fr, false, ping_data))) {
+            for (;;) {
+                Http2Frame *f = h2t_read_frame(&st);
+                if (f == NULL)
+                    break;
+                bool ack = f->kind == HTTP2_PING_FRAME &&
+                           (f->header.flags & HTTP2_FLAG_PING_ACK) != 0;
+                burrow__http2_frame_free(f);
+                if (ack)
+                    break;
+            }
+        }
+        chan_close(p.ready);
+        readied = true;
+        bool v;
+        (void)chan_recv(p.done, &v);
+    }
+    if (!readied)
+        chan_close(p.ready);
+    h2t_close(&st);
+    chan_free(p.done);
+    chan_free(p.ready);
+}
+
+static void h2t_push_underflow_handler(H2tPush *p, HttpResponseWriter w, HttpRequest *r,
+                                       Alloc *a) {
+    Str uri = url_request_uri(r->url, a);
+    if (str_eq(uri, BURROW_S("/"))) {
+        HttpPushOptions opt;
+        memset(&opt, 0, sizeof opt);
+        opt.header = http_header_make(a);
+        (void)http_header_set(opt.header, BURROW_S("User-Agent"),
+                              BURROW_S("testagent"));
+        Error err = h2t_push(w, BURROW_S("/pushed"), &opt);
+        if (BURROW_FAILED(err))
+            testing_t_errorf_v(p->t, "error pushing: %v", err);
+        http_response_writer_write_header(w, 200);
+    } else if (str_eq(uri, BURROW_S("/pushed"))) {
+        (void)http_header_set(r->header, BURROW_S("User-Agent"), BURROW_S("newagent"));
+        (void)http_header_set(r->header, BURROW_S("Cookie"), BURROW_S("cookie"));
+        http_response_writer_write_header(w, 200);
+    } else {
+        testing_t_errorf_v(p->t, "unknown RequestURL %q", uri);
+    }
+}
+
+static void TestServer_Push_Underflow(TestingT *t) {
+    SKIP_WITHOUT_THREADS(t);
+    /* Test for #63511: Send several requests which generate PUSH_PROMISE
+     * responses, verify they all complete successfully. */
+    H2tPush p = {t, h2t_push_underflow_handler, NULL, NULL};
+    H2tTester st;
+    if (!h2t_start_push(&st, t, &p) || !h2t_greet(&st)) {
+        h2t_close(&st);
+        return;
+    }
+    /* Send several requests. */
+    enum { num_requests = 4 };
+    for (int i = 0; i < num_requests; i++) {
+        /* clients send odd numbers */
+        if (!h2t_write_headers(&st, (uint32_t)(1 + i * 2),
+                               h2t_encode_header(&st, NULL, 0), true, true)) {
+            h2t_close(&st);
+            return;
+        }
+    }
+    /* Each request should result in one PUSH_PROMISE and two responses. */
+    int num_push_promises = 0;
+    int num_headers = 0;
+    while (num_headers < num_requests * 2 || num_push_promises < num_requests) {
+        Http2Frame *f = h2t_read_frame(&st);
+        if (f == NULL) {
+            testing_t_errorf_v(t, "conn is idle, want frame");
+            break;
+        }
+        bool bad = false;
+        if (f->kind == HTTP2_META_HEADERS_FRAME) {
+            if ((f->header.flags & HTTP2_FLAG_HEADERS_END_STREAM) == 0) {
+                testing_t_errorf_v(t,
+                                   "got HEADERS frame with no END_STREAM, expected "
+                                   "END_STREAM: stream %d",
+                                   (int)f->header.stream_id);
+                bad = true;
+            }
+            num_headers++;
+        } else if (f->kind == HTTP2_PUSH_PROMISE_FRAME) {
+            /* Not in Go, whose framer here has no decoder: the block goes
+             * through the one the HEADERS use, which has to see it. */
+            Error err = BURROW_NO_ERROR;
+            Arena ar;
+            arena_init(&ar, NULL, 0);
+            (void)burrow__hpack_decoder_decode_full(
+                st.dec, arena_allocator(&ar),
+                burrow__http2_push_promise_frame_header_block_fragment(f), &err);
+            arena_free(&ar);
+            num_push_promises++;
+        }
+        burrow__http2_frame_free(f);
+        if (bad)
+            break;
+    }
+    h2t_close(&st);
+}
+
 #define TESTS(X)                                                                       \
     X(TestServer)                                                                      \
     X(TestServer_Request_TLS)                                                          \
@@ -5250,6 +5995,18 @@ static void TestServer_Headers_HalfCloseRemote(TestingT *t) {
     X(TestServerHandlerConnectionClose)                                                \
     X(TestNoErrorLoggedOnPostAfterGOAWAY)                                              \
     X(TestServer_MaxQueuedControlFrames)                                               \
-    X(TestServer_Headers_HalfCloseRemote)
+    X(TestServer_Headers_HalfCloseRemote)                                              \
+    X(TestServer_Push_Success)                                                         \
+    X(TestServer_Push_SuccessNoRace)                                                   \
+    X(TestServer_Push_RejectRecursivePush)                                             \
+    X(TestServer_Push_RejectIfDisabled)                                                \
+    X(TestServer_Push_RejectWhenNoConcurrentStreams)                                   \
+    X(TestServer_Push_RejectWrongScheme)                                               \
+    X(TestServer_Push_RejectMissingHost)                                               \
+    X(TestServer_Push_RejectRelativePath)                                              \
+    X(TestServer_Push_RejectForbiddenMethod)                                           \
+    X(TestServer_Push_RejectForbiddenHeader)                                           \
+    X(TestServer_Push_RejectAfterGoAway)                                               \
+    X(TestServer_Push_Underflow)
 
 TESTING_MAIN(TESTS)

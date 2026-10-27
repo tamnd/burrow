@@ -229,6 +229,12 @@ os/exec: method (ExitError) UserTime: the receiver is a pointer, and the method 
 os/exec: method (ExitError) Sys: the receiver is a pointer, and it returns the syscall.WaitStatus itself, as ProcessState's does
 os/exec: method (ExitError) SysUsage: the receiver is a pointer, and it returns a pointer to the syscall.Rusage itself, as ProcessState's does
 
+# include/burrow/os/signal.h: the stop function comes back through a pointer
+# that goes before the signals rather than on the end, so that
+# signal_notify_context_v can take the signals as its variadic tail, and the
+# Slice form keeps the same order.
+os/signal: func NotifyContext: the stop pointer goes before the signals, so the _v form can end with them
+
 # include/burrow/syscall.h: Go's Getsockopt functions for structs, LsfStmt,
 # LsfJump, ParseUnixCredentials, BpfStmt, BpfJump, BpfTimeout and BpfStats
 # allocate the struct and return a pointer to it. The structs are small and the

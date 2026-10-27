@@ -167,10 +167,10 @@ BURROW_BORROWS(ret) Error smtp_client_hello(SmtpClient *c, Str local_name);
  * this function. Not in Go: config has to outlive c, as with tls_client. */
 BURROW_BORROWS(ret) Error smtp_client_start_tls(SmtpClient *c, TlsConfig *config);
 
-/* Client.TLSConnectionState. Returns the client's TLS connection state in
- * *state, and whether there is one. *state is the zero value, and the result
- * false, if smtp_client_start_tls did not succeed. */
-bool smtp_client_tls_connection_state(SmtpClient *c, TlsConnectionState *state);
+/* Client.TLSConnectionState. Returns the client's TLS connection state, and
+ * in *ok whether there is one. The state is the zero value, and *ok false, if
+ * smtp_client_start_tls did not succeed. */
+TlsConnectionState smtp_client_tls_connection_state(SmtpClient *c, bool *ok);
 
 /* Client.Verify. Checks the validity of an email address on the server. If it
  * gives no error, the address is valid. A refusal does not mean the address is

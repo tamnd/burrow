@@ -148,3 +148,4 @@ index/suffixarray
 plugin
 log/syslog
 net/textproto
+time

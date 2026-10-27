@@ -559,8 +559,7 @@ static TypesPackage *check_file(TestingT *t, Str filename, Slice src) {
         return NULL;
     }
     TypesConfig config = {0};
-    config.importer =
-        importer_for(a, S("gc"), (ImporterLookup){0}); /* importer.Default() */
+    config.importer = importer_default(a);
     Slice files = slice_append(a, slice_nil(TYPE_AST_FILE_PTR), &f, 1);
     TypesPackage *pkg = types_config_check(&config, a, S(""), fset, files, NULL, &err);
     if (BURROW_FAILED(err)) {

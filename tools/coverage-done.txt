@@ -171,3 +171,4 @@ os/user
 testing/fstest
 reflect
 embed
+go/importer

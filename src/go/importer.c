@@ -88,3 +88,7 @@ TypesImporter importer_for_compiler(Alloc *a, TokenFileSet *fset, Str compiler,
 TypesImporter importer_for(Alloc *a, Str compiler, ImporterLookup lookup) {
     return importer_for_compiler(a, token_new_file_set(a), compiler, lookup);
 }
+
+TypesImporter importer_default(Alloc *a) {
+    return importer_for(a, BURROW_S("gc"), (ImporterLookup){0});
+}

@@ -83,6 +83,20 @@ BURROW_OWNS(ret) TypesImporter importer_for_compiler(Alloc *a, TokenFileSet *fse
 BURROW_OWNS(ret) TypesImporter importer_for(Alloc *a, Str compiler,
                                             ImporterLookup lookup);
 
+/* Default returns an Importer for the compiler that built the running binary.
+ * If available, the result implements [types.ImporterFrom].
+ *
+ * Default may be convenient for use in the simplest of cases, but
+ * most clients should instead use [ForCompiler], which accepts a
+ * [token.FileSet] from the caller; without it, all position
+ * information derived from the Importer will be incorrect and
+ * misleading. See also the package documentation.
+ *
+ * Not in Go: a program using burrow was not built by a Go compiler, so this is
+ * importer_for with "gc" and no lookup, the importer for the export data of the
+ * go command's own compiler. */
+BURROW_OWNS(ret) TypesImporter importer_default(Alloc *a);
+
 #ifdef __cplusplus
 }
 #endif

@@ -202,9 +202,12 @@ static inline void cst_run(TestingT *t, CSTRunFunc f, void *env, const RunOpts *
     if (parallel)
         set_parallel(t);
     for (int i = 0; i < n; i++) {
-        CSTRun r = {f, env, modes[i], parallel, sync};
+        /* Not in Go: a subtest that pauses in t.Parallel goes on after
+         * testing_t_run returns, so what it runs lives as long as t. */
+        CSTRun *r = (CSTRun *)test_alloc(t, sizeof *r);
+        *r = (CSTRun){f, env, modes[i], parallel, sync};
         (void)testing_t_run(t, test_mode_string(modes[i]),
-                            BURROW_FN(TestingTFunc, cst_run_mode, &r));
+                            BURROW_FN(TestingTFunc, cst_run_mode, r));
     }
 }
 

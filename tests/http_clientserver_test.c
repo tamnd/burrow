@@ -11,17 +11,24 @@
 #include "check.h"
 #include "http_clientserver.h"
 
+#include "../src/net/http_internal.h"
+
 #include "burrow/burrow.h"
 #include "burrow/bytes.h"
+#include "burrow/chan.h"
 #include "burrow/compress/gzip.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
 #include "burrow/io.h"
 #include "burrow/log.h"
 #include "burrow/map.h"
+#include "burrow/mem/arena.h"
+#include "burrow/mem/heap.h"
 #include "burrow/net/http.h"
 #include "burrow/net/http/httptest.h"
+#include "burrow/net/url.h"
 #include "burrow/os.h"
+#include "burrow/sort.h"
 #include "burrow/strings.h"
 #include "burrow/sync.h"
 #include "burrow/testing.h"
@@ -753,6 +760,719 @@ static void TestH12_RequestContentLength_Unknown(TestingT *t) {
     h12_request_content_length(t, body_hidden, -1);
 }
 
+/* Not in Go: wantBody is from transport_test.go. */
+static Error want_body(Alloc *a, HttpResponse *res, Error err, Str want) {
+    if (BURROW_FAILED(err))
+        return err;
+    Slice slurp = io_read_all(a, cst_body(res), &err);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("error reading body: %v", err);
+    Str got = str_from_bytes(slurp.p, slurp.len);
+    if (!str_eq(got, want))
+        return fmt_errorf_v("body = %q; want %q", got, want);
+    err = res->body.vt->closer.close(res->body.data);
+    if (BURROW_FAILED(err))
+        return fmt_errorf_v("body Close = %v", err);
+    return BURROW_NO_ERROR;
+}
+
+/* Not in Go: h[key] = vs, with the values copied into a, and n < 0 for a nil
+ * slice. */
+static void header_set_values(TestingT *t, HttpHeader h, Alloc *a, Str key,
+                              const char *const *vs, Int n) {
+    Slice s = slice_from(NULL, 0, 0, TYPE_STRING);
+    if (n > 0) {
+        Str *p = (Str *)mem_alloc(a, (size_t)n * sizeof *p, _Alignof(Str));
+        if (p == NULL)
+            testing_t_fatal_v(t, "out of memory");
+        for (Int i = 0; i < n; i++)
+            p[i] = str_from_cstr(vs[i]);
+        s = slice_from(p, n, n, TYPE_STRING);
+    }
+    if (!map_set(h, &key, &s))
+        testing_t_fatal_v(t, "out of memory");
+}
+
+/* Not in Go: h as Go prints it with %v, near enough for a message. */
+static Str header_string(Alloc *a, HttpHeader h) {
+    if (h == NULL)
+        return BURROW_S("map[]");
+    BytesBuffer b = BYTES_BUFFER(a);
+    (void)http_header_write(h, bytes_buffer_as_io_writer(&b));
+    Slice p = bytes_buffer_bytes(&b);
+    return str_from_bytes(p.p, p.len);
+}
+
+static void cst_free_request(void *env) {
+    http_request_free((HttpRequest *)env);
+}
+
+/* Tests that closing the Request.Cancel channel also while still
+ * reading the response body. Issue 13159. */
+typedef struct CancelMidBody {
+    Chan *unblock;
+    Chan *did_flush;
+    Chan *cancel;
+} CancelMidBody;
+
+static void cancel_mid_body_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    CancelMidBody *cm = (CancelMidBody *)env;
+    write_string(w, BURROW_S("Hello"));
+    (void)w.vt->flush(w.data);
+    bool v = true;
+    chan_send(cm->did_flush, &v);
+    (void)chan_recv(cm->unblock, NULL);
+    write_string(w, BURROW_S(", world."));
+}
+
+static void cancel_mid_body_free(void *env) {
+    CancelMidBody *cm = (CancelMidBody *)env;
+    chan_free(cm->unblock);
+    chan_free(cm->did_flush);
+    chan_free(cm->cancel);
+}
+
+static void cancel_mid_body_unblock(void *env) {
+    chan_close(((CancelMidBody *)env)->unblock);
+}
+
+static void test_cancel_request_mid_body(TestingT *t, TestMode mode, void *env) {
+    (void)env;
+    CancelMidBody *cm = (CancelMidBody *)test_alloc(t, sizeof *cm);
+    testing_t_cleanup(t, BURROW_FN(Func, cancel_mid_body_free, cm));
+    cm->unblock = chan_make(heap_allocator(), TYPE_BOOL, 0);
+    cm->did_flush = chan_make(heap_allocator(), TYPE_BOOL, 1);
+    cm->cancel = chan_make(heap_allocator(), TYPE_BOOL, 0);
+    if (cm->unblock == NULL || cm->did_flush == NULL || cm->cancel == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, cancel_mid_body_handler, cm), NULL);
+    /* Not in Go: a cleanup registered after the server's runs before it, as
+     * Go's defer does. */
+    testing_t_cleanup(t, BURROW_FN(Func, cancel_mid_body_unblock, cm));
+
+    Alloc *a = test_arena(t);
+    Error err = BURROW_NO_ERROR;
+    HttpRequest *req =
+        http_new_request(a, BURROW_S("GET"), cst->ts->url, (IoReader){0}, &err);
+    if (req == NULL)
+        testing_t_fatal_v(t, err);
+    testing_t_cleanup(t, BURROW_FN(Func, cst_free_request, req));
+    req->cancel = cm->cancel;
+
+    HttpResponse *res = http_client_do(cst->c, req, &err);
+    if (res == NULL)
+        testing_t_fatal_v(t, err);
+    (void)chan_recv(cm->did_flush, NULL);
+
+    /* Read a bit before we cancel. (Issue 13626)
+     * We should have "Hello" at least sitting there. */
+    uint8_t buf[10];
+    Int n = res->body.vt->reader.read(res->body.data,
+                                      slice_from(buf, 10, 10, TYPE_BYTE), &err);
+    if (BURROW_FAILED(err)) {
+        http_response_free(res);
+        testing_t_fatal_v(t, err);
+    }
+    Str first_read = str_from_bytes(buf, n);
+
+    chan_close(cm->cancel);
+
+    Slice rest = io_read_all(a, cst_body(res), &err);
+    Str rest_s = str_from_bytes(rest.p, rest.len);
+    Str all = fmt_sprintf_v(a, "%s%s", first_read, rest_s);
+    if (!str_eq(all, BURROW_S("Hello")))
+        testing_t_errorf_v(t, "Read %q (%q + %q); want Hello", all, first_read, rest_s);
+    if (!errors_is(err, burrow__http_err_request_canceled))
+        testing_t_errorf_v(t, "ReadAll error = %v; want %v", err,
+                           burrow__http_err_request_canceled);
+    http_response_free(res);
+}
+
+static void TestCancelRequestMidBody(TestingT *t) {
+    RunOpts o = {http3_skipped_mode, 2, false};
+    run(t, test_cancel_request_mid_body, NULL, &o);
+}
+
+/* Tests that clients can send trailers to a server and that the server can read them. */
+static void trailers_client_to_server_handler(void *env, HttpResponseWriter w,
+                                              HttpRequest *r) {
+    TestingT *t = (TestingT *)env;
+    Error err = BURROW_NO_ERROR;
+    Slice slurp =
+        io_read_all(r->a, (IoReader){&r->body.vt->reader, r->body.data}, &err);
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(t, "Server reading request body: %v", err);
+    Str s = str_from_bytes(slurp.p, slurp.len);
+    if (!str_eq(s, BURROW_S("foo")))
+        testing_t_errorf_v(t, "Server read request body %q; want foo", s);
+    if (r->trailer == NULL) {
+        write_string(w, BURROW_S("nil Trailer"));
+    } else {
+        Int n = map_len(r->trailer);
+        Str *keys =
+            (Str *)mem_alloc(r->a, (size_t)(n + 1) * sizeof *keys, _Alignof(Str));
+        if (keys == NULL) {
+            testing_t_errorf_v(t, "out of memory");
+            return;
+        }
+        Int i = 0;
+        MapIter it = map_iter(r->trailer);
+        const void *k;
+        void *v;
+        while (map_next(&it, &k, &v))
+            keys[i++] = *(const Str *)k;
+        Slice decl = slice_from(keys, n, n, TYPE_STRING);
+        sort_strings(decl);
+        (void)fmt_fprintf_v(http_response_writer_as_io_writer(w),
+                            "decl: %v, vals: %s, %s", decl,
+                            http_header_get(r->trailer, BURROW_S("Client-Trailer-A")),
+                            http_header_get(r->trailer, BURROW_S("Client-Trailer-B")));
+    }
+}
+
+/* eofReaderFunc, which sets a trailer the first time it is read. */
+typedef struct EofSetTrailer {
+    TestingT *t;
+    HttpRequest **req;
+    const char *key;
+    const char *value;
+} EofSetTrailer;
+
+static Int eof_set_trailer_read(void *self, Slice p, Error *err) {
+    (void)p;
+    EofSetTrailer *e = (EofSetTrailer *)self;
+    HttpRequest *req = *e->req;
+    header_set_values(e->t, req->trailer, req->a, str_from_cstr(e->key), &e->value, 1);
+    if (err != NULL)
+        *err = io_eof;
+    return 0;
+}
+
+static const IoReaderVT eof_set_trailer_vt = {NULL, eof_set_trailer_read};
+
+static void test_trailers_client_to_server(TestingT *t, TestMode mode, void *env) {
+    (void)env;
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, trailers_client_to_server_handler, t),
+        NULL);
+
+    Alloc *a = test_arena(t);
+    HttpRequest **reqp = (HttpRequest **)test_alloc(t, sizeof *reqp);
+    EofSetTrailer *ea = (EofSetTrailer *)test_alloc(t, sizeof *ea);
+    EofSetTrailer *eb = (EofSetTrailer *)test_alloc(t, sizeof *eb);
+    *ea = (EofSetTrailer){t, reqp, "Client-Trailer-A", "valuea"};
+    *eb = (EofSetTrailer){t, reqp, "Client-Trailer-B", "valueb"};
+    IoReader parts[3] = {
+        {&eof_set_trailer_vt, ea},
+        strings_reader_as_io_reader(strings_new_reader(a, BURROW_S("foo"))),
+        {&eof_set_trailer_vt, eb},
+    };
+    IoReader body = io_multi_reader(a, parts, 3);
+    Error err = BURROW_NO_ERROR;
+    HttpRequest *req = http_new_request(a, BURROW_S("POST"), cst->ts->url, body, &err);
+    if (req == NULL)
+        testing_t_fatal_v(t, err);
+    testing_t_cleanup(t, BURROW_FN(Func, cst_free_request, req));
+    *reqp = req;
+    req->trailer = http_header_make(req->a);
+    if (req->trailer == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    header_set_values(t, req->trailer, req->a, BURROW_S("Client-Trailer-A"), NULL,
+                      -1); /*  to be set later */
+    header_set_values(t, req->trailer, req->a, BURROW_S("Client-Trailer-B"), NULL,
+                      -1); /*  to be set later */
+    req->content_length = -1;
+    HttpResponse *res = http_client_do(cst->c, req, &err);
+    if (res == NULL)
+        testing_t_fatal_v(t, err);
+    err = want_body(
+        a, res, BURROW_NO_ERROR,
+        BURROW_S("decl: [Client-Trailer-A Client-Trailer-B], vals: valuea, valueb"));
+    if (BURROW_FAILED(err))
+        testing_t_error_v(t, err);
+    http_response_free(res);
+}
+
+static void TestTrailersClientToServer(TestingT *t) {
+    run(t, test_trailers_client_to_server, NULL, NULL);
+}
+
+/* Tests that servers send trailers to a client and that the client can read them. */
+static const char trailers_body[] = "Some body";
+
+static void trailers_server_to_client_handler(void *env, HttpResponseWriter w,
+                                              HttpRequest *r) {
+    (void)r;
+    bool flush = *(const bool *)env;
+    HttpHeader h = w.vt->header(w.data);
+    (void)http_header_set(h, BURROW_S("Trailer"),
+                          BURROW_S("Server-Trailer-A, Server-Trailer-B"));
+    (void)http_header_add(h, BURROW_S("Trailer"), BURROW_S("Server-Trailer-C"));
+
+    write_string(w, str_from_cstr(trailers_body));
+    if (flush)
+        (void)w.vt->flush(w.data);
+
+    /* How handlers set Trailers: declare it ahead of time
+     * with the Trailer header, and then mutate the
+     * Header() of those values later, after the response
+     * has been written (we wrote to w above). */
+    h = w.vt->header(w.data);
+    (void)http_header_set(h, BURROW_S("Server-Trailer-A"), BURROW_S("valuea"));
+    (void)http_header_set(h, BURROW_S("Server-Trailer-C"),
+                          BURROW_S("valuec")); /* skipping B */
+    (void)http_header_set(h, BURROW_S("Server-Trailer-NotDeclared"),
+                          BURROW_S("should be omitted"));
+}
+
+static void test_trailers_server_to_client(TestingT *t, TestMode mode, bool flush) {
+    Str body = str_from_cstr(trailers_body);
+    bool *flushp = (bool *)test_alloc(t, sizeof *flushp);
+    *flushp = flush;
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, trailers_server_to_client_handler, flushp),
+        NULL);
+
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *res = http_client_get(cst->c, cst->ts->url, &err);
+    if (res == NULL)
+        testing_t_fatal_v(t, err);
+
+    Alloc *a = test_arena(t);
+    HttpHeader want_header = http_header_make(a);
+    if (want_header == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    static const char *const content_type[] = {"text/plain; charset=utf-8"};
+    header_set_values(t, want_header, a, BURROW_S("Content-Type"), content_type, 1);
+    int64_t want_len = -1;
+    if (mode == HTTP2_MODE && !flush) {
+        /* In HTTP/1.1, any use of trailers forces HTTP/1.1
+         * chunking and a flush at the first write. That's
+         * unnecessary with HTTP/2's framing, so the server
+         * is able to calculate the length while still sending
+         * trailers afterwards. */
+        want_len = body.len;
+        (void)http_header_set(want_header, BURROW_S("Content-Length"),
+                              fmt_sprint_v(a, want_len));
+    }
+    if (res->content_length != want_len)
+        testing_t_errorf_v(t, "ContentLength = %v; want %v", res->content_length,
+                           want_len);
+
+    http_header_del(res->header, BURROW_S("Date")); /* irrelevant for test */
+    if (!header_equal(res->header, want_header))
+        testing_t_errorf_v(t, "Header = %v; want %v", header_string(a, res->header),
+                           header_string(a, want_header));
+
+    HttpHeader want = http_header_make(a);
+    if (want == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    header_set_values(t, want, a, BURROW_S("Server-Trailer-A"), NULL, -1);
+    header_set_values(t, want, a, BURROW_S("Server-Trailer-B"), NULL, -1);
+    header_set_values(t, want, a, BURROW_S("Server-Trailer-C"), NULL, -1);
+    if (!header_equal(res->trailer, want))
+        testing_t_errorf_v(t, "Trailer before body read = %v; want %v",
+                           header_string(a, res->trailer), header_string(a, want));
+
+    err = want_body(a, res, BURROW_NO_ERROR, body);
+    if (BURROW_FAILED(err)) {
+        http_response_free(res);
+        testing_t_fatal_v(t, err);
+    }
+
+    static const char *const valuea[] = {"valuea"};
+    static const char *const valuec[] = {"valuec"};
+    want = http_header_make(a);
+    if (want == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    header_set_values(t, want, a, BURROW_S("Server-Trailer-A"), valuea, 1);
+    header_set_values(t, want, a, BURROW_S("Server-Trailer-B"), NULL, -1);
+    header_set_values(t, want, a, BURROW_S("Server-Trailer-C"), valuec, 1);
+    if (!header_equal(res->trailer, want))
+        testing_t_errorf_v(t, "Trailer after body read = %v; want %v",
+                           header_string(a, res->trailer), header_string(a, want));
+    http_response_free(res);
+}
+
+static void trailers_server_to_client(TestingT *t, TestMode mode, void *env) {
+    (void)env;
+    test_trailers_server_to_client(t, mode, false);
+}
+
+static void trailers_server_to_client_flush(TestingT *t, TestMode mode, void *env) {
+    (void)env;
+    test_trailers_server_to_client(t, mode, true);
+}
+
+static void TestTrailersServerToClient(TestingT *t) {
+    RunOpts o = {http3_skipped_mode, 2, false};
+    run(t, trailers_server_to_client, NULL, &o);
+}
+
+static void TestTrailersServerToClientFlush(TestingT *t) {
+    run(t, trailers_server_to_client_flush, NULL, NULL);
+}
+
+/* Don't allow a Body.Read after Body.Close. Issue 13648. */
+static void some_body_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)r;
+    write_string(w, str_from_cstr(trailers_body));
+}
+
+static void test_response_body_read_after_close(TestingT *t, TestMode mode, void *env) {
+    (void)env;
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, some_body_handler, NULL), NULL);
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *res = http_client_get(cst->c, cst->ts->url, &err);
+    if (res == NULL)
+        testing_t_fatal_v(t, err);
+    (void)res->body.vt->closer.close(res->body.data);
+    Alloc *a = test_arena(t);
+    Slice data = io_read_all(a, cst_body(res), &err);
+    http_response_free(res);
+    if (data.len != 0 || BURROW_OK(err))
+        testing_t_fatalf_v(t, "ReadAll returned %q, %v; want error",
+                           str_from_bytes(data.p, data.len), err);
+}
+
+static void TestResponseBodyReadAfterClose(TestingT *t) {
+    run(t, test_response_body_read_after_close, NULL, NULL);
+}
+
+static const char concurrent_req_body[] = "some request body";
+static const char concurrent_res_body[] = "some response body";
+
+/* Not in Go: what the two goroutines in the handler share. */
+typedef struct ConcurrentRW {
+    TestingT *t;
+    TestMode mode;
+    HttpResponseWriter w;
+    HttpRequest *r;
+    Chan *did_read;
+} ConcurrentRW;
+
+/* Read in one goroutine. */
+static void concurrent_rw_read(void *env) {
+    ConcurrentRW *c = (ConcurrentRW *)env;
+    Error err = BURROW_NO_ERROR;
+    Slice data = io_read_all(heap_allocator(),
+                             (IoReader){&c->r->body.vt->reader, c->r->body.data}, &err);
+    Str got = str_from_bytes(data.p, data.len);
+    if (!str_eq(got, str_from_cstr(concurrent_req_body)))
+        testing_t_errorf_v(c->t, "Handler read %q; want %q", got,
+                           str_from_cstr(concurrent_req_body));
+    if (BURROW_FAILED(err))
+        testing_t_errorf_v(c->t, "Handler Read: %v", err);
+    mem_free(heap_allocator(), data.p, (size_t)data.cap, 1);
+    bool v = true;
+    chan_send(c->did_read, &v);
+}
+
+/* Write in another goroutine. */
+static void concurrent_rw_write(void *env) {
+    ConcurrentRW *c = (ConcurrentRW *)env;
+    if (c->mode != HTTP2_MODE) {
+        /* our HTTP/1 implementation intentionally
+         * doesn't permit writes during read (mostly
+         * due to it being undefined); if that is ever
+         * relaxed, change this. */
+        (void)chan_recv(c->did_read, NULL);
+    }
+    write_string(c->w, str_from_cstr(concurrent_res_body));
+}
+
+static void concurrent_rw_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    ConcurrentRW c = *(const ConcurrentRW *)env;
+    c.w = w;
+    c.r = r;
+    c.did_read = chan_make(heap_allocator(), TYPE_BOOL, 1);
+    if (c.did_read == NULL) {
+        testing_t_errorf_v(c.t, "out of memory");
+        return;
+    }
+    SyncWaitGroup wg = {0};
+    if (!sync_wait_group_go(&wg, BURROW_FN(Func, concurrent_rw_read, &c)))
+        testing_t_errorf_v(c.t, "cannot start a goroutine");
+    if (!sync_wait_group_go(&wg, BURROW_FN(Func, concurrent_rw_write, &c)))
+        testing_t_errorf_v(c.t, "cannot start a goroutine");
+    sync_wait_group_wait(&wg);
+    chan_free(c.did_read);
+}
+
+static void test_concurrent_read_write_req_body(TestingT *t, TestMode mode, void *env) {
+    (void)env;
+    ConcurrentRW *c = (ConcurrentRW *)test_alloc(t, sizeof *c);
+    c->t = t;
+    c->mode = mode;
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, concurrent_rw_handler, c), NULL);
+    Alloc *a = test_arena(t);
+    Error err = BURROW_NO_ERROR;
+    HttpRequest *req = http_new_request(a, BURROW_S("POST"), cst->ts->url,
+                                        strings_reader_as_io_reader(strings_new_reader(
+                                            a, str_from_cstr(concurrent_req_body))),
+                                        &err);
+    if (req == NULL)
+        testing_t_fatal_v(t, err);
+    testing_t_cleanup(t, BURROW_FN(Func, cst_free_request, req));
+    (void)http_header_add(req->header, BURROW_S("Expect"),
+                          BURROW_S("100-continue")); /* just to complicate things */
+    HttpResponse *res = http_client_do(cst->c, req, &err);
+    if (res == NULL)
+        testing_t_fatal_v(t, err);
+    Slice data = io_read_all(a, cst_body(res), &err);
+    http_response_free(res);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    Str got = str_from_bytes(data.p, data.len);
+    if (!str_eq(got, str_from_cstr(concurrent_res_body)))
+        testing_t_errorf_v(t, "read %q; want %q", got,
+                           str_from_cstr(concurrent_res_body));
+}
+
+static void TestConcurrentReadWriteReqBody(TestingT *t) {
+    run(t, test_concurrent_read_write_req_body, NULL, NULL);
+}
+
+/* Not in Go: what the handler saw of a request, copied before the request
+ * goes away, since the server frees it once the handler returns. */
+typedef struct GotReq {
+    Alloc *a;
+    Chan *gotc;
+    Str method;
+    Str host;
+    Str url_host;
+    Str url_path;
+    Str request_uri;
+} GotReq;
+
+static void got_req_free(void *env) {
+    chan_free(((GotReq *)env)->gotc);
+}
+
+static GotReq *new_got_req(TestingT *t) {
+    GotReq *g = (GotReq *)test_alloc(t, sizeof *g);
+    g->a = test_arena(t);
+    g->gotc = chan_make(heap_allocator(), TYPE_BOOL, 1);
+    if (g->gotc == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    testing_t_cleanup(t, BURROW_FN(Func, got_req_free, g));
+    return g;
+}
+
+/* gotc <- r */
+static void got_req_send(GotReq *g, HttpRequest *r) {
+    g->method = strings_clone(g->a, r->method);
+    g->host = strings_clone(g->a, r->host);
+    g->url_host = strings_clone(g->a, r->url->host);
+    g->url_path = strings_clone(g->a, r->url->path);
+    g->request_uri = strings_clone(g->a, r->request_uri);
+    bool v = true;
+    chan_send(g->gotc, &v);
+}
+
+static void connect_request_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)w;
+    got_req_send((GotReq *)env, r);
+}
+
+static void test_connect_request(TestingT *t, TestMode mode, void *env) {
+    (void)env;
+    GotReq *got = new_got_req(t);
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, connect_request_handler, got), NULL);
+
+    Alloc *a = test_arena(t);
+    Error err = BURROW_NO_ERROR;
+    Url *u = url_parse(a, cst->ts->url, &err);
+    if (u == NULL)
+        testing_t_fatal_v(t, err);
+
+    struct {
+        Str host;
+        Str want;
+    } tests[] = {
+        {BURROW_S(""), u->host},
+        {BURROW_S("example.com:123"), BURROW_S("example.com:123")},
+    };
+
+    for (size_t i = 0; i < sizeof tests / sizeof tests[0]; i++) {
+        HttpRequest req = {0};
+        req.method = BURROW_S("CONNECT");
+        req.header = http_header_make(a);
+        req.url = u;
+        req.host = tests[i].host;
+        HttpResponse *res = http_client_do(cst->c, &req, &err);
+        if (res == NULL) {
+            testing_t_errorf_v(t, "%d. RoundTrip = %v", (Int)i, err);
+            arena_free(&req.arena);
+            continue;
+        }
+        http_response_free(res);
+        arena_free(&req.arena);
+        (void)chan_recv(got->gotc, NULL);
+        if (!str_eq(got->method, BURROW_S("CONNECT")))
+            testing_t_errorf_v(t, "method = %q; want CONNECT", got->method);
+        if (!str_eq(got->host, tests[i].want))
+            testing_t_errorf_v(t, "Host = %q; want %q", got->host, tests[i].want);
+        if (!str_eq(got->url_host, tests[i].want))
+            testing_t_errorf_v(t, "URL.Host = %q; want %q", got->url_host,
+                               tests[i].want);
+    }
+}
+
+static void TestConnectRequest(TestingT *t) {
+    run(t, test_connect_request, NULL, NULL);
+}
+
+static void user_agent_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)fmt_fprintf_v(http_response_writer_as_io_writer(w), "%q",
+                        http_header_values(r->header, BURROW_S("User-Agent")));
+}
+
+static void test_transport_user_agent(TestingT *t, TestMode mode, void *env) {
+    (void)env;
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, user_agent_handler, NULL), NULL);
+
+    static const char *const multiple[] = {"single", "or", "multiple"};
+    Str want0 = mode == HTTP2_MODE ? BURROW_S("[\"Go-http-client/2.0\"]")
+                                   : BURROW_S("[\"Go-http-client/1.1\"]");
+    Str wants[] = {
+        want0,
+        BURROW_S("[\"foo/1.2.3\"]"),
+        BURROW_S("[\"single\"]"),
+        BURROW_S("[]"),
+        BURROW_S("[]"),
+    };
+    Alloc *a = test_arena(t);
+    for (int i = 0; i < 5; i++) {
+        Error err = BURROW_NO_ERROR;
+        HttpRequest *req =
+            http_new_request(a, BURROW_S("GET"), cst->ts->url, (IoReader){0}, &err);
+        if (req == NULL)
+            testing_t_fatal_v(t, err);
+        switch (i) {
+        case 1:
+            (void)http_header_set(req->header, BURROW_S("User-Agent"),
+                                  BURROW_S("foo/1.2.3"));
+            break;
+        case 2:
+            header_set_values(t, req->header, req->a, BURROW_S("User-Agent"), multiple,
+                              3);
+            break;
+        case 3:
+            (void)http_header_set(req->header, BURROW_S("User-Agent"), BURROW_S(""));
+            break;
+        case 4:
+            header_set_values(t, req->header, req->a, BURROW_S("User-Agent"), NULL, -1);
+            break;
+        default:
+            break;
+        }
+        HttpResponse *res = http_client_do(cst->c, req, &err);
+        if (res == NULL) {
+            testing_t_errorf_v(t, "%d. RoundTrip = %v", i, err);
+            http_request_free(req);
+            continue;
+        }
+        Slice slurp = io_read_all(a, cst_body(res), &err);
+        http_response_free(res);
+        http_request_free(req);
+        if (BURROW_FAILED(err)) {
+            testing_t_errorf_v(t, "%d. read body = %v", i, err);
+            continue;
+        }
+        Str got = str_from_bytes(slurp.p, slurp.len);
+        if (!str_eq(got, wants[i]))
+            testing_t_errorf_v(t, "%d. body mismatch.\n got: %s\nwant: %s\n", i, got,
+                               wants[i]);
+    }
+}
+
+static void TestTransportUserAgent(TestingT *t) {
+    RunOpts o = {http3_skipped_mode, 2, false};
+    run(t, test_transport_user_agent, NULL, &o);
+}
+
+static void star_request_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)http_header_set(w.vt->header(w.data), BURROW_S("foo"), BURROW_S("bar"));
+    got_req_send((GotReq *)env, r);
+    (void)w.vt->flush(w.data);
+}
+
+static void test_star_request(TestingT *t, TestMode mode, void *env) {
+    Str method = *(const Str *)env;
+    GotReq *got = new_got_req(t);
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, star_request_handler, got), NULL);
+
+    Alloc *a = test_arena(t);
+    Error err = BURROW_NO_ERROR;
+    Url *u = url_parse(a, cst->ts->url, &err);
+    if (u == NULL)
+        testing_t_fatal_v(t, err);
+    u->path = BURROW_S("*");
+
+    HttpRequest req = {0};
+    req.method = method;
+    req.header = http_header_make(a);
+    req.url = u;
+
+    HttpResponse *res = http_client_do(cst->c, &req, &err);
+    if (res == NULL) {
+        arena_free(&req.arena);
+        testing_t_fatalf_v(t, "RoundTrip = %v", err);
+    }
+    (void)res->body.vt->closer.close(res->body.data);
+
+    Str want_foo = BURROW_S("bar");
+    int64_t want_len = -1;
+    if (str_eq(method, BURROW_S("OPTIONS"))) {
+        want_foo = BURROW_S("");
+        want_len = 0;
+    }
+    if (res->status_code != 200)
+        testing_t_errorf_v(t, "status code = %v; want %d", res->status, 200);
+    if (res->content_length != want_len)
+        testing_t_errorf_v(t, "content length = %v; want %d", res->content_length,
+                           want_len);
+    Str foo = http_header_get(res->header, BURROW_S("foo"));
+    if (!str_eq(foo, want_foo))
+        testing_t_errorf_v(t, "response \"foo\" header = %q; want %q", foo, want_foo);
+    http_response_free(res);
+    arena_free(&req.arena);
+    bool v;
+    bool ok;
+    if (!chan_try_recv(got->gotc, &v, &ok)) {
+        if (!str_eq(method, BURROW_S("OPTIONS")))
+            testing_t_fatalf_v(t, "handler never got request");
+        return;
+    }
+    if (!str_eq(got->method, method))
+        testing_t_errorf_v(t, "method = %q; want %q", got->method, method);
+    if (!str_eq(got->url_path, BURROW_S("*")))
+        testing_t_errorf_v(t, "URL.Path = %q; want *", got->url_path);
+    if (!str_eq(got->request_uri, BURROW_S("*")))
+        testing_t_errorf_v(t, "RequestURI = %q; want *", got->request_uri);
+}
+
+static void star_request_method(void *env, TestingT *t) {
+    run(t, test_star_request, env, NULL);
+}
+
+static void TestStarRequestMethod(TestingT *t) {
+    static Str methods[] = {BURROW_S("FOO"), BURROW_S("OPTIONS")};
+    for (size_t i = 0; i < 2; i++)
+        (void)testing_t_run(t, methods[i],
+                            BURROW_FN(TestingTFunc, star_request_method, &methods[i]));
+}
+
 #define TESTS(X)                                                                       \
     X(TestNewClientServerTest)                                                         \
     X(TestChunkedResponseHeaders)                                                      \
@@ -777,5 +1497,14 @@ static void TestH12_RequestContentLength_Unknown(TestingT *t) {
     X(TestH12_ServerEmptyContentLength)                                                \
     X(TestH12_RequestContentLength_Known_NonZero)                                      \
     X(TestH12_RequestContentLength_Known_Zero)                                         \
-    X(TestH12_RequestContentLength_Unknown)
+    X(TestH12_RequestContentLength_Unknown)                                            \
+    X(TestCancelRequestMidBody)                                                        \
+    X(TestTrailersClientToServer)                                                      \
+    X(TestTrailersServerToClient)                                                      \
+    X(TestTrailersServerToClientFlush)                                                 \
+    X(TestResponseBodyReadAfterClose)                                                  \
+    X(TestConcurrentReadWriteReqBody)                                                  \
+    X(TestConnectRequest)                                                              \
+    X(TestTransportUserAgent)                                                          \
+    X(TestStarRequestMethod)
 TESTING_MAIN(TESTS)

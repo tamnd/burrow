@@ -1288,6 +1288,15 @@ Int burrow__http2_client_conn_streams_active(Http2ClientConn *cc);
 
 void burrow__http2_client_conn_release(Http2ClientConn *cc);
 
+/* NewClientConn: a connection on c for net/http's ClientConn, which takes c
+ * whatever happens, with one reference, the caller's. hook is the
+ * internalStateHook. Not in Go: done is called once whatever happens, when
+ * the connection is gone and calls hook no more. Its RoundTrip waits for a
+ * stream when the connection is at its concurrency limit. */
+BURROW_OWNS(ret) Http2ClientConn *
+burrow__http2_transport_new_client_conn(Http2Transport *t2, NetConn c, Str key,
+                                        Func hook, Func done, Error *err);
+
 /* IdleConnStrsForTesting: the address of each connection that can take a new
  * request, sorted, as a Slice of Str in a. */
 BURROW_OWNS(ret) Slice burrow__http2_transport_idle_conn_strs(Http2Transport *t2,

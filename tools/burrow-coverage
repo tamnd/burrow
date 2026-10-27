@@ -843,6 +843,8 @@ FUNC_TYPES = {
     "func(*testing.T)": {"TestingTFunc"},
     "func(*B)": {"TestingBFunc"},
     "func(*PB)": {"TestingPBFunc"},
+    # burrow/net/http.h, for ClientConn.SetStateHook.
+    "func(*ClientConn)": {"HttpClientConnStateHook"},
 }
 
 BUILTIN = {

@@ -560,6 +560,48 @@ Int burrow__http_transport_idle_conn_count_for_testing(HttpTransport *t, Str sch
 void burrow__http_transport_set_post_close_read_time_for_testing(HttpTransport *t,
                                                                  Duration d);
 
+/* export_test.go's MaxPostCloseReadTime, how long a body closed early is
+ * drained for when the transport has no post_close_read_time of its own. */
+extern const Duration burrow__http_max_post_close_read_time;
+
+/* ---------------------------------------------------------------- ClientConn
+ *
+ * genericClientConn, the connection under a ClientConn: an HTTP/1 one the
+ * transport made, or an HTTP/2 one the HTTP/2 transport made. Not in Go: ping
+ * is NULL for a connection with no Ping, and free closes the connection and
+ * gives back the ClientConn's hold on it. */
+typedef struct burrow__HttpGenericClientConnVT {
+    Error (*close)(void *self);
+    Error (*err)(void *self);
+    HttpResponse *(*round_trip)(void *self, HttpRequest *req, Error *err);
+    Error (*reserve)(void *self);
+    void (*release)(void *self);
+    Int (*available)(void *self);
+    Int (*in_flight)(void *self);
+    Error (*ping)(void *self, Context ctx);
+    void (*free)(void *self);
+} burrow__HttpGenericClientConnVT;
+
+typedef struct burrow__HttpGenericClientConn {
+    const burrow__HttpGenericClientConnVT *vt;
+    void *self;
+} burrow__HttpGenericClientConn;
+
+/* dialConn with isClientConn set: a new connection to target_addr by
+ * target_scheme, through proxy_url when it is not NULL, which goes in no pool.
+ * hook is the internal state hook, which the connection calls as Go's does.
+ * Not in Go: done is called once, when the connection is gone and calls hook
+ * no more, or before this returns when there is no connection to be had. The
+ * error is in the caller's error_allocator. */
+/* The genericClientConn of the HTTP/2 NetHTTPClientConn, whose self is an
+ * Http2ClientConn. */
+extern const burrow__HttpGenericClientConnVT burrow__http2_client_conn_vt;
+
+Error burrow__http_transport_dial_client_conn(HttpTransport *t, Context ctx,
+                                              Str target_scheme, Str target_addr,
+                                              Url *proxy_url, Func hook, Func done,
+                                              burrow__HttpGenericClientConn *gc);
+
 /* The pieces of the server the HTTP/2 server shares: serverHandler.ServeHTTP,
  * doKeepAlives, and the header value limit. */
 void burrow__http_server_handler_serve(HttpServer *srv, HttpResponseWriter w,

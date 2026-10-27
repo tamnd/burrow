@@ -1,0 +1,159 @@
+name: Install
+
+# The README says that getting burrow is two files and one compiler line. This
+# checks that from the user's side: no checkout, nothing from the tree, just the
+# release archive, a main.c written on the spot and the line as the README has
+# it, on Linux and macOS for both architectures and on Windows with MinGW and
+# with MSVC. It runs when a release is published, once a week after that in
+# case a runner image changes under it, and on a pull request that changes it.
+on:
+  release:
+    types: [published]
+  schedule:
+    - cron: "17 5 * * 1"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release to try, without the leading v. Empty means the latest."
+        required: false
+  pull_request:
+    paths:
+      - .github/workflows/install.yml
+
+permissions:
+  contents: read
+
+jobs:
+  install:
+    name: install (${{ matrix.os }}${{ matrix.msvc && ', msvc' || '' }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            shell: bash
+            build: cc -std=c11 -O2 main.c burrow.c -pthread -o main
+          - os: ubuntu-24.04-arm
+            shell: bash
+            build: cc -std=c11 -O2 main.c burrow.c -pthread -o main
+          - os: macos-latest
+            shell: bash
+            build: cc -std=c11 -O2 main.c burrow.c -pthread -o main
+          - os: macos-15-intel
+            shell: bash
+            build: cc -std=c11 -O2 main.c burrow.c -pthread -o main
+          # A Windows machine has no compiler of its own, so these get the two
+          # that building.md talks about.
+          - os: windows-latest
+            shell: msys2 {0}
+            build: gcc -std=c11 -O2 main.c burrow.c -lws2_32 -o main
+          - os: windows-latest
+            msvc: true
+            shell: bash
+            # Git's bash has a link of its own, ahead of MSVC's on the path, and
+            # it turns an argument like /O2 into a Windows path, so cl gets its
+            # options with a dash.
+            build: PATH="$(dirname "$(command -v cl)"):$PATH" cl -nologo -std:c11 -O2 -bigobj main.c burrow.c ws2_32.lib -Fe:main.exe
+    # The steps before the compiler is there say bash for themselves.
+    defaults:
+      run:
+        shell: ${{ matrix.shell }}
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - name: the release
+        id: v
+        shell: bash
+        env:
+          WANT: ${{ github.event.release.tag_name || inputs.version }}
+        run: |
+          if [ -n "$WANT" ]; then
+            v=${WANT#v}
+          else
+            v=$(gh release view --json tagName -q .tagName)
+            v=${v#v}
+          fi
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          echo "trying v$v"
+
+      - name: download and check it
+        shell: bash
+        env:
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          gh release download "v$V" -p "burrow-$V-amalgamation.tar.gz" -p "burrow-$V-amalgamation.sha256"
+          if command -v sha256sum > /dev/null; then
+            grep " burrow-$V-amalgamation.tar.gz\$" "burrow-$V-amalgamation.sha256" | sha256sum -c -
+          else
+            grep " burrow-$V-amalgamation.tar.gz\$" "burrow-$V-amalgamation.sha256" | shasum -a 256 -c -
+          fi
+          tar -xzf "burrow-$V-amalgamation.tar.gz"
+          cd "burrow-$V-amalgamation"
+          ls
+
+      # Some goroutines, a channel and a wait group, which is enough to need the
+      # scheduler and the context switch, and the version, so that the program
+      # proves it was built from the archive it was meant to be.
+      - name: a program that uses it
+        shell: bash
+        env:
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          cat > "burrow-$V-amalgamation/main.c" << 'EOF'
+          #include "burrow.h"
+
+          #include <stdio.h>
+
+          static Chan *results;
+          static SyncWaitGroup wg;
+
+          static void square(void *env) {
+              Int n = (Int)(intptr_t)env;
+              Int sq = n * n;
+              chan_send(results, &sq);
+          }
+
+          static void body(void *env) {
+              (void)env;
+              results = chan_make(heap_allocator(), TYPE_INT, 8);
+              for (int i = 1; i <= 8; i++)
+                  sync_wait_group_go(&wg, BURROW_FN(Func, square, (void *)(intptr_t)i));
+              sync_wait_group_wait(&wg);
+              Int total = 0;
+              for (int i = 0; i < 8; i++) {
+                  Int v = 0;
+                  chan_recv(results, &v);
+                  total += v;
+              }
+              chan_free(results);
+              printf("burrow %s, %lld\n", burrow_version(), (long long)total);
+          }
+
+          int main(void) {
+              runtime_main(BURROW_FN(Func, body, NULL));
+              return 0;
+          }
+          EOF
+
+      - if: runner.os == 'Windows' && !matrix.msvc
+        uses: msys2/setup-msys2@v2
+        with:
+          msystem: UCRT64
+          install: mingw-w64-ucrt-x86_64-gcc
+          path-type: inherit
+
+      - if: matrix.msvc
+        uses: ilammy/msvc-dev-cmd@v1
+
+      - name: the line from the README
+        env:
+          V: ${{ steps.v.outputs.version }}
+        run: |
+          cd "burrow-$V-amalgamation"
+          ${{ matrix.build }}
+          got=$(./main)
+          echo "$got"
+          test "$got" = "burrow $V, 204"

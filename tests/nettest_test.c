@@ -955,34 +955,42 @@ static void TestListenerNewConn(TestingT *t) {
     synctest_top(t, test_listener_new_conn);
 }
 
+/* Not in Go: the error Accept gave goes when the goroutine does, so the
+ * goroutine checks it and keeps its text for the messages. */
 typedef struct InterruptAccept {
     NettestListener *li;
-    Error accept_err;
-    uint32_t returned; /* Not in Go: says accept_err has been set */
+    bool closed;          /* errors.Is(acceptErr, net.ErrClosed) */
+    char accept_err[256]; /* the text of acceptErr */
+    uint32_t returned;    /* says the two above have been set */
 } InterruptAccept;
 
 static void interrupt_accept_job(void *env) {
     InterruptAccept *a = env;
-    NettestConn *c = burrow__nettest_listener_accept(a->li, &a->accept_err);
+    Error err;
+    NettestConn *c = burrow__nettest_listener_accept(a->li, &err);
     burrow__nettest_conn_free(c);
+    a->closed = errors_is(err, net_err_closed);
+    Str msg = BURROW_FAILED(err) ? error_text(err) : S("<nil>");
+    snprintf(a->accept_err, sizeof a->accept_err, "%.*s", (int)msg.len, msg.p);
     done_store(&a->returned);
 }
 
 static void test_listener_interrupt_accept(void *env, TestingT *t) {
     (void)env;
-    InterruptAccept a = {burrow__nettest_new_listener(heap()), BURROW_NO_ERROR, 0};
+    InterruptAccept a = {burrow__nettest_new_listener(heap()), false, "", 0};
 
     go(BURROW_FN(Func, interrupt_accept_job, &a));
 
     synctest_wait();
     if (done_load(&a.returned))
         testing_t_fatalf_v(t, "li.Accept() = %v, want still running before close",
-                           a.accept_err);
+                           str_from_cstr(a.accept_err));
 
     burrow__nettest_listener_close(a.li);
     synctest_wait();
-    if (!done_load(&a.returned) || !errors_is(a.accept_err, net_err_closed))
-        testing_t_fatalf_v(t, "li.Accept() = %v, want ErrClosed", a.accept_err);
+    if (!done_load(&a.returned) || !a.closed)
+        testing_t_fatalf_v(t, "li.Accept() = %v, want ErrClosed",
+                           str_from_cstr(a.accept_err));
     burrow__nettest_listener_free(a.li); /* Not in Go. */
 }
 

@@ -211,7 +211,7 @@ static bool coh_is_request_exempt(HttpCrossOriginProtection *c,
         Arena scratch;
         arena_init(&scratch, NULL, 0);
         HttpHandler h =
-            http_serve_mux_handler(bypass, req, arena_allocator(&scratch), NULL);
+            http_serve_mux_handler(bypass, arena_allocator(&scratch), req, NULL);
         bool hit = h.vt == coh_sentinel_handler.vt;
         arena_free(&scratch);
         if (hit) {

@@ -1248,7 +1248,7 @@ HttpCookie out = {
     .secure = true,
     .same_site = HTTP_SAME_SITE_STRICT_MODE,
 };
-printf("%.*s\n", P(http_cookie_string(a, &out)));
+printf("%.*s\n", P(http_cookie_string(&out, a)));
 ```
 
 That prints:

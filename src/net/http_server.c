@@ -618,7 +618,7 @@ HttpHandler burrow__http_serve_mux_find_handler(HttpServeMux *mux, const HttpReq
     return *(const HttpHandler *)n->handler;
 }
 
-HttpHandler http_serve_mux_handler(HttpServeMux *mux, const HttpRequest *r, Alloc *a,
+HttpHandler http_serve_mux_handler(HttpServeMux *mux, Alloc *a, const HttpRequest *r,
                                    Str *pattern) {
     Str p;
     HttpHandler h;

@@ -153,7 +153,7 @@ static MultipartFileHeader *hf_clone_file_header(Alloc *a,
     if (fh2 == NULL)
         return NULL;
     *fh2 = *fh;
-    fh2->header = http_header_clone(a, fh->header);
+    fh2->header = http_header_clone(fh->header, a);
     if (fh->header != NULL && fh2->header == NULL)
         return NULL;
     return fh2;
@@ -169,7 +169,7 @@ static bool hf_clone_multipart_form(Alloc *a, const MultipartForm *f,
         (MultipartForm *)mem_alloc(a, sizeof *f2, _Alignof(MultipartForm));
     if (f2 == NULL)
         return false;
-    f2->value = http_header_clone(a, f->value);
+    f2->value = http_header_clone(f->value, a);
     f2->file = NULL;
     if (f->value != NULL && f2->value == NULL)
         return false;
@@ -223,9 +223,9 @@ HttpRequest *http_request_clone(const HttpRequest *r, Alloc *a, Context ctx) {
     bool ok = true;
     r2->url = url_clone(r->url, ra);
     ok = ok && (r->url == NULL || r2->url != NULL);
-    r2->header = http_header_clone(ra, r->header);
+    r2->header = http_header_clone(r->header, ra);
     ok = ok && (r->header == NULL || r2->header != NULL);
-    r2->trailer = http_header_clone(ra, r->trailer);
+    r2->trailer = http_header_clone(r->trailer, ra);
     ok = ok && (r->trailer == NULL || r2->trailer != NULL);
     if (ok && r->transfer_encoding.p != NULL) {
         Slice s = r->transfer_encoding;
@@ -239,9 +239,9 @@ HttpRequest *http_request_clone(const HttpRequest *r, Alloc *a, Context ctx) {
         }
         r2->transfer_encoding = s;
     }
-    r2->form = http_header_clone(ra, r->form);
+    r2->form = http_header_clone(r->form, ra);
     ok = ok && (r->form == NULL || r2->form != NULL);
-    r2->post_form = http_header_clone(ra, r->post_form);
+    r2->post_form = http_header_clone(r->post_form, ra);
     ok = ok && (r->post_form == NULL || r2->post_form != NULL);
     ok = ok && hf_clone_multipart_form(ra, r->multipart_form, &r2->multipart_form);
 

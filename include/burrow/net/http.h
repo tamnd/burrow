@@ -205,7 +205,7 @@ BURROW_STATIC(ret) Error http_header_write_subset(HttpHeader h, IoWriter w,
 /* Header.Clone. A copy of h made in a, or NULL for a NULL h. The copy has its
  * own map and slices, in one block for all the values, and shares the bytes
  * of every key and value with h. NULL as well when a says no. */
-BURROW_OWNS(ret) HttpHeader http_header_clone(Alloc *a, HttpHeader h);
+BURROW_OWNS(ret) HttpHeader http_header_clone(HttpHeader h, Alloc *a);
 
 /* http.CanonicalHeaderKey, which is textproto_canonical_mime_header_key. */
 BURROW_OWNS(ret) BURROW_BORROWS(ret, s) static inline Str
@@ -292,7 +292,7 @@ void http_cookie_free(Alloc *a, HttpCookie *c);
  * in it is quoted, and a domain that is not a host name or IPv4 address is left
  * out. Each of these is reported on the standard logger, as Go reports them
  * with log.Printf. */
-BURROW_OWNS(ret) Str http_cookie_string(Alloc *a, const HttpCookie *c);
+BURROW_OWNS(ret) Str http_cookie_string(const HttpCookie *c, Alloc *a);
 
 /* Cookie.Valid. No error when c could be sent as it is. The error for a byte
  * that does not belong is made by fmt_errorf, and the others are static. */
@@ -963,9 +963,9 @@ void burrow__http_serve_mux_handle_func_at(HttpServeMux *mux, Str pattern,
  *
  * r is left as it is, so http_request_path_value does not see the wildcards.
  * The handlers made here, and the strings they hold, come from a. */
-BURROW_BORROWS(ret, mux) HttpHandler http_serve_mux_handler(HttpServeMux *mux,
+BURROW_BORROWS(ret, mux) HttpHandler http_serve_mux_handler(HttpServeMux *mux, Alloc *a,
                                                             const HttpRequest *r,
-                                                            Alloc *a, Str *pattern);
+                                                            Str *pattern);
 
 /* ServeMux.ServeHTTP. Sends r to the handler for it, after setting r's pattern
  * and what its wildcards matched. A request for "*" gets a 400, with
@@ -1999,7 +1999,7 @@ extern HttpTransport *const http_default_transport;
  * which a request for localhost or a loopback address never has. The
  * environment is read once, the first time it is wanted, and the URL is made
  * in a. */
-BURROW_OWNS(ret) Url *http_proxy_from_environment(HttpRequest *req, Alloc *a,
+BURROW_OWNS(ret) Url *http_proxy_from_environment(Alloc *a, HttpRequest *req,
                                                   Error *err);
 
 /* http_proxy_from_environment as the HttpProxyFunc a transport takes. */

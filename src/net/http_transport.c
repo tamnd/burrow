@@ -1713,7 +1713,7 @@ static Error tp_proxy_connect(HttpTransport *t, Context ctx, const tp_ConnectMet
     } else {
         hdr = t->proxy_connect_header;
     }
-    hdr = hdr != NULL ? http_header_clone(sa, hdr) : http_header_make(sa);
+    hdr = hdr != NULL ? http_header_clone(hdr, sa) : http_header_make(sa);
     Str pa = burrow__http_proxy_auth(sa, cm->proxy_url);
     target.opaque = cm->target_addr;
     req.method = BURROW_S("CONNECT");
@@ -4048,7 +4048,7 @@ HttpTransport http_transport_clone(HttpTransport *t, Alloc *a) {
     t2.response_header_timeout = t->response_header_timeout;
     t2.expect_continue_timeout = t->expect_continue_timeout;
     if (t->proxy_connect_header != NULL)
-        t2.proxy_connect_header = http_header_clone(a, t->proxy_connect_header);
+        t2.proxy_connect_header = http_header_clone(t->proxy_connect_header, a);
     t2.get_proxy_connect_header = t->get_proxy_connect_header;
     t2.max_response_header_bytes = t->max_response_header_bytes;
     t2.force_attempt_http2 = t->force_attempt_http2;
@@ -4166,7 +4166,7 @@ typedef struct tp_EnvProxy {
 
 static tp_EnvProxy tp_env_proxy_cache;
 
-Url *http_proxy_from_environment(HttpRequest *req, Alloc *a, Error *err) {
+Url *http_proxy_from_environment(Alloc *a, HttpRequest *req, Error *err) {
     tp_EnvProxy *c = &tp_env_proxy_cache;
     Error e = BURROW_NO_ERROR;
     Url *out = NULL;
@@ -4212,7 +4212,7 @@ void burrow__http_reset_cached_environment(void) {
 
 static Url *tp_env_proxy(void *env, HttpRequest *req, Alloc *a, Error *err) {
     (void)env;
-    return http_proxy_from_environment(req, a, err);
+    return http_proxy_from_environment(a, req, err);
 }
 
 HttpProxyFunc http_proxy_from_environment_func(void) {

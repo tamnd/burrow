@@ -52,7 +52,7 @@ bool burrow__http_header_has(HttpHeader h, Str key) {
  * all, as Go's make([]string, 0) is not nil. Nothing is ever written there. */
 static const Str ht_no_values[1] = {{NULL, 0}};
 
-HttpHeader http_header_clone(Alloc *a, HttpHeader h) {
+HttpHeader http_header_clone(HttpHeader h, Alloc *a) {
     if (h == NULL)
         return NULL;
     /* Every value goes in one block, as Go shares one backing array. */
@@ -97,7 +97,7 @@ HttpHeader http_header_clone(Alloc *a, HttpHeader h) {
 HttpHeader burrow__http_clone_or_make_header(Alloc *a, HttpHeader h) {
     if (h == NULL)
         return http_header_make(a);
-    return http_header_clone(a, h);
+    return http_header_clone(h, a);
 }
 
 /* ---------------------------------------------------------------- ParseTime */

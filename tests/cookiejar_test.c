@@ -1490,7 +1490,7 @@ static void jar_test_run(TestingT *t, const JarTest *test, CookiejarJar *jar) {
             jar, a, must_parse_url(a, test->queries[i].to_url), now);
         Slice s = slice_make(a, TYPE_STRING, 0, cookies.len);
         for (Int k = 0; k < cookies.len; k++) {
-            Str c = http_cookie_string(a, &((const HttpCookie *)cookies.p)[k]);
+            Str c = http_cookie_string(&((const HttpCookie *)cookies.p)[k], a);
             s = slice_append(a, s, &c, 1);
         }
         Str q = strings_join(a, s, S(" "));

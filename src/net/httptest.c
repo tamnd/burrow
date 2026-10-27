@@ -298,7 +298,7 @@ void httptest_response_recorder_write_header(HttptestResponseRecorder *rw, Int c
     rw->code = code;
     rw->wrote_header = true;
     HttpHeader m = httptest_response_recorder_header(rw);
-    rw->snap_header = http_header_clone(arena_allocator(&rw->arena), m);
+    rw->snap_header = http_header_clone(m, arena_allocator(&rw->arena));
     if (rw->snap_header == NULL)
         hh_out_of_memory();
 }
@@ -355,7 +355,7 @@ HttpResponse *httptest_response_recorder_result(HttptestResponseRecorder *rw) {
         return rw->result;
     Alloc *ra = arena_allocator(&rw->arena);
     if (rw->snap_header == NULL && rw->header_map != NULL) {
-        rw->snap_header = http_header_clone(ra, rw->header_map);
+        rw->snap_header = http_header_clone(rw->header_map, ra);
         if (rw->snap_header == NULL)
             return NULL;
     }

@@ -327,7 +327,7 @@ static HttpResponse *cl_send_request(cl_Do *d, HttpRequest *req, Time deadline,
                 goto oom;
         }
         if (wants_auth) {
-            HttpHeader h = req->header != NULL ? http_header_clone(fa, req->header)
+            HttpHeader h = req->header != NULL ? http_header_clone(req->header, fa)
                                                : http_header_make(fa);
             Str v = burrow__http_proxy_auth(fa, req->url);
             if (h == NULL || v.len == 0 ||
@@ -830,7 +830,7 @@ static HttpResponse *cl_do(HttpClient *c, HttpRequest *req, HttpRequest *owned,
     /* makeHeadersCopier, with the header as it is before the jar adds to
      * it. */
     d->ireqhdr =
-        req->header != NULL ? http_header_clone(da, req->header) : http_header_make(da);
+        req->header != NULL ? http_header_clone(req->header, da) : http_header_make(da);
     if (d->ireqhdr == NULL) {
         cl_close_body(req);
         return cl_do_fail(d, NULL, burrow_err_out_of_memory, err);

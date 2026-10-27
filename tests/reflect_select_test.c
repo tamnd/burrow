@@ -740,8 +740,9 @@ BURROW_STRUCT(LookupS, LOOKUP_S_FIELDS);
 
 static bool print_alias(void *env, const void *f) {
     const ReflectStructField *field = f;
-    Str alias;
-    if (reflect_struct_tag_lookup(field->tag, env, BURROW_S("alias"), &alias)) {
+    bool ok;
+    Str alias = reflect_struct_tag_lookup(field->tag, env, BURROW_S("alias"), &ok);
+    if (ok) {
         if (alias.len == 0)
             fmt_println_v(BURROW_S("(blank)"));
         else

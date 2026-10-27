@@ -66,7 +66,7 @@ static Alloc *test_alloc(TestingT *t) {
 static void test_files(TestingT *t, Alloc *a, const EmbedFS *f, Str name, Str data) {
     testing_t_helper(t);
     Error err;
-    Slice d = embed_fs_read_file(f, a, name, &err);
+    Slice d = embed_fs_read_file(*f, a, name, &err);
     if (BURROW_FAILED(err)) {
         testing_t_error_v(t, err);
         return;
@@ -85,7 +85,7 @@ static void test_string(TestingT *t, Str s, Str name, Str data) {
 static void test_dir(TestingT *t, Alloc *a, const EmbedFS *f, Str name, Str expect) {
     testing_t_helper(t);
     Error err;
-    Slice dirs = embed_fs_read_dir(f, a, name, &err);
+    Slice dirs = embed_fs_read_dir(*f, a, name, &err);
     if (BURROW_FAILED(err)) {
         testing_t_error_v(t, err);
         return;
@@ -164,7 +164,7 @@ static void TestUninitialized(TestingT *t) {
     EmbedFS uninitialized = {0};
     test_dir(t, a, &uninitialized, BURROW_S("."), BURROW_STR_EMPTY);
     Error err;
-    FsFile f = embed_fs_open(&uninitialized, a, BURROW_S("."), &err);
+    FsFile f = embed_fs_open(uninitialized, a, BURROW_S("."), &err);
     if (BURROW_FAILED(err))
         testing_t_fatal_v(t, err);
     FsFileInfo fi = BURROW_CALL(f, stat, a, &err);
@@ -182,7 +182,7 @@ static void TestAliases(TestingT *t) {
     Alloc *a = test_alloc(t);
     Error e;
     Slice want =
-        embed_fs_read_file(&test_dir_all, a, BURROW_S("testdata/hello.txt"), &e);
+        embed_fs_read_file(test_dir_all, a, BURROW_S("testdata/hello.txt"), &e);
     if (BURROW_FAILED(e))
         testing_t_fatalf_v(t, "ReadFile: %v", e);
     if (!bytes_equal(hello_bytes, want))
@@ -194,7 +194,7 @@ static void TestAliases(TestingT *t) {
 static void TestOffset(TestingT *t) {
     Alloc *a = test_alloc(t);
     Error err;
-    FsFile file = embed_fs_open(&test_dir_all, a, BURROW_S("testdata/hello.txt"), &err);
+    FsFile file = embed_fs_open(test_dir_all, a, BURROW_S("testdata/hello.txt"), &err);
     if (BURROW_FAILED(err))
         testing_t_fatalf_v(t, "Open: %v", err);
 
@@ -316,11 +316,11 @@ static void TestErrors(TestingT *t) {
     const EmbedFS *all = &test_dir_all;
     Error err;
 
-    embed_fs_read_file(all, a, BURROW_S("testdata"), &err);
+    embed_fs_read_file(*all, a, BURROW_S("testdata"), &err);
     test_string(t, error_text(err), BURROW_S("ReadFile(testdata)"),
                 BURROW_S("read testdata: is a directory"));
 
-    embed_fs_read_dir(all, a, BURROW_S("testdata/hello.txt"), &err);
+    embed_fs_read_dir(*all, a, BURROW_S("testdata/hello.txt"), &err);
     test_string(t, error_text(err), BURROW_S("ReadDir(testdata/hello.txt)"),
                 BURROW_S("read testdata/hello.txt: not a directory"));
 
@@ -329,14 +329,14 @@ static void TestErrors(TestingT *t) {
                              ""};
     for (size_t i = 0; i < sizeof missing / sizeof missing[0]; i++) {
         Str name = str_from_cstr(missing[i]);
-        embed_fs_open(all, a, name, &err);
+        embed_fs_open(*all, a, name, &err);
         if (!errors_is(err, fs_err_not_exist))
             testing_t_errorf_v(t, "Open(%q) = %v, want not exist", name, err);
     }
 
     /* A directory open for reading says so with the name it has in the list,
      * slash and all, as Go's openDir does. */
-    FsFile d = embed_fs_open(all, a, BURROW_S("testdata"), &err);
+    FsFile d = embed_fs_open(*all, a, BURROW_S("testdata"), &err);
     if (BURROW_FAILED(err))
         testing_t_fatal_v(t, err);
     Byte buf[1];
@@ -344,7 +344,7 @@ static void TestErrors(TestingT *t) {
     test_string(t, error_text(err), BURROW_S("Read(testdata)"),
                 BURROW_S("read testdata/: is a directory"));
 
-    FsFile f = embed_fs_open(all, a, BURROW_S("testdata/hello.txt"), &err);
+    FsFile f = embed_fs_open(*all, a, BURROW_S("testdata/hello.txt"), &err);
     if (BURROW_FAILED(err))
         testing_t_fatal_v(t, err);
     const Method *seek = burrow__io_seek_method(f.vt->read_closer.reader.self_type);

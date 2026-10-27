@@ -169,3 +169,5 @@ net/http/httptrace
 os
 os/user
 testing/fstest
+reflect
+embed

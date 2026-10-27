@@ -89,17 +89,14 @@ typedef struct EmbedFS {
 Fs embed_fs_as_fs(const EmbedFS *fsys);
 
 /* FS.Open: a file to read, seek and read at, or a directory to read. */
-BURROW_OWNS(ret) FsFile embed_fs_open(const EmbedFS *fsys, Alloc *a, Str name,
-                                      Error *err);
+BURROW_OWNS(ret) FsFile embed_fs_open(EmbedFS fsys, Alloc *a, Str name, Error *err);
 
 /* FS.ReadDir: the entries of a directory, a Slice of FsDirEntry sorted by
  * name. */
-BURROW_OWNS(ret) Slice embed_fs_read_dir(const EmbedFS *fsys, Alloc *a, Str name,
-                                         Error *err);
+BURROW_OWNS(ret) Slice embed_fs_read_dir(EmbedFS fsys, Alloc *a, Str name, Error *err);
 
 /* FS.ReadFile: a copy of a file's contents, made in a. */
-BURROW_OWNS(ret) Slice embed_fs_read_file(const EmbedFS *fsys, Alloc *a, Str name,
-                                          Error *err);
+BURROW_OWNS(ret) Slice embed_fs_read_file(EmbedFS fsys, Alloc *a, Str name, Error *err);
 
 #ifdef __cplusplus
 }

@@ -1718,9 +1718,9 @@ The sentences taken from Go are reproduced from the doc comments of Go's `debug/
 The sentences taken from Go are reproduced from the doc comments of Go's `embed` package, Copyright 2009 The Go Authors, BSD-3-Clause.
 
 - `Fs embed_fs_as_fs(const EmbedFS *fsys)` – The FS as an fs FS.
-- `FsFile embed_fs_open(const EmbedFS *fsys, Alloc *a, Str name, Error *err)` – Open opens the named file for reading and returns it as an fs.File.
-- `Slice embed_fs_read_dir(const EmbedFS *fsys, Alloc *a, Str name, Error *err)` – ReadDir reads and returns the entire named directory.
-- `Slice embed_fs_read_file(const EmbedFS *fsys, Alloc *a, Str name, Error *err)` – ReadFile reads and returns the content of the named file.
+- `FsFile embed_fs_open(EmbedFS fsys, Alloc *a, Str name, Error *err)` – Open opens the named file for reading and returns it as an fs.File.
+- `Slice embed_fs_read_dir(EmbedFS fsys, Alloc *a, Str name, Error *err)` – ReadDir reads and returns the entire named directory.
+- `Slice embed_fs_read_file(EmbedFS fsys, Alloc *a, Str name, Error *err)` – ReadFile reads and returns the content of the named file.
 
 ## burrow/encoding.h
 
@@ -5992,7 +5992,7 @@ The sentences taken from Go are reproduced from the doc comments of Go's `reflec
 - `Str reflect_kind_string(ReflectKind k)` – String returns the name of k.
 - `Str reflect_chan_dir_string(ReflectChanDir d)` – ChanDir.String: "\<-chan", "chan\<-", "chan", or "ChanDir" and the number.
 - `Str reflect_struct_tag_get(ReflectStructTag tag, Alloc *a, Str key)` – Get returns the value associated with key in the tag string.
-- `bool reflect_struct_tag_lookup(ReflectStructTag tag, Alloc *a, Str key, Str *value)` – Lookup returns the value associated with key in the tag string.
+- `Str reflect_struct_tag_lookup(ReflectStructTag tag, Alloc *a, Str key, bool *ok)` – Lookup returns the value associated with key in the tag string.
 - `bool reflect_struct_field_is_exported(ReflectStructField f)` – IsExported reports whether the field is exported.
 - `Int reflect_type_align(ReflectType t)` – Align returns the alignment in bytes of a value of this type when allocated in memory.
 - `Int reflect_type_field_align(ReflectType t)` – FieldAlign returns the alignment in bytes of a value of this type when used as a field in a struct.

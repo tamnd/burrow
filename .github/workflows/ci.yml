@@ -726,7 +726,10 @@ jobs:
   collisions:
     name: symbol collisions (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 20
+    # The install takes about a minute from the cache and from a healthy
+    # mirror. 40 is for the run that fills the cache from a slow one, which ran
+    # past 20 minutes on 27 October.
+    timeout-minutes: 40
     strategy:
       fail-fast: false
       matrix:

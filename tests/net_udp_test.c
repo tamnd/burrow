@@ -440,7 +440,7 @@ static void TestIPv6LoopbackWorksWhereThereIsOne(TestingT *t) {
     Error e = BURROW_NO_ERROR;
     NetUDPConn *s = net_listen_udp(heap_allocator(), BURROW_S("udp6"), &la, &e);
     if (s == NULL) {
-        testing_t_skip_v(t, "no IPv6 loopback here: %v", e);
+        testing_t_skipf_v(t, "no IPv6 loopback here: %v", e);
         return;
     }
     (void)net_udp_conn_set_read_deadline(s, time_add(time_now(), 10 * TIME_SECOND));

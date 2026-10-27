@@ -1043,8 +1043,8 @@ void http_cross_origin_protection_free(HttpCrossOriginProtection *c);
  *
  * Not in Go: it fails with burrow_err_out_of_memory when the origin cannot be
  * kept. */
-Error http_cross_origin_protection_add_trusted_origin(HttpCrossOriginProtection *c,
-                                                      Str origin);
+BURROW_BORROWS(ret) Error http_cross_origin_protection_add_trusted_origin(
+    HttpCrossOriginProtection *c, Str origin);
 
 /* AddInsecureBypassPattern permits all requests that match the given pattern.
  *
@@ -1077,8 +1077,8 @@ bool http_cross_origin_protection_set_deny_handler(HttpCrossOriginProtection *c,
 
 /* Check applies cross-origin checks to a request.
  * It returns an error if the request should be rejected. */
-Error http_cross_origin_protection_check(HttpCrossOriginProtection *c,
-                                         const HttpRequest *req);
+BURROW_STATIC(ret) Error http_cross_origin_protection_check(
+    HttpCrossOriginProtection *c, const HttpRequest *req);
 
 /* Handler returns a handler that applies cross-origin checks
  * before invoking the handler h.

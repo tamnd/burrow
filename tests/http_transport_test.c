@@ -676,27 +676,37 @@ static void cancel_test_check_err(TestingT *t, CancelTest *test, const char *whe
                            cs(when), err);
 }
 
+/* Not in Go: what cancel_test_run sets up is freed in a cleanup, since a test
+ * that skips never returns to it. */
+static void cancel_test_free(void *env) {
+    CancelTest *test = (CancelTest *)env;
+    if (test->with_ctx != NULL)
+        http_request_free(test->with_ctx);
+    if (test->kind == CANCEL_CONTEXT) {
+        BURROW_CALLF0(test->cancel_ctx);
+        context_release(test->ctx);
+    }
+    chan_free(test->cancelc);
+    arena_free(&test->ar);
+    mem_free(heap_allocator(), test, sizeof *test, _Alignof(CancelTest));
+}
+
 static void cancel_test_run(void *env, TestingT *t) {
     CancelTest *proto = (CancelTest *)env;
-    CancelTest test;
-    memset(&test, 0, sizeof test);
-    test.kind = proto->kind;
-    test.f = proto->f;
-    arena_init(&test.ar, heap_allocator(), 0);
-    Alloc *a = arena_allocator(&test.ar);
-    if (test.kind == CANCEL_CHANNEL)
-        test.cancelc = chan_make(a, TYPE_BOOL, 0);
-    if (test.kind == CANCEL_CONTEXT)
-        test.ctx = context_with_cancel(a, context_background(), &test.cancel_ctx);
-    test.f(t, &test);
-    if (test.with_ctx != NULL)
-        http_request_free(test.with_ctx);
-    if (test.kind == CANCEL_CONTEXT) {
-        BURROW_CALLF0(test.cancel_ctx);
-        context_release(test.ctx);
-    }
-    chan_free(test.cancelc);
-    arena_free(&test.ar);
+    CancelTest *test =
+        (CancelTest *)mem_alloc(heap_allocator(), sizeof *test, _Alignof(CancelTest));
+    if (test == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    test->kind = proto->kind;
+    test->f = proto->f;
+    arena_init(&test->ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&test->ar);
+    if (test->kind == CANCEL_CHANNEL)
+        test->cancelc = chan_make(a, TYPE_BOOL, 0);
+    if (test->kind == CANCEL_CONTEXT)
+        test->ctx = context_with_cancel(a, context_background(), &test->cancel_ctx);
+    testing_t_cleanup(t, BURROW_FN(Func, cancel_test_free, test));
+    test->f(t, test);
 }
 
 /* runCancelTest. Go runs each in every mode, and TransportCancel in HTTP/1

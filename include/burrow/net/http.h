@@ -979,6 +979,119 @@ void http_serve_mux_serve_http(HttpServeMux *mux, HttpResponseWriter w, HttpRequ
 /* The mux as a Handler, which calls http_serve_mux_serve_http. */
 BURROW_BORROWS(ret, mux) HttpHandler http_serve_mux_as_handler(HttpServeMux *mux);
 
+/* ------------------------------------------------------- CrossOriginProtection */
+
+/* CrossOriginProtection implements protections against [Cross-Site Request
+ * Forgery (CSRF)] by rejecting non-safe cross-origin browser requests.
+ *
+ * Cross-origin requests are currently detected with the [Sec-Fetch-Site]
+ * header, available in all browsers since 2023, or by comparing the hostname of
+ * the [Origin] header with the Host header.
+ *
+ * The GET, HEAD, and OPTIONS methods are [safe methods] and are always allowed.
+ * It's important that applications do not perform any state changing actions
+ * due to requests with safe methods.
+ *
+ * Requests without Sec-Fetch-Site or Origin headers are currently assumed to be
+ * either same-origin or non-browser requests, and are allowed.
+ *
+ * The zero value of CrossOriginProtection is valid and has no trusted origins
+ * or bypass patterns.
+ *
+ * [Sec-Fetch-Site]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Sec-Fetch-Site
+ * [Origin]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Origin
+ * [Cross-Site Request Forgery (CSRF)]: https://developer.mozilla.org/en-US/docs/Web/Security/Attacks/CSRF
+ * [safe methods]: https://developer.mozilla.org/en-US/docs/Glossary/Safe/HTTP
+ *
+ * Not in Go: what the methods keep, the trusted origins, the bypass patterns,
+ * the deny handler and the handlers http_cross_origin_protection_handler makes,
+ * comes from the value's own arena, which
+ * http_cross_origin_protection_free gives back. So the value must not be
+ * copied once it is used, and it has to outlive the handlers it made. The
+ * bypass mux is part of the value, where Go makes one the first time a pattern
+ * is added. */
+typedef struct HttpCrossOriginProtection {
+    SyncAtomicPointer bypass; /* HttpServeMux *, &bypass_mux once there is a pattern */
+    HttpServeMux bypass_mux;
+    SyncRWMutex mu;         /* trusted, and the arena */
+    Map *trusted;           /* Str to bool */
+    SyncAtomicPointer deny; /* HttpHandler * */
+    Arena arena;
+    Alloc *a; /* what made the value, or NULL for one that was not made */
+} HttpCrossOriginProtection;
+
+/* NewCrossOriginProtection returns a new [CrossOriginProtection] value.
+ *
+ * Not in Go: it is made in a, NULL when a says no, and
+ * http_cross_origin_protection_free gives it back. */
+BURROW_OWNS(ret) HttpCrossOriginProtection *http_new_cross_origin_protection(Alloc *a);
+
+/* Not in Go. Gives back what c holds, and c itself if
+ * http_new_cross_origin_protection made it. Not while it or a handler it made
+ * is being used. NULL is fine. */
+void http_cross_origin_protection_free(HttpCrossOriginProtection *c);
+
+/* AddTrustedOrigin allows all requests with an [Origin] header
+ * which exactly matches the given value.
+ *
+ * Origin header values are of the form "scheme://host[:port]".
+ *
+ * AddTrustedOrigin can be called concurrently with other methods
+ * or request handling, and applies to future requests.
+ *
+ * [Origin]: https://developer.mozilla.org/en-US/docs/Web/HTTP/Headers/Origin
+ *
+ * Not in Go: it fails with burrow_err_out_of_memory when the origin cannot be
+ * kept. */
+Error http_cross_origin_protection_add_trusted_origin(HttpCrossOriginProtection *c,
+                                                      Str origin);
+
+/* AddInsecureBypassPattern permits all requests that match the given pattern.
+ *
+ * The pattern syntax and precedence rules are the same as [ServeMux]. Only
+ * requests that match the pattern directly are permitted. Those that ServeMux
+ * would redirect to a pattern (e.g. after cleaning the path or adding a
+ * trailing slash) are not.
+ *
+ * AddInsecureBypassPattern panics if the pattern conflicts with one already
+ * registered, or if the pattern is syntactically invalid (for example, an
+ * improperly formed wildcard).
+ *
+ * AddInsecureBypassPattern can be called concurrently with other methods or
+ * request handling, and applies to future requests. */
+void http_cross_origin_protection_add_insecure_bypass_pattern(
+    HttpCrossOriginProtection *c, Str pattern);
+
+/* SetDenyHandler sets a handler to invoke when a request is rejected.
+ * The default error handler responds with a 403 Forbidden status.
+ *
+ * SetDenyHandler can be called concurrently with other methods
+ * or request handling, and applies to future requests.
+ *
+ * Check does not call the error handler.
+ *
+ * Not in Go: a handler with a NULL vt is nil. When there is no memory to keep h
+ * in, the handler is left as it was and this returns false. */
+bool http_cross_origin_protection_set_deny_handler(HttpCrossOriginProtection *c,
+                                                   HttpHandler h);
+
+/* Check applies cross-origin checks to a request.
+ * It returns an error if the request should be rejected. */
+Error http_cross_origin_protection_check(HttpCrossOriginProtection *c,
+                                         const HttpRequest *req);
+
+/* Handler returns a handler that applies cross-origin checks
+ * before invoking the handler h.
+ *
+ * If a request fails cross-origin checks, the request is rejected
+ * with a 403 Forbidden status or handled with the handler passed
+ * to [CrossOriginProtection.SetDenyHandler].
+ *
+ * Not in Go: the handler is made in c's arena, so it lasts as long as c does.
+ * When there is no memory for it, it is a handler that replies 500. */
+BURROW_BORROWS(ret, c) HttpHandler
+http_cross_origin_protection_handler(HttpCrossOriginProtection *c, HttpHandler h);
+
 /* -------------------------------------------------------------------- Files */
 
 /* http.File, what an HttpFileSystem's open gives and a file server serves. Its

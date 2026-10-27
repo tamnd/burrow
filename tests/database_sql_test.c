@@ -241,21 +241,19 @@ static SqlDB *new_test_db(TestingT *t, FakeConnector *fc, const char *name) {
     return db;
 }
 
-/* A bubble for a test that runs on its own, like synctest.Test. */
+/* synctest.Test, for a test body that is a plain function rather than a
+ * closure. */
 typedef struct TdSolo {
-    TestingT *t;
     void (*f)(TestingT *t);
 } TdSolo;
 
-static void td_solo_bubble(void *env) {
-    TdSolo *s = env;
-    s->f(s->t);
+static void td_solo_body(void *env, TestingT *t) {
+    ((TdSolo *)env)->f(t);
 }
 
-static void synctest_test(TestingT *t, void (*f)(TestingT *t)) {
-    TdSolo s = {t, f};
-    if (!synctest_run(BURROW_FN(Func, td_solo_bubble, &s)))
-        testing_t_errorf_v(t, "synctest_run failed");
+static void td_synctest_test(TestingT *t, void (*f)(TestingT *t)) {
+    TdSolo s = {f};
+    synctest_test(t, BURROW_FN(TestingTFunc, td_solo_body, &s));
 }
 
 typedef struct AgeName {
@@ -312,7 +310,7 @@ static void testOpenDB(TestingT *t) {
 }
 
 static void TestOpenDB(TestingT *t) {
-    synctest_test(t, testOpenDB);
+    td_synctest_test(t, testOpenDB);
 }
 
 static void testQuery(TestingT *t, SqlDB *db) {
@@ -1390,7 +1388,7 @@ static void testTxErrBadConn(TestingT *t) {
 }
 
 static void TestTxErrBadConn(TestingT *t) {
-    synctest_test(t, testTxErrBadConn);
+    td_synctest_test(t, testTxErrBadConn);
 }
 
 static void testConnQuery(TestingT *t, SqlDB *db) {
@@ -1753,7 +1751,7 @@ static void testInvalidNilValues(TestingT *t) {
 
 static void td_invalid_nil_sub(void *env, TestingT *t) {
     td_invalid_nil = env;
-    synctest_test(t, testInvalidNilValues);
+    td_synctest_test(t, testInvalidNilValues);
 }
 
 /* Go's second case scans into an int. Int is int64_t here, or int32_t on a
@@ -2778,7 +2776,7 @@ static void testPendingConnsAfterErr(TestingT *t) {
 }
 
 static void TestPendingConnsAfterErr(TestingT *t) {
-    synctest_test(t, testPendingConnsAfterErr);
+    td_synctest_test(t, testPendingConnsAfterErr);
 }
 
 static void testSingleOpenConn(TestingT *t, SqlDB *db) {
@@ -3377,7 +3375,7 @@ out:
 }
 
 static void TestManyErrBadConn(TestingT *t) {
-    synctest_test(t, testManyErrBadConn);
+    td_synctest_test(t, testManyErrBadConn);
 }
 
 static Chan *td_send_query;
@@ -4963,7 +4961,7 @@ out:
 }
 
 static void TestNamedValueChecker(TestingT *t) {
-    synctest_test(t, testNamedValueChecker);
+    td_synctest_test(t, testNamedValueChecker);
 }
 
 static void testNamedValueCheckerSkip(TestingT *t) {
@@ -5004,7 +5002,7 @@ out:
 }
 
 static void TestNamedValueCheckerSkip(TestingT *t) {
-    synctest_test(t, testNamedValueCheckerSkip);
+    td_synctest_test(t, testNamedValueCheckerSkip);
 }
 
 /* fakeDriverCtx, a fake driver that is also a DriverContext. */
@@ -5047,7 +5045,7 @@ static void testOpenConnector(TestingT *t) {
 }
 
 static void TestOpenConnector(TestingT *t) {
-    synctest_test(t, testOpenConnector);
+    td_synctest_test(t, testOpenConnector);
 }
 
 /* ctxOnlyDriver and ctxOnlyConn: a conn with QueryContext and ExecContext but
@@ -5204,7 +5202,7 @@ out:
 }
 
 static void TestQueryExecContextOnly(TestingT *t) {
-    synctest_test(t, testQueryExecContextOnly);
+    td_synctest_test(t, testQueryExecContextOnly);
 }
 
 /* ------------------------------------------------------ errors and cancel */
@@ -5335,7 +5333,7 @@ typedef struct TdSubFn {
 } TdSubFn;
 
 static void td_synctest_sub(void *env, TestingT *t) {
-    synctest_test(t, ((TdSubFn *)env)->f);
+    td_synctest_test(t, ((TdSubFn *)env)->f);
 }
 
 /* Like Go's synctestSubtest: a subtest whose body runs in a bubble. */
@@ -5789,7 +5787,7 @@ out:
 }
 
 static void TestDriverPanic(TestingT *t) {
-    synctest_test(t, testDriverPanic);
+    td_synctest_test(t, testDriverPanic);
 }
 
 TD_SENTINEL(td_err_bad_prepare, "badConn Prepare");
@@ -5867,7 +5865,7 @@ static void testBadDriver(TestingT *t) {
 }
 
 static void TestBadDriver(TestingT *t) {
-    synctest_test(t, testBadDriver);
+    td_synctest_test(t, testBadDriver);
 }
 
 typedef struct TdPingDriver {
@@ -5924,7 +5922,7 @@ static void testPing(TestingT *t) {
 }
 
 static void TestPing(TestingT *t) {
-    synctest_test(t, testPing);
+    td_synctest_test(t, testPing);
 }
 
 /* type Str string, a named string type of the test's own. */
@@ -6004,7 +6002,7 @@ static void testGrabConnAllocs(TestingT *t) {
 }
 
 static void TestGrabConnAllocs(TestingT *t) {
-    synctest_test(t, testGrabConnAllocs);
+    td_synctest_test(t, testGrabConnAllocs);
 }
 
 static void td_want_len(TestingT *t, void *s, Int want) {
@@ -6301,7 +6299,7 @@ static void testColumnConverterWithUnknownInputCount(TestingT *t) {
 }
 
 static void TestColumnConverterWithUnknownInputCount(TestingT *t) {
-    synctest_test(t, testColumnConverterWithUnknownInputCount);
+    td_synctest_test(t, testColumnConverterWithUnknownInputCount);
 }
 
 typedef enum TdNullKind {
@@ -6694,7 +6692,7 @@ out:
 }
 
 static void TestPoolExhaustOnCancel(TestingT *t) {
-    synctest_test(t, testPoolExhaustOnCancel);
+    td_synctest_test(t, testPoolExhaustOnCancel);
 }
 
 TD_SENTINEL(td_err_stmt, "STMT ERROR");
@@ -6737,7 +6735,7 @@ static void testStatementClose(TestingT *t) {
 }
 
 static void TestStatementClose(TestingT *t) {
-    synctest_test(t, testStatementClose);
+    td_synctest_test(t, testStatementClose);
 }
 
 /* ------------------------------------------------------------ convert_test.go */

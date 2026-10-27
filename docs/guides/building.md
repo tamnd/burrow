@@ -96,6 +96,32 @@ cosmocc -std=c11 -O2 -o hello burrow.c hello.c
 
 CI builds `tests/amalgamation/hello.c` this way on Linux and runs the same binary, without rebuilding it, on macOS and Windows. It is about a megabyte.
 
+A server is no different. `docs/examples/deploy/https.c` makes an Ed25519 key and a certificate for 127.0.0.1 when it starts, serves HTTPS on a port the system picks, and fetches a page from itself with a client that trusts that certificate and nothing else. This is the server half:
+
+<!-- example: ../examples/deploy/https.c#https -->
+```c
+// The server, on a port the system picks.
+Byte loopback[4] = {127, 0, 0, 1};
+NetTCPAddr laddr = {slice_from(loopback, 4, 4, TYPE_BYTE), 0, BURROW_STR_EMPTY};
+NetTCPListener *l = net_listen_tcp(heap_allocator(), BURROW_S("tcp"), &laddr, &err);
+if (l == NULL) {
+    fmt_printf_v("listen: %v\n", err);
+    return;
+}
+Int port = ((const NetTCPAddr *)net_tcp_listener_addr(l).data)->port;
+TlsConfig server_tls = {0};
+server_tls.certificates = slice_from(&cert, 1, 1, TYPE_TLS_CERTIFICATE);
+HttpHandlerFunc handler = BURROW_FN(HttpHandlerFunc, hello, NULL);
+HttpServer srv = {.handler = http_handler_func_as_handler(&handler),
+                  .tls_config = &server_tls,
+                  .read_header_timeout = 5 * TIME_SECOND};
+Serving s = {&srv, net_tcp_listener_as_listener(l), BURROW_NO_ERROR};
+SyncWaitGroup wg = {0};
+sync_wait_group_go(&wg, BURROW_FN(Func, serve, &s));
+```
+
+CI builds it with cosmocc next to hello, and runs that one file on Linux, macOS and Windows, where it prints `200 OK` and `hello over HTTP/1.1 and TLS 1.3`.
+
 Some things to know. The netpoller uses poll(2) under cosmocc, since that is what every system it runs on has, so a wait looks through every descriptor that has a goroutine waiting on it rather than asking the kernel for a list. The stack protector is left out of a cosmocc build, because a binary built with it crashes on its first check. And `make test` works with the x86-64 compiler, `x86_64-unknown-cosmo-cc` with `x86_64-unknown-cosmo-ar`, but not with `cosmocc` itself, whose archive tool keeps only one architecture's objects. The single file build has no archive and so has no such problem.
 
 ## WebAssembly

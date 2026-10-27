@@ -29,6 +29,7 @@
 #include "burrow/mem/heap.h"
 #include "burrow/net/http.h"
 #include "burrow/net/http/httptest.h"
+#include "burrow/netpoll.h"
 #include "burrow/strings.h"
 #include "burrow/synctest.h"
 #include "burrow/testing.h"

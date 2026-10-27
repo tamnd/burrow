@@ -369,8 +369,8 @@ static const FsFileVT embed_dir_vt = {
 
 /* ---------------------------------------------------------------------- FS */
 
-FsFile embed_fs_open(const EmbedFS *fsys, Alloc *a, Str name, Error *err) {
-    const EmbedFile *file = embed_lookup(fsys, name);
+FsFile embed_fs_open(EmbedFS fsys, Alloc *a, Str name, Error *err) {
+    const EmbedFile *file = embed_lookup(&fsys, name);
     if (file == NULL) {
         *err = fs_path_error_new(error_allocator(), EMBED_LIT("open"), name,
                                  fs_err_not_exist);
@@ -384,7 +384,7 @@ FsFile embed_fs_open(const EmbedFS *fsys, Alloc *a, Str name, Error *err) {
             return (FsFile){0};
         }
         d->f = file;
-        d->files = embed_read_dir_files(fsys, name, &d->n);
+        d->files = embed_read_dir_files(&fsys, name, &d->n);
         *err = BURROW_NO_ERROR;
         return (FsFile){&embed_dir_vt, d};
     }
@@ -399,8 +399,8 @@ FsFile embed_fs_open(const EmbedFS *fsys, Alloc *a, Str name, Error *err) {
     return (FsFile){&embed_open_vt, f};
 }
 
-Slice embed_fs_read_dir(const EmbedFS *fsys, Alloc *a, Str name, Error *err) {
-    const EmbedFile *file = embed_lookup(fsys, name);
+Slice embed_fs_read_dir(EmbedFS fsys, Alloc *a, Str name, Error *err) {
+    const EmbedFile *file = embed_lookup(&fsys, name);
     if (file == NULL) {
         *err = fs_path_error_new(error_allocator(), EMBED_LIT("open"), name,
                                  fs_err_not_exist);
@@ -413,13 +413,13 @@ Slice embed_fs_read_dir(const EmbedFS *fsys, Alloc *a, Str name, Error *err) {
         return slice_nil(TYPE_FS_DIR_ENTRY);
     }
     Int n;
-    const EmbedFile *files = embed_read_dir_files(fsys, name, &n);
+    const EmbedFile *files = embed_read_dir_files(&fsys, name, &n);
     *err = BURROW_NO_ERROR;
     return embed_entries(a, files, n, err);
 }
 
-Slice embed_fs_read_file(const EmbedFS *fsys, Alloc *a, Str name, Error *err) {
-    const EmbedFile *file = embed_lookup(fsys, name);
+Slice embed_fs_read_file(EmbedFS fsys, Alloc *a, Str name, Error *err) {
+    const EmbedFile *file = embed_lookup(&fsys, name);
     if (file == NULL) {
         *err = fs_path_error_new(error_allocator(), EMBED_LIT("open"), name,
                                  fs_err_not_exist);
@@ -442,15 +442,15 @@ Slice embed_fs_read_file(const EmbedFS *fsys, Alloc *a, Str name, Error *err) {
 }
 
 static FsFile embed_open_slot(void *self, Alloc *a, Str name, Error *err) {
-    return embed_fs_open((const EmbedFS *)self, a, name, err);
+    return embed_fs_open(*(const EmbedFS *)self, a, name, err);
 }
 
 static Slice embed_read_dir_slot(void *self, Alloc *a, Str name, Error *err) {
-    return embed_fs_read_dir((const EmbedFS *)self, a, name, err);
+    return embed_fs_read_dir(*(const EmbedFS *)self, a, name, err);
 }
 
 static Slice embed_read_file_slot(void *self, Alloc *a, Str name, Error *err) {
-    return embed_fs_read_file((const EmbedFS *)self, a, name, err);
+    return embed_fs_read_file(*(const EmbedFS *)self, a, name, err);
 }
 
 EMBED_TYPE(embed_fs_desc, "FS", EmbedFS, 0x656d6673U, 0, NULL);

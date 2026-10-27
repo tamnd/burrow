@@ -138,10 +138,11 @@ typedef Str ReflectStructTag;
 
 /* StructTag.Get and StructTag.Lookup, which are tag_get and tag_lookup from
  * burrow/type.h: the value comes back unquoted and made in a. Lookup tells an
- * empty value apart from a missing key. */
+ * empty value apart from a missing key through ok, the way os_lookup_env
+ * spells Go's (value, ok). */
 BURROW_OWNS(ret) Str reflect_struct_tag_get(ReflectStructTag tag, Alloc *a, Str key);
-BURROW_OWNS(value) bool reflect_struct_tag_lookup(ReflectStructTag tag, Alloc *a,
-                                                  Str key, Str *value);
+BURROW_OWNS(ret) Str reflect_struct_tag_lookup(ReflectStructTag tag, Alloc *a, Str key,
+                                               bool *ok);
 
 /* StructField, one field of a struct as reflect describes it.
  *

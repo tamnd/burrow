@@ -1925,6 +1925,8 @@ Str reflect_struct_tag_get(ReflectStructTag tag, Alloc *a, Str key) {
     return tag_get(a, tag, key);
 }
 
-bool reflect_struct_tag_lookup(ReflectStructTag tag, Alloc *a, Str key, Str *value) {
-    return tag_lookup(a, tag, key, value);
+Str reflect_struct_tag_lookup(ReflectStructTag tag, Alloc *a, Str key, bool *ok) {
+    Str value = BURROW_STR_EMPTY;
+    *ok = tag_lookup(a, tag, key, &value);
+    return value;
 }

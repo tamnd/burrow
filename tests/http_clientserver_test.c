@@ -17,6 +17,7 @@
 #include "burrow/bytes.h"
 #include "burrow/chan.h"
 #include "burrow/compress/gzip.h"
+#include "burrow/crypto/tls.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
 #include "burrow/io.h"
@@ -24,14 +25,19 @@
 #include "burrow/map.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
+#include "burrow/net.h"
 #include "burrow/net/http.h"
 #include "burrow/net/http/httptest.h"
+#include "burrow/net/http/httputil.h"
 #include "burrow/net/url.h"
 #include "burrow/os.h"
+#include "burrow/panic.h"
 #include "burrow/sort.h"
 #include "burrow/strings.h"
 #include "burrow/sync.h"
+#include "burrow/sync/atomic.h"
 #include "burrow/testing.h"
+#include "burrow/time.h"
 
 #include <stdint.h>
 #include <string.h>
@@ -1487,6 +1493,882 @@ static void TestStarRequestMethod(TestingT *t) {
                             BURROW_FN(TestingTFunc, star_request_method, &methods[i]));
 }
 
+static void hello_remote_addr_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)fmt_fprintf_v(http_response_writer_as_io_writer(w), "Hello, %v",
+                        r->remote_addr);
+}
+
+/* Not in Go: the connection under it, the TLS one over it and the next one
+ * dialed, so that the transport's free_conn can give back all three. */
+typedef struct NoteCloseConn {
+    NetConn conn;
+    void (*close_func)(void *env);
+    void *env;
+    TlsConn *tls;
+    struct NoteCloseConn *next;
+} NoteCloseConn;
+
+static Int note_close_read(void *self, Slice p, Error *err) {
+    NetConn c = ((NoteCloseConn *)self)->conn;
+    return c.vt->reader.read(c.data, p, err);
+}
+
+static Int note_close_write(void *self, Slice p, Error *err) {
+    NetConn c = ((NoteCloseConn *)self)->conn;
+    return c.vt->writer.write(c.data, p, err);
+}
+
+static Error note_close_close(void *self) {
+    NoteCloseConn *x = (NoteCloseConn *)self;
+    x->close_func(x->env);
+    return x->conn.vt->closer.close(x->conn.data);
+}
+
+static NetAddr note_close_local_addr(void *self) {
+    NetConn c = ((NoteCloseConn *)self)->conn;
+    return c.vt->local_addr(c.data);
+}
+
+static NetAddr note_close_remote_addr(void *self) {
+    NetConn c = ((NoteCloseConn *)self)->conn;
+    return c.vt->remote_addr(c.data);
+}
+
+static Error note_close_set_deadline(void *self, Time d) {
+    NetConn c = ((NoteCloseConn *)self)->conn;
+    return c.vt->set_deadline(c.data, d);
+}
+
+static Error note_close_set_read_deadline(void *self, Time d) {
+    NetConn c = ((NoteCloseConn *)self)->conn;
+    return c.vt->set_read_deadline(c.data, d);
+}
+
+static Error note_close_set_write_deadline(void *self, Time d) {
+    NetConn c = ((NoteCloseConn *)self)->conn;
+    return c.vt->set_write_deadline(c.data, d);
+}
+
+static const NetConnVT note_close_conn_vt = {
+    .reader = {NULL, note_close_read},
+    .writer = {NULL, note_close_write},
+    .closer = {NULL, note_close_close},
+    .local_addr = note_close_local_addr,
+    .remote_addr = note_close_remote_addr,
+    .set_deadline = note_close_set_deadline,
+    .set_read_deadline = note_close_set_read_deadline,
+    .set_write_deadline = note_close_set_write_deadline,
+};
+
+enum { DISCARD_N = 10 };
+
+/* Not in Go: what the test's closures share. */
+typedef struct DiscardConns {
+    TestingT *t;
+    SyncAtomicInt32 num_open, num_close; /* atomic */
+    TlsConfig tls_config;
+    Str next_protos[1];
+    HttpProtocols protocols;
+    HttpTransport tr;
+    HttpClient c;
+    Str url;
+    Chan *got_body;
+    Slice bodies[DISCARD_N];
+    SyncMutex mu; /* guards conns */
+    NoteCloseConn *conns;
+} DiscardConns;
+
+static void discard_note_close(void *env) {
+    (void)sync_atomic_int32_add(&((DiscardConns *)env)->num_close, 1);
+}
+
+static NetConn discard_dial_tls(void *env, Str network, Str addr, Error *err) {
+    (void)network;
+    DiscardConns *d = (DiscardConns *)env;
+    NetConn none = {NULL, NULL};
+    time_sleep(10 * TIME_MILLISECOND);
+    NetConn rc = net_dial(heap_allocator(), BURROW_S("tcp"), addr, err);
+    if (BURROW_FAILED(*err))
+        return none;
+    (void)sync_atomic_int32_add(&d->num_open, 1);
+    NoteCloseConn *c = (NoteCloseConn *)mem_alloc(heap_allocator(), sizeof *c,
+                                                  _Alignof(NoteCloseConn));
+    if (c == NULL) {
+        net_conn_free(rc);
+        *err = burrow_err_out_of_memory;
+        return none;
+    }
+    *c = (NoteCloseConn){rc, discard_note_close, d, NULL, NULL};
+    c->tls =
+        tls_client(heap_allocator(), (NetConn){&note_close_conn_vt, c}, &d->tls_config);
+    if (c->tls == NULL) {
+        net_conn_free(rc);
+        mem_free(heap_allocator(), c, sizeof *c, _Alignof(NoteCloseConn));
+        *err = burrow_err_out_of_memory;
+        return none;
+    }
+    sync_mutex_lock(&d->mu);
+    c->next = d->conns;
+    d->conns = c;
+    sync_mutex_unlock(&d->mu);
+    return tls_conn_as_net_conn(c->tls);
+}
+
+/* Not in Go: the transport gives back the connections the hook made with
+ * this. */
+static void discard_free_conn(void *env, NetConn conn) {
+    DiscardConns *d = (DiscardConns *)env;
+    TlsConn *tc = tls_conn_from_net_conn(conn);
+    NoteCloseConn *c = NULL;
+    sync_mutex_lock(&d->mu);
+    for (NoteCloseConn **p = &d->conns; *p != NULL; p = &(*p)->next) {
+        if ((*p)->tls == tc) {
+            c = *p;
+            *p = c->next;
+            break;
+        }
+    }
+    sync_mutex_unlock(&d->mu);
+    tls_conn_free(tc);
+    if (c != NULL) {
+        net_conn_free(c->conn);
+        mem_free(heap_allocator(), c, sizeof *c, _Alignof(NoteCloseConn));
+    }
+}
+
+/* Not in Go: tr.CloseIdleConnections, which Go defers, and then what the
+ * garbage collector would do. */
+static void discard_conns_free(void *env) {
+    DiscardConns *d = (DiscardConns *)env;
+    http_transport_close_idle_connections(&d->tr);
+    http_transport_free(&d->tr);
+    chan_free(d->got_body);
+    for (Int i = 0; i < DISCARD_N; i++)
+        mem_free(heap_allocator(), d->bodies[i].p, (size_t)d->bodies[i].cap, 1);
+}
+
+typedef struct DiscardGet {
+    DiscardConns *d;
+    Int i;
+} DiscardGet;
+
+static void discard_get(void *env) {
+    DiscardGet *g = (DiscardGet *)env;
+    DiscardConns *d = g->d;
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *resp = http_client_get(&d->c, d->url, &err);
+    if (resp == NULL) {
+        /* Try to work around spurious connection reset on loaded system.
+         * See golang.org/issue/33585 and golang.org/issue/36797. */
+        time_sleep(10 * TIME_MILLISECOND);
+        err = BURROW_NO_ERROR;
+        resp = http_client_get(&d->c, d->url, &err);
+        if (resp == NULL) {
+            testing_t_errorf_v(d->t, "Get: %v", err);
+            return;
+        }
+    }
+    Slice slurp = io_read_all(heap_allocator(), cst_body(resp), &err);
+    cst_close_response(resp);
+    if (BURROW_FAILED(err))
+        testing_t_error_v(d->t, err);
+    d->bodies[g->i] = slurp;
+    chan_send(d->got_body, &g->i);
+}
+
+static void test_transport_discards_unneeded_conns(TestingT *t, TestMode mode,
+                                                   void *env) {
+    (void)env;
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, hello_remote_addr_handler, NULL), NULL);
+
+    DiscardConns *d = (DiscardConns *)test_alloc(t, sizeof *d);
+    d->t = t;
+    d->url = cst->ts->url;
+    d->got_body = chan_make(heap_allocator(), TYPE_INT, DISCARD_N);
+    if (d->got_body == NULL)
+        testing_t_fatal_v(t, "out of memory");
+
+    d->tls_config.insecure_skip_verify = true;
+    /* Not in Go: Go's transport puts "h2" in TLSClientConfig.NextProtos when
+     * it turns HTTP/2 on, and DialTLS's tls.Client offers it from there. Here
+     * it goes only in the clone each of the transport's own connections gets,
+     * so the config has what Go's would. */
+    d->next_protos[0] = BURROW_S("h2");
+    d->tls_config.next_protos = slice_from(d->next_protos, 1, 1, TYPE_STRING);
+    d->tr.tls_client_config = &d->tls_config;
+    d->tr.dial_tls = BURROW_FN(HttpDialFunc, discard_dial_tls, d);
+    d->tr.free_conn = BURROW_FN(HttpFreeConnFunc, discard_free_conn, d);
+    d->tr.protocols = &d->protocols;
+    http_protocols_set_http2(&d->protocols, true);
+    testing_t_cleanup(t, BURROW_FN(Func, discard_conns_free, d));
+
+    d->c.transport = http_transport_as_round_tripper(&d->tr);
+
+    DiscardGet gets[DISCARD_N];
+    SyncWaitGroup wg = {0};
+    for (Int i = 0; i < DISCARD_N; i++) {
+        gets[i] = (DiscardGet){d, i};
+        if (!sync_wait_group_go(&wg, BURROW_FN(Func, discard_get, &gets[i])))
+            testing_t_errorf_v(t, "cannot start a goroutine");
+    }
+    sync_wait_group_wait(&wg);
+    chan_close(d->got_body);
+
+    Str last = BURROW_S("");
+    Int i;
+    while (chan_recv(d->got_body, &i)) {
+        Str got = str_from_bytes(d->bodies[i].p, d->bodies[i].len);
+        if (last.len == 0) {
+            last = got;
+            continue;
+        }
+        if (!str_eq(got, last))
+            testing_t_errorf_v(t, "Response body changed: %q -> %q", last, got);
+    }
+
+    int32_t open = 0;
+    int32_t close = 0;
+    for (int n = 0; n < 150; n++) {
+        open = sync_atomic_int32_load(&d->num_open);
+        close = sync_atomic_int32_load(&d->num_close);
+        if (open < 1)
+            testing_t_fatalf_v(t, "open = %d; want at least", open);
+        if (close == open - 1) {
+            /* Success */
+            return;
+        }
+        time_sleep(10 * TIME_MILLISECOND);
+    }
+    testing_t_errorf_v(t, "%d connections opened, %d closed; want %d to close", open,
+                       close, open - 1);
+}
+
+static void TestTransportDiscardsUnneededConns(TestingT *t) {
+    static const TestMode modes[1] = {HTTP2_MODE};
+    RunOpts o = {modes, 1, false};
+    run(t, test_transport_discards_unneeded_conns, NULL, &o);
+}
+
+/* tests that Transport doesn't retain a pointer to the provided request.
+ *
+ * Not in Go: there is no garbage collector to watch the request go. The
+ * request is freed as soon as its response is, so a transport that kept a
+ * pointer to it would use freed memory, which the sanitizer builds catch. */
+static void gc_request_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    bool body = *(const bool *)env;
+    Error err = BURROW_NO_ERROR;
+    (void)io_read_all(arena_allocator(&r->arena),
+                      (IoReader){&r->body.vt->reader, r->body.data}, &err);
+    if (body)
+        write_string(w, BURROW_S("Hello."));
+}
+
+static void test_transport_gc_request(TestingT *t, TestMode mode, bool body) {
+    bool *bodyp = (bool *)test_alloc(t, sizeof *bodyp);
+    *bodyp = body;
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, gc_request_handler, bodyp), NULL);
+
+    Arena ar;
+    arena_init(&ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&ar);
+    Error err = BURROW_NO_ERROR;
+    IoReader rbody =
+        strings_reader_as_io_reader(strings_new_reader(a, BURROW_S("some body")));
+    HttpRequest *req = http_new_request(a, BURROW_S("POST"), cst->ts->url, rbody, &err);
+    if (req == NULL) {
+        arena_free(&ar);
+        testing_t_fatal_v(t, err);
+    }
+    HttpResponse *res = http_client_do(cst->c, req, &err);
+    if (res == NULL) {
+        http_request_free(req);
+        arena_free(&ar);
+        testing_t_fatal_v(t, err);
+    }
+    (void)io_read_all(a, cst_body(res), &err);
+    Error cerr = res->body.vt->closer.close(res->body.data);
+    http_response_free(res);
+    http_request_free(req);
+    arena_free(&ar);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    if (BURROW_FAILED(cerr))
+        testing_t_fatal_v(t, cerr);
+}
+
+static void gc_request_body(void *env, TestingT *t) {
+    test_transport_gc_request(t, *(const TestMode *)env, true);
+}
+
+static void gc_request_no_body(void *env, TestingT *t) {
+    test_transport_gc_request(t, *(const TestMode *)env, false);
+}
+
+static void transport_gc_request(TestingT *t, TestMode mode, void *env) {
+    (void)env;
+    TestMode *m = (TestMode *)test_alloc(t, sizeof *m);
+    *m = mode;
+    (void)testing_t_run(t, BURROW_S("Body"),
+                        BURROW_FN(TestingTFunc, gc_request_body, m));
+    (void)testing_t_run(t, BURROW_S("NoBody"),
+                        BURROW_FN(TestingTFunc, gc_request_no_body, m));
+}
+
+static void TestTransportGCRequest(TestingT *t) {
+    run(t, transport_gc_request, NULL, NULL);
+}
+
+static void handler_saw_headers(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)fmt_fprintf_v(http_response_writer_as_io_writer(w), "Handler saw headers: %q",
+                        header_string(arena_allocator(&r->arena), r->header));
+}
+
+static NetConn rejects_invalid_dial(void *env, Str netw, Str addr, Error *err) {
+    bool v = true;
+    chan_send((Chan *)env, &v);
+    return net_dial(heap_allocator(), netw, addr, err);
+}
+
+enum { REJECTS_INVALID_N = 9 };
+
+/* Not in Go: each test's dialedc, kept until the transport is done with
+ * them. */
+typedef struct RejectsInvalid {
+    Chan *dialedc[REJECTS_INVALID_N];
+} RejectsInvalid;
+
+static void rejects_invalid_free(void *env) {
+    RejectsInvalid *ri = (RejectsInvalid *)env;
+    for (int i = 0; i < REJECTS_INVALID_N; i++)
+        chan_free(ri->dialedc[i]);
+}
+
+static void test_transport_rejects_invalid_headers(TestingT *t, TestMode mode,
+                                                   void *env) {
+    (void)env;
+    Alloc *a = test_arena(t);
+    RejectsInvalid *ri = (RejectsInvalid *)test_alloc(t, sizeof *ri);
+    testing_t_cleanup(t, BURROW_FN(Func, rejects_invalid_free, ri));
+    CSTOpts opts = {.error_log = cst_quiet_log(t, a)};
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, handler_saw_headers, NULL), &opts);
+    cst->tr->disable_keep_alives = true;
+
+    struct {
+        Str key, val;
+        bool ok;
+    } tests[REJECTS_INVALID_N] = {
+        {BURROW_S("Foo"), BURROW_S("capital-key"),
+         true}, /* verify h2 allows capital keys */
+        {BURROW_S("Foo"),
+         BURROW_S("foo\x00"
+                  "bar"),
+         false}, /* \x00 byte in value not allowed */
+        {BURROW_S("Foo"), BURROW_S("two\nlines"),
+         false}, /* \n byte in value not allowed */
+        {BURROW_S("bogus\nkey"), BURROW_S("v"),
+         false}, /* \n byte also not allowed in key */
+        {BURROW_S("A space"), BURROW_S("v"), false}, /* spaces in keys not allowed */
+        {BURROW_S("имя"), BURROW_S("v"), false},     /* key must be ascii */
+        {BURROW_S("name"), BURROW_S("валю"), true},  /* value may be non-ascii */
+        {BURROW_S(""), BURROW_S("v"), false},        /* key must be non-empty */
+        {BURROW_S("k"), BURROW_S(""), true},         /* value may be empty */
+    };
+    for (int i = 0; i < REJECTS_INVALID_N; i++) {
+        Chan *dialedc = chan_make(heap_allocator(), TYPE_BOOL, 1);
+        if (dialedc == NULL)
+            testing_t_fatal_v(t, "out of memory");
+        ri->dialedc[i] = dialedc;
+        cst->tr->dial = BURROW_FN(HttpDialFunc, rejects_invalid_dial, dialedc);
+        Error err = BURROW_NO_ERROR;
+        HttpRequest *req =
+            http_new_request(a, BURROW_S("GET"), cst->ts->url, (IoReader){0}, &err);
+        if (req == NULL)
+            testing_t_fatal_v(t, err);
+        Str *v = (Str *)mem_alloc(a, sizeof *v, _Alignof(Str));
+        if (v == NULL)
+            testing_t_fatal_v(t, "out of memory");
+        *v = tests[i].val;
+        Slice vs = slice_from(v, 1, 1, TYPE_STRING);
+        if (!map_set(req->header, &tests[i].key, &vs))
+            testing_t_fatal_v(t, "out of memory");
+        HttpResponse *res = http_client_do(cst->c, req, &err);
+        Slice body = {0};
+        if (res != NULL) {
+            Error rerr = BURROW_NO_ERROR;
+            body = io_read_all(a, cst_body(res), &rerr);
+            (void)res->body.vt->closer.close(res->body.data);
+        }
+        bool dialed = false;
+        bool got;
+        bool ok;
+        if (chan_try_recv(dialedc, &got, &ok))
+            dialed = true;
+
+        if (!tests[i].ok && dialed) {
+            /* Not in Go: the response's status stands for the response. */
+            testing_t_errorf_v(
+                t,
+                "For key %q, value %q, transport dialed. Expected local "
+                "failure. Response was: (%v, %v)\nServer replied with: %s",
+                tests[i].key, tests[i].val,
+                res != NULL ? res->status : BURROW_S("<nil>"), err,
+                str_from_bytes(body.p, body.len));
+        } else if ((res != NULL) != tests[i].ok) {
+            testing_t_errorf_v(t, "For key %q, value %q; got err = %v; want ok=%v",
+                               tests[i].key, tests[i].val, err, tests[i].ok);
+        }
+        if (res != NULL)
+            http_response_free(res);
+        http_request_free(req);
+    }
+}
+
+static void TestTransportRejectsInvalidHeaders(TestingT *t) {
+    RunOpts o = {http3_skipped_mode, 2, false};
+    run(t, test_transport_rejects_invalid_headers, NULL, &o);
+}
+
+typedef struct LockedBytesBuffer {
+    SyncMutex mu;
+    BytesBuffer buf;
+} LockedBytesBuffer;
+
+static Int locked_bytes_buffer_write(void *self, Slice p, Error *err) {
+    LockedBytesBuffer *b = (LockedBytesBuffer *)self;
+    sync_mutex_lock(&b->mu);
+    Int n = bytes_buffer_write(&b->buf, p, err);
+    sync_mutex_unlock(&b->mu);
+    return n;
+}
+
+static const IoWriterVT locked_bytes_buffer_vt = {NULL, locked_bytes_buffer_write};
+
+/* Not in Go: the buffer's contents, copied into a under the lock. */
+static Str locked_bytes_buffer_string(LockedBytesBuffer *b, Alloc *a) {
+    sync_mutex_lock(&b->mu);
+    Slice p = bytes_buffer_bytes(&b->buf);
+    Str s = strings_clone(a, str_from_bytes(p.p, p.len));
+    sync_mutex_unlock(&b->mu);
+    return s;
+}
+
+/* waitCondition waits for fn to return true,
+ * checking immediately and then at exponentially increasing intervals.
+ *
+ * Not in Go: it is from main_test.go, and fn takes env. */
+static void wait_condition(TestingT *t, Duration delay,
+                           bool (*fn)(TestingT *t, void *env, Duration d), void *env) {
+    testing_t_helper(t);
+    Time start = time_now();
+    Duration since = 0;
+    while (!fn(t, env, since)) {
+        time_sleep(delay);
+        delay = 2 * delay - (delay / 2); /* 1.5x, rounded up */
+        since = time_since(start);
+    }
+}
+
+/* Not in Go: what the handler and the test share. */
+typedef struct InterruptPanic {
+    Chan *test_done;
+    Chan *got_headers;
+    Any panic_value;
+    LockedBytesBuffer error_log;
+    LogLogger *log;
+    Alloc *a;
+    bool want_stack_logged;
+} InterruptPanic;
+
+static void interrupt_panic_free(void *env) {
+    InterruptPanic *ip = (InterruptPanic *)env;
+    chan_free(ip->test_done);
+    chan_free(ip->got_headers);
+    if (ip->log != NULL)
+        log_logger_free(heap_allocator(), ip->log);
+    bytes_buffer_free(&ip->error_log.buf);
+}
+
+static void interrupt_panic_done(void *env) {
+    chan_close(((InterruptPanic *)env)->test_done);
+}
+
+static void interrupt_panic_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    InterruptPanic *ip = (InterruptPanic *)env;
+    write_string(w, BURROW_S("hello"));
+    (void)w.vt->flush(w.data);
+
+    SelectCase cases[] = {
+        BURROW_RECV(ip->got_headers, NULL),
+        BURROW_RECV(ip->test_done, NULL),
+    };
+    (void)chan_select(cases, 2);
+    panic(ip->panic_value);
+}
+
+static void interrupt_panic_server(HttptestServer *ts, void *env) {
+    ts->config.error_log = ((InterruptPanic *)env)->log;
+}
+
+static bool interrupt_panic_logged(TestingT *t, void *env, Duration d) {
+    InterruptPanic *ip = (InterruptPanic *)env;
+    Str got_log = locked_bytes_buffer_string(&ip->error_log, ip->a);
+    if (!ip->want_stack_logged) {
+        if (got_log.len == 0)
+            return true;
+        testing_t_fatalf_v(t, "want no log output; got: %s", got_log);
+    }
+    if (got_log.len == 0) {
+        if (d > 0)
+            testing_t_logf_v(t, "wanted a stack trace logged; got nothing after %v",
+                             duration_string(d, ip->a));
+        return false;
+    }
+    if (!strings_contains(got_log, BURROW_S("created by ")) &&
+        strings_count(got_log, BURROW_S("\n")) < 6) {
+        if (d > 0)
+            testing_t_logf_v(
+                t, "output doesn't look like a panic stack trace after %v. Got: %s",
+                duration_string(d, ip->a), got_log);
+        return false;
+    }
+    return true;
+}
+
+static void test_interrupt_with_panic(TestingT *t, TestMode mode, Any panic_value,
+                                      bool abort) {
+    Str msg = BURROW_S("hello");
+
+    InterruptPanic *ip = (InterruptPanic *)test_alloc(t, sizeof *ip);
+    testing_t_cleanup(t, BURROW_FN(Func, interrupt_panic_free, ip));
+    ip->a = test_arena(t);
+    ip->panic_value = panic_value;
+    ip->test_done = chan_make(heap_allocator(), TYPE_BOOL, 0);
+    ip->got_headers = chan_make(heap_allocator(), TYPE_BOOL, 1);
+    ip->error_log.buf = BYTES_BUFFER(heap_allocator());
+    IoWriter lw = {&locked_bytes_buffer_vt, &ip->error_log};
+    ip->log = log_new(heap_allocator(), lw, BURROW_S(""), 0);
+    if (ip->test_done == NULL || ip->got_headers == NULL || ip->log == NULL)
+        testing_t_fatal_v(t, "out of memory");
+
+    CSTOpts opts = {.server = interrupt_panic_server, .env = ip};
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, interrupt_panic_handler, ip), &opts);
+    /* Not in Go: a cleanup registered after the server's runs before it, as
+     * Go's defer does. */
+    testing_t_cleanup(t, BURROW_FN(Func, interrupt_panic_done, ip));
+
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *res = http_client_get(cst->c, cst->ts->url, &err);
+    if (res == NULL)
+        testing_t_fatal_v(t, err);
+    bool v = true;
+    chan_send(ip->got_headers, &v);
+    Slice slurp = io_read_all(ip->a, cst_body(res), &err);
+    cst_close_response(res);
+    Str got = str_from_bytes(slurp.p, slurp.len);
+    if (!str_eq(got, msg))
+        testing_t_errorf_v(t, "client read %q; want %q", got, msg);
+    if (BURROW_OK(err))
+        testing_t_errorf_v(t, "client read all successfully; want some error");
+    ip->want_stack_logged = panic_value.t != NULL && !abort;
+
+    wait_condition(t, 10 * TIME_MILLISECOND, interrupt_panic_logged, ip);
+}
+
+static void interrupt_with_panic_boom(void *env, TestingT *t) {
+    Str *boom = (Str *)test_alloc(t, sizeof *boom);
+    *boom = BURROW_S("boom");
+    test_interrupt_with_panic(t, *(const TestMode *)env, BURROW_ANY(TYPE_STRING, boom),
+                              false);
+}
+
+static void interrupt_with_panic_abort(void *env, TestingT *t) {
+    test_interrupt_with_panic(
+        t, *(const TestMode *)env,
+        BURROW_ANY(TYPE_ERROR, (void *)(uintptr_t)&http_err_abort_handler), true);
+}
+
+/* Not in Go: there is no "nil" subtest. It sets GODEBUG=panicnil=1, and
+ * burrow has no such setting, so panic(nil) always panics with a value, which
+ * is what Go does without it. */
+static void interrupt_with_panic(TestingT *t, TestMode mode, void *env) {
+    (void)env;
+    TestMode *m = (TestMode *)test_alloc(t, sizeof *m);
+    *m = mode;
+    (void)testing_t_run(t, BURROW_S("boom"),
+                        BURROW_FN(TestingTFunc, interrupt_with_panic_boom, m));
+    (void)testing_t_run(t, BURROW_S("ErrAbortHandler"),
+                        BURROW_FN(TestingTFunc, interrupt_with_panic_abort, m));
+}
+
+static void TestInterruptWithPanic(TestingT *t) {
+    RunOpts o = {http3_skipped_mode, 2, true};
+    run(t, interrupt_with_panic, NULL, &o);
+}
+
+/* Issue 15366 */
+static void handler_gzip_foo(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)r;
+    HttpHeader h = w.vt->header(w.data);
+    (void)http_header_set(h, BURROW_S("Content-Encoding"), BURROW_S("gzip"));
+    (void)http_header_set(h, BURROW_S("Content-Length"), BURROW_S("23"));
+    write_string(w,
+                 BURROW_S("\x1f\x8b\b\x00\x00\x00\x00\x00\x00\x00s\xf3\xf7\a\x00\xab'"
+                          "\xd4\x1a\x03\x00\x00\x00"));
+}
+
+static void gzip_dump_early_check(TestingT *t, void *env, Str proto, H12Res *r) {
+    (void)env;
+    HttpResponse *res = r->res;
+    if (!res->uncompressed)
+        testing_t_errorf_v(t, "%s: expected Uncompressed to be set", proto);
+    Error err = BURROW_NO_ERROR;
+    Slice dump = httputil_dump_response(test_arena(t), res, true, &err);
+    if (BURROW_FAILED(err)) {
+        testing_t_errorf_v(t, "%s: DumpResponse: %v", proto, err);
+        return;
+    }
+    Str d = str_from_bytes(dump.p, dump.len);
+    if (strings_contains(d, BURROW_S("Connection: close")))
+        testing_t_errorf_v(
+            t, "%s: should not see \"Connection: close\" in dump; got:\n%s", proto, d);
+    if (!strings_contains(d, BURROW_S("FOO")))
+        testing_t_errorf_v(t, "%s: should see \"FOO\" in response; got:\n%s", proto, d);
+}
+
+static void TestH12_AutoGzipWithDumpResponse(TestingT *t) {
+    H12Compare tt = {.handler = handler_gzip_foo,
+                     .early_check_response = gzip_dump_early_check};
+    h12_run(t, &tt);
+}
+
+/* Issue 14607 */
+static void x_addr_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)http_header_set(w.vt->header(w.data), BURROW_S("X-Addr"), r->remote_addr);
+}
+
+static Str close_idle_get(TestingT *t, ClientServerTest *cst, Alloc *a) {
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *res = http_client_get(cst->c, cst->ts->url, &err);
+    if (res == NULL)
+        testing_t_fatal_v(t, err);
+    (void)res->body.vt->closer.close(res->body.data);
+    Str v = strings_clone(a, http_header_get(res->header, BURROW_S("X-Addr")));
+    http_response_free(res);
+    if (v.len == 0)
+        testing_t_fatal_v(t, "didn't get X-Addr");
+    return v;
+}
+
+static void test_close_idle_connections(TestingT *t, TestMode mode, void *env) {
+    (void)env;
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, x_addr_handler, NULL), NULL);
+    Alloc *a = test_arena(t);
+    Str a1 = close_idle_get(t, cst, a);
+    http_transport_close_idle_connections(cst->tr);
+    Str a2 = close_idle_get(t, cst, a);
+    if (str_eq(a1, a2))
+        testing_t_errorf_v(t, "didn't close connection");
+}
+
+static void TestCloseIdleConnections(TestingT *t) {
+    run(t, test_close_idle_connections, NULL, NULL);
+}
+
+static Int test_error_reader_read(void *self, Slice p, Error *err) {
+    (void)p;
+    testing_t_error_v((TestingT *)self, "unexpected Read call");
+    if (err != NULL)
+        *err = io_eof;
+    return 0;
+}
+
+static const IoReaderVT test_error_reader_vt = {NULL, test_error_reader_read};
+
+static void unauthorized_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)r;
+    w.vt->write_header(w.data, HTTP_STATUS_UNAUTHORIZED);
+}
+
+static void test_no_sniff_expect_request_body(TestingT *t, TestMode mode, void *env) {
+    (void)env;
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, unauthorized_handler, NULL), NULL);
+
+    /* Set ExpectContinueTimeout non-zero so RoundTrip won't try to write it. */
+    cst->tr->expect_continue_timeout = 10 * TIME_SECOND;
+
+    Alloc *a = test_arena(t);
+    Error err = BURROW_NO_ERROR;
+    HttpRequest *req = http_new_request(a, BURROW_S("POST"), cst->ts->url,
+                                        (IoReader){&test_error_reader_vt, t}, &err);
+    if (req == NULL)
+        testing_t_fatal_v(t, err);
+    testing_t_cleanup(t, BURROW_FN(Func, cst_free_request, req));
+    req->content_length = 0; /* so transport is tempted to sniff it */
+    (void)http_header_set(req->header, BURROW_S("Expect"), BURROW_S("100-continue"));
+    HttpResponse *res = http_transport_round_trip(cst->tr, req, &err);
+    if (res == NULL)
+        testing_t_fatal_v(t, err);
+    if (res->status_code != HTTP_STATUS_UNAUTHORIZED)
+        testing_t_errorf_v(t, "status code = %v; want %v", res->status_code,
+                           (Int)HTTP_STATUS_UNAUTHORIZED);
+    cst_close_response(res);
+}
+
+static void TestNoSniffExpectRequestBody(TestingT *t) {
+    run(t, test_no_sniff_expect_request_body, NULL, NULL);
+}
+
+static void undeclared_trailers_handler(void *env, HttpResponseWriter w,
+                                        HttpRequest *r) {
+    (void)env;
+    (void)r;
+    (void)http_header_set(w.vt->header(w.data), BURROW_S("Foo"), BURROW_S("Bar"));
+    (void)http_header_set(w.vt->header(w.data), BURROW_S("Trailer:Foo"),
+                          BURROW_S("Baz"));
+    (void)w.vt->flush(w.data);
+    (void)http_header_add(w.vt->header(w.data), BURROW_S("Trailer:Foo"),
+                          BURROW_S("Baz2"));
+    (void)http_header_set(w.vt->header(w.data), BURROW_S("Trailer:Bar"),
+                          BURROW_S("Quux"));
+}
+
+static void test_server_undeclared_trailers(TestingT *t, TestMode mode, void *env) {
+    (void)env;
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, undeclared_trailers_handler, NULL), NULL);
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *res = http_client_get(cst->c, cst->ts->url, &err);
+    if (res == NULL)
+        testing_t_fatal_v(t, err);
+    Alloc *a = test_arena(t);
+    (void)io_copy(a, io_discard, cst_body(res), &err);
+    if (BURROW_FAILED(err)) {
+        cst_close_response(res);
+        testing_t_fatal_v(t, err);
+    }
+    (void)res->body.vt->closer.close(res->body.data);
+    http_header_del(res->header, BURROW_S("Date"));
+    http_header_del(res->header, BURROW_S("Content-Type"));
+
+    static const char *const bar[] = {"Bar"};
+    HttpHeader want = http_header_make(a);
+    if (want == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    header_set_values(t, want, a, BURROW_S("Foo"), bar, 1);
+    if (!header_equal(res->header, want))
+        testing_t_errorf_v(t, "Header = %v; want %v", header_string(a, res->header),
+                           header_string(a, want));
+
+    static const char *const baz[] = {"Baz", "Baz2"};
+    static const char *const quux[] = {"Quux"};
+    want = http_header_make(a);
+    if (want == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    header_set_values(t, want, a, BURROW_S("Foo"), baz, 2);
+    header_set_values(t, want, a, BURROW_S("Bar"), quux, 1);
+    if (!header_equal(res->trailer, want))
+        testing_t_errorf_v(t, "Trailer = %v; want %v", header_string(a, res->trailer),
+                           header_string(a, want));
+    http_response_free(res);
+}
+
+static void TestServerUndeclaredTrailers(TestingT *t) {
+    RunOpts o = {http3_skipped_mode, 2, false};
+    run(t, test_server_undeclared_trailers, NULL, &o);
+}
+
+static void bad_response_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    TestingT *t = (TestingT *)env;
+    Error err = BURROW_NO_ERROR;
+    (void)io_copy(arena_allocator(&r->arena), io_discard,
+                  (IoReader){&r->body.vt->reader, r->body.data}, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    HttpResponseController rc = http_new_response_controller(w);
+    BufioReadWriter buf;
+    NetConn c = http_response_controller_hijack(&rc, &buf, &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    IoWriter cw = {&c.vt->writer, c.data};
+    (void)fmt_fprintln_v(cw, "some bogus crap");
+    /* Not in Go: what the hijack handed over is given back, and net_conn_free
+     * closes the connection. */
+    bufio_reader_free(buf.reader);
+    bufio_writer_free(buf.writer);
+    net_conn_free(c);
+}
+
+/* countCloseReader, from transport_test.go. */
+typedef struct CountCloseReader {
+    SyncAtomicInt32 *n;
+    IoReader r;
+} CountCloseReader;
+
+static Int count_close_read(void *self, Slice p, Error *err) {
+    IoReader r = ((CountCloseReader *)self)->r;
+    return r.vt->read(r.data, p, err);
+}
+
+static Error count_close_close(void *self) {
+    (void)sync_atomic_int32_add(((CountCloseReader *)self)->n, 1);
+    return BURROW_NO_ERROR;
+}
+
+static const IoReadCloserVT count_close_reader_vt = {{NULL, count_close_read},
+                                                     {NULL, count_close_close}};
+
+static void test_bad_response_after_reading_body(TestingT *t, TestMode mode,
+                                                 void *env) {
+    (void)env;
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, bad_response_handler, t), NULL);
+
+    /* Not in Go: Post takes an IoReader, which cannot say that it is an
+     * io.ReadCloser, so the request is the one Post makes, with the closer set
+     * as its body by hand. closes is atomic, since the transport may close the
+     * body on a goroutine of its own. */
+    SyncAtomicInt32 *closes = (SyncAtomicInt32 *)test_alloc(t, sizeof *closes);
+    Alloc *a = test_arena(t);
+    CountCloseReader *cr = (CountCloseReader *)test_alloc(t, sizeof *cr);
+    *cr = (CountCloseReader){
+        closes, strings_reader_as_io_reader(strings_new_reader(a, BURROW_S("hello")))};
+    Error err = BURROW_NO_ERROR;
+    IoReader body = {&count_close_reader_vt.reader, cr};
+    HttpRequest *req = http_new_request(a, BURROW_S("POST"), cst->ts->url, body, &err);
+    if (req == NULL)
+        testing_t_fatal_v(t, err);
+    testing_t_cleanup(t, BURROW_FN(Func, cst_free_request, req));
+    req->body = (IoReadCloser){&count_close_reader_vt, cr};
+    (void)http_header_set(req->header, BURROW_S("Content-Type"),
+                          BURROW_S("text/plain"));
+    HttpResponse *res = http_client_do(cst->c, req, &err);
+    if (res != NULL) {
+        cst_close_response(res);
+        testing_t_fatal_v(t, "expected an error to be returned from Post");
+    }
+    int32_t n = sync_atomic_int32_load(closes);
+    if (n != 1)
+        testing_t_errorf_v(t, "closes = %d; want 1", n);
+}
+
+static void TestBadResponseAfterReadingBody(TestingT *t) {
+    static const TestMode modes[1] = {HTTP1_MODE};
+    RunOpts o = {modes, 1, false};
+    run(t, test_bad_response_after_reading_body, NULL, &o);
+}
+
 #define TESTS(X)                                                                       \
     X(TestNewClientServerTest)                                                         \
     X(TestChunkedResponseHeaders)                                                      \
@@ -1520,5 +2402,14 @@ static void TestStarRequestMethod(TestingT *t) {
     X(TestConcurrentReadWriteReqBody)                                                  \
     X(TestConnectRequest)                                                              \
     X(TestTransportUserAgent)                                                          \
-    X(TestStarRequestMethod)
+    X(TestStarRequestMethod)                                                           \
+    X(TestTransportDiscardsUnneededConns)                                              \
+    X(TestTransportGCRequest)                                                          \
+    X(TestTransportRejectsInvalidHeaders)                                              \
+    X(TestInterruptWithPanic)                                                          \
+    X(TestH12_AutoGzipWithDumpResponse)                                                \
+    X(TestCloseIdleConnections)                                                        \
+    X(TestNoSniffExpectRequestBody)                                                    \
+    X(TestServerUndeclaredTrailers)                                                    \
+    X(TestBadResponseAfterReadingBody)
 TESTING_MAIN(TESTS)

@@ -832,6 +832,11 @@ FUNC_TYPES = {
     "func(*testing.T) slog.Handler": {"SlogtestNewHandlerFunc"},
     "func(*testing.T) map[string]interface{}": {"SlogtestResultFunc"},
     "func(KeyValue)": {"ExpvarDoFunc"},
+    # burrow/testing.h, for testing itself and for testing/synctest.
+    "func(*T)": {"TestingTFunc"},
+    "func(*testing.T)": {"TestingTFunc"},
+    "func(*B)": {"TestingBFunc"},
+    "func(*PB)": {"TestingPBFunc"},
 }
 
 BUILTIN = {

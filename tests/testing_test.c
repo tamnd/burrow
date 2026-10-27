@@ -21,6 +21,7 @@
 
 #include "burrow/testing.h"
 
+#include "burrow/chan.h"
 #include "burrow/context.h"
 #include "burrow/core.h"
 #include "burrow/error.h"
@@ -30,8 +31,10 @@
 #include "burrow/mem/heap.h"
 #include "burrow/pal.h"
 #include "burrow/panic.h"
+#include "burrow/proc.h"
 #include "burrow/slice.h"
 #include "burrow/sync/atomic.h"
+#include "burrow/synctest.h"
 #include "burrow/time.h"
 
 #include <stdio.h>
@@ -302,6 +305,54 @@ static void child_fatal(void *env, TestingT *t) {
 static void child_skip(void *env, TestingT *t) {
     (void)env;
     testing_t_skip_v(t, "later");
+}
+
+/* The tests of synctest_test that Go runs in a child process, from
+ * testing/synctest/synctest_test.go. */
+static void child_synctest_fatal_body(void *env, TestingT *t) {
+    (void)env;
+    testing_t_fatal_v(t, "fatal");
+}
+
+static void child_synctest_fatal(void *env, TestingT *t) {
+    (void)env;
+    synctest_test(t, BURROW_FN(TestingTFunc, child_synctest_fatal_body, NULL));
+}
+
+static void child_synctest_error_body(void *env, TestingT *t) {
+    (void)env;
+    testing_t_error_v(t, "error");
+}
+
+static void child_synctest_error(void *env, TestingT *t) {
+    (void)env;
+    synctest_test(t, BURROW_FN(TestingTFunc, child_synctest_error_body, NULL));
+}
+
+static void child_synctest_skip_body(void *env, TestingT *t) {
+    (void)env;
+    testing_t_skip_v(t, "skip");
+}
+
+static void child_synctest_skip(void *env, TestingT *t) {
+    (void)env;
+    synctest_test(t, BURROW_FN(TestingTFunc, child_synctest_skip_body, NULL));
+}
+
+/* helperLog is a t.Helper which logs. */
+static void helper_log(TestingT *t, const char *s) {
+    testing_t_helper(t);
+    testing_t_log_v(t, s);
+}
+
+static void child_synctest_helper_body(void *env, TestingT *t) {
+    (void)env;
+    helper_log(t, "log in helper");
+}
+
+static void child_synctest_helper(void *env, TestingT *t) {
+    (void)env;
+    synctest_test(t, BURROW_FN(TestingTFunc, child_synctest_helper_body, NULL));
 }
 
 static void child_sub(void *env, TestingT *t) {
@@ -748,6 +799,15 @@ static int run_child(const char *scenario) {
         tests[n++] = (TestingInternalTest){BURROW_S("TestMarks"), {child_marks, NULL}};
     } else if (strcmp(scenario, "sleep") == 0) {
         tests[n++] = (TestingInternalTest){BURROW_S("TestSleep"), {child_sleep, NULL}};
+    } else if (strcmp(scenario, "synctest") == 0) {
+        tests[n++] =
+            (TestingInternalTest){BURROW_S("TestFatal"), {child_synctest_fatal, NULL}};
+        tests[n++] =
+            (TestingInternalTest){BURROW_S("TestError"), {child_synctest_error, NULL}};
+        tests[n++] =
+            (TestingInternalTest){BURROW_S("TestSkip"), {child_synctest_skip, NULL}};
+        tests[n++] = (TestingInternalTest){BURROW_S("TestHelper"),
+                                           {child_synctest_helper, NULL}};
     } else {
         tests[n++] = (TestingInternalTest){BURROW_S("TestPass"), {child_pass, NULL}};
         tests[n++] = (TestingInternalTest){BURROW_S("TestFail"), {child_fail, NULL}};
@@ -1253,6 +1313,35 @@ static const Scenario scenarios[] = {
      "running tests:\n"
      "\tTestSleep (0s)\n",
      true},
+    {"-test.run=TestFatal", "synctest", 1,
+     "--- FAIL: TestFatal (0.00s)\n"
+     "    testing_test.c:N: fatal\n"
+     "FAIL\n",
+     false},
+    {"-test.run=TestError", "synctest", 1,
+     "--- FAIL: TestError (0.00s)\n"
+     "    testing_test.c:N: error\n"
+     "FAIL\n",
+     false},
+    {"-test.v -test.run=TestError", "synctest", 1,
+     "=== RUN   TestError\n"
+     "    testing_test.c:N: error\n"
+     "--- FAIL: TestError (0.00s)\n"
+     "FAIL\n",
+     false},
+    {"-test.run=TestSkip", "synctest", 0, "PASS\n", false},
+    {"-test.v -test.run=TestSkip", "synctest", 0,
+     "=== RUN   TestSkip\n"
+     "    testing_test.c:N: skip\n"
+     "--- PASS: TestSkip (0.00s)\n"
+     "PASS\n",
+     false},
+    {"-test.v -test.run=TestHelper", "synctest", 0,
+     "=== RUN   TestHelper\n"
+     "    testing_test.c:N: log in helper\n"
+     "--- PASS: TestHelper (0.00s)\n"
+     "PASS\n",
+     false},
 };
 
 /* The same, for benchmarks. */
@@ -1675,6 +1764,193 @@ static void guard(void (*fn)(void *), void *env, char *caught_text) {
     BURROW_TRY_END;
 }
 
+/* ------------------------------------------------------------- synctest_test
+ *
+ * Tests for interactions between synctest bubbles and the testing package,
+ * from Go's testing/synctest/synctest_test.go. The ones there that look at
+ * what go test prints are the synctest scenarios above. */
+
+static void empty_t_body(void *env, TestingT *t) {
+    (void)env;
+    (void)t;
+}
+
+static void TestSynctestSuccess(TestingT *t) {
+    synctest_test(t, BURROW_FN(TestingTFunc, empty_t_body, NULL));
+}
+
+static Chan *cleanup_ch;
+static int32_t cleanup_done;
+
+static void cleanup_close(void *env) {
+    (void)env;
+    /* This cleanup function should execute inside the test's bubble.
+     * (If it doesn't the runtime will panic.) */
+    chan_close(cleanup_ch);
+}
+
+static void cleanup_waiter(void *env) {
+    (void)env;
+    chan_recv(cleanup_ch, NULL);
+    sync_atomic_store_int32(&cleanup_done, 1);
+}
+
+static void cleanup_bubble(void *env, TestingT *t) {
+    (void)env;
+    cleanup_ch = chan_make(heap_allocator(), TYPE_BOOL, 0);
+    testing_t_cleanup(t, BURROW_FN(Func, cleanup_close, NULL));
+    /* synctest.Test will wait for this goroutine to exit before returning.
+     * The cleanup function signals the goroutine to exit before the wait starts. */
+    go(BURROW_FN(Func, cleanup_waiter, NULL));
+}
+
+static void TestSynctestCleanup(TestingT *t) {
+    synctest_test(t, BURROW_FN(TestingTFunc, cleanup_bubble, NULL));
+    chan_free(cleanup_ch);
+    if (sync_atomic_load_int32(&cleanup_done) == 0)
+        testing_t_fatalf_v(t, "background goroutine did not return");
+}
+
+enum { STATE_NOT_STARTED, STATE_WAITING, STATE_DONE };
+static const char *const state_names[] = {"not started", "waiting on context", "done"};
+static int32_t context_state;
+
+static void context_waiter(void *env) {
+    TestingT *t = (TestingT *)env;
+    sync_atomic_store_int32(&context_state, STATE_WAITING);
+    chan_recv(context_done(testing_t_context(t)), NULL);
+    sync_atomic_store_int32(&context_state, STATE_DONE);
+}
+
+static void context_bubble(void *env, TestingT *t) {
+    (void)env;
+    go(BURROW_FN(Func, context_waiter, t));
+    /* Wait blocks until the goroutine above is blocked on t.Context().Done(). */
+    synctest_wait();
+    int32_t got = sync_atomic_load_int32(&context_state);
+    if (got != STATE_WAITING)
+        testing_t_fatalf_v(t, "state = %q, want %q", state_names[got],
+                           state_names[STATE_WAITING]);
+}
+
+static void TestSynctestContext(TestingT *t) {
+    sync_atomic_store_int32(&context_state, STATE_NOT_STARTED);
+    synctest_test(t, BURROW_FN(TestingTFunc, context_bubble, NULL));
+    /* t.Context() is canceled before the test completes,
+     * and synctest.Test does not return until the goroutine has set its state to "done". */
+    int32_t got = sync_atomic_load_int32(&context_state);
+    if (got != STATE_DONE)
+        testing_t_fatalf_v(t, "state = %q, want %q", state_names[got],
+                           state_names[STATE_DONE]);
+}
+
+static void want_panic(TestingT *t, void (*fn)(void *), const char *want) {
+    char caught_text[CAUGHT_MAX];
+    guard(fn, t, caught_text);
+    if (caught_text[0] == '\0')
+        testing_t_errorf_v(t, "got no panic, want one");
+    else if (strcmp(caught_text, want) != 0)
+        testing_t_errorf_v(t, "got panic message %q, want %q", caught_text, want);
+}
+
+static void call_t_deadline(void *t) {
+    int64_t when;
+    (void)testing_t_deadline((TestingT *)t, &when);
+}
+
+static void deadline_bubble(void *env, TestingT *t) {
+    (void)env;
+    want_panic(t, call_t_deadline, "testing: t.Deadline called inside synctest bubble");
+}
+
+static void TestSynctestDeadline(TestingT *t) {
+    synctest_test(t, BURROW_FN(TestingTFunc, deadline_bubble, NULL));
+}
+
+static void call_t_parallel(void *t) {
+    testing_t_parallel((TestingT *)t);
+}
+
+static void parallel_bubble(void *env, TestingT *t) {
+    (void)env;
+    want_panic(t, call_t_parallel, "testing: t.Parallel called inside synctest bubble");
+}
+
+static void TestSynctestParallel(TestingT *t) {
+    synctest_test(t, BURROW_FN(TestingTFunc, parallel_bubble, NULL));
+}
+
+static void call_t_run(void *t) {
+    (void)testing_t_run((TestingT *)t, BURROW_S("subtest"),
+                        BURROW_FN(TestingTFunc, empty_t_body, NULL));
+}
+
+static void run_bubble(void *env, TestingT *t) {
+    (void)env;
+    want_panic(t, call_t_run, "testing: t.Run called inside synctest bubble");
+}
+
+static void TestSynctestRun(TestingT *t) {
+    synctest_test(t, BURROW_FN(TestingTFunc, run_bubble, NULL));
+}
+
+static void now_bubble(void *env, TestingT *t) {
+    (void)env;
+    Time got = time_now();
+    Time want = time_date(2000, TIME_JANUARY, 1, 0, 0, 0, 0, time_utc_loc);
+    if (!time_equal(got, want))
+        testing_t_errorf_v(t, "time.Now() = %d, want %d", time_unix_nano(got),
+                           time_unix_nano(want));
+}
+
+static void TestSynctestNow(TestingT *t) {
+    synctest_test(t, BURROW_FN(TestingTFunc, now_bubble, NULL));
+}
+
+/* Every timer one bubble of TestSynctestTimerRaceCtxCrash makes, so that they
+ * can be freed once it is over and nothing is left to fire. */
+#define RACE_TIMERS 100
+static TimeTimer *race_timers[2 * RACE_TIMERS];
+static int32_t race_ntimers;
+
+static void keep_race_timer(TimeTimer *tm) {
+    int32_t i = sync_atomic_add_int32(&race_ntimers, 1) - 1;
+    race_timers[i] = tm;
+}
+
+static void race_inner(void *env) {
+    (void)env;
+}
+
+static void race_outer(void *env) {
+    (void)env;
+    keep_race_timer(
+        time_after_func(heap_allocator(), 0, BURROW_FN(Func, race_inner, NULL)));
+}
+
+static void race_bubble(void *env, TestingT *t) {
+    (void)env;
+    (void)t;
+    for (int i = 0; i < RACE_TIMERS; i++)
+        keep_race_timer(time_after_func(heap_allocator(), 1 * TIME_SECOND,
+                                        BURROW_FN(Func, race_outer, NULL)));
+    time_sleep(2 * TIME_SECOND);
+}
+
+static void race_sub(void *env, TestingT *t) {
+    (void)env;
+    sync_atomic_store_int32(&race_ntimers, 0);
+    synctest_test(t, BURROW_FN(TestingTFunc, race_bubble, NULL));
+    int32_t n = sync_atomic_load_int32(&race_ntimers);
+    for (int32_t i = 0; i < n; i++)
+        time_timer_free(race_timers[i]);
+}
+
+static void TestSynctestTimerRaceCtxCrash(TestingT *t) {
+    for (int i = 0; i < 20; i++)
+        testing_t_run(t, BURROW_S(""), BURROW_FN(TestingTFunc, race_sub, NULL));
+}
+
 static void call_f_fail(void *f) {
     testing_f_fail((TestingF *)f);
 }
@@ -1858,6 +2134,14 @@ static void TestHelpers(TestingT *t) {
     X(TestOutput)                                                                      \
     X(TestTimeoutStacks)                                                               \
     X(TestBenchmarkOutput)                                                             \
+    X(TestSynctestSuccess)                                                             \
+    X(TestSynctestCleanup)                                                             \
+    X(TestSynctestContext)                                                             \
+    X(TestSynctestDeadline)                                                            \
+    X(TestSynctestParallel)                                                            \
+    X(TestSynctestRun)                                                                 \
+    X(TestSynctestNow)                                                                 \
+    X(TestSynctestTimerRaceCtxCrash)                                                   \
     X(TestFuzzing)                                                                     \
     X(TestProfileFlags)                                                                \
     X(FuzzTypes)                                                                       \

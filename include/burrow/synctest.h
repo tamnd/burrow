@@ -45,6 +45,7 @@
 
 #include "burrow/core.h"
 #include "burrow/func.h"
+#include "burrow/testing.h"
 #include "burrow/time.h"
 
 #include <stdbool.h>
@@ -76,10 +77,28 @@ extern "C" {
  * Stops the program if called from outside a goroutine, and if called from
  * inside a bubble, since bubbles do not nest.
  *
- * Go 1.25 replaced Run with Test, which takes the *testing.T so that a deadlock
- * fails the test rather than the process. burrow has no testing package yet, so
- * the shape here is Go 1.24's Run, and synctest_test arrives with testing. */
+ * This is Go 1.24's Run. Go 1.25 replaced it with Test, which is synctest_test
+ * below and is what a test should call. This stays because it needs no T, and
+ * the tests of the bubble itself run without one. */
 bool synctest_run(Func f);
+
+/* Runs f in a new bubble, with a T of its own, and waits for every goroutine in
+ * the bubble to exit before returning. Go's synctest.Test.
+ *
+ * The T that f gets has the same name as t and writes its output to t. Its
+ * cleanups run inside the bubble, just before synctest_test returns, and its
+ * context belongs to the bubble, so waiting on context_done of it is durably
+ * blocked. testing_t_run, testing_t_parallel and testing_t_deadline must not be
+ * called on it, and panic if they are.
+ *
+ * If f fails, t fails too, and synctest_test ends t the way testing_t_fail_now
+ * does. That happens outside the bubble, so t's duration is real time.
+ *
+ * Go fails the test when the goroutines in the bubble deadlock. Here a deadlock
+ * stops the program, the same as it does for synctest_run.
+ *
+ * Must not be called from inside a bubble. */
+void synctest_test(TestingT *t, TestingTFunc f);
 
 /* Blocks until every other goroutine in the bubble is durably blocked.
  *

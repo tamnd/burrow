@@ -149,3 +149,4 @@ plugin
 log/syslog
 net/textproto
 time
+testing/synctest

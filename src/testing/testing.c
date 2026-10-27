@@ -31,6 +31,7 @@
 #include "burrow/slice.h"
 #include "burrow/strconv.h"
 #include "burrow/sync.h"
+#include "burrow/synctest.h"
 #include "burrow/testing.h"
 #include "burrow/thread.h"
 #include "burrow/time.h"
@@ -519,7 +520,8 @@ struct TestingT {
     bool finished;
     bool is_parallel;
     bool deny_parallel;
-    bool running; /* in Go's running map, for the timeout message */
+    bool is_synctest; /* the T synctest_test hands its f, inside the bubble */
+    bool running;     /* in Go's running map, for the timeout message */
 
     int64_t start;
     int64_t duration;
@@ -1171,7 +1173,7 @@ static void flush_to_parent(TestingT *c, Str header) {
 static TestingT *destination(TestingT *c) {
     for (TestingT *n = c; n != NULL; n = n->parent) {
         sync_mutex_lock(&n->mu);
-        bool done = n->done;
+        bool done = n->done || (n == c && n->is_synctest);
         sync_mutex_unlock(&n->mu);
         if (!done)
             return n;
@@ -1394,6 +1396,12 @@ Context testing_t_context(TestingT *t) {
 }
 
 bool testing_t_deadline(TestingT *t, int64_t *when) {
+    if (t->is_synctest) {
+        /* There's no point in returning a real-clock deadline to
+         * a test using a fake clock. We could return "no timeout",
+         * but panicking makes it easier for users to catch the error. */
+        panic_str(BURROW_S("testing: t.Deadline called inside synctest bubble"));
+    }
     *when = t->tstate->deadline;
     return t->tstate->deadline != 0;
 }
@@ -1794,6 +1802,8 @@ static bool run_cleanup(TestingT *t, Any *out) {
 static void report(TestingT *t) {
     if (t->parent == NULL)
         return;
+    if (t->is_synctest)
+        return; /* t.parent will handle reporting */
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
@@ -1826,7 +1836,10 @@ BURROW_NORETURN static void do_panic(TestingT *t, Any err) {
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
-    for (TestingT *root = t; root->parent != NULL; root = root->parent) {
+    /* Flush the output log up to the root before dying.
+     * Skip this if this *T is a synctest bubble, because we're not a subtest. */
+    for (TestingT *root = t; !root->is_synctest && root->parent != NULL;
+         root = root->parent) {
         sync_mutex_lock(&root->mu);
         root->duration += burrow_nanotime() - root->start;
         int64_t d = root->duration;
@@ -2022,7 +2035,29 @@ static void run_goroutine(void *env) {
     t_runner(arg.t, arg.f);
 }
 
+/* Runs f as c on a goroutine of its own, or in line when the runner is bare,
+ * and answers what c signalled: false when a parent test has been stopped. */
+static bool run_runner(TestingT *c, TestingTFunc f) {
+    if (c->signal == NULL) {
+        t_runner(c, f);
+        return c->signal_value;
+    }
+    RunArg *arg =
+        (RunArg *)must_alloc(heap_allocator(), sizeof(RunArg), _Alignof(RunArg));
+    arg->t = c;
+    arg->f = f;
+    if (!go(BURROW_FN(Func, run_goroutine, arg))) {
+        mem_free(heap_allocator(), arg, sizeof(RunArg), _Alignof(RunArg));
+        panic_str(BURROW_S("testing: cannot start the goroutine for a test"));
+    }
+    bool signal;
+    chan_recv(c->signal, &signal);
+    return signal;
+}
+
 bool testing_t_run(TestingT *t, Str name, TestingTFunc f) {
+    if (t->is_synctest)
+        panic_str(BURROW_S("testing: t.Run called inside synctest bubble"));
     sync_mutex_lock(&t->mu);
     if (t->cleanup_started) {
         sync_mutex_unlock(&t->mu);
@@ -2044,27 +2079,55 @@ bool testing_t_run(TestingT *t, Str name, TestingTFunc f) {
         chatty_updatef(c->chatty, c->name, "=== RUN   %s\n", c->name);
     set_running(c, true);
 
-    bool signal;
-    if (c->signal != NULL) {
-        RunArg *arg =
-            (RunArg *)must_alloc(heap_allocator(), sizeof(RunArg), _Alignof(RunArg));
-        arg->t = c;
-        arg->f = f;
-        if (!go(BURROW_FN(Func, run_goroutine, arg))) {
-            mem_free(heap_allocator(), arg, sizeof(RunArg), _Alignof(RunArg));
-            panic_str(BURROW_S("testing: cannot start the goroutine for a test"));
-        }
-        chan_recv(c->signal, &signal);
-    } else {
-        t_runner(c, f);
-        signal = c->signal_value;
-    }
-    if (!signal)
+    if (!run_runner(c, f))
         stop_test();
 
     if (c->chatty != NULL && c->chatty->json)
         chatty_updatef(c->chatty, t->name, "=== NAME  %s\n", t->name);
     return !testing_t_failed(c);
+}
+
+/* testingSynctestTest, which synctest_test calls from inside the bubble it
+ * has made, so that the context t_new makes belongs to the bubble too. */
+static bool synctest_test_in(TestingT *t, TestingTFunc f) {
+    sync_mutex_lock(&t->mu);
+    bool cleanup_started = t->cleanup_started;
+    sync_mutex_unlock(&t->mu);
+    if (cleanup_started)
+        panic_str(BURROW_S("testing: synctest.Run called during t.Cleanup"));
+
+    TestingT *t2 = t_new(t, str_clone(heap_allocator(), t->name), t->tstate, t->chatty);
+    t2->is_synctest = true;
+    if (!run_runner(t2, f)) {
+        /* At this point, it is likely that FailNow was called on one of the
+         * parent tests by one of the subtests. Continue aborting up the chain. */
+        runtime_goexit();
+    }
+    sync_mutex_lock(&t2->mu);
+    bool failed = t2->failed;
+    sync_mutex_unlock(&t2->mu);
+    return !failed;
+}
+
+typedef struct SynctestArg {
+    TestingT *t;
+    TestingTFunc f;
+    bool ok;
+} SynctestArg;
+
+static void synctest_body(void *env) {
+    SynctestArg *arg = (SynctestArg *)env;
+    arg->ok = synctest_test_in(arg->t, arg->f);
+}
+
+void synctest_test(TestingT *t, TestingTFunc f) {
+    SynctestArg arg = {t, f, false};
+    synctest_run(BURROW_FN(Func, synctest_body, &arg));
+    if (!arg.ok) {
+        /* Fail the test outside the bubble,
+         * so test durations get set using real time. */
+        testing_t_fail_now(t);
+    }
 }
 
 static const Str testing_parallel_conflict = BURROW_S_INIT(
@@ -2074,6 +2137,8 @@ static const Str testing_parallel_conflict = BURROW_S_INIT(
 void testing_t_parallel(TestingT *t) {
     if (t->is_parallel)
         panic_str(BURROW_S("testing: t.Parallel called multiple times"));
+    if (t->is_synctest)
+        panic_str(BURROW_S("testing: t.Parallel called inside synctest bubble"));
     if (t->deny_parallel)
         panic_str(testing_parallel_conflict);
     if (t->parent == NULL || t->parent->barrier == NULL)

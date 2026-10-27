@@ -1098,13 +1098,13 @@ static void TestJSONHandler(TestingT *t) {
 
 /* for testing json.Marshaler */
 #define JSON_MARSHALER_FIELDS(F, T) F(T, Str, s, "")
-BURROW_STRUCT_DECL(JsonMarshaler, JSON_MARSHALER_FIELDS);
+BURROW_STRUCT_DECL(TestJsonMarshaler, JSON_MARSHALER_FIELDS);
 
-static Str json_marshaler_string(JsonMarshaler *j) {
+static Str json_marshaler_string(TestJsonMarshaler *j) {
     return j->s; /* should be ignored */
 }
 
-static Slice json_marshaler_marshal_json(JsonMarshaler *j, Alloc *a, Error *err) {
+static Slice json_marshaler_marshal_json(TestJsonMarshaler *j, Alloc *a, Error *err) {
     if (j->s.len == 0) {
         BURROW_OUT(err, errors_new(error_allocator(), S("json: empty string")));
         return slice_nil(TYPE_BYTE);
@@ -1117,20 +1117,20 @@ static Slice json_marshaler_marshal_json(JsonMarshaler *j, Alloc *a, Error *err)
 #define JSON_MARSHALER_METHODS(M, T)                                                   \
     M(T, MarshalJSON, json_marshaler_marshal_json, JSONV2_SIG_MARSHAL_JSON)            \
     M(T, String, json_marshaler_string, JSON_MARSHALER_SIG_String)
-BURROW_STRUCT_DEFINE_METHODS(JsonMarshaler, JSON_MARSHALER_FIELDS,
+BURROW_STRUCT_DEFINE_METHODS(TestJsonMarshaler, JSON_MARSHALER_FIELDS,
                              JSON_MARSHALER_METHODS);
 
 /* jsonMarshalerError, a jsonMarshaler that is an error too. Go gets the
  * MarshalJSON by embedding, and here it is listed again. */
 #define JSON_MARSHALER_ERR_FIELDS(F, T) F(T, Str, s, "")
-BURROW_STRUCT_DECL(JsonMarshalerErr, JSON_MARSHALER_ERR_FIELDS);
+BURROW_STRUCT_DECL(TestJsonMarshalerErr, JSON_MARSHALER_ERR_FIELDS);
 
-static Slice json_marshaler_err_marshal_json(JsonMarshalerErr *j, Alloc *a,
+static Slice json_marshaler_err_marshal_json(TestJsonMarshalerErr *j, Alloc *a,
                                              Error *err) {
-    return json_marshaler_marshal_json((JsonMarshaler *)(void *)j, a, err);
+    return json_marshaler_marshal_json((TestJsonMarshaler *)(void *)j, a, err);
 }
 
-static Str json_marshaler_err_error(JsonMarshalerErr *j) {
+static Str json_marshaler_err_error(TestJsonMarshalerErr *j) {
     (void)j;
     return S("oops");
 }
@@ -1139,7 +1139,7 @@ static Str json_marshaler_err_error(JsonMarshalerErr *j) {
 #define JSON_MARSHALER_ERR_METHODS(M, T)                                               \
     M(T, Error, json_marshaler_err_error, JSON_MARSHALER_ERR_SIG_Error)                \
     M(T, MarshalJSON, json_marshaler_err_marshal_json, JSONV2_SIG_MARSHAL_JSON)
-BURROW_STRUCT_DEFINE_METHODS(JsonMarshalerErr, JSON_MARSHALER_ERR_FIELDS,
+BURROW_STRUCT_DEFINE_METHODS(TestJsonMarshalerErr, JSON_MARSHALER_ERR_FIELDS,
                              JSON_MARSHALER_ERR_METHODS);
 
 #define M_FIELDS(F, T) F(T, StrSlice, M, "json:\"m\"")
@@ -1153,9 +1153,10 @@ static void TestJSONHandlerMarshalerEscaping(TestingT *t) {
     BytesBuffer buf = BYTES_BUFFER(a);
     SlogHandler h = json_handler(a, &buf, NULL);
     SlogRecord r = slog_new_record(test_time(), SLOG_LEVEL_INFO, S("m"), 0);
-    slog_record_add_attrs(&r, a,
-                          ATTRS(slog_any(S("m"), BURROW_ANY(TYPE_OF(JsonMarshaler),
-                                                            &(JsonMarshaler){ascii}))));
+    slog_record_add_attrs(
+        &r, a,
+        ATTRS(slog_any(S("m"), BURROW_ANY(TYPE_OF(TestJsonMarshaler),
+                                          &(TestJsonMarshaler){ascii}))));
     Error err = handle(h, r);
     if (BURROW_FAILED(err)) {
         testing_t_errorf_v(t, "%v", err);
@@ -1244,8 +1245,8 @@ static void TestAppendJSONValue(TestingT *t) {
         BURROW_ANY_VAL(TYPE_BOOL, bool, false),
         BURROW_ANY_VAL(TYPE_DURATION, Duration, TIME_MINUTE),
         BURROW_ANY(TYPE_TIME, &tt),
-        BURROW_ANY(TYPE_OF(JsonMarshaler), &(JsonMarshaler){S("xyz")}),
-        BURROW_ANY(TYPE_OF(JsonMarshalerErr), &(JsonMarshalerErr){S("pqr")}),
+        BURROW_ANY(TYPE_OF(TestJsonMarshaler), &(TestJsonMarshaler){S("xyz")}),
+        BURROW_ANY(TYPE_OF(TestJsonMarshalerErr), &(TestJsonMarshalerErr){S("pqr")}),
         BURROW_ANY_VAL(TYPE_SLOG_LEVEL, SlogLevel, SLOG_LEVEL_WARN),
     };
     for (size_t i = 0; i < sizeof values / sizeof values[0]; i++) {

@@ -197,11 +197,13 @@ double json_number_float64(JsonNumber n, Error *err);
 int64_t json_number_int64(JsonNumber n, Error *err);
 
 /* Number.MarshalJSONTo, which writes n to enc the way Marshal does. */
-Error json_number_marshal_json_to(JsonNumber n, JsontextEncoder *enc);
+BURROW_STATIC(ret) Error json_number_marshal_json_to(JsonNumber n,
+                                                     JsontextEncoder *enc);
 
 /* Number.UnmarshalJSONFrom, which reads the next value from dec into n the way
  * Unmarshal does. The text n ends up with comes from a. */
-Error json_number_unmarshal_json_from(JsonNumber *n, Alloc *a, JsontextDecoder *dec);
+BURROW_STATIC(ret) Error json_number_unmarshal_json_from(JsonNumber *n, Alloc *a,
+                                                         JsontextDecoder *dec);
 
 /* json.RawMessage, which is jsontext.Value under another name. */
 typedef JsontextValue JsonRawMessage;

@@ -1726,6 +1726,50 @@ http_round_tripper_round_trip(HttpRoundTripper rt, HttpRequest *req, Error *err)
  * request itself. */
 extern const Error http_err_skip_alt_protocol;
 
+/* ----------------------------------------------------------- File transport */
+
+/* NewFileTransport returns a new [RoundTripper], serving the provided
+ * [FileSystem]. The returned RoundTripper ignores the URL host in its
+ * incoming requests, as well as most other properties of the
+ * request.
+ *
+ * The typical use case for NewFileTransport is to register the "file"
+ * protocol with a [Transport], as in:
+ *
+ *     HttpTransport t = {0};
+ *     HttpDir root = BURROW_S("/");
+ *     http_transport_register_protocol(
+ *         &t, BURROW_S("file"),
+ *         http_new_file_transport(a, http_dir_as_file_system(&root)));
+ *     HttpClient c = {.transport = http_transport_as_round_tripper(&t)};
+ *     HttpResponse *res = http_client_get(&c, BURROW_S("file:///etc/passwd"), &err);
+ *     ...
+ *
+ * Not in Go: the round tripper is made in a, with NULL data when a says no, and
+ * lasts as long as a does. Each request is served on a goroutine of its own
+ * that writes the body to a pipe, and http_response_free closes the pipe, waits
+ * for that goroutine to finish, and gives back what it used. */
+BURROW_OWNS(ret) HttpRoundTripper http_new_file_transport(Alloc *a, HttpFileSystem fs);
+
+/* NewFileTransportFS returns a new [RoundTripper], serving the provided
+ * file system fsys. The returned RoundTripper ignores the URL host in its
+ * incoming requests, as well as most other properties of the
+ * request. The files provided by fsys must implement [io.Seeker].
+ *
+ * The typical use case for NewFileTransportFS is to register the "file"
+ * protocol with a [Transport], as in:
+ *
+ *     HttpTransport t = {0};
+ *     http_transport_register_protocol(
+ *         &t, BURROW_S("file"),
+ *         http_new_file_transport_fs(a, os_dir_fs(a, BURROW_S("/"))));
+ *     HttpClient c = {.transport = http_transport_as_round_tripper(&t)};
+ *     HttpResponse *res = http_client_get(&c, BURROW_S("file:///etc/passwd"), &err);
+ *     ...
+ *
+ * Not in Go: as with http_new_file_transport, it is made in a. */
+BURROW_OWNS(ret) HttpRoundTripper http_new_file_transport_fs(Alloc *a, Fs fsys);
+
 /* ---------------------------------------------------------------- Transport */
 
 /* http.DefaultMaxIdleConnsPerHost, the idle connections a transport keeps for

@@ -156,3 +156,16 @@ os/exec
 os/signal
 net/smtp
 net/http/httptest
+encoding/xml
+go/ast
+go/build
+go/build/constraint
+go/doc
+go/doc/comment
+go/format
+go/parser
+go/printer
+net/http/httptrace
+os
+os/user
+testing/fstest

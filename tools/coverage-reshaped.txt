@@ -451,3 +451,8 @@ crypto/tls: method (RecordHeaderError) Error: the receiver is a pointer, and the
 # is a value rather than a pointer to one, which needs no allocator.
 runtime/trace: func StartRegion: returns the TraceRegion by value
 runtime/trace: method (*Region) End: takes the TraceRegion by value
+
+# include/burrow/net.h: LookupSRV returns the records, and the canonical name,
+# Go's first result, comes back through a pointer that may be NULL.
+net: func LookupSRV: returns the records, with cname through a pointer that may be NULL
+net: method (*Resolver) LookupSRV: returns the records, with cname through a pointer that may be NULL

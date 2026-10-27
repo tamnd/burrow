@@ -142,7 +142,7 @@ static void TestTwoListenersTradeDatagrams(TestingT *t) {
     char buf[16] = {0};
     NetUDPAddr *from = NULL;
     CHECK_INT_EQ(
-        net_udp_conn_read_from_udp(s, bytes_of(buf, 16), heap_allocator(), &from, &e),
+        net_udp_conn_read_from_udp(s, heap_allocator(), bytes_of(buf, 16), &from, &e),
         4);
     CHECK(!BURROW_FAILED(e));
     CHECK(memcmp(buf, "ping", 4) == 0);
@@ -202,7 +202,7 @@ static void TestADialedConnTalksToItsPeerOnly(TestingT *t) {
     char buf[16] = {0};
     NetAddr from = {0};
     CHECK_INT_EQ(
-        net_udp_conn_read_from(s, bytes_of(buf, 16), heap_allocator(), &from, &e), 2);
+        net_udp_conn_read_from(s, heap_allocator(), bytes_of(buf, 16), &from, &e), 2);
     CHECK(!BURROW_FAILED(e));
     char local[64];
     CHECK_STR_EQ(addr_text(from, text, sizeof text),
@@ -485,8 +485,9 @@ static void TestAMessageGoesOutAndComesBack(TestingT *t) {
     CHECK_INT_EQ(oobn, 0);
     Int flags = -1;
     NetUDPAddr *from = NULL;
-    CHECK_INT_EQ(net_udp_conn_read_msg_udp(c, bytes_of(rb, 128), bytes_of(oob, 128),
-                                           heap_allocator(), &oobn, &flags, &from, &e),
+    CHECK_INT_EQ(net_udp_conn_read_msg_udp(c, heap_allocator(), bytes_of(rb, 128),
+                                           bytes_of(oob, 128), &oobn, &flags, &from,
+                                           &e),
                  12);
     CHECK(BURROW_OK(e));
     CHECK_INT_EQ(oobn, 0);
@@ -622,8 +623,8 @@ static void TestUDPIPVersionReadMsg(TestingT *t) {
     CHECK_INT_EQ(net_udp_conn_write_to_udp_addr_port(c, bytes_of(buf, 8), daddr, &e),
                  8);
     NetUDPAddr *soldaddr = NULL;
-    CHECK_INT_EQ(net_udp_conn_read_msg_udp(c, bytes_of(buf, 8), (Slice){0},
-                                           heap_allocator(), NULL, NULL, &soldaddr, &e),
+    CHECK_INT_EQ(net_udp_conn_read_msg_udp(c, heap_allocator(), bytes_of(buf, 8),
+                                           (Slice){0}, NULL, NULL, &soldaddr, &e),
                  8);
     CHECK(BURROW_OK(e));
     if (soldaddr == NULL || soldaddr->ip.len != 4)

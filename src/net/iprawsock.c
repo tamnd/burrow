@@ -344,7 +344,7 @@ static Int ir_strip_ipv4_header(Int n, Slice p) {
     return n - l;
 }
 
-Int net_ip_conn_read_from_ip(NetIPConn *c, Slice p, Alloc *a, NetIPAddr **addr,
+Int net_ip_conn_read_from_ip(NetIPConn *c, Alloc *a, Slice p, NetIPAddr **addr,
                              Error *err) {
     if (addr != NULL)
         *addr = NULL;
@@ -373,9 +373,9 @@ Int net_ip_conn_read_from_ip(NetIPConn *c, Slice p, Alloc *a, NetIPAddr **addr,
     return n;
 }
 
-Int net_ip_conn_read_from(NetIPConn *c, Slice p, Alloc *a, NetAddr *addr, Error *err) {
+Int net_ip_conn_read_from(NetIPConn *c, Alloc *a, Slice p, NetAddr *addr, Error *err) {
     NetIPAddr *ip = NULL;
-    Int n = net_ip_conn_read_from_ip(c, p, a, addr != NULL ? &ip : NULL, err);
+    Int n = net_ip_conn_read_from_ip(c, a, p, addr != NULL ? &ip : NULL, err);
     if (addr != NULL)
         *addr = net_ip_addr_as_addr(ip);
     return n;
@@ -420,7 +420,7 @@ Int net_ip_conn_write_to(NetIPConn *c, Slice p, NetAddr addr, Error *err) {
     return net_ip_conn_write_to_ip(c, p, (const NetIPAddr *)addr.data, err);
 }
 
-Int net_ip_conn_read_msg_ip(NetIPConn *c, Slice p, Slice oob, Alloc *a, Int *oobn,
+Int net_ip_conn_read_msg_ip(NetIPConn *c, Alloc *a, Slice p, Slice oob, Int *oobn,
                             Int *flags, NetIPAddr **addr, Error *err) {
     if (oobn != NULL)
         *oobn = 0;
@@ -614,7 +614,7 @@ NetIPConn *net_conn_as_ip_conn(NetConn c) {
 }
 
 static Int ir_m_read_from(void *self, Slice p, Alloc *a, NetAddr *addr, Error *err) {
-    return net_ip_conn_read_from((NetIPConn *)self, p, a, addr, err);
+    return net_ip_conn_read_from((NetIPConn *)self, a, p, addr, err);
 }
 
 static Int ir_m_write_to(void *self, Slice p, NetAddr addr, Error *err) {

@@ -38,9 +38,9 @@ static void run(void *env) {
     /* The other end gets a descriptor of its own for the same open file. */
     Byte b[1];
     Byte oob[64];
-    (void)net_unix_conn_read_msg_unix(server, slice_from(b, 1, 1, TYPE_BYTE),
-                                      slice_from(oob, 64, 64, TYPE_BYTE), a, &oobn,
-                                      NULL, NULL, &err);
+    (void)net_unix_conn_read_msg_unix(server, a, slice_from(b, 1, 1, TYPE_BYTE),
+                                      slice_from(oob, 64, 64, TYPE_BYTE), &oobn, NULL,
+                                      NULL, &err);
     Slice msgs = syscall_parse_socket_control_message(
         a, slice_from(oob, oobn, oobn, TYPE_BYTE), &err);
     Slice fds =

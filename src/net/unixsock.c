@@ -509,7 +509,7 @@ static Int nx_read_from(NetUnixConn *c, Slice p, NxAddr *got, bool *named, Error
     return n;
 }
 
-Int net_unix_conn_read_from_unix(NetUnixConn *c, Slice p, Alloc *a, NetUnixAddr **addr,
+Int net_unix_conn_read_from_unix(NetUnixConn *c, Alloc *a, Slice p, NetUnixAddr **addr,
                                  Error *err) {
     if (addr != NULL)
         *addr = NULL;
@@ -530,10 +530,10 @@ Int net_unix_conn_read_from_unix(NetUnixConn *c, Slice p, Alloc *a, NetUnixAddr 
     return n;
 }
 
-Int net_unix_conn_read_from(NetUnixConn *c, Slice p, Alloc *a, NetAddr *addr,
+Int net_unix_conn_read_from(NetUnixConn *c, Alloc *a, Slice p, NetAddr *addr,
                             Error *err) {
     NetUnixAddr *u = NULL;
-    Int n = net_unix_conn_read_from_unix(c, p, a, addr != NULL ? &u : NULL, err);
+    Int n = net_unix_conn_read_from_unix(c, a, p, addr != NULL ? &u : NULL, err);
     if (addr != NULL)
         *addr = net_unix_addr_as_addr(u);
     return n;
@@ -581,7 +581,7 @@ Int net_unix_conn_write_to(NetUnixConn *c, Slice p, NetAddr addr, Error *err) {
     return net_unix_conn_write_to_unix(c, p, (const NetUnixAddr *)addr.data, err);
 }
 
-Int net_unix_conn_read_msg_unix(NetUnixConn *c, Slice p, Slice oob, Alloc *a, Int *oobn,
+Int net_unix_conn_read_msg_unix(NetUnixConn *c, Alloc *a, Slice p, Slice oob, Int *oobn,
                                 Int *flags, NetUnixAddr **addr, Error *err) {
     if (oobn != NULL)
         *oobn = 0;
@@ -799,7 +799,7 @@ NetUnixConn *net_conn_as_unix_conn(NetConn c) {
 }
 
 static Int nx_m_read_from(void *self, Slice p, Alloc *a, NetAddr *addr, Error *err) {
-    return net_unix_conn_read_from((NetUnixConn *)self, p, a, addr, err);
+    return net_unix_conn_read_from((NetUnixConn *)self, a, p, addr, err);
 }
 
 static Int nx_m_write_to(void *self, Slice p, NetAddr addr, Error *err) {

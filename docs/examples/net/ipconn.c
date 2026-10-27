@@ -47,7 +47,7 @@ static void run(void *env) {
         Byte got[128];
         NetIPAddr *from = NULL;
         Int n = net_ip_conn_read_from_ip(
-            c, slice_from(got, sizeof got, sizeof got, TYPE_BYTE), a, &from, &err);
+            c, a, slice_from(got, sizeof got, sizeof got, TYPE_BYTE), &from, &err);
         if (BURROW_FAILED(err)) {
             Str s = error_text(err);
             printf("%.*s\n", (int)s.len, (const char *)s.p);

@@ -844,12 +844,12 @@ Int net_udp_conn_write(NetUDPConn *c, Slice p, Error *err);
 
 /* ReadFromUDP: a datagram, and in *addr who sent it, made in a. *addr is
  * NULL on an error. addr may be NULL to not ask. */
-Int net_udp_conn_read_from_udp(NetUDPConn *c, Slice p, Alloc *a, NetUDPAddr **addr,
+Int net_udp_conn_read_from_udp(NetUDPConn *c, Alloc *a, Slice p, NetUDPAddr **addr,
                                Error *err);
 
 /* ReadFrom, which is ReadFromUDP with the sender as a NetAddr, nil on an
  * error. */
-Int net_udp_conn_read_from(NetUDPConn *c, Slice p, Alloc *a, NetAddr *addr, Error *err);
+Int net_udp_conn_read_from(NetUDPConn *c, Alloc *a, Slice p, NetAddr *addr, Error *err);
 
 /* ReadFromUDPAddrPort, which needs no memory for the sender. */
 Int net_udp_conn_read_from_udp_addr_port(NetUDPConn *c, Slice p, NetipAddrPort *addr,
@@ -870,7 +870,7 @@ Int net_udp_conn_write_to(NetUDPConn *c, Slice p, NetAddr addr, Error *err);
  * is none to give. Any of oobn, flags and addr may be NULL to not ask. The
  * control messages are as the system lays them out, for
  * syscall_parse_socket_control_message to pick apart. */
-Int net_udp_conn_read_msg_udp(NetUDPConn *c, Slice p, Slice oob, Alloc *a, Int *oobn,
+Int net_udp_conn_read_msg_udp(NetUDPConn *c, Alloc *a, Slice p, Slice oob, Int *oobn,
                               Int *flags, NetUDPAddr **addr, Error *err);
 
 /* ReadMsgUDPAddrPort, which needs no memory for the sender. */
@@ -994,12 +994,12 @@ Int net_unix_conn_write(NetUnixConn *c, Slice p, Error *err);
 
 /* ReadFromUnix: what was read, and in *addr who sent it, made in a. *addr is
  * NULL when the sender has no name, which is always so on a stream. */
-Int net_unix_conn_read_from_unix(NetUnixConn *c, Slice p, Alloc *a, NetUnixAddr **addr,
+Int net_unix_conn_read_from_unix(NetUnixConn *c, Alloc *a, Slice p, NetUnixAddr **addr,
                                  Error *err);
 
 /* ReadFrom, which is ReadFromUnix with the sender as a NetAddr, nil when it
  * has no name. */
-Int net_unix_conn_read_from(NetUnixConn *c, Slice p, Alloc *a, NetAddr *addr,
+Int net_unix_conn_read_from(NetUnixConn *c, Alloc *a, Slice p, NetAddr *addr,
                             Error *err);
 
 /* WriteToUnix and WriteTo: p to addr, on a socket that is not connected.
@@ -1015,7 +1015,7 @@ Int net_unix_conn_write_to(NetUnixConn *c, Slice p, NetAddr addr, Error *err);
  * close-on-exec. A stream that has ended reads as io_eof, not wrapped, as
  * read does. addr may be NULL to write on a connected socket, and has to be
  * on a connected datagram one. */
-Int net_unix_conn_read_msg_unix(NetUnixConn *c, Slice p, Slice oob, Alloc *a, Int *oobn,
+Int net_unix_conn_read_msg_unix(NetUnixConn *c, Alloc *a, Slice p, Slice oob, Int *oobn,
                                 Int *flags, NetUnixAddr **addr, Error *err);
 Int net_unix_conn_write_msg_unix(NetUnixConn *c, Slice p, Slice oob,
                                  const NetUnixAddr *addr, Int *oobn, Error *err);
@@ -1090,7 +1090,7 @@ void net_unix_listener_free(NetUnixListener *l);
  *     NetIPAddr any = {0};
  *     NetIPConn *c = net_listen_ip(a, BURROW_S("ip4:icmp"), &any, &err);
  *     NetIPAddr *from;
- *     Int n = net_ip_conn_read_from_ip(c, buf, a, &from, &err);
+ *     Int n = net_ip_conn_read_from_ip(c, a, buf, &from, &err);
  *
  * The network is "ip", "ip4" or "ip6" with the protocol after a colon, by
  * number or by name, as in "ip4:1" or "ip6:ipv6-icmp". Raw sockets need
@@ -1150,9 +1150,9 @@ Int net_ip_conn_read(NetIPConn *c, Slice p, Error *err);
 Int net_ip_conn_write(NetIPConn *c, Slice p, Error *err);
 
 /* ReadFromIP and ReadFrom: one packet, and who sent it, made in a. */
-Int net_ip_conn_read_from_ip(NetIPConn *c, Slice p, Alloc *a, NetIPAddr **addr,
+Int net_ip_conn_read_from_ip(NetIPConn *c, Alloc *a, Slice p, NetIPAddr **addr,
                              Error *err);
-Int net_ip_conn_read_from(NetIPConn *c, Slice p, Alloc *a, NetAddr *addr, Error *err);
+Int net_ip_conn_read_from(NetIPConn *c, Alloc *a, Slice p, NetAddr *addr, Error *err);
 
 /* WriteToIP and WriteTo: one packet to addr, which for write_to has to be a
  * NetIPAddr. A connection that was dialed gives net_err_write_to_connected. */
@@ -1162,7 +1162,7 @@ Int net_ip_conn_write_to(NetIPConn *c, Slice p, NetAddr addr, Error *err);
 /* ReadMsgIP and WriteMsgIP, as UDP has them, except that an IPv4 packet
  * keeps its header, as Go leaves it, and that WriteMsgIP always needs an
  * address and fails on a connected conn, as WriteToIP does. */
-Int net_ip_conn_read_msg_ip(NetIPConn *c, Slice p, Slice oob, Alloc *a, Int *oobn,
+Int net_ip_conn_read_msg_ip(NetIPConn *c, Alloc *a, Slice p, Slice oob, Int *oobn,
                             Int *flags, NetIPAddr **addr, Error *err);
 Int net_ip_conn_write_msg_ip(NetIPConn *c, Slice p, Slice oob, const NetIPAddr *addr,
                              Int *oobn, Error *err);
@@ -1375,7 +1375,9 @@ BURROW_OWNS(ret) Str net_resolver_lookup_cname(NetResolver *r, Alloc *a, Context
 /* LookupSRV: the SRV records of _service._proto.name, as NetSRV values,
  * sorted by priority and shuffled by weight, with the name they were found
  * under in *cname, which may be NULL. Empty service and proto look up name
- * itself. */
+ * itself. Not in Go, where cname is the first result: the records are what a
+ * caller wants, so they are the result here, and a caller that has no use for
+ * cname has nothing to free. */
 BURROW_OWNS(ret) Slice net_resolver_lookup_srv(NetResolver *r, Alloc *a, Context ctx,
                                                Str service, Str proto, Str name,
                                                Str *cname, Error *err);

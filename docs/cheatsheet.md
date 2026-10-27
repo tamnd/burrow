@@ -4679,13 +4679,13 @@ The sentences taken from Go are reproduced from the doc comments of Go's `net` p
 - `NetUDPConn *net_listen_multicast_udp(Alloc *a, Str network, const NetInterface *ifi, const NetUDPAddr *gaddr, Error *err)` – ListenMulticastUDP acts like ListenPacket for UDP networks but takes a group address on a specific network interface.
 - `Int net_udp_conn_read(NetUDPConn *c, Slice p, Error *err)` – Read implements the Conn Read method.
 - `Int net_udp_conn_write(NetUDPConn *c, Slice p, Error *err)` – Write implements the Conn Write method.
-- `Int net_udp_conn_read_from_udp(NetUDPConn *c, Slice p, Alloc *a, NetUDPAddr **addr, Error *err)` – ReadFromUDP acts like UDPConn.ReadFrom but returns a UDPAddr.
-- `Int net_udp_conn_read_from(NetUDPConn *c, Slice p, Alloc *a, NetAddr *addr, Error *err)` – ReadFrom implements the PacketConn ReadFrom method.
+- `Int net_udp_conn_read_from_udp(NetUDPConn *c, Alloc *a, Slice p, NetUDPAddr **addr, Error *err)` – ReadFromUDP acts like UDPConn.ReadFrom but returns a UDPAddr.
+- `Int net_udp_conn_read_from(NetUDPConn *c, Alloc *a, Slice p, NetAddr *addr, Error *err)` – ReadFrom implements the PacketConn ReadFrom method.
 - `Int net_udp_conn_read_from_udp_addr_port(NetUDPConn *c, Slice p, NetipAddrPort *addr, Error *err)` – ReadFromUDPAddrPort acts like ReadFrom but returns a netip.AddrPort.
 - `Int net_udp_conn_write_to_udp(NetUDPConn *c, Slice p, const NetUDPAddr *addr, Error *err)` – WriteToUDP acts like UDPConn.WriteTo but takes a UDPAddr.
 - `Int net_udp_conn_write_to_udp_addr_port(NetUDPConn *c, Slice p, NetipAddrPort addr, Error *err)` – WriteToUDPAddrPort acts like UDPConn.WriteTo but takes a netip.AddrPort.
 - `Int net_udp_conn_write_to(NetUDPConn *c, Slice p, NetAddr addr, Error *err)` – WriteTo implements the PacketConn WriteTo method.
-- `Int net_udp_conn_read_msg_udp(NetUDPConn *c, Slice p, Slice oob, Alloc *a, Int *oobn, Int *flags, NetUDPAddr **addr, Error *err)` – ReadMsgUDP reads a message from c, copying the payload into b and the associated out-of-band data into oob.
+- `Int net_udp_conn_read_msg_udp(NetUDPConn *c, Alloc *a, Slice p, Slice oob, Int *oobn, Int *flags, NetUDPAddr **addr, Error *err)` – ReadMsgUDP reads a message from c, copying the payload into b and the associated out-of-band data into oob.
 - `Int net_udp_conn_read_msg_udp_addr_port(NetUDPConn *c, Slice p, Slice oob, Int *oobn, Int *flags, NetipAddrPort *addr, Error *err)` – ReadMsgUDPAddrPort is like UDPConn.ReadMsgUDP but returns an netip.AddrPort instead of a UDPAddr.
 - `Int net_udp_conn_write_msg_udp(NetUDPConn *c, Slice p, Slice oob, const NetUDPAddr *addr, Int *oobn, Error *err)` – WriteMsgUDP writes a message to addr via c if c isn't connected, or to c's remote address if c is connected (in which case addr must be nil).
 - `Int net_udp_conn_write_msg_udp_addr_port(NetUDPConn *c, Slice p, Slice oob, NetipAddrPort addr, Int *oobn, Error *err)` – WriteMsgUDPAddrPort is like UDPConn.WriteMsgUDP but takes a netip.AddrPort instead of a UDPAddr.
@@ -4715,11 +4715,11 @@ The sentences taken from Go are reproduced from the doc comments of Go's `net` p
 - `NetUnixConn *net_listen_unixgram(Alloc *a, Str network, const NetUnixAddr *laddr, Error *err)` – ListenUnixgram acts like ListenPacket for Unix networks.
 - `Int net_unix_conn_read(NetUnixConn *c, Slice p, Error *err)` – Read implements the Conn Read method.
 - `Int net_unix_conn_write(NetUnixConn *c, Slice p, Error *err)` – Write implements the Conn Write method.
-- `Int net_unix_conn_read_from_unix(NetUnixConn *c, Slice p, Alloc *a, NetUnixAddr **addr, Error *err)` – ReadFromUnix acts like UnixConn.ReadFrom but returns a UnixAddr.
-- `Int net_unix_conn_read_from(NetUnixConn *c, Slice p, Alloc *a, NetAddr *addr, Error *err)` – ReadFrom implements the PacketConn.ReadFrom method.
+- `Int net_unix_conn_read_from_unix(NetUnixConn *c, Alloc *a, Slice p, NetUnixAddr **addr, Error *err)` – ReadFromUnix acts like UnixConn.ReadFrom but returns a UnixAddr.
+- `Int net_unix_conn_read_from(NetUnixConn *c, Alloc *a, Slice p, NetAddr *addr, Error *err)` – ReadFrom implements the PacketConn.ReadFrom method.
 - `Int net_unix_conn_write_to_unix(NetUnixConn *c, Slice p, const NetUnixAddr *addr, Error *err)` – WriteToUnix acts like UnixConn.WriteTo but takes a UnixAddr.
 - `Int net_unix_conn_write_to(NetUnixConn *c, Slice p, NetAddr addr, Error *err)` – WriteTo implements the PacketConn.WriteTo method.
-- `Int net_unix_conn_read_msg_unix(NetUnixConn *c, Slice p, Slice oob, Alloc *a, Int *oobn, Int *flags, NetUnixAddr **addr, Error *err)` – ReadMsgUnix reads a message from c, copying the payload into b and the associated out-of-band data into oob.
+- `Int net_unix_conn_read_msg_unix(NetUnixConn *c, Alloc *a, Slice p, Slice oob, Int *oobn, Int *flags, NetUnixAddr **addr, Error *err)` – ReadMsgUnix reads a message from c, copying the payload into b and the associated out-of-band data into oob.
 - `Int net_unix_conn_write_msg_unix(NetUnixConn *c, Slice p, Slice oob, const NetUnixAddr *addr, Int *oobn, Error *err)` – WriteMsgUnix writes a message to addr via c, copying the payload from b and the associated out-of-band data from oob.
 - `Error net_unix_conn_close(NetUnixConn *c)` – Close closes the connection.
 - `Error net_unix_conn_close_read(NetUnixConn *c)` – CloseRead shuts down the reading side of the Unix domain connection.
@@ -4761,11 +4761,11 @@ The sentences taken from Go are reproduced from the doc comments of Go's `net` p
 - `OsFile *net_ip_conn_file(NetIPConn *c, Alloc *a, Error *err)` – File returns a copy of the underlying os.File.
 - `Int net_ip_conn_read(NetIPConn *c, Slice p, Error *err)` – Read implements the Conn Read method.
 - `Int net_ip_conn_write(NetIPConn *c, Slice p, Error *err)` – Write implements the Conn Write method.
-- `Int net_ip_conn_read_from_ip(NetIPConn *c, Slice p, Alloc *a, NetIPAddr **addr, Error *err)` – ReadFromIP acts like ReadFrom but returns an IPAddr.
-- `Int net_ip_conn_read_from(NetIPConn *c, Slice p, Alloc *a, NetAddr *addr, Error *err)` – ReadFrom implements the PacketConn ReadFrom method.
+- `Int net_ip_conn_read_from_ip(NetIPConn *c, Alloc *a, Slice p, NetIPAddr **addr, Error *err)` – ReadFromIP acts like ReadFrom but returns an IPAddr.
+- `Int net_ip_conn_read_from(NetIPConn *c, Alloc *a, Slice p, NetAddr *addr, Error *err)` – ReadFrom implements the PacketConn ReadFrom method.
 - `Int net_ip_conn_write_to_ip(NetIPConn *c, Slice p, const NetIPAddr *addr, Error *err)` – WriteToIP acts like IPConn.WriteTo but takes an IPAddr.
 - `Int net_ip_conn_write_to(NetIPConn *c, Slice p, NetAddr addr, Error *err)` – WriteTo implements the PacketConn WriteTo method.
-- `Int net_ip_conn_read_msg_ip(NetIPConn *c, Slice p, Slice oob, Alloc *a, Int *oobn, Int *flags, NetIPAddr **addr, Error *err)` – ReadMsgIP reads a message from c, copying the payload into b and the associated out-of-band data into oob.
+- `Int net_ip_conn_read_msg_ip(NetIPConn *c, Alloc *a, Slice p, Slice oob, Int *oobn, Int *flags, NetIPAddr **addr, Error *err)` – ReadMsgIP reads a message from c, copying the payload into b and the associated out-of-band data into oob.
 - `Int net_ip_conn_write_msg_ip(NetIPConn *c, Slice p, Slice oob, const NetIPAddr *addr, Int *oobn, Error *err)` – WriteMsgIP writes a message to addr via c, copying the payload from b and the associated out-of-band data from oob.
 - `Error net_ip_conn_close(NetIPConn *c)` – Close closes the connection.
 - `NetAddr net_ip_conn_local_addr(NetIPConn *c)` – LocalAddr returns the local network address.

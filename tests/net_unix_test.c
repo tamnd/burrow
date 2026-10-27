@@ -182,7 +182,7 @@ static void TestAStreamListenerAcceptsAndTalks(TestingT *t) {
     /* On a stream nobody has a name to read from. */
     NetUnixAddr *from = NULL;
     CHECK_INT_EQ(net_unix_conn_write(c, bytes_of(hello, 5), &e), 5);
-    CHECK_INT_EQ(net_unix_conn_read_from_unix(s, bytes_of(buf, 16), a, &from, &e), 5);
+    CHECK_INT_EQ(net_unix_conn_read_from_unix(s, a, bytes_of(buf, 16), &from, &e), 5);
     CHECK(BURROW_OK(e));
     /* Linux gives no name at all, and the BSDs may give an empty one. */
     CHECK(from == NULL || from->name.len == 0);
@@ -371,7 +371,7 @@ static void TestDatagramsCarryTheirSendersName(TestingT *t) {
     CHECK(BURROW_OK(e));
     char buf[16] = {0};
     NetUnixAddr *from = NULL;
-    CHECK_INT_EQ(net_unix_conn_read_from_unix(r, bytes_of(buf, 16), a, &from, &e), 4);
+    CHECK_INT_EQ(net_unix_conn_read_from_unix(r, a, bytes_of(buf, 16), &from, &e), 4);
     CHECK(BURROW_OK(e));
     CHECK(memcmp(buf, "ping", 4) == 0);
     char got[160];
@@ -389,7 +389,7 @@ static void TestDatagramsCarryTheirSendersName(TestingT *t) {
                                             net_unix_addr_as_addr(from), &e),
                      4);
         NetAddr back = {NULL, NULL};
-        CHECK_INT_EQ(net_unix_conn_read_from(s, bytes_of(buf, 16), a, &back, &e), 4);
+        CHECK_INT_EQ(net_unix_conn_read_from(s, a, bytes_of(buf, 16), &back, &e), 4);
         CHECK(memcmp(buf, "pong", 4) == 0);
         CHECK_STR_EQ(addr_text(back, got, sizeof got),
                      c_text(ra.name, want, sizeof want));
@@ -419,7 +419,7 @@ static void TestAnUnboundSenderHasNoName(TestingT *t) {
         CHECK_INT_EQ(net_unix_conn_write(c, bytes_of(ping, 4), &e), 4);
         char buf[16];
         NetAddr from = {NULL, NULL};
-        CHECK_INT_EQ(net_unix_conn_read_from(r, bytes_of(buf, 16), a, &from, &e), 4);
+        CHECK_INT_EQ(net_unix_conn_read_from(r, a, bytes_of(buf, 16), &from, &e), 4);
         CHECK(BURROW_OK(e));
         char none[160];
         CHECK(from.vt == NULL || addr_text(from, none, sizeof none)[0] == '\0');
@@ -711,7 +711,7 @@ static void TestWriteMsgUnixOnADatagramSocket(TestingT *t) {
     char oob[64];
     Int flags = -1;
     NetUnixAddr *from = NULL;
-    CHECK_INT_EQ(net_unix_conn_read_msg_unix(r, bytes_of(buf, 32), bytes_of(oob, 64), a,
+    CHECK_INT_EQ(net_unix_conn_read_msg_unix(r, a, bytes_of(buf, 32), bytes_of(oob, 64),
                                              &oobn, &flags, &from, &e),
                  23);
     CHECK(BURROW_OK(e));
@@ -805,7 +805,7 @@ static void TestReadMsgUnixAtTheEndIsEOF(TestingT *t) {
     (void)net_unix_conn_close(p.s);
     char b[1];
     Error e = BURROW_NO_ERROR;
-    CHECK_INT_EQ(net_unix_conn_read_msg_unix(p.c, bytes_of(b, 1), (Slice){0}, a, NULL,
+    CHECK_INT_EQ(net_unix_conn_read_msg_unix(p.c, a, bytes_of(b, 1), (Slice){0}, NULL,
                                              NULL, NULL, &e),
                  0);
     if (!(e.vt == io_eof.vt && e.data == io_eof.data)) {
@@ -830,9 +830,9 @@ static void scm_rights_close_on_exec(TestingT *t, StreamPair *p, Int scm_file) {
     CHECK_INT_EQ(oobn, rights.len);
     Byte oob[64];
     Int space = syscall_cmsg_space(4);
-    (void)net_unix_conn_read_msg_unix(p->s, (Slice){0},
-                                      slice_from(oob, space, space, TYPE_BYTE), a,
-                                      &oobn, NULL, NULL, &e);
+    (void)net_unix_conn_read_msg_unix(p->s, a, (Slice){0},
+                                      slice_from(oob, space, space, TYPE_BYTE), &oobn,
+                                      NULL, NULL, &e);
     if (BURROW_FAILED(e)) {
         testing_t_errorf_v(t, "UnixConn readMsg: %v", e);
         return;
@@ -906,7 +906,7 @@ static void TestANilConnIsAnInvalidArgument(TestingT *t) {
     CHECK_INT_EQ(net_unix_conn_read(NULL, (Slice){0}, &e), 0);
     CHECK_STR_EQ(text_of(e, buf, sizeof buf), EINVAL_TEXT);
     NetUnixAddr *from = NULL;
-    CHECK_INT_EQ(net_unix_conn_read_from_unix(NULL, (Slice){0}, a, &from, &e), 0);
+    CHECK_INT_EQ(net_unix_conn_read_from_unix(NULL, a, (Slice){0}, &from, &e), 0);
     CHECK(from == NULL);
     CHECK_STR_EQ(text_of(e, buf, sizeof buf), EINVAL_TEXT);
     CHECK(net_unix_listener_accept_unix(NULL, &e) == NULL);

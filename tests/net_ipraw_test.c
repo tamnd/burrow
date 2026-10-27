@@ -332,7 +332,7 @@ static void TestIPConnICMPEcho(TestingT *t) {
         Byte got[128];
         NetIPAddr *from = NULL;
         n = net_ip_conn_read_from_ip(
-            c, slice_from(got, sizeof got, sizeof got, TYPE_BYTE), a, &from, &e);
+            c, a, slice_from(got, sizeof got, sizeof got, TYPE_BYTE), &from, &e);
         if (BURROW_FAILED(e)) {
             testing_t_errorf_v(t, "ReadFromIP: %v", e);
             break;
@@ -387,10 +387,10 @@ static void TestIPConnICMPEchoMsg(TestingT *t) {
         Byte oob[64];
         NetIPAddr *from = NULL;
         Int flags = -1;
-        n = net_ip_conn_read_msg_ip(c,
+        n = net_ip_conn_read_msg_ip(c, a,
                                     slice_from(got, sizeof got, sizeof got, TYPE_BYTE),
                                     slice_from(oob, sizeof oob, sizeof oob, TYPE_BYTE),
-                                    a, &oobn, &flags, &from, &e);
+                                    &oobn, &flags, &from, &e);
         if (BURROW_FAILED(e)) {
             testing_t_errorf_v(t, "ReadMsgIP: %v", e);
             break;

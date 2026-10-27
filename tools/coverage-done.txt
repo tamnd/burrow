@@ -152,3 +152,6 @@ time
 testing/synctest
 encoding/json/v2
 encoding/json
+os/exec
+os/signal
+net/smtp

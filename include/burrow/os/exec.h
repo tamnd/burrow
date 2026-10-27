@@ -237,6 +237,23 @@ BURROW_OWNS(ret) Str exec_error_error(const ExecError *e, Alloc *a);
 BURROW_OWNS(ret) Error exec_error_as_error(const ExecError *e, Alloc *a);
 BURROW_OWNS(ret) Str exec_exit_error_error(const ExecExitError *e, Alloc *a);
 
+/* Error.Unwrap: e->err. */
+BURROW_BORROWS(ret, e) Error exec_error_unwrap(const ExecError *e);
+
+/* The ProcessState methods Go's ExitError gets from its embedded
+ * *os.ProcessState, each the os_process_state_ function of the same name
+ * called on e->process_state. */
+Int exec_exit_error_pid(const ExecExitError *e);
+bool exec_exit_error_exited(const ExecExitError *e);
+bool exec_exit_error_success(const ExecExitError *e);
+Int exec_exit_error_exit_code(const ExecExitError *e);
+BURROW_OWNS(ret) Str exec_exit_error_string(const ExecExitError *e, Alloc *a);
+SyscallWaitStatus exec_exit_error_sys(const ExecExitError *e);
+BURROW_BORROWS(ret, e) const SyscallRusage *
+exec_exit_error_sys_usage(const ExecExitError *e);
+Duration exec_exit_error_user_time(const ExecExitError *e);
+Duration exec_exit_error_system_time(const ExecExitError *e);
+
 #ifdef __cplusplus
 }
 #endif

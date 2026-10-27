@@ -210,11 +210,13 @@ DIRECTIVE = re.compile(r"^//(?:go:|line |export |extern )")
 
 def go_docs(goroot, pkg, cache):
     """(receiver type or "", name) to the doc comment, for the funcs, methods
-    and vars of one package."""
+    and vars of one package, the receiver types that declare each method name,
+    and the types each struct embeds from the same package."""
     if pkg in cache:
         return cache[pkg]
     docs = {}
     methods = {}  # name to the receiver types that declare it, doc or not
+    embeds = {}  # struct type to the types of this package it embeds
     for f in sorted(glob.glob(os.path.join(goroot, "src", pkg, "*.go"))):
         if f.endswith("_test.go"):
             continue
@@ -233,6 +235,9 @@ def go_docs(goroot, pkg, cache):
                 if line.startswith("}"):
                     in_type = None
                 else:
+                    m = re.match(r"^\t\*?(\w+)\s*(?://.*)?$", line)
+                    if m:
+                        embeds.setdefault(in_type, []).append(m.group(1))
                     m = re.match(r"^\t(\w+)", line)
                     if m and doc:
                         docs.setdefault((in_type, m.group(1)), "\n".join(doc))
@@ -259,8 +264,8 @@ def go_docs(goroot, pkg, cache):
                     for name in re.split(r"\s*,\s*", m.group(1)):
                         docs.setdefault(("", name), "\n".join(doc))
             doc = []
-    cache[pkg] = (docs, methods)
-    return docs, methods
+    cache[pkg] = (docs, methods, embeds)
+    return docs, methods, embeds
 
 
 def first_sentence(s):
@@ -364,14 +369,26 @@ def build(cov, goroot):
             text = ""
             o = origin.get(c.name)
             if o is not None:
-                docs, methods = go_docs(goroot, o[0], cache)
+                docs, methods, embeds = go_docs(goroot, o[0], cache)
                 doc = docs.get((o[1], o[2]))
                 have = methods.get(o[2], set())
-                if doc is None and o[3] and o[1] not in have and len(have) == 1:
-                    # A method Go promotes from an embedded type, like T.Fail,
-                    # which is common.Fail. Only when the type doesn't declare
-                    # it itself and one type in the package does.
-                    doc = docs.get((next(iter(have)), o[2]))
+                if doc is None and o[3] and o[1] not in have:
+                    # A method Go promotes from a type of the same package
+                    # that the type embeds, like T.Fail, which is
+                    # common.Fail. One embedded from another package, like
+                    # ExitError's *os.ProcessState, gets no doc from here.
+                    seen_t, todo, found = set(), list(embeds.get(o[1], [])), set()
+                    while todo:
+                        e = todo.pop()
+                        if e in seen_t:
+                            continue
+                        seen_t.add(e)
+                        if e in have:
+                            found.add(e)
+                        else:
+                            todo.extend(embeds.get(e, []))
+                    if len(found) == 1:
+                        doc = docs.get((next(iter(found)), o[2]))
                 if doc is not None:
                     text = synopsis(doc)
                     if text:

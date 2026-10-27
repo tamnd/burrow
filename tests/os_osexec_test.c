@@ -517,6 +517,16 @@ static void TestExitStatus(TestingT *t) {
                            error_text(err));
     CHECK_S(error_text(err), S("exit status 42"));
     CHECK_S(exec_exit_error_error(ee, a), S("exit status 42"));
+    /* Not in Go: the methods ExitError gets from its embedded ProcessState. */
+    CHECK(exec_exit_error_exited(ee));
+    CHECK(!exec_exit_error_success(ee));
+    CHECK_INT_EQ(exec_exit_error_exit_code(ee), 42);
+    CHECK_INT_EQ(exec_exit_error_pid(ee), os_process_state_pid(ee->process_state));
+    CHECK_S(exec_exit_error_string(ee, a), S("exit status 42"));
+    CHECK(exec_exit_error_user_time(ee) >= 0);
+    CHECK(exec_exit_error_system_time(ee) >= 0);
+    CHECK(exec_exit_error_sys_usage(ee) ==
+          os_process_state_sys_usage(ee->process_state));
     exec_cmd_free(c);
 }
 
@@ -1404,6 +1414,11 @@ static void TestLookPathNotFound(TestingT *t) {
             testing_t_fatal_v(t, "LookPath error is not an exec.Error");
         if (!str_eq(pe->name, names[i]))
             testing_t_fatalf_v(t, "want Error name %q, got %q", names[i], pe->name);
+        /* Not in Go: Unwrap gives the reason, which for a name without a
+         * slash is ErrNotFound. */
+        if (i == 0 && !errors_is(exec_error_unwrap(pe), exec_err_not_found))
+            testing_t_fatalf_v(t, "Unwrap() = %s, want ErrNotFound",
+                               error_text(exec_error_unwrap(pe)));
     }
 }
 

@@ -157,6 +157,10 @@ Error exec_error_as_error(const ExecError *e, Alloc *a) {
     return exec_error_new(a, e->name, e->err);
 }
 
+Error exec_error_unwrap(const ExecError *e) {
+    return e->err;
+}
+
 /* -------------------------------------------------------- exec.wrappedError */
 
 typedef struct CmdWrapped {
@@ -283,6 +287,42 @@ static Error exec_exit_error_clone(const void *self, Alloc *a) {
 
 Str exec_exit_error_error(const ExecExitError *e, Alloc *a) {
     return os_process_state_string(e->process_state, a);
+}
+
+Int exec_exit_error_pid(const ExecExitError *e) {
+    return os_process_state_pid(e->process_state);
+}
+
+bool exec_exit_error_exited(const ExecExitError *e) {
+    return os_process_state_exited(e->process_state);
+}
+
+bool exec_exit_error_success(const ExecExitError *e) {
+    return os_process_state_success(e->process_state);
+}
+
+Int exec_exit_error_exit_code(const ExecExitError *e) {
+    return os_process_state_exit_code(e->process_state);
+}
+
+Str exec_exit_error_string(const ExecExitError *e, Alloc *a) {
+    return os_process_state_string(e->process_state, a);
+}
+
+SyscallWaitStatus exec_exit_error_sys(const ExecExitError *e) {
+    return os_process_state_sys(e->process_state);
+}
+
+const SyscallRusage *exec_exit_error_sys_usage(const ExecExitError *e) {
+    return os_process_state_sys_usage(e->process_state);
+}
+
+Duration exec_exit_error_user_time(const ExecExitError *e) {
+    return os_process_state_user_time(e->process_state);
+}
+
+Duration exec_exit_error_system_time(const ExecExitError *e) {
+    return os_process_state_system_time(e->process_state);
 }
 
 /* ----------------------------------------------------- the state of one Cmd */

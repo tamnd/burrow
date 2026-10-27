@@ -1347,8 +1347,9 @@ static void conn_state_client(void *env) {
     if (BURROW_FAILED(err)) {
         testing_t_errorf_v(s->t, "StartTLS: %v", err);
     } else {
-        TlsConnectionState cs;
-        if (!smtp_client_tls_connection_state(c, &cs)) {
+        bool ok;
+        TlsConnectionState cs = smtp_client_tls_connection_state(c, &ok);
+        if (!ok) {
             testing_t_errorf_v(s->t,
                                "TLSConnectionState returned ok == false; want true");
         } else if (cs.version == 0 || !cs.handshake_complete) {

@@ -297,14 +297,14 @@ Error smtp_client_start_tls(SmtpClient *c, TlsConfig *config) {
     return burrow__smtp_client_ehlo(c);
 }
 
-bool smtp_client_tls_connection_state(SmtpClient *c, TlsConnectionState *state) {
+TlsConnectionState smtp_client_tls_connection_state(SmtpClient *c, bool *ok) {
     TlsConn *tc = tls_conn_from_net_conn(c->conn);
     if (tc == NULL) {
-        BURROW_OUT(state, (TlsConnectionState){0});
-        return false;
+        BURROW_OUT(ok, false);
+        return (TlsConnectionState){0};
     }
-    BURROW_OUT(state, tls_conn_connection_state(tc));
-    return true;
+    BURROW_OUT(ok, true);
+    return tls_conn_connection_state(tc);
 }
 
 Error smtp_client_verify(SmtpClient *c, Str addr) {

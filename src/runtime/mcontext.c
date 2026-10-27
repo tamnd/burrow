@@ -686,7 +686,12 @@ void burrow__mcontext_free(burrow__MContext *ctx) {
     annotate_free(ctx);
 }
 
-void burrow__mcontext_switch_raw(burrow__MContext *from, burrow__MContext *to) {
+/* Never inlined. A rewind calls each function on the way back down again, and
+ * it is this one being called again that sees asy.rewinding and stops it. In
+ * the amalgamation sched.c is in the same file, and at -O2 clang copied this
+ * into mcall and mstart, and a rewind into either then trapped. */
+BURROW_NOINLINE void burrow__mcontext_switch_raw(burrow__MContext *from,
+                                                 burrow__MContext *to) {
     /* The second time through. burrow__mcontext_run has rewound `from` and every
      * frame above this one has been called again with its locals put back, so
      * this call is the switch coming back, and returning from it is the whole

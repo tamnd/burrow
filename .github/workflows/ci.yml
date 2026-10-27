@@ -580,6 +580,25 @@ jobs:
           echo "$RUNNER_TEMP/binaryen-version_133/bin" >>"$GITHUB_PATH"
       - name: the test suite
         run: make -j4 BUILD=build-wasi CC="$WASI_SDK/bin/clang --target=wasm32-wasip1" AR="$WASI_SDK/bin/llvm-ar" TESTFLAGS="-test.short -test.v" test
+      # The commands in docs/guides/building.md, on the two files, so that the
+      # way the guide tells people to build for wasip1 keeps working.
+      - name: the single file build from the guide
+        run: |
+          tools/burrow-gen amalgamate --out dist --source-id ci
+          cp tests/amalgamation/hello.c dist/
+          cd dist
+          "$WASI_SDK/bin/clang" --target=wasm32-wasip1 -std=c11 -O2 \
+              -mllvm -wasm-enable-sjlj -mexception-handling --no-wasm-opt \
+              -o hello.wasm burrow.c hello.c -lsetjmp -Wl,-z,stack-size=8388608
+          wasm-opt --enable-exception-handling --enable-bulk-memory \
+              --enable-bulk-memory-opt --enable-nontrapping-float-to-int --enable-sign-ext \
+              --enable-mutable-globals --enable-multivalue --enable-reference-types \
+              --enable-call-indirect-overlong hello.wasm --asyncify \
+              --pass-arg=asyncify-ignore-imports \
+              --pass-arg=asyncify-removelist@burrow__mcontext_run -O1 \
+              --translate-to-exnref -o hello.wasm 2>&1 | tee wasm-opt.out
+          if [ -s wasm-opt.out ]; then exit 1; fi
+          wasmtime run -W exceptions=y hello.wasm
 
   # The gc backend is the only optional dependency in the project, and an
   # optional backend nobody builds is a backend that is already broken. One job

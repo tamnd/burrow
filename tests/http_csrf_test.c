@@ -18,6 +18,7 @@
 #include "burrow/net/http.h"
 #include "burrow/net/http/httptest.h"
 #include "burrow/net/url.h"
+#include "burrow/netpoll.h"
 #include "burrow/proc.h"
 #include "burrow/slice.h"
 #include "burrow/strings.h"
@@ -27,6 +28,18 @@
 #include <string.h>
 
 #define S BURROW_S
+
+#if defined(BURROW_NETPOLL_READINESS) && !defined(BURROW_OS_WASI)
+#define HAVE_TCP 1
+#endif
+
+static void need_tcp(TestingT *t) {
+#if !defined(HAVE_TCP)
+    testing_t_skip_v(t, "TCP here needs the readiness poll FD");
+#else
+    (void)t;
+#endif
+}
 
 static Str cs(const char *s) {
     return s == NULL ? BURROW_STR_EMPTY : str_from_cstr(s);
@@ -544,6 +557,7 @@ static void server_case(void *env, TestingT *t) {
 }
 
 static void TestCrossOriginProtectionServer(TestingT *t) {
+    need_tcp(t);
     HttpCrossOriginProtection *protection =
         http_new_cross_origin_protection(heap_allocator());
     (void)http_cross_origin_protection_add_trusted_origin(protection,

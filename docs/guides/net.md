@@ -455,9 +455,9 @@ printf("sent all of it: %d\n", oobn == rights.len);
 /* The other end gets a descriptor of its own for the same open file. */
 Byte b[1];
 Byte oob[64];
-(void)net_unix_conn_read_msg_unix(server, slice_from(b, 1, 1, TYPE_BYTE),
-                                  slice_from(oob, 64, 64, TYPE_BYTE), a, &oobn,
-                                  NULL, NULL, &err);
+(void)net_unix_conn_read_msg_unix(server, a, slice_from(b, 1, 1, TYPE_BYTE),
+                                  slice_from(oob, 64, 64, TYPE_BYTE), &oobn, NULL,
+                                  NULL, &err);
 Slice msgs = syscall_parse_socket_control_message(
     a, slice_from(oob, oobn, oobn, TYPE_BYTE), &err);
 Slice fds =
@@ -521,7 +521,7 @@ for (;;) {
     Byte got[128];
     NetIPAddr *from = NULL;
     Int n = net_ip_conn_read_from_ip(
-        c, slice_from(got, sizeof got, sizeof got, TYPE_BYTE), a, &from, &err);
+        c, a, slice_from(got, sizeof got, sizeof got, TYPE_BYTE), &from, &err);
     if (BURROW_FAILED(err)) {
         Str s = error_text(err);
         printf("%.*s\n", (int)s.len, (const char *)s.p);
@@ -780,8 +780,8 @@ if (c.vt != NULL) {
     char ping[] = "ping";
     (void)c.vt->writer.write(c.data, slice_from(ping, 4, 4, TYPE_BYTE), &err);
     NetAddr from = {NULL, NULL};
-    Int n = pc.vt->read_from(pc.data,
-                             slice_from(buf, sizeof buf, sizeof buf, TYPE_BYTE), a,
+    Int n = pc.vt->read_from(pc.data, a,
+                             slice_from(buf, sizeof buf, sizeof buf, TYPE_BYTE),
                              &from, &err);
     NetAddr cl = c.vt->local_addr(c.data);
     bool same = from.vt != NULL &&

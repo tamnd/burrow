@@ -529,7 +529,7 @@ static Int nu_read_from(NetUDPConn *c, Slice p, PalSockAddr *from, Error *err) {
     return n;
 }
 
-Int net_udp_conn_read_from_udp(NetUDPConn *c, Slice p, Alloc *a, NetUDPAddr **addr,
+Int net_udp_conn_read_from_udp(NetUDPConn *c, Alloc *a, Slice p, NetUDPAddr **addr,
                                Error *err) {
     if (addr != NULL)
         *addr = NULL;
@@ -553,10 +553,10 @@ Int net_udp_conn_read_from_udp(NetUDPConn *c, Slice p, Alloc *a, NetUDPAddr **ad
     return n;
 }
 
-Int net_udp_conn_read_from(NetUDPConn *c, Slice p, Alloc *a, NetAddr *addr,
+Int net_udp_conn_read_from(NetUDPConn *c, Alloc *a, Slice p, NetAddr *addr,
                            Error *err) {
     NetUDPAddr *u = NULL;
-    Int n = net_udp_conn_read_from_udp(c, p, a, addr != NULL ? &u : NULL, err);
+    Int n = net_udp_conn_read_from_udp(c, a, p, addr != NULL ? &u : NULL, err);
     if (addr != NULL)
         *addr = net_udp_addr_as_addr(u);
     return n;
@@ -689,7 +689,7 @@ static Int nu_read_msg(NetUDPConn *c, Slice p, Slice oob, Int *oobn, Int *flags,
     return n;
 }
 
-Int net_udp_conn_read_msg_udp(NetUDPConn *c, Slice p, Slice oob, Alloc *a, Int *oobn,
+Int net_udp_conn_read_msg_udp(NetUDPConn *c, Alloc *a, Slice p, Slice oob, Int *oobn,
                               Int *flags, NetUDPAddr **addr, Error *err) {
     if (addr != NULL)
         *addr = NULL;
@@ -950,8 +950,8 @@ NetUDPConn *net_conn_as_udp_conn(NetConn c) {
     return (NetUDPConn *)c.data;
 }
 
-static Int nu_m_read_from(void *self, Slice p, Alloc *a, NetAddr *addr, Error *err) {
-    return net_udp_conn_read_from((NetUDPConn *)self, p, a, addr, err);
+static Int nu_m_read_from(void *self, Alloc *a, Slice p, NetAddr *addr, Error *err) {
+    return net_udp_conn_read_from((NetUDPConn *)self, a, p, addr, err);
 }
 
 static Int nu_m_write_to(void *self, Slice p, NetAddr addr, Error *err) {

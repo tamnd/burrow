@@ -50,9 +50,9 @@ int main(void) {
     Byte buf[1024];
     for (int i = 0; i < 2; i++) {
         NetAddr from = {NULL, NULL};
-        Int n = server.vt->read_from(server.data,
+        Int n = server.vt->read_from(server.data, arena_allocator(&ar),
                                      slice_from(buf, sizeof buf, sizeof buf, TYPE_BYTE),
-                                     arena_allocator(&ar), &from, &err);
+                                     &from, &err);
         if (BURROW_FAILED(err))
             log_fatal_v(err);
         Str m = {buf, n};

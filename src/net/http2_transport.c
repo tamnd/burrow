@@ -821,6 +821,7 @@ struct h2c_Stream {
     HttpRequest *req;
 
     Context ctx;
+    Chan *req_cancel; /* the request's cancel, which may be NULL */
     /* trace is cleared, under tmu, before donec is closed, and the read loop
      * calls it under tmu, so nothing calls it once the round trip is over. */
     SyncMutex tmu;
@@ -2931,6 +2932,7 @@ static h2c_Stream *h2c_new_stream(h2c_Conn *cc, HttpRequest *req, IoReadCloser b
     cs->refs.v = 1;
     cs->req = req;
     cs->ctx = http_request_context(req);
+    cs->req_cancel = req->cancel;
     cs->trace = httptrace_context_client_trace(cs->ctx);
     cs->is_head = str_eq(req->method, BURROW_S("HEAD"));
     cs->req_body = body;
@@ -3154,6 +3156,8 @@ static Error h2c_encode_and_write_headers(h2c_Stream *cs) {
         err = cs->abort_err;
     } else if (chan_try_recv(context_done(cs->ctx), NULL, NULL)) {
         err = context_err(cs->ctx);
+    } else if (chan_try_recv(cs->req_cancel, NULL, NULL)) {
+        err = burrow__http_err_request_canceled;
     }
     if (BURROW_FAILED(err)) {
         sync_mutex_unlock(&cc->wmu);
@@ -3235,6 +3239,10 @@ static int32_t h2c_await_flow_control(h2c_Stream *cs, Int max_bytes, Error *err)
         }
         if (chan_try_recv(ctx_done, NULL, NULL)) {
             *err = context_err(cs->ctx);
+            break;
+        }
+        if (chan_try_recv(cs->req_cancel, NULL, NULL)) {
+            *err = burrow__http_err_request_canceled;
             break;
         }
         bool ok = false;
@@ -3457,11 +3465,18 @@ static Error h2c_write_request(h2c_Stream *cs) {
         http_header_get(req->header, BURROW_S(":protocol")).len != 0;
     if (is_extended_connect) {
         SelectCase sc[] = {
+            BURROW_RECV(cs->req_cancel, NULL),
             BURROW_RECV(ctx_done, NULL),
             BURROW_RECV(cc->seen_settings_chan, NULL),
         };
-        if (chan_select(sc, 2) == 0)
+        switch (chan_select(sc, 3)) {
+        case 0:
+            return burrow__http_err_request_canceled;
+        case 1:
             return context_err(cs->ctx);
+        default:
+            break;
+        }
         sync_mutex_lock(&cc->mu);
         bool allowed = cc->extended_connect_allowed;
         sync_mutex_unlock(&cc->mu);
@@ -3490,10 +3505,17 @@ static Error h2c_write_request(h2c_Stream *cs) {
     bool token = true;
     SelectCase hc[] = {
         BURROW_SEND(cc->req_header_mu, &token),
+        BURROW_RECV(cs->req_cancel, NULL),
         BURROW_RECV(ctx_done, NULL),
     };
-    if (chan_select(hc, 2) == 1)
+    switch (chan_select(hc, 3)) {
+    case 1:
+        return burrow__http_err_request_canceled;
+    case 2:
         return context_err(cs->ctx);
+    default:
+        break;
+    }
 
     sync_mutex_lock(&cc->mu);
     h2c_timer_stop(cc, cc->idle_timer);
@@ -3535,13 +3557,17 @@ static Error h2c_write_request(h2c_Stream *cs) {
                     BURROW_RECV(cs->on100, NULL),
                     BURROW_RECV(cs->abort, NULL),
                     BURROW_RECV(ctx_done, NULL),
+                    BURROW_RECV(cs->req_cancel, NULL),
                 };
-                switch (chan_select(sc, 4)) {
+                switch (chan_select(sc, 5)) {
                 case 2:
                     err = cs->abort_err;
                     break;
                 case 3:
                     err = context_err(cs->ctx);
+                    break;
+                case 4:
+                    err = burrow__http_err_request_canceled;
                     break;
                 default:
                     break;
@@ -3588,9 +3614,9 @@ static Error h2c_write_request(h2c_Stream *cs) {
         SelectCase sc[] = {
             BURROW_RECV(cs->peer_closed, NULL),  BURROW_RECV(resp_header_timer, NULL),
             BURROW_RECV(resp_header_recv, NULL), BURROW_RECV(cs->abort, NULL),
-            BURROW_RECV(ctx_done, NULL),
+            BURROW_RECV(ctx_done, NULL),         BURROW_RECV(cs->req_cancel, NULL),
         };
-        Int i = chan_select(sc, 5);
+        Int i = chan_select(sc, 6);
         if (i == 2) {
             resp_header_recv = NULL;
             resp_header_timer = NULL; /* keep waiting for END_STREAM */
@@ -3608,8 +3634,11 @@ static Error h2c_write_request(h2c_Stream *cs) {
         case 3:
             err = cs->abort_err;
             break;
-        default:
+        case 4:
             err = context_err(cs->ctx);
+            break;
+        default:
+            err = burrow__http_err_request_canceled;
             break;
         }
         break;
@@ -3793,9 +3822,13 @@ static HttpResponse *h2c_handle_response_headers(h2c_Stream *cs, Error *err) {
         SelectCase sc[] = {
             BURROW_RECV(cs->donec, NULL),
             BURROW_RECV(context_done(cs->ctx), NULL),
+            BURROW_RECV(cs->req_cancel, NULL),
         };
-        if (chan_select(sc, 2) == 1) {
-            *err = error_retain(error_allocator(), context_err(cs->ctx));
+        Int i = chan_select(sc, 3);
+        if (i != 0) {
+            *err = error_retain(error_allocator(),
+                                i == 1 ? context_err(cs->ctx)
+                                       : burrow__http_err_request_canceled);
             (void)chan_recv(cs->donec, NULL);
             h2c_sunref(cs);
             return NULL;
@@ -3854,8 +3887,9 @@ static HttpResponse *h2c_conn_round_trip(h2c_Conn *cc, HttpRequest *req,
         BURROW_RECV(cs->resp_header_recv, NULL),
         BURROW_RECV(cs->abort, NULL),
         BURROW_RECV(ctx_done, NULL),
+        BURROW_RECV(cs->req_cancel, NULL),
     };
-    switch (chan_select(sc, 3)) {
+    switch (chan_select(sc, 4)) {
     case 0:
         return h2c_handle_response_headers(cs, err);
     case 1:
@@ -3867,12 +3901,16 @@ static HttpResponse *h2c_conn_round_trip(h2c_Conn *cc, HttpRequest *req,
         }
         *err = h2c_cancel_request(cs, cs->abort_err);
         return NULL;
-    default: {
+    case 2: {
         Error e = context_err(cs->ctx);
         h2c_abort_stream(cs, e);
         *err = h2c_cancel_request(cs, e);
         return NULL;
     }
+    default:
+        h2c_abort_stream(cs, burrow__http_err_request_canceled);
+        *err = h2c_cancel_request(cs, burrow__http_err_request_canceled);
+        return NULL;
     }
 }
 
@@ -3951,11 +3989,13 @@ static Error h2c_body_close(void *self) {
     SelectCase sc[] = {
         BURROW_RECV(cs->donec, NULL),
         BURROW_RECV(context_done(cs->ctx), NULL),
+        BURROW_RECV(cs->req_cancel, NULL),
     };
     /* See golang/go#49366: The net/http package can cancel the request
      * context after the response body is fully read. Don't treat this as an
      * error. */
-    (void)chan_select(sc, 2);
+    if (chan_select(sc, 3) == 2)
+        return burrow__http_err_request_canceled;
     return BURROW_NO_ERROR;
 }
 

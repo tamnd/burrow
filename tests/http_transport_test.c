@@ -1,6 +1,7 @@
 /* Derived from Go's src/net/http/transport_test.go, in its HTTP/1 mode:
  * keep-alives, Connection: close, HEAD, gzip, the header timeout and limit,
- * closing a body early, and the errors the transport gives before it dials.
+ * cancelling a request, closing a body early, and the errors the transport
+ * gives before it dials.
  * Go source: go1.27.1.
  *
  * Go's hostPortHandler also writes the address of the net.Conn, in case the
@@ -601,6 +602,190 @@ static void TestTransportResponseHeaderTimeout(TestingT *t) {
         http_serve_mux_free(mux);
         chan_free(ht.in_handler);
     }
+}
+
+/* A cancelTest is a test of request cancellation. Go's has funcs for newReq,
+ * cancel and checkErr; here the kind picks them. */
+typedef enum CancelKind {
+    CANCEL_TRANSPORT, /* uses Transport.CancelRequest */
+    CANCEL_CHANNEL,   /* uses Request.Cancel */
+    CANCEL_CONTEXT,   /* uses a request context */
+} CancelKind;
+
+typedef struct CancelTest {
+    CancelKind kind;
+    Arena ar;
+    Chan *cancelc;
+    bool cancelled;
+    Context ctx;
+    ContextCancelFunc cancel_ctx;
+    HttpRequest *with_ctx;
+    void (*f)(TestingT *t, struct CancelTest *test);
+} CancelTest;
+
+/* prepare the request to cancel */
+static HttpRequest *cancel_test_new_req(CancelTest *test, HttpRequest *req) {
+    switch (test->kind) {
+    case CANCEL_TRANSPORT:
+        return req;
+    case CANCEL_CHANNEL:
+        req->cancel = test->cancelc;
+        return req;
+    case CANCEL_CONTEXT:
+        test->with_ctx =
+            http_request_with_context(req, arena_allocator(&test->ar), test->ctx);
+        return test->with_ctx;
+    default:
+        return req;
+    }
+}
+
+/* cancel the request */
+static void cancel_test_cancel(CancelTest *test, HttpTransport *tr, HttpRequest *req) {
+    switch (test->kind) {
+    case CANCEL_TRANSPORT:
+        http_transport_cancel_request(tr, req);
+        break;
+    case CANCEL_CHANNEL:
+        if (!test->cancelled)
+            chan_close(test->cancelc);
+        test->cancelled = true;
+        break;
+    case CANCEL_CONTEXT:
+        BURROW_CALLF0(test->cancel_ctx);
+        break;
+    default:
+        break;
+    }
+}
+
+/* verify the expected error */
+static void cancel_test_check_err(TestingT *t, CancelTest *test, const char *when,
+                                  Error err) {
+    if (test->kind == CANCEL_CONTEXT) {
+        if (!errors_is(err, context_canceled))
+            testing_t_errorf_v(t, "%s error = %v, want context.Canceled", cs(when),
+                               err);
+        return;
+    }
+    if (!errors_is(err, burrow__http_err_request_canceled) &&
+        !errors_is(err, burrow__http_err_request_canceled_conn))
+        testing_t_errorf_v(t,
+                           "%s error = %v, want errRequestCanceled or "
+                           "errRequestCanceledConn",
+                           cs(when), err);
+}
+
+/* Not in Go: what cancel_test_run sets up is freed in a cleanup, since a test
+ * that skips never returns to it. */
+static void cancel_test_free(void *env) {
+    CancelTest *test = (CancelTest *)env;
+    if (test->with_ctx != NULL)
+        http_request_free(test->with_ctx);
+    if (test->kind == CANCEL_CONTEXT) {
+        BURROW_CALLF0(test->cancel_ctx);
+        context_release(test->ctx);
+    }
+    chan_free(test->cancelc);
+    arena_free(&test->ar);
+    mem_free(heap_allocator(), test, sizeof *test, _Alignof(CancelTest));
+}
+
+static void cancel_test_run(void *env, TestingT *t) {
+    CancelTest *proto = (CancelTest *)env;
+    CancelTest *test =
+        (CancelTest *)mem_alloc(heap_allocator(), sizeof *test, _Alignof(CancelTest));
+    if (test == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    test->kind = proto->kind;
+    test->f = proto->f;
+    arena_init(&test->ar, heap_allocator(), 0);
+    Alloc *a = arena_allocator(&test->ar);
+    if (test->kind == CANCEL_CHANNEL)
+        test->cancelc = chan_make(a, TYPE_BOOL, 0);
+    if (test->kind == CANCEL_CONTEXT)
+        test->ctx = context_with_cancel(a, context_background(), &test->cancel_ctx);
+    testing_t_cleanup(t, BURROW_FN(Func, cancel_test_free, test));
+    test->f(t, test);
+}
+
+/* runCancelTest. Go runs each in every mode, and TransportCancel in HTTP/1
+ * only; this file has only HTTP/1, so the mode level is left out, as is the
+ * second TransportCancel level runCancelTestTransport adds. */
+static void run_cancel_test(TestingT *t, void (*f)(TestingT *t, CancelTest *test)) {
+    static const struct {
+        const char *name;
+        CancelKind kind;
+    } kinds[] = {{"TransportCancel", CANCEL_TRANSPORT},
+                 {"RequestCancel", CANCEL_CHANNEL},
+                 {"ContextCancel", CANCEL_CONTEXT}};
+    for (Int i = 0; i < 3; i++) {
+        CancelTest proto = {.kind = kinds[i].kind, .f = f};
+        (void)testing_t_run(t, cs(kinds[i].name),
+                            BURROW_FN(TestingTFunc, cancel_test_run, &proto));
+    }
+}
+
+/* The handler of testTransportCancelRequest. */
+static void serve_cancel_request(void *env, HttpResponseWriter w, HttpRequest *r) {
+    Chan *unblockc = (Chan *)env;
+    (void)r;
+    Error err = BURROW_NO_ERROR;
+    (void)write_str(w, cs("Hello"), &err);
+    HttpResponseController rc = http_new_response_controller(w);
+    (void)http_response_controller_flush(&rc); /* send headers and some body */
+    (void)chan_recv(unblockc, NULL);
+}
+
+static void test_transport_cancel_request(TestingT *t, CancelTest *test) {
+    need_tcp(t);
+    if (testing_short())
+        testing_t_skip_v(t, "skipping test in -short mode");
+
+    static const char msg[] = "Hello";
+    Chan *unblockc = chan_make(heap_allocator(), TYPE_BOOL, 0);
+    HttpHandlerFunc hf = BURROW_FN(HttpHandlerFunc, serve_cancel_request, unblockc);
+    HttptestServer *ts = httptest_new_server(NULL, http_handler_func_as_handler(&hf));
+
+    HttpClient *c = httptest_server_client(ts);
+    HttpTransport *tr = &ts->transport;
+
+    Alloc *a = arena_allocator(&test->ar);
+    Error err = BURROW_NO_ERROR;
+    IoReader none = {NULL, NULL};
+    HttpRequest *req = http_new_request(a, cs("GET"), ts->url, none, &err);
+    if (req != NULL)
+        req = cancel_test_new_req(test, req);
+    HttpResponse *res = req == NULL ? NULL : http_client_do(c, req, &err);
+    if (res == NULL) {
+        testing_t_errorf_v(t, "%v", err);
+        goto out;
+    }
+    Byte body[sizeof msg - 1];
+    Int n = io_read_full(io_read_closer_as_io_reader(res->body),
+                         slice_from(body, sizeof body, sizeof body, TYPE_BYTE), &err);
+    if (n != (Int)sizeof body || memcmp(body, msg, sizeof body) != 0)
+        testing_t_errorf_v(t, "Body = %q; want %q", str_from_bytes(body, n), cs(msg));
+    cancel_test_cancel(test, tr, req);
+
+    err = BURROW_NO_ERROR;
+    Str tail = read_all(a, res, &err);
+    close_body(res);
+    cancel_test_check_err(t, test, "Body.Read", err);
+    if (tail.len > 0)
+        testing_t_errorf_v(t, "Spurious bytes from Body.Read: %q", tail);
+    http_response_free(res);
+
+    /* Go then waits for NumPendingRequestsForTesting to be 0, which burrow's
+     * transport has no counterpart of. */
+out:
+    chan_close(unblockc);
+    httptest_server_free(ts);
+    chan_free(unblockc);
+}
+
+static void TestTransportCancelRequest(TestingT *t) {
+    run_cancel_test(t, test_transport_cancel_request);
 }
 
 /* The handler of TestTransportCloseResponseBody. */
@@ -1491,6 +1676,7 @@ static void TestTransportResponseWriteAfterEarlyClose(TestingT *t) {
     X(TestTransportHeadChunkedResponse)                                                \
     X(TestRoundTripGzip)                                                               \
     X(TestTransportResponseHeaderTimeout)                                              \
+    X(TestTransportCancelRequest)                                                      \
     X(TestTransportCloseResponseBody)                                                  \
     X(TestTransportAltProto)                                                           \
     X(TestTransportNoHost)                                                             \

@@ -43,6 +43,11 @@
 #include <string.h>
 #include <time.h>
 
+#if defined(BURROW_OS_WINDOWS)
+#include <fcntl.h>
+#include <io.h>
+#endif
+
 /* The separator filepath.Join puts between the parts of a path. */
 #if defined(BURROW_OS_WINDOWS)
 #define FUZZ_SEP "\\"
@@ -4834,6 +4839,13 @@ int testing_m_run(TestingM *m) {
     m->num_run++;
     if (!pkg.parsed)
         flags_parse();
+#if defined(BURROW_OS_WINDOWS)
+    /* Not in Go: Go's os.Stdout writes bytes as they are, where the C
+     * runtime's text mode turns each \n into \r\n. A test that runs its own
+     * binary and matches the output, as httptest's do, wants Go's bytes. */
+    (void)_setmode(_fileno(stdout), _O_BINARY);
+    (void)_setmode(_fileno(stderr), _O_BINARY);
+#endif
 
     Arena ar;
     arena_init(&ar, NULL, 0);

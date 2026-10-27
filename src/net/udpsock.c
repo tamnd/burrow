@@ -950,7 +950,7 @@ NetUDPConn *net_conn_as_udp_conn(NetConn c) {
     return (NetUDPConn *)c.data;
 }
 
-static Int nu_m_read_from(void *self, Slice p, Alloc *a, NetAddr *addr, Error *err) {
+static Int nu_m_read_from(void *self, Alloc *a, Slice p, NetAddr *addr, Error *err) {
     return net_udp_conn_read_from((NetUDPConn *)self, a, p, addr, err);
 }
 

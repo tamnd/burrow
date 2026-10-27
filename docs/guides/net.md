@@ -780,8 +780,8 @@ if (c.vt != NULL) {
     char ping[] = "ping";
     (void)c.vt->writer.write(c.data, slice_from(ping, 4, 4, TYPE_BYTE), &err);
     NetAddr from = {NULL, NULL};
-    Int n = pc.vt->read_from(pc.data,
-                             slice_from(buf, sizeof buf, sizeof buf, TYPE_BYTE), a,
+    Int n = pc.vt->read_from(pc.data, a,
+                             slice_from(buf, sizeof buf, sizeof buf, TYPE_BYTE),
                              &from, &err);
     NetAddr cl = c.vt->local_addr(c.data);
     bool same = from.vt != NULL &&

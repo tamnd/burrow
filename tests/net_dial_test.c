@@ -805,7 +805,7 @@ static void packet_exchange(TestingT *t, NetPacketConn pc, NetConn c) {
         return;
     }
     NetAddr from = {NULL, NULL};
-    n = pc.vt->read_from(pc.data, bytes_of(buf, sizeof buf), a, &from, &e);
+    n = pc.vt->read_from(pc.data, a, bytes_of(buf, sizeof buf), &from, &e);
     if (n != 4 || memcmp(buf, ping, 4) != 0 || BURROW_FAILED(e) || from.vt == NULL) {
         testing_t_errorf_v(t, "ReadFrom: %d, %v", n, e);
         return;

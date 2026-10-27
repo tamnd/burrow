@@ -798,7 +798,7 @@ NetUnixConn *net_conn_as_unix_conn(NetConn c) {
     return (NetUnixConn *)c.data;
 }
 
-static Int nx_m_read_from(void *self, Slice p, Alloc *a, NetAddr *addr, Error *err) {
+static Int nx_m_read_from(void *self, Alloc *a, Slice p, NetAddr *addr, Error *err) {
     return net_unix_conn_read_from((NetUnixConn *)self, a, p, addr, err);
 }
 

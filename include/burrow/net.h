@@ -334,7 +334,7 @@ IoCloser net_listener_as_io_closer(NetListener l);
  * local_addr and the deadlines are what a NetConn's are. */
 typedef struct NetPacketConnVT {
     IoCloserVT closer;
-    Int (*read_from)(void *self, Slice p, Alloc *a, NetAddr *addr, Error *err);
+    Int (*read_from)(void *self, Alloc *a, Slice p, NetAddr *addr, Error *err);
     Int (*write_to)(void *self, Slice p, NetAddr addr, Error *err);
     NetAddr (*local_addr)(void *self);
     Error (*set_deadline)(void *self, Time t);

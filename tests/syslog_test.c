@@ -111,9 +111,9 @@ static void run_pkt_syslog(void *env) {
 
         (void)c.vt->set_read_deadline(c.data,
                                       time_add(time_now(), 100 * TIME_MILLISECOND));
-        Int n =
-            c.vt->read_from(c.data, slice_from(buf, sizeof buf, sizeof buf, TYPE_BYTE),
-                            arena_allocator(&ar), &from, &err);
+        Int n = c.vt->read_from(c.data, arena_allocator(&ar),
+                                slice_from(buf, sizeof buf, sizeof buf, TYPE_BYTE),
+                                &from, &err);
         append_bytes(&rcvd, &rlen, buf, n);
         if (BURROW_FAILED(err)) {
             if (err.vt->self_type == TYPE_NET_OP_ERROR) {

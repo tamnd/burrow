@@ -613,7 +613,7 @@ NetIPConn *net_conn_as_ip_conn(NetConn c) {
     return (NetIPConn *)c.data;
 }
 
-static Int ir_m_read_from(void *self, Slice p, Alloc *a, NetAddr *addr, Error *err) {
+static Int ir_m_read_from(void *self, Alloc *a, Slice p, NetAddr *addr, Error *err) {
     return net_ip_conn_read_from((NetIPConn *)self, a, p, addr, err);
 }
 

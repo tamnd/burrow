@@ -313,36 +313,39 @@ static void nett_deadline_disarm(NettDeadline *d, NettHalf *h) {
 static Error nett_deadline_set(NettDeadline *d, NettHalf *h, Time t) {
     nett_lock(h);
     nett_deadline_disarm(d, h);
-    Error err = BURROW_NO_ERROR;
-    Duration expiry = 0;
     if (time_is_zero(t)) {
         /* No deadline. */
         d->expired = false;
-    } else if ((expiry = time_until(t)) <= 0) {
+        nett_unlock(h);
+        return BURROW_NO_ERROR;
+    }
+    Duration expiry = time_until(t);
+    if (expiry <= 0) {
         /* Deadline has already passed. */
         d->expired = true;
-    } else {
-        /* Deadline is in the future. */
-        d->expired = false;
-        NettPair *pair = h->pair;
-        NettArm *arm =
-            (NettArm *)mem_alloc(pair->a, sizeof(NettArm), _Alignof(NettArm));
-        if (arm != NULL) {
-            arm->h = h;
-            arm->d = d;
-            (void)burrow__atomic_add_u32(&pair->refs, 1);
-            arm->timer = time_after_func(pair->a, expiry,
-                                         BURROW_FN(Func, nett_deadline_fire, arm));
-            if (arm->timer == NULL) {
-                (void)burrow__atomic_add_u32(&pair->refs, (uint32_t)-1);
-                mem_free(pair->a, arm, sizeof(NettArm), _Alignof(NettArm));
-                arm = NULL;
-            }
-        }
-        if (arm == NULL)
-            err = burrow_err_out_of_memory;
-        d->arm = arm;
+        nett_unlock(h);
+        return BURROW_NO_ERROR;
     }
+    /* Deadline is in the future. */
+    d->expired = false;
+    Error err = BURROW_NO_ERROR;
+    NettPair *pair = h->pair;
+    NettArm *arm = (NettArm *)mem_alloc(pair->a, sizeof(NettArm), _Alignof(NettArm));
+    if (arm != NULL) {
+        arm->h = h;
+        arm->d = d;
+        (void)burrow__atomic_add_u32(&pair->refs, 1);
+        arm->timer =
+            time_after_func(pair->a, expiry, BURROW_FN(Func, nett_deadline_fire, arm));
+        if (arm->timer == NULL) {
+            (void)burrow__atomic_add_u32(&pair->refs, (uint32_t)-1);
+            mem_free(pair->a, arm, sizeof(NettArm), _Alignof(NettArm));
+            arm = NULL;
+        }
+    }
+    if (arm == NULL)
+        err = burrow_err_out_of_memory;
+    d->arm = arm;
     nett_unlock(h);
     return err;
 }

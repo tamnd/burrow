@@ -21,6 +21,7 @@ burrow.c builds with MSVC from a plain `cl` line, a package left out of a `--pac
 - `check-amalg.sh` links and runs hello for each single package build (#683).
 - The release workflow publishes only when its tests pass, and the release test job gets 40 minutes (#684).
 - The amalgamation job installs only the win32 mingw compiler (#693).
+- The amalgamation and symbol collisions jobs keep their apt packages in the Actions cache, so a slow mirror doesn't cancel them, and macos-x64-clang gets 50 minutes (#695).
 
 ### Docs
 

@@ -446,3 +446,8 @@ crypto/tls: method (*Config) BuildNameToCertificate: returns burrow_err_out_of_m
 # The text is built in an allocator, and the error is read through a pointer,
 # as with the other error types in the package.
 crypto/tls: method (RecordHeaderError) Error: the receiver is a pointer, and the text is built in an allocator
+
+# include/burrow/runtime/trace.h: a Region never changes after it starts, so it
+# is a value rather than a pointer to one, which needs no allocator.
+runtime/trace: func StartRegion: returns the TraceRegion by value
+runtime/trace: method (*Region) End: takes the TraceRegion by value

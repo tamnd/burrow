@@ -144,6 +144,7 @@ crypto/tls
 io/ioutil
 runtime/cgo
 runtime/metrics
+runtime/trace
 index/suffixarray
 plugin
 log/syslog

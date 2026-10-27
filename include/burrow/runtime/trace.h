@@ -151,7 +151,12 @@ void trace_logf(Context ctx, Str category, Str format, Slice args);
  * handful of unique region types. */
 void trace_with_region(Context ctx, Str region_type, Func fn);
 
-/* Region is a region of code whose execution time interval is traced. */
+/* Region is a region of code whose execution time interval is traced.
+ *
+ * Not in Go: Go hands out a *Region, a new one per region and one shared
+ * noopRegion when tracing is off. Nothing in a Region changes after it starts,
+ * so here it is a value, with active standing in for the noopRegion check, and
+ * starting a region needs no allocator and leaves nothing to free. */
 typedef struct TraceRegion {
     uint64_t id;
     Str region_type; /* borrowed from the caller of trace_start_region */

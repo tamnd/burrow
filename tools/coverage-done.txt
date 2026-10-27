@@ -155,3 +155,4 @@ encoding/json
 os/exec
 os/signal
 net/smtp
+net/http/httptest

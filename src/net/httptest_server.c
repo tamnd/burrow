@@ -1,10 +1,9 @@
 /* net/http/httptest's Server: a server on a port of the loopback address for a
  * test to talk to.
  *
- * Derived from Go's src/net/http/httptest/server.go. Go source: go1.27.1.
+ * Derived from Go's src/net/http/httptest/server.go. Go source: go1.27.3.
  *
- * NewTestServer, which serves on a network in memory, is left out, and so is
- * the -httptest.serve flag.
+ * The -httptest.serve flag is left out.
  *
  * Copyright 2011 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -14,6 +13,7 @@
 #include "burrow/net/http/httptest.h"
 
 #include "http_internal.h"
+#include "nettest.h"
 
 #include "burrow/context.h"
 #include "burrow/core.h"
@@ -30,14 +30,50 @@
 #include "burrow/net/http.h"
 #include "burrow/panic.h"
 #include "burrow/proc.h"
+#include "burrow/runtime.h"
 #include "burrow/slice.h"
 #include "burrow/strings.h"
 #include "burrow/sync.h"
+#include "burrow/testing.h"
 #include "burrow/time.h"
 
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+
+/* A Serve on one of the listeners of the network in memory. */
+typedef struct ts_Serve {
+    HttptestServer *s;
+    NetListener l;
+} ts_Serve;
+
+/* One of the listeners of the network in memory as a net.Listener, which
+ * keeps the connections it accepts. */
+typedef struct ts_FakeListener {
+    struct burrow__HttptestFake *f;
+    NettestListener *li;
+} ts_FakeListener;
+
+/* What a server from httptest_new_test_server has that the others do not:
+ * testServerHandler, and the network in memory once it is started.
+ *
+ * Not in Go: srv keeps the server end of every connection the client dialed,
+ * which the server does not give back, since it gives back only the kinds of
+ * connection it knows. httptest_server_free gives them back once the server
+ * is done with them. The client ends go back through the transport's
+ * free_conn. */
+typedef struct burrow__HttptestFake {
+    HttptestServer *s;
+    HttpHandler h;          /* testServerHandler.h */
+    HttpHandlerFunc fn;     /* testServerHandler */
+    ts_FakeListener li;     /* fakeListener */
+    ts_FakeListener tls_li; /* fakeTLSListener */
+    NetListener tls;        /* the TLS listener over tls_li */
+    ts_Serve serve[2];
+    SyncMutex mu; /* guards srv */
+    NettestConn **srv;
+    Int nsrv, cap_srv;
+} ts_Fake;
 
 /* A connection the server has and the state it is in, one of new, active and
  * idle. */
@@ -186,7 +222,8 @@ static NetConn ts_dial(void *env, Context ctx, Str network, Str addr, Error *err
     return c;
 }
 
-HttptestServer *httptest_new_unstarted_server(Alloc *a, HttpHandler handler) {
+/* A server with nothing started and no listener. */
+static HttptestServer *ts_new(Alloc *a, HttpHandler handler) {
     Alloc *sa = a != NULL ? a : heap_allocator();
     HttptestServer *s =
         (HttptestServer *)mem_alloc(sa, sizeof *s, _Alignof(HttptestServer));
@@ -194,9 +231,92 @@ HttptestServer *httptest_new_unstarted_server(Alloc *a, HttpHandler handler) {
         panic_str(BURROW_S("httptest: out of memory"));
     s->a = a;
     arena_init(&s->arena, sa, 0);
-    s->listener = ts_new_local_listener(sa);
     s->config.handler = handler;
     s->config.a = a;
+    return s;
+}
+
+HttptestServer *httptest_new_unstarted_server(Alloc *a, HttpHandler handler) {
+    HttptestServer *s = ts_new(a, handler);
+    s->listener = ts_new_local_listener(ts_alloc(s));
+    return s;
+}
+
+static bool ts_is_abort_handler(Any p) {
+    if (p.t != TYPE_ERROR || p.data == NULL)
+        return false;
+    const Error *e = (const Error *)p.data;
+    return e->vt == http_err_abort_handler.vt && e->data == http_err_abort_handler.data;
+}
+
+/* testServerHandler.ServeHTTP. */
+static void ts_test_handler(void *env, HttpResponseWriter w, HttpRequest *req) {
+    ts_Fake *f = (ts_Fake *)env;
+    Alloc *h = heap_allocator();
+    volatile bool panicked = false;
+    volatile bool abort_handler = false;
+    Str volatile text = {NULL, 0};
+    BURROW_TRY {
+        if (f->h.vt != NULL)
+            http_handler_serve_http(f->h, w, req);
+        else
+            http_response_writer_write_header(w, 500);
+    }
+    BURROW_CATCH(p) {
+        panicked = true;
+        abort_handler = ts_is_abort_handler(p);
+        if (!abort_handler)
+            text = str_clone(h, panic_text(p));
+    }
+    BURROW_TRY_END;
+    if (!panicked)
+        return;
+    if (!abort_handler) {
+        /* This is the same logging http.Server would do,
+         * but we can put it into the test output rather than stderr. */
+        enum { size = 64 << 10 };
+        Byte *buf = (Byte *)mem_alloc(h, size, 1);
+        Int n = buf == NULL
+                    ? 0
+                    : runtime_stack(slice_from(buf, size, size, TYPE_BYTE), false);
+        Str msg = text;
+        TestingTB t = f->s->t;
+        t.vt->errorf(t.data,
+                     BURROW__FMT_FARGS(BURROW_ANY_OF,
+                                       "httptest: panic in server handler: %v\n%s", msg,
+                                       str_from_bytes(buf, n)));
+        mem_free(h, buf, size, 1);
+        if (msg.p != NULL)
+            mem_free(h, (void *)(uintptr_t)msg.p, (size_t)msg.len, 1);
+    }
+    /* Convert panic to ErrAbortHandler to suppress http.Server's logging. */
+    panic(BURROW_ANY(TYPE_ERROR, (void *)(uintptr_t)&http_err_abort_handler));
+}
+
+static void ts_free(HttptestServer *s);
+
+static void ts_cleanup(void *env) {
+    ts_free((HttptestServer *)env);
+}
+
+HttptestServer *httptest_new_test_server(Alloc *a, TestingTB t, HttpHandler handler) {
+    HttptestServer *s = ts_new(a, handler);
+    Alloc *sa = ts_alloc(s);
+    ts_Fake *f = (ts_Fake *)mem_alloc(sa, sizeof *f, _Alignof(ts_Fake));
+    if (f == NULL) {
+        arena_free(&s->arena);
+        mem_free(sa, s, sizeof *s, _Alignof(HttptestServer));
+        panic_str(BURROW_S("httptest: out of memory"));
+    }
+    f->s = s;
+    f->h = handler;
+    f->fn = BURROW_FN(HttpHandlerFunc, ts_test_handler, f);
+    f->li.f = f;
+    f->tls_li.f = f;
+    s->t = t;
+    s->fake = f;
+    s->config.handler = http_handler_func_as_handler(&f->fn);
+    t.vt->cleanup(t.data, BURROW_FN(Func, ts_cleanup, s));
     return s;
 }
 
@@ -207,8 +327,19 @@ static void ts_serve(void *env) {
     sync_wait_group_done(&s->wg);
 }
 
+/* goServe's goroutine, for a listener of the network in memory. */
+static void ts_serve_fake(void *env) {
+    ts_Serve *sv = (ts_Serve *)env;
+    (void)http_server_serve(&sv->s->config, sv->l);
+    sync_wait_group_done(&sv->s->wg);
+}
+
+static void ts_nothing(void *env) {
+    (void)env;
+}
+
 /* startCommon. */
-static void ts_start_common(HttptestServer *s) {
+static void ts_start_common(HttptestServer *s, bool use_loopback) {
     sync_mutex_lock(&s->mu);
     if (s->started) {
         sync_mutex_unlock(&s->mu);
@@ -219,6 +350,21 @@ static void ts_start_common(HttptestServer *s) {
         panic_str(BURROW_S("Start of closed Server"));
     }
     s->started = true;
+    if (s->fake != NULL && use_loopback) {
+        /* We're being called from Start or StartTLS.
+         * Don't try to start the server again when Client is called. */
+        sync_once_do(&s->start_once, BURROW_FN(Func, ts_nothing, NULL));
+
+        /* NewTestServer servers create their listener at start time.
+         *
+         * We might want to permit the user to provide their own Listener
+         * in the future. For now, we panic. */
+        if (s->listener.vt != NULL) {
+            sync_mutex_unlock(&s->mu);
+            panic_str(BURROW_S("Server.Listener is unexpectedly set"));
+        }
+        s->listener = ts_new_local_listener(ts_alloc(s));
+    }
     /* wrap. */
     s->old_hook = s->config.conn_state;
     s->config.conn_state = BURROW_FN(HttpConnStateFunc, ts_conn_state, s);
@@ -245,8 +391,19 @@ static void ts_go_serve(HttptestServer *s) {
     }
 }
 
+/* goServe, for a listener of the network in memory. */
+static void ts_go_serve_fake(HttptestServer *s, ts_Serve *sv, NetListener l) {
+    sv->s = s;
+    sv->l = l;
+    sync_wait_group_add(&s->wg, 1);
+    if (!go(BURROW_FN(Func, ts_serve_fake, sv))) {
+        sync_wait_group_done(&s->wg);
+        panic_str(BURROW_S("httptest: out of memory"));
+    }
+}
+
 void httptest_server_start(HttptestServer *s) {
-    ts_start_common(s);
+    ts_start_common(s, true);
 
     s->transport.a = s->a;
     s->transport.dial_context = BURROW_FN(HttpDialContextFunc, ts_dial, s);
@@ -331,7 +488,7 @@ static TlsConfig *ts_init_tls(HttptestServer *s, Error *err) {
 }
 
 void httptest_server_start_tls(HttptestServer *s) {
-    ts_start_common(s);
+    ts_start_common(s, true);
 
     Error err = BURROW_NO_ERROR;
     TlsConfig *tls_client_config = ts_init_tls(s, &err);
@@ -355,6 +512,189 @@ void httptest_server_start_tls(HttptestServer *s) {
     s->listener = l;
     ts_set_url(s, BURROW_S("https"));
     ts_go_serve(s);
+}
+
+/* Keeps c, the server end of a connection of the network in memory, for
+ * httptest_server_free. False when the allocator says no. */
+static bool ts_fake_keep(ts_Fake *f, NettestConn *c) {
+    bool ok = true;
+    sync_mutex_lock(&f->mu);
+    if (f->nsrv == f->cap_srv) {
+        Alloc *a = ts_alloc(f->s);
+        Int ncap = f->cap_srv == 0 ? 8 : f->cap_srv * 2;
+        NettestConn **srv = (NettestConn **)mem_alloc(a, (size_t)ncap * sizeof *srv,
+                                                      _Alignof(NettestConn *));
+        if (srv == NULL) {
+            ok = false;
+        } else {
+            if (f->nsrv > 0)
+                memcpy(srv, f->srv, (size_t)f->nsrv * sizeof *srv);
+            if (f->srv != NULL)
+                mem_free(a, f->srv, (size_t)f->cap_srv * sizeof *srv,
+                         _Alignof(NettestConn *));
+            f->srv = srv;
+            f->cap_srv = ncap;
+        }
+    }
+    if (ok)
+        f->srv[f->nsrv++] = c;
+    sync_mutex_unlock(&f->mu);
+    return ok;
+}
+
+static Error ts_fl_close(void *self) {
+    return burrow__nettest_listener_close(((ts_FakeListener *)self)->li);
+}
+
+static NetConn ts_fl_accept(void *self, Error *err) {
+    ts_FakeListener *fl = (ts_FakeListener *)self;
+    for (;;) {
+        NettestConn *c = burrow__nettest_listener_accept(fl->li, err);
+        if (c == NULL || ts_fake_keep(fl->f, c))
+            return burrow__nettest_conn_as_net_conn(c);
+        /* Not kept, so closed now rather than served. */
+        (void)burrow__nettest_conn_close(c);
+        burrow__nettest_conn_free(c);
+    }
+}
+
+static NetAddr ts_fl_addr(void *self) {
+    return burrow__nettest_listener_addr(((ts_FakeListener *)self)->li);
+}
+
+static const Type ts_fake_listener_desc = {
+    BURROW_S_INIT("fakeListener"),
+    BURROW_S_INIT("net/http/httptest"),
+    KIND_STRUCT,
+    (uint32_t)sizeof(ts_FakeListener),
+    (uint16_t)_Alignof(ts_FakeListener),
+    0,
+    0,
+    NULL,
+    NULL,
+    NULL,
+    NULL,
+    0,
+    0x6874666cU, /* "htfl" */
+    NULL,
+};
+
+static const NetListenerVT ts_fake_listener_vt = {
+    {&ts_fake_listener_desc, ts_fl_close},
+    ts_fl_accept,
+    ts_fl_addr,
+};
+
+static NetListener ts_fl_as_listener(ts_FakeListener *fl) {
+    NetListener l = {&ts_fake_listener_vt, fl};
+    return l;
+}
+
+/* The transport's DialContext on the network in memory. */
+static NetConn ts_fake_dial(void *env, Context ctx, Str network, Str address,
+                            Error *err) {
+    ts_Fake *f = (ts_Fake *)env;
+    (void)ctx;
+    (void)network;
+    (void)address;
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    NettestConn *c = burrow__nettest_listener_new_conn(f->li.li);
+    if (c == NULL)
+        BURROW_OUT(err, burrow_err_out_of_memory);
+    return burrow__nettest_conn_as_net_conn(c);
+}
+
+/* The transport's DialTLSContext on the network in memory. */
+static NetConn ts_fake_dial_tls(void *env, Context ctx, Str network, Str address,
+                                Error *err) {
+    ts_Fake *f = (ts_Fake *)env;
+    (void)ctx;
+    (void)network;
+    (void)address;
+    BURROW_OUT(err, BURROW_NO_ERROR);
+    NetConn nc = {NULL, NULL};
+    NettestConn *c = burrow__nettest_listener_new_conn(f->tls_li.li);
+    if (c == NULL) {
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return nc;
+    }
+    TlsConn *tc = tls_client(ts_alloc(f->s), burrow__nettest_conn_as_net_conn(c),
+                             f->s->transport.tls_client_config);
+    if (tc == NULL) {
+        (void)burrow__nettest_conn_close(c);
+        burrow__nettest_conn_free(c);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return nc;
+    }
+    return tls_conn_as_net_conn(tc);
+}
+
+/* Not in Go: the transport's free_conn, which gives back the client end of a
+ * connection of the network in memory, and the TLS client over it. */
+static void ts_fake_free_conn(void *env, NetConn c) {
+    (void)env;
+    TlsConn *tc = tls_conn_from_net_conn(c);
+    if (tc != NULL) {
+        c = tls_conn_net_conn(tc);
+        tls_conn_free(tc);
+    }
+    NettestConn *nc = burrow__nettest_conn_from_net_conn(c);
+    if (nc != NULL) {
+        (void)burrow__nettest_conn_close(nc);
+        burrow__nettest_conn_free(nc);
+    } else {
+        net_conn_free(c);
+    }
+}
+
+/* startFakeNet. */
+static void ts_start_fake_net(void *env) {
+    HttptestServer *s = (HttptestServer *)env;
+    ts_Fake *f = s->fake;
+    ts_start_common(s, false);
+
+    Error err = BURROW_NO_ERROR;
+    TlsConfig *tls_client_config = ts_init_tls(s, &err);
+    if (BURROW_FAILED(err)) {
+        Str msg = fmt_sprintf_v(heap_allocator(), "httptest: NewTestServer: %v", err);
+        panic_str(msg);
+    }
+
+    s->transport.a = s->a;
+    s->transport.tls_client_config = tls_client_config;
+    s->transport.force_attempt_http2 = s->enable_http2;
+    s->client.transport = http_transport_as_round_tripper(&s->transport);
+    s->client.a = s->a;
+
+    Alloc *a = ts_alloc(s);
+    f->li.li = burrow__nettest_new_listener(a);
+    f->tls_li.li = burrow__nettest_new_listener(a);
+    if (f->li.li == NULL || f->tls_li.li == NULL)
+        panic_str(BURROW_S("httptest: out of memory"));
+
+    /* Set InsecureSkipVerify rather than depending on a specific server hostname. */
+    tls_client_config->insecure_skip_verify = true;
+    if (s->enable_http2) {
+        /* Not in Go: Go's transport puts "h2" in TLSClientConfig.NextProtos
+         * for the TLS connections DialTLSContext makes, and the transport here
+         * leaves the config alone, so it is done here. */
+        Str *next_protos = (Str *)mem_alloc(arena_allocator(&s->arena),
+                                            2 * sizeof *next_protos, _Alignof(Str));
+        if (next_protos == NULL)
+            panic_str(BURROW_S("httptest: out of memory"));
+        next_protos[0] = BURROW_S("h2");
+        next_protos[1] = BURROW_S("http/1.1");
+        tls_client_config->next_protos = slice_from(next_protos, 2, 2, TYPE_STRING);
+    }
+    s->transport.dial_context = BURROW_FN(HttpDialContextFunc, ts_fake_dial, f);
+    s->transport.dial_tls_context = BURROW_FN(HttpDialContextFunc, ts_fake_dial_tls, f);
+    s->transport.free_conn = BURROW_FN(HttpFreeConnFunc, ts_fake_free_conn, NULL);
+    s->url = BURROW_S("http://example.com");
+    ts_go_serve_fake(s, &f->serve[0], ts_fl_as_listener(&f->li));
+    f->tls = tls_new_listener(a, ts_fl_as_listener(&f->tls_li), s->tls);
+    if (f->tls.vt == NULL)
+        panic_str(BURROW_S("httptest: out of memory"));
+    ts_go_serve_fake(s, &f->serve[1], f->tls);
 }
 
 HttptestServer *httptest_new_server(Alloc *a, HttpHandler handler) {
@@ -409,6 +749,10 @@ void httptest_server_close(HttptestServer *s) {
         s->closed = true;
         if (s->listener.vt != NULL)
             (void)s->listener.vt->closer.close(s->listener.data);
+        if (s->fake != NULL && s->fake->li.li != NULL) {
+            (void)burrow__nettest_listener_close(s->fake->li.li);
+            (void)burrow__nettest_listener_close(s->fake->tls_li.li);
+        }
         http_server_set_keep_alives_enabled(&s->config, false);
         for (Int i = 0; i < s->nconns; i++) {
             HttpConnState st = s->conns[i].st;
@@ -448,16 +792,44 @@ X509Certificate *httptest_server_certificate(HttptestServer *s) {
 }
 
 HttpClient *httptest_server_client(HttptestServer *s) {
+    if (s->fake != NULL)
+        sync_once_do(&s->start_once, BURROW_FN(Func, ts_start_fake_net, s));
     return &s->client;
+}
+
+/* Gives back what httptest_new_test_server added: the network in memory and
+ * the server ends of its connections, which the server is done with by now. */
+static void ts_fake_free(HttptestServer *s, Alloc *a) {
+    ts_Fake *f = s->fake;
+    for (Int i = 0; i < f->nsrv; i++)
+        burrow__nettest_conn_free(f->srv[i]);
+    if (f->srv != NULL)
+        mem_free(a, f->srv, (size_t)f->cap_srv * sizeof *f->srv,
+                 _Alignof(NettestConn *));
+    tls_listener_free(f->tls);
+    burrow__nettest_listener_free(f->li.li);
+    burrow__nettest_listener_free(f->tls_li.li);
+    mem_free(a, f, sizeof *f, _Alignof(ts_Fake));
 }
 
 void httptest_server_free(HttptestServer *s) {
     if (s == NULL)
         return;
+    if (s->fake != NULL) {
+        /* The cleanup gives it back. */
+        httptest_server_close(s);
+        return;
+    }
+    ts_free(s);
+}
+
+static void ts_free(HttptestServer *s) {
     httptest_server_close(s);
     Alloc *a = ts_alloc(s);
     http_server_free(&s->config);
     http_transport_free(&s->transport);
+    if (s->fake != NULL)
+        ts_fake_free(s, a);
     if (s->use_tls) {
         tls_listener_free(s->listener);
         net_listener_free(s->inner);

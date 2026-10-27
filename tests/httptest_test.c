@@ -1,7 +1,6 @@
 /* Derived from Go's src/net/http/httptest/httptest_test.go, recorder_test.go
- * and server_test.go. NewTestServer is not here, so neither are its variants
- * of the Server tests nor the tests that need it.
- * Go source: go1.27.1.
+ * and server_test.go.
+ * Go source: go1.27.3.
  *
  * Copyright 2016 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -26,9 +25,14 @@
 #include "burrow/net/http/httptest.h"
 #include "burrow/net/url.h"
 #include "burrow/netpoll.h"
+#include "burrow/os.h"
+#include "burrow/os/exec.h"
 #include "burrow/panic.h"
 #include "burrow/proc.h"
+#include "burrow/regexp.h"
 #include "burrow/strings.h"
+#include "burrow/synctest.h"
+#include "burrow/testing.h"
 #include "burrow/time.h"
 
 #include <stdint.h>
@@ -780,17 +784,41 @@ static void wait_for_goroutines(int want) {
         time_sleep(TIME_MILLISECOND);
 }
 
-/* newServers, without NewTestServer's. */
-typedef HttptestServer *(*NewServerFunc)(HttpHandler h);
+/* newServers. */
+typedef HttptestServer *(*NewServerFunc)(TestingT *t, HttpHandler h);
 
-static HttptestServer *new_server(HttpHandler h) {
+static HttptestServer *new_server(TestingT *t, HttpHandler h) {
+    (void)t;
     return httptest_new_server(NULL, h);
 }
 
-static HttptestServer *new_server_unstarted(HttpHandler h) {
+static HttptestServer *new_server_unstarted(TestingT *t, HttpHandler h) {
+    (void)t;
     HttptestServer *ts = httptest_new_unstarted_server(NULL, h);
     httptest_server_start(ts);
     return ts;
+}
+
+static HttptestServer *new_test_server_memory(TestingT *t, HttpHandler h) {
+    return httptest_new_test_server(NULL, testing_t_as_testing_tb(t), h);
+}
+
+static HttptestServer *new_test_server_loopback(TestingT *t, HttpHandler h) {
+    HttptestServer *ts = httptest_new_test_server(NULL, testing_t_as_testing_tb(t), h);
+    httptest_server_start(ts);
+    return ts;
+}
+
+static HttptestServer *new_test_server_loopback_tls(TestingT *t, HttpHandler h) {
+    HttptestServer *ts = httptest_new_test_server(NULL, testing_t_as_testing_tb(t), h);
+    httptest_server_start_tls(ts);
+    return ts;
+}
+
+/* need_tcp, except for a server on the network in memory. */
+static void need_tcp_for(TestingT *t, void *env) {
+    if (*(NewServerFunc *)env != new_test_server_memory)
+        need_tcp(t);
 }
 
 /* The body of a Get of url with c, or of the default client when c is NULL,
@@ -813,7 +841,7 @@ static Str get_body(TestingT *t, Alloc *a, HttpClient *c, Str url) {
 static void server_hello(void *env, TestingT *t) {
     need_tcp(t);
     HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_hello, NULL);
-    HttptestServer *ts = (*(NewServerFunc *)env)(http_handler_func_as_handler(&f));
+    HttptestServer *ts = (*(NewServerFunc *)env)(t, http_handler_func_as_handler(&f));
     Arena ar;
     arena_init(&ar, NULL, 0);
     Str got = get_body(t, arena_allocator(&ar), NULL, ts->url);
@@ -827,7 +855,7 @@ static void server_hello(void *env, TestingT *t) {
 static void get_after_close(void *env, TestingT *t) {
     need_tcp(t);
     HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_hello, NULL);
-    HttptestServer *ts = (*(NewServerFunc *)env)(http_handler_func_as_handler(&f));
+    HttptestServer *ts = (*(NewServerFunc *)env)(t, http_handler_func_as_handler(&f));
     Arena ar;
     arena_init(&ar, NULL, 0);
     Str got = get_body(t, arena_allocator(&ar), NULL, ts->url);
@@ -850,7 +878,7 @@ static void get_after_close(void *env, TestingT *t) {
 static void server_close_blocking(void *env, TestingT *t) {
     need_tcp(t);
     HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_hello, NULL);
-    HttptestServer *ts = (*(NewServerFunc *)env)(http_handler_func_as_handler(&f));
+    HttptestServer *ts = (*(NewServerFunc *)env)(t, http_handler_func_as_handler(&f));
     Arena ar;
     arena_init(&ar, NULL, 0);
     Alloc *a = arena_allocator(&ar);
@@ -896,11 +924,8 @@ static void server_close_client_connections(void *env, TestingT *t) {
     need_tcp(t);
     HttptestServer *s = NULL;
     HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_close_client_connections, &s);
-    HttptestServer *ts =
-        httptest_new_unstarted_server(NULL, http_handler_func_as_handler(&f));
-    s = ts;
-    httptest_server_start(ts);
-    (void)env;
+    s = (*(NewServerFunc *)env)(t, http_handler_func_as_handler(&f));
+    HttptestServer *ts = s;
     Error err = BURROW_NO_ERROR;
     HttpResponse *res = http_get(ts->url, &err);
     if (res != NULL) {
@@ -913,9 +938,9 @@ static void server_close_client_connections(void *env, TestingT *t) {
 
 /* That the client's transport is a transport. */
 static void server_client_transport_type(void *env, TestingT *t) {
-    need_tcp(t);
+    need_tcp_for(t, env);
     HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_nothing, NULL);
-    HttptestServer *ts = (*(NewServerFunc *)env)(http_handler_func_as_handler(&f));
+    HttptestServer *ts = (*(NewServerFunc *)env)(t, http_handler_func_as_handler(&f));
     HttpClient *client = httptest_server_client(ts);
     if (burrow__http_as_transport(client->transport) == NULL)
         testing_t_errorf_v(t, "got a round tripper that is not an HttpTransport");
@@ -934,24 +959,26 @@ static void server_variant(void *env, TestingT *t) {
                         BURROW_FN(TestingTFunc, server_client_transport_type, env));
 }
 
-static HttptestServer *new_tls_server(HttpHandler h) {
+static HttptestServer *new_tls_server(TestingT *t, HttpHandler h) {
+    (void)t;
     return httptest_new_tls_server(NULL, h);
 }
 
 /* Not in Go: NewTLSServerManual fills in only the exported fields of a
  * Server, and here the server is made by httptest_new_unstarted_server, as
  * for NewUnstartedServer above, and then started with TLS. */
-static HttptestServer *new_tls_server_manual(HttpHandler h) {
+static HttptestServer *new_tls_server_manual(TestingT *t, HttpHandler h) {
+    (void)t;
     HttptestServer *ts = httptest_new_unstarted_server(NULL, h);
     httptest_server_start_tls(ts);
     return ts;
 }
 
 static void server_client(void *env, TestingT *t) {
-    need_tcp(t);
+    need_tcp_for(t, env);
     int ng = runtime_numgoroutine();
     HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_hello, NULL);
-    HttptestServer *ts = (*(NewServerFunc *)env)(http_handler_func_as_handler(&f));
+    HttptestServer *ts = (*(NewServerFunc *)env)(t, http_handler_func_as_handler(&f));
     HttpClient *client = httptest_server_client(ts);
     Error err = BURROW_NO_ERROR;
     HttpResponse *res = http_client_get(client, ts->url, &err);
@@ -990,16 +1017,25 @@ static void tls_server_variant(void *env, TestingT *t) {
 }
 
 static void TestServer(TestingT *t) {
-    static NewServerFunc news[2] = {new_server, new_server_unstarted};
+    static NewServerFunc news[3] = {new_server, new_server_unstarted,
+                                    new_test_server_loopback};
     (void)testing_t_run(t, S("NewServer"),
                         BURROW_FN(TestingTFunc, server_variant, &news[0]));
     (void)testing_t_run(t, S("NewUnstartedServer"),
                         BURROW_FN(TestingTFunc, server_variant, &news[1]));
-    static NewServerFunc tls_news[2] = {new_tls_server, new_tls_server_manual};
+    (void)testing_t_run(t, S("NewTestServerLoopback"),
+                        BURROW_FN(TestingTFunc, server_variant, &news[2]));
+    static NewServerFunc tls_news[4] = {new_tls_server, new_tls_server_manual,
+                                        new_test_server_memory,
+                                        new_test_server_loopback_tls};
     (void)testing_t_run(t, S("NewTLSServer"),
                         BURROW_FN(TestingTFunc, tls_server_variant, &tls_news[0]));
     (void)testing_t_run(t, S("NewTLSServerManual"),
                         BURROW_FN(TestingTFunc, tls_server_variant, &tls_news[1]));
+    (void)testing_t_run(t, S("NewTestServerMemory"),
+                        BURROW_FN(TestingTFunc, tls_server_variant, &tls_news[2]));
+    (void)testing_t_run(t, S("NewTestServerLoopbackTLS"),
+                        BURROW_FN(TestingTFunc, tls_server_variant, &tls_news[3]));
 }
 
 typedef struct TLSServerMode {
@@ -1239,6 +1275,157 @@ static void TestCloseHijackedConnection(TestingT *t) {
     wait_for_goroutines(ng);
 }
 
+/* ------------------------------------------------------- NewTestServer */
+
+/* Not in Go: the handlers below are made outside the bubble, since the
+ * server's cleanup runs after the function the bubble runs has returned. */
+
+static void in_memory_network(void *env, TestingT *t) {
+    HttptestServer *ts =
+        httptest_new_test_server(NULL, testing_t_as_testing_tb(t), *(HttpHandler *)env);
+
+    static const char *const urls[] = {
+        "http://example.tld/", "https://example.tld/", "https://go.dev/",
+        "http://127.0.0.1/",   "http://[::1]/",        "https://127.0.0.1/",
+    };
+    for (size_t i = 0; i < sizeof urls / sizeof urls[0]; i++) {
+        Str u = cs(urls[i]);
+        Error err = BURROW_NO_ERROR;
+        HttpResponse *resp = http_client_get(httptest_server_client(ts), u, &err);
+        if (resp == NULL) {
+            testing_t_errorf_v(t, "Get(%q): %v", u, err);
+            continue;
+        }
+        (void)resp->body.vt->closer.close(resp->body.data);
+        if (resp->status_code != 200)
+            testing_t_errorf_v(t, "Get(%q): Response.StatusCode = %v, want 200", u,
+                               resp->status_code);
+        bool got_tls = resp->tls != NULL;
+        bool want_tls = strings_has_prefix(u, S("https://"));
+        if (got_tls != want_tls)
+            testing_t_errorf_v(t, "Get(%q): TLS: %v; want %v", u, got_tls, want_tls);
+        http_response_free(resp); /* Not in Go. */
+    }
+}
+
+static void TestServerInMemoryNetwork(TestingT *t) {
+    HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_nothing, NULL);
+    HttpHandler h = http_handler_func_as_handler(&f);
+    synctest_test(t, BURROW_FN(TestingTFunc, in_memory_network, &h));
+}
+
+static void TestServerNilHandler(TestingT *t) {
+    HttpHandler nil = {NULL, NULL};
+    HttptestServer *ts =
+        httptest_new_test_server(NULL, testing_t_as_testing_tb(t), nil);
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *resp =
+        http_client_get(httptest_server_client(ts), S("http://example.tld/"), &err);
+    if (resp == NULL)
+        testing_t_fatalf_v(t, "Get: %v", err);
+    (void)resp->body.vt->closer.close(resp->body.data);
+    Int got = resp->status_code, want = 500;
+    if (got != want)
+        testing_t_errorf_v(t, "Response.StatusCode = %v, want %v", got, want);
+    http_response_free(resp); /* Not in Go. */
+}
+
+static void serve_panic_err_abort_handler(void *env, HttpResponseWriter w,
+                                          HttpRequest *r) {
+    (void)env;
+    (void)w;
+    (void)r;
+    panic(BURROW_ANY(TYPE_ERROR, (void *)(uintptr_t)&http_err_abort_handler));
+}
+
+static void panic_err_abort_handler(void *env, TestingT *t) {
+    HttptestServer *ts =
+        httptest_new_test_server(NULL, testing_t_as_testing_tb(t), *(HttpHandler *)env);
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *resp =
+        http_client_get(httptest_server_client(ts), S("http://example.com/"), &err);
+    if (resp != NULL) {
+        (void)resp->body.vt->closer.close(resp->body.data);
+        testing_t_errorf_v(t, "request succeeded; want failure");
+        http_response_free(resp); /* Not in Go. */
+    }
+}
+
+static void TestServerPanicErrAbortHandler(TestingT *t) {
+    HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_panic_err_abort_handler, NULL);
+    HttpHandler h = http_handler_func_as_handler(&f);
+    synctest_test(t, BURROW_FN(TestingTFunc, panic_err_abort_handler, &h));
+}
+
+static void serve_panic_message(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)w;
+    (void)r;
+    panic_str(S("PANIC MESSAGE"));
+}
+
+static void panic_fails_test(void *env, TestingT *t) {
+    HttptestServer *ts =
+        httptest_new_test_server(NULL, testing_t_as_testing_tb(t), *(HttpHandler *)env);
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *resp =
+        http_client_get(httptest_server_client(ts), S("http://example.com/"), &err);
+    if (resp != NULL) { /* Not in Go. */
+        (void)resp->body.vt->closer.close(resp->body.data);
+        http_response_free(resp);
+    }
+}
+
+static void panic_fails_test_helper(TestingT *t) {
+    HttpHandlerFunc f = BURROW_FN(HttpHandlerFunc, serve_panic_message, NULL);
+    HttpHandler h = http_handler_func_as_handler(&f);
+    synctest_test(t, BURROW_FN(TestingTFunc, panic_fails_test, &h));
+}
+
+static void run_test(TestingT *t, void (*f)(TestingT *t), const char *pattern);
+
+static void TestServerPanicFailsTest(TestingT *t) {
+    run_test(t, panic_fails_test_helper,
+             "--- FAIL: TestServerPanicFailsTest.*\n"
+             "    .*: httptest: panic in server handler: "
+             "PANIC MESSAGE\n");
+}
+
+/* runTest. */
+static void run_test(TestingT *t, void (*f)(TestingT *t), const char *pattern) {
+    Arena ar;
+    arena_init(&ar, NULL, 0);
+    Alloc *a = arena_allocator(&ar);
+    if (str_eq(os_getenv(a, S("GO_WANT_HELPER_PROCESS")), S("1"))) {
+        arena_free(&ar);
+        f(t);
+        return;
+    }
+    testing_t_helper(t);
+    Regexp *re = regexp_must_compile(a, cs(pattern));
+    SKIP_WITHOUT_EXEC(t);
+    Error err = BURROW_NO_ERROR;
+    Str exe = os_executable(a, &err);
+    if (BURROW_FAILED(err)) {
+        regexp_free(re);
+        arena_free(&ar);
+        testing_t_fatalf_v(t, "Executable: %v", err);
+    }
+    Str run =
+        fmt_sprintf_v(a, "-test.run=^%s$", regexp_quote_meta(a, testing_t_name(t)));
+    ExecCmd *cmd = exec_command_v(a, exe, 2, run, S("-test.count=1"));
+    Slice env = os_environ(a);
+    env = BURROW_APPEND(Str, a, env, S("GO_WANT_HELPER_PROCESS=1"));
+    cmd->env = env;
+    Slice out = exec_cmd_combined_output(cmd, a, &err);
+    if (!regexp_match(re, out))
+        testing_t_errorf_v(t, "got output:\n%s\nwant matching:\n%s",
+                           str_from_bytes(out.p, out.len), cs(pattern));
+    exec_cmd_free(cmd);
+    regexp_free(re);
+    arena_free(&ar);
+}
+
 #define TESTS(X)                                                                       \
     X(TestRecorder)                                                                    \
     X(TestBodyNotAllowed)                                                              \
@@ -1249,6 +1436,12 @@ static void TestCloseHijackedConnection(TestingT *t) {
     X(TestNewRequestPanics)                                                            \
     X(TestServer)                                                                      \
     X(TestTLSServerWithHTTP2)                                                          \
-    X(TestClientExampleCom) X(TestServerZeroValueClose) X(TestCloseHijackedConnection)
+    X(TestClientExampleCom)                                                            \
+    X(TestServerZeroValueClose)                                                        \
+    X(TestCloseHijackedConnection)                                                     \
+    X(TestServerInMemoryNetwork)                                                       \
+    X(TestServerNilHandler)                                                            \
+    X(TestServerPanicErrAbortHandler)                                                  \
+    X(TestServerPanicFailsTest)
 
 TESTING_MAIN(TESTS)

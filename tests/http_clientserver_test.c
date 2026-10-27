@@ -17,9 +17,13 @@
 #include "burrow/bytes.h"
 #include "burrow/chan.h"
 #include "burrow/compress/gzip.h"
+#include "burrow/context.h"
+#include "burrow/crypto/rand.h"
+#include "burrow/crypto/sha1.h"
 #include "burrow/crypto/tls.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
+#include "burrow/hash.h"
 #include "burrow/io.h"
 #include "burrow/log.h"
 #include "burrow/map.h"
@@ -28,6 +32,7 @@
 #include "burrow/net.h"
 #include "burrow/net/http.h"
 #include "burrow/net/http/httptest.h"
+#include "burrow/net/http/httptrace.h"
 #include "burrow/net/http/httputil.h"
 #include "burrow/net/url.h"
 #include "burrow/os.h"
@@ -2369,6 +2374,556 @@ static void TestBadResponseAfterReadingBody(TestingT *t) {
     run(t, test_bad_response_after_reading_body, NULL, &o);
 }
 
+/* Not in Go: cst_close_response as a cleanup, for Go's defer
+ * res.Body.Close(). */
+static void cst_close_response_env(void *env) {
+    cst_close_response((HttpResponse *)env);
+}
+
+/* Not in Go: what the handler and the test share. */
+typedef struct WriteHeader0 {
+    TestingT *t;
+    Chan *gotpanic;
+} WriteHeader0;
+
+static void write_header0_free(void *env) {
+    chan_free(((WriteHeader0 *)env)->gotpanic);
+}
+
+static void write_header0_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    WriteHeader0 *x = (WriteHeader0 *)env;
+    BURROW_TRY {
+        w.vt->write_header(w.data, 0);
+    }
+    BURROW_CATCH(e) {
+        Str got = fmt_sprintf_v(arena_allocator(&r->arena), "%T, %v", e, e);
+        Str want = BURROW_S("string, invalid WriteHeader code 0");
+        if (!str_eq(got, want))
+            testing_t_errorf_v(x->t, "unexpected panic value:\n got: %v\nwant: %v\n",
+                               got, want);
+        bool v = true;
+        chan_send(x->gotpanic, &v);
+
+        /* Set an explicit 503. This also tests that the WriteHeader call panics
+         * before it recorded that an explicit value was set and that bogus
+         * value wasn't stuck. */
+        w.vt->write_header(w.data, 503);
+    }
+    BURROW_TRY_END;
+    chan_close(x->gotpanic);
+}
+
+static void test_write_header0(TestingT *t, TestMode mode, void *env) {
+    (void)env;
+    WriteHeader0 *x = (WriteHeader0 *)test_alloc(t, sizeof *x);
+    x->t = t;
+    x->gotpanic = chan_make(heap_allocator(), TYPE_BOOL, 1);
+    if (x->gotpanic == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    testing_t_cleanup(t, BURROW_FN(Func, write_header0_free, x));
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, write_header0_handler, x), NULL);
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *res = http_client_get(cst->c, cst->ts->url, &err);
+    if (res == NULL)
+        testing_t_fatal_v(t, err);
+    if (res->status_code != 503)
+        testing_t_errorf_v(t, "Response: %v %q; want 503", res->status_code,
+                           res->status);
+    /* Not in Go: Go leaves the body to the collector. */
+    cst_close_response(res);
+    bool got = false;
+    (void)chan_recv(x->gotpanic, &got);
+    if (!got)
+        testing_t_error_v(t, "expected panic in handler");
+}
+
+static void TestWriteHeader0(TestingT *t) {
+    run(t, test_write_header0, NULL, NULL);
+}
+
+/* Not in Go: what the handler and the test share. */
+typedef struct WriteHeaderAfterWrite {
+    bool hijack;
+    LockedBytesBuffer error_log;
+    LogLogger *log;
+} WriteHeaderAfterWrite;
+
+static void write_header_after_write_free(void *env) {
+    WriteHeaderAfterWrite *x = (WriteHeaderAfterWrite *)env;
+    if (x->log != NULL)
+        log_logger_free(heap_allocator(), x->log);
+    bytes_buffer_free(&x->error_log.buf);
+}
+
+static void write_header_after_write_server(HttptestServer *ts, void *env) {
+    ts->config.error_log = ((WriteHeaderAfterWrite *)env)->log;
+}
+
+static void write_conn_string(NetConn c, Str s) {
+    Error err = BURROW_NO_ERROR;
+    (void)c.vt->writer.write(
+        c.data, slice_from((void *)(uintptr_t)s.p, s.len, s.len, TYPE_UINT8), &err);
+}
+
+static void write_header_after_write_handler(void *env, HttpResponseWriter w,
+                                             HttpRequest *r) {
+    (void)r;
+    WriteHeaderAfterWrite *x = (WriteHeaderAfterWrite *)env;
+    if (x->hijack) {
+        HttpResponseController rc = http_new_response_controller(w);
+        BufioReadWriter buf;
+        Error err = BURROW_NO_ERROR;
+        NetConn conn = http_response_controller_hijack(&rc, &buf, &err);
+        if (BURROW_FAILED(err))
+            return;
+        write_conn_string(conn,
+                          BURROW_S("HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nfoo"));
+        w.vt->write_header(
+            w.data,
+            0); /* verify this doesn't panic if there's already output; Issue 23010 */
+        write_conn_string(conn, BURROW_S("bar"));
+        /* Not in Go: what the hijack handed over is given back, and
+         * net_conn_free closes the connection. */
+        bufio_reader_free(buf.reader);
+        bufio_writer_free(buf.writer);
+        net_conn_free(conn);
+        return;
+    }
+    write_string(w, BURROW_S("foo"));
+    (void)w.vt->flush(w.data);
+    w.vt->write_header(
+        w.data,
+        0); /* verify this doesn't panic if there's already output; Issue 23010 */
+    write_string(w, BURROW_S("bar"));
+}
+
+static void test_write_header_after_write(TestingT *t, TestMode mode, bool hijack) {
+    WriteHeaderAfterWrite *x = (WriteHeaderAfterWrite *)test_alloc(t, sizeof *x);
+    testing_t_cleanup(t, BURROW_FN(Func, write_header_after_write_free, x));
+    x->hijack = hijack;
+    x->error_log.buf = BYTES_BUFFER(heap_allocator());
+    IoWriter lw = {&locked_bytes_buffer_vt, &x->error_log};
+    x->log = log_new(heap_allocator(), lw, BURROW_S(""), 0);
+    if (x->log == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    CSTOpts opts = {.server = write_header_after_write_server, .env = x};
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, write_header_after_write_handler, x),
+        &opts);
+    Error err = BURROW_NO_ERROR;
+    HttpResponse *res = http_client_get(cst->c, cst->ts->url, &err);
+    if (res == NULL)
+        testing_t_fatal_v(t, err);
+    Alloc *a = test_arena(t);
+    Slice body = io_read_all(a, cst_body(res), &err);
+    cst_close_response(res);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    Str got = str_from_bytes(body.p, body.len);
+    Str want = BURROW_S("foobar");
+    if (!str_eq(got, want))
+        testing_t_errorf_v(t, "got = %q; want %q", got, want);
+
+    /* Also check the stderr output: */
+    if (mode == HTTP2_MODE) {
+        /* TODO: also emit this log message for HTTP/2?
+         * We historically haven't, so don't check. */
+        return;
+    }
+    Str got_log = strings_trim_space(locked_bytes_buffer_string(&x->error_log, a));
+    /* Not in Go: Go's message goes on with the handler's name and file, and
+     * burrow cannot name a static function or give a file and line yet, so
+     * only what comes before them is checked. */
+    Str want_log = BURROW_S("http: superfluous response.WriteHeader call from ");
+    if (hijack)
+        want_log = BURROW_S("http: response.WriteHeader on hijacked connection from ");
+    if (!strings_has_prefix(got_log, want_log))
+        testing_t_errorf_v(t, "stderr output = %q; want %q", got_log, want_log);
+}
+
+static void write_header_no_code_check(TestingT *t, TestMode mode, void *env) {
+    (void)env;
+    test_write_header_after_write(t, mode, false);
+}
+
+/* Issue 23010: don't be super strict checking WriteHeader's code if
+ * it's not even valid to call WriteHeader then anyway. */
+static void TestWriteHeaderNoCodeCheck(TestingT *t) {
+    RunOpts o = {http3_skipped_mode, 2, false};
+    run(t, write_header_no_code_check, NULL, &o);
+}
+
+static void TestWriteHeaderNoCodeCheck_h1hijack(TestingT *t) {
+    test_write_header_after_write(t, HTTP1_MODE, true);
+}
+
+static void bidi_backend_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    Error err = BURROW_NO_ERROR;
+    (void)io_copy(arena_allocator(&r->arena), http_response_writer_as_io_writer(w),
+                  (IoReader){&r->body.vt->reader, r->body.data}, &err);
+    if (BURROW_FAILED(err))
+        log_printf_v("bidi backend copy: %v", err);
+}
+
+static void bidi_proxy_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    httputil_reverse_proxy_serve_http((HttputilReverseProxy *)env, w, r);
+}
+
+enum { BIDI_SIZE = 4 << 20 };
+
+/* Not in Go: what the test, its goroutine and its cleanups share. */
+typedef struct BidiStream {
+    TestingT *t;
+    HttputilReverseProxy *rp;
+    IoPipeReader *pr;
+    IoPipeWriter *pw;
+    Chan *body_res; /* true when h has the hash, false on an error */
+    Hash h;
+    SyncWaitGroup wg;
+} BidiStream;
+
+static void bidi_stream_free(void *env) {
+    BidiStream *b = (BidiStream *)env;
+    httputil_reverse_proxy_free(b->rp);
+    if (b->pr != NULL)
+        io_pipe_free(b->pr);
+    chan_free(b->body_res);
+}
+
+/* Not in Go: Go leaves the goroutine to finish on its own, and here the pipe
+ * cannot be freed under it, so the reader is closed, which ends a Write the
+ * goroutine is stuck in, and the goroutine is waited for. */
+static void bidi_stream_stop(void *env) {
+    BidiStream *b = (BidiStream *)env;
+    (void)io_pipe_reader_close(b->pr);
+    sync_wait_group_wait(&b->wg);
+}
+
+static void bidi_stream_write(void *env) {
+    BidiStream *b = (BidiStream *)env;
+    IoWriter ws[2] = {hash_as_io_writer(b->h), io_pipe_writer_as_io_writer(b->pw)};
+    IoWriter mw = io_multi_writer(heap_allocator(), ws, 2);
+    Error err = BURROW_NO_ERROR;
+    (void)io_copy_n(heap_allocator(), mw, crypto_rand_reader, BIDI_SIZE, &err);
+    io_multi_writer_free(heap_allocator(), mw);
+    /* Not in Go: Go closes it on a goroutine of its own, and closing the
+     * write side of a pipe does not block, so it is closed here. */
+    (void)io_pipe_writer_close(b->pw);
+    bool ok = BURROW_OK(err);
+    if (!ok)
+        testing_t_errorf_v(b->t, "body copy: %v", err);
+    chan_send(b->body_res, &ok);
+    sync_wait_group_done(&b->wg);
+}
+
+static void test_bidi_stream_reverse_proxy(TestingT *t, TestMode mode, void *env) {
+    (void)env;
+    BidiStream *b = (BidiStream *)test_alloc(t, sizeof *b);
+    b->t = t;
+    testing_t_cleanup(t, BURROW_FN(Func, bidi_stream_free, b));
+    ClientServerTest *backend = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, bidi_backend_handler, NULL), NULL);
+
+    Alloc *a = test_arena(t);
+    Error err = BURROW_NO_ERROR;
+    Url *back_url = url_parse(a, backend->ts->url, &err);
+    if (back_url == NULL)
+        testing_t_fatal_v(t, err);
+    b->rp = httputil_new_single_host_reverse_proxy(heap_allocator(), back_url);
+    if (b->rp == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    b->rp->transport = http_transport_as_round_tripper(backend->tr);
+    ClientServerTest *proxy = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, bidi_proxy_handler, b->rp), NULL);
+
+    b->body_res = chan_make(heap_allocator(), TYPE_BOOL, 1);
+    b->h = sha1_new(a);
+    if (b->body_res == NULL || b->h.vt == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    io_pipe(heap_allocator(), &b->pr, &b->pw);
+    if (b->pr == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    testing_t_cleanup(t, BURROW_FN(Func, bidi_stream_stop, b));
+    HttpRequest *req = http_new_request(a, BURROW_S("PUT"), proxy->ts->url,
+                                        io_pipe_reader_as_io_reader(b->pr), &err);
+    if (req == NULL)
+        testing_t_fatal_v(t, err);
+    testing_t_cleanup(t, BURROW_FN(Func, cst_free_request, req));
+    sync_wait_group_add(&b->wg, 1);
+    if (!go(BURROW_FN(Func, bidi_stream_write, b))) {
+        sync_wait_group_done(&b->wg);
+        testing_t_fatal_v(t, "cannot start a goroutine");
+    }
+    HttpResponse *res = http_client_do(backend->c, req, &err);
+    if (res == NULL)
+        testing_t_fatal_v(t, err);
+    testing_t_cleanup(t, BURROW_FN(Func, cst_close_response_env, res));
+    Hash hgot = sha1_new(a);
+    if (hgot.vt == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    int64_t n = io_copy(a, hash_as_io_writer(hgot), cst_body(res), &err);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    if (n != BIDI_SIZE)
+        testing_t_fatalf_v(t, "got %d bytes; want %d", n, (Int)BIDI_SIZE);
+    Chan *timeout = time_after_chan(a, 10 * TIME_SECOND);
+    if (timeout == NULL)
+        testing_t_fatal_v(t, "out of memory");
+    bool ok = false;
+    SelectCase cases[] = {
+        BURROW_RECV(b->body_res, &ok),
+        BURROW_RECV(timeout, NULL),
+    };
+    switch (chan_select(cases, 2)) {
+    case 0:
+        if (!ok) {
+            testing_t_fatalf_v(t, "body copy: %v", err);
+        } else if (!bytes_equal(hash_sum(a, b->h, (Slice){0}),
+                                hash_sum(a, hgot, (Slice){0}))) {
+            testing_t_errorf_v(t, "written bytes didn't match received bytes");
+        }
+        break;
+    default:
+        testing_t_fatal_v(t, "timeout");
+    }
+}
+
+static void TestBidiStreamReverseProxy(TestingT *t) {
+    static const TestMode modes[1] = {HTTP2_MODE};
+    RunOpts o = {modes, 1, false};
+    run(t, test_bidi_stream_reverse_proxy, NULL, &o);
+}
+
+static void handler_set_foo_bar(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)env;
+    (void)r;
+    HttpHeader h = w.vt->header(w.data);
+    (void)http_header_set(h, BURROW_S("Foo"), BURROW_S("bar"));
+}
+
+static HttpResponse *req_websocket_upgrade(void *env, HttpClient *c, Str url,
+                                           Error *err) {
+    TestingT *t = (TestingT *)env;
+    HttpRequest *req =
+        http_new_request(test_arena(t), BURROW_S("GET"), url, (IoReader){0}, err);
+    if (req == NULL)
+        return NULL;
+    testing_t_cleanup(t, BURROW_FN(Func, cst_free_request, req));
+    (void)http_header_set(req->header, BURROW_S("Connection"), BURROW_S("Upgrade"));
+    (void)http_header_set(req->header, BURROW_S("Upgrade"), BURROW_S("WebSocket"));
+    return http_client_do(c, req, err);
+}
+
+static void websocket_early_check(TestingT *t, void *env, Str proto, H12Res *r) {
+    (void)env;
+    HttpResponse *res = r->res;
+    if (!str_eq(res->proto, BURROW_S("HTTP/1.1")))
+        testing_t_errorf_v(t, "%s: expected HTTP/1.1, got %q", proto, res->proto);
+    res->proto =
+        BURROW_S("HTTP/IGNORE"); /* skip later checks that Proto must be 1.1 vs 2.0 */
+}
+
+static void websocket_server(HttptestServer *ts, void *env) {
+    /* Configure servers to support HTTP/1 and HTTP/2,
+     * so we can verify that we use HTTP/1
+     * even when HTTP/2 is an option. */
+    HttpProtocols *p = (HttpProtocols *)env;
+    http_protocols_set_http1(p, true);
+    http_protocols_set_http2(p, true);
+    ts->config.protocols = p;
+}
+
+/* Always use HTTP/1.1 for WebSocket upgrades. */
+static void TestH12_WebSocketUpgrade(TestingT *t) {
+    CSTOpts *opts = (CSTOpts *)test_alloc(t, sizeof *opts);
+    *opts = (CSTOpts){.server = websocket_server,
+                      .env = test_alloc(t, sizeof(HttpProtocols))};
+    H12Compare tt = {.handler = handler_set_foo_bar,
+                     .req_func = req_websocket_upgrade,
+                     .early_check_response = websocket_early_check,
+                     .opts = opts,
+                     .env = t};
+    h12_run(t, &tt);
+}
+
+static void identity_te_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    TestingT *t = (TestingT *)env;
+    Str body = BURROW_S("body");
+    Error err = BURROW_NO_ERROR;
+    Slice got_body = io_read_all(arena_allocator(&r->arena),
+                                 (IoReader){&r->body.vt->reader, r->body.data}, &err);
+    Str got = str_from_bytes(got_body.p, got_body.len);
+    if (!str_eq(got, body))
+        testing_t_errorf_v(t, "got request body = %q; want %q", got, body);
+    (void)http_header_set(w.vt->header(w.data), BURROW_S("Transfer-Encoding"),
+                          BURROW_S("identity"));
+    w.vt->write_header(w.data, HTTP_STATUS_OK);
+    (void)w.vt->flush(w.data);
+    write_string(w, body);
+}
+
+static void test_identity_transfer_encoding(TestingT *t, TestMode mode, void *env) {
+    (void)env;
+    Str body = BURROW_S("body");
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, identity_te_handler, t), NULL);
+    Alloc *a = test_arena(t);
+    Error err = BURROW_NO_ERROR;
+    HttpRequest *req = http_new_request(
+        a, BURROW_S("GET"), cst->ts->url,
+        strings_reader_as_io_reader(strings_new_reader(a, body)), &err);
+    if (req == NULL)
+        testing_t_fatal_v(t, err);
+    testing_t_cleanup(t, BURROW_FN(Func, cst_free_request, req));
+    HttpResponse *res = http_client_do(cst->c, req, &err);
+    if (res == NULL)
+        testing_t_fatal_v(t, err);
+    Slice got_body = io_read_all(a, cst_body(res), &err);
+    cst_close_response(res);
+    if (BURROW_FAILED(err))
+        testing_t_fatal_v(t, err);
+    Str got = str_from_bytes(got_body.p, got_body.len);
+    if (!str_eq(got, body))
+        testing_t_errorf_v(t, "got response body = %q; want %q", got, body);
+}
+
+static void TestIdentityTransferEncoding(TestingT *t) {
+    run(t, test_identity_transfer_encoding, NULL, NULL);
+}
+
+/* Not in Go: what the handler, the trace and the test share. */
+typedef struct EarlyHints {
+    TestingT *t;
+    SyncWaitGroup wg;
+    uint8_t resp_counter;
+} EarlyHints;
+
+static void early_hints_handler(void *env, HttpResponseWriter w, HttpRequest *r) {
+    (void)r;
+    EarlyHints *e = (EarlyHints *)env;
+    HttpHeader h = w.vt->header(w.data);
+
+    (void)http_header_add(h, BURROW_S("Content-Length"),
+                          BURROW_S("123")); /* must be ignored */
+    (void)http_header_add(h, BURROW_S("Link"),
+                          BURROW_S("</style.css>; rel=preload; as=style"));
+    (void)http_header_add(h, BURROW_S("Link"),
+                          BURROW_S("</script.js>; rel=preload; as=script"));
+    w.vt->write_header(w.data, HTTP_STATUS_EARLY_HINTS);
+
+    sync_wait_group_wait(&e->wg);
+
+    (void)http_header_add(h, BURROW_S("Link"),
+                          BURROW_S("</foo.js>; rel=preload; as=script"));
+    w.vt->write_header(w.data, HTTP_STATUS_EARLY_HINTS);
+
+    write_string(w, BURROW_S("Hello"));
+}
+
+static void check_link_headers(TestingT *t, const char *const *expected, Int n,
+                               Slice got) {
+    testing_t_helper(t);
+
+    if (n != got.len)
+        testing_t_errorf_v(t, "got %d expected %d", got.len, n);
+
+    for (Int i = 0; i < n; i++) {
+        /* Not in Go: Go would index past got and panic. */
+        Str g = i < got.len ? ((const Str *)got.p)[i] : BURROW_S("");
+        Str x = str_from_cstr(expected[i]);
+        if (!str_eq(x, g))
+            testing_t_errorf_v(t, "got %q expected %q", g, x);
+    }
+}
+
+static void check_excluded_headers(TestingT *t, TextprotoMIMEHeader header) {
+    testing_t_helper(t);
+
+    static const Str hs[] = {BURROW_S_INIT("Content-Length"),
+                             BURROW_S_INIT("Transfer-Encoding")};
+    for (int i = 0; i < 2; i++) {
+        Slice *v = (Slice *)map_get(header, &hs[i]);
+        if (v != NULL)
+            testing_t_errorf_v(t, "%s is %q; must not be sent", hs[i], *v);
+    }
+}
+
+static const char *const early_links2[] = {"</style.css>; rel=preload; as=style",
+                                           "</script.js>; rel=preload; as=script"};
+static const char *const early_links3[] = {"</style.css>; rel=preload; as=style",
+                                           "</script.js>; rel=preload; as=script",
+                                           "</foo.js>; rel=preload; as=script"};
+
+static Error early_hints_got1xx(void *env, Int code, TextprotoMIMEHeader header) {
+    (void)code;
+    EarlyHints *e = (EarlyHints *)env;
+    TestingT *t = e->t;
+    switch (e->resp_counter) {
+    case 0:
+        check_link_headers(t, early_links2, 2,
+                           http_header_values(header, BURROW_S("Link")));
+        check_excluded_headers(t, header);
+
+        sync_wait_group_done(&e->wg);
+        break;
+    case 1:
+        check_link_headers(t, early_links3, 3,
+                           http_header_values(header, BURROW_S("Link")));
+        check_excluded_headers(t, header);
+        break;
+
+    default:
+        testing_t_error_v(t, "Unexpected 1xx response");
+    }
+
+    e->resp_counter++;
+
+    return BURROW_NO_ERROR;
+}
+
+static void test_early_hints_request(TestingT *t, TestMode mode, void *env) {
+    (void)env;
+    EarlyHints *e = (EarlyHints *)test_alloc(t, sizeof *e);
+    e->t = t;
+    sync_wait_group_add(&e->wg, 1);
+    ClientServerTest *cst = new_client_server_test_func(
+        t, mode, BURROW_FN(HttpHandlerFunc, early_hints_handler, e), NULL);
+
+    Alloc *a = test_arena(t);
+    HttptraceClientTrace *trace = (HttptraceClientTrace *)test_alloc(t, sizeof *trace);
+    trace->got1xx_response =
+        BURROW_FN(HttptraceGot1xxResponseFunc, early_hints_got1xx, e);
+    Context ctx = httptrace_with_client_trace(a, context_background(), trace);
+    Error err = BURROW_NO_ERROR;
+    HttpRequest *req = http_new_request_with_context(a, ctx, BURROW_S("GET"),
+                                                     cst->ts->url, (IoReader){0}, &err);
+    if (req == NULL)
+        testing_t_fatal_v(t, err);
+    testing_t_cleanup(t, BURROW_FN(Func, cst_free_request, req));
+
+    HttpResponse *res = http_client_do(cst->c, req, &err);
+    if (res == NULL)
+        testing_t_fatal_v(t, err);
+    testing_t_cleanup(t, BURROW_FN(Func, cst_close_response_env, res));
+
+    check_link_headers(t, early_links3, 3,
+                       http_header_values(res->header, BURROW_S("Link")));
+    Str cl = http_header_get(res->header, BURROW_S("Content-Length"));
+    if (!str_eq(cl, BURROW_S("123")))
+        testing_t_errorf_v(t, "Content-Length is %q; want 123", cl);
+
+    Slice body = io_read_all(a, cst_body(res), &err);
+    Str got = str_from_bytes(body.p, body.len);
+    if (!str_eq(got, BURROW_S("Hello")))
+        testing_t_errorf_v(t, "Read body %q; want Hello", got);
+}
+
+static void TestEarlyHintsRequest(TestingT *t) {
+    run(t, test_early_hints_request, NULL, NULL);
+}
+
 #define TESTS(X)                                                                       \
     X(TestNewClientServerTest)                                                         \
     X(TestChunkedResponseHeaders)                                                      \
@@ -2411,5 +2966,12 @@ static void TestBadResponseAfterReadingBody(TestingT *t) {
     X(TestCloseIdleConnections)                                                        \
     X(TestNoSniffExpectRequestBody)                                                    \
     X(TestServerUndeclaredTrailers)                                                    \
-    X(TestBadResponseAfterReadingBody)
+    X(TestBadResponseAfterReadingBody)                                                 \
+    X(TestWriteHeader0)                                                                \
+    X(TestWriteHeaderNoCodeCheck)                                                      \
+    X(TestWriteHeaderNoCodeCheck_h1hijack)                                             \
+    X(TestBidiStreamReverseProxy)                                                      \
+    X(TestH12_WebSocketUpgrade)                                                        \
+    X(TestIdentityTransferEncoding)                                                    \
+    X(TestEarlyHintsRequest)
 TESTING_MAIN(TESTS)

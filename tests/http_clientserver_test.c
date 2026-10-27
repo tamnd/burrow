@@ -398,7 +398,7 @@ static void TestH12_HeadContentLengthSmallBody(TestingT *t) {
 
 static void handler_large(void *env, HttpResponseWriter w, HttpRequest *r) {
     (void)env;
-    Str chunk = strings_repeat(r->a, BURROW_S("x"), 512 * 1024);
+    Str chunk = strings_repeat(arena_allocator(&r->arena), BURROW_S("x"), 512 * 1024);
     for (int i = 0; i < 10; i++)
         write_string(w, chunk);
 }
@@ -546,8 +546,9 @@ static void handler_writes_too_much(void *env, HttpResponseWriter w, HttpRequest
     TestingT *t = (TestingT *)env;
     Str want_body = BURROW_S("123");
     HttpResponseController rc = http_new_response_controller(w);
-    (void)http_header_set(w.vt->header(w.data), BURROW_S("Content-Length"),
-                          fmt_sprintf_v(r->a, "%v", want_body.len));
+    (void)http_header_set(
+        w.vt->header(w.data), BURROW_S("Content-Length"),
+        fmt_sprintf_v(arena_allocator(&r->arena), "%v", want_body.len));
     (void)http_response_controller_flush(&rc);
     IoWriter ww = http_response_writer_as_io_writer(w);
     Error err = BURROW_NO_ERROR;
@@ -596,7 +597,8 @@ static void handler_auto_gzip(void *env, HttpResponseWriter w, HttpRequest *r) {
     (void)http_header_set(w.vt->header(w.data), BURROW_S("Content-Encoding"),
                           BURROW_S("gzip"));
     Error err = BURROW_NO_ERROR;
-    GzipWriter *gz = gzip_new_writer(r->a, http_response_writer_as_io_writer(w));
+    GzipWriter *gz = gzip_new_writer(arena_allocator(&r->arena),
+                                     http_response_writer_as_io_writer(w));
     if (gz == NULL) {
         testing_t_errorf_v(t, "out of memory");
         return;
@@ -726,7 +728,7 @@ static void handler_request_content_length(void *env, HttpResponseWriter w,
                                            HttpRequest *r) {
     (void)env;
     (void)http_header_set(w.vt->header(w.data), BURROW_S("Got-Length"),
-                          fmt_sprint_v(r->a, r->content_length));
+                          fmt_sprint_v(arena_allocator(&r->arena), r->content_length));
     (void)fmt_fprintf_v(http_response_writer_as_io_writer(w), "Req.ContentLength=%v",
                         r->content_length);
 }
@@ -910,8 +912,8 @@ static void trailers_client_to_server_handler(void *env, HttpResponseWriter w,
                                               HttpRequest *r) {
     TestingT *t = (TestingT *)env;
     Error err = BURROW_NO_ERROR;
-    Slice slurp =
-        io_read_all(r->a, (IoReader){&r->body.vt->reader, r->body.data}, &err);
+    Slice slurp = io_read_all(arena_allocator(&r->arena),
+                              (IoReader){&r->body.vt->reader, r->body.data}, &err);
     if (BURROW_FAILED(err))
         testing_t_errorf_v(t, "Server reading request body: %v", err);
     Str s = str_from_bytes(slurp.p, slurp.len);
@@ -921,8 +923,8 @@ static void trailers_client_to_server_handler(void *env, HttpResponseWriter w,
         write_string(w, BURROW_S("nil Trailer"));
     } else {
         Int n = map_len(r->trailer);
-        Str *keys =
-            (Str *)mem_alloc(r->a, (size_t)(n + 1) * sizeof *keys, _Alignof(Str));
+        Str *keys = (Str *)mem_alloc(arena_allocator(&r->arena),
+                                     (size_t)(n + 1) * sizeof *keys, _Alignof(Str));
         if (keys == NULL) {
             testing_t_errorf_v(t, "out of memory");
             return;
@@ -954,7 +956,8 @@ static Int eof_set_trailer_read(void *self, Slice p, Error *err) {
     (void)p;
     EofSetTrailer *e = (EofSetTrailer *)self;
     HttpRequest *req = *e->req;
-    header_set_values(e->t, req->trailer, req->a, str_from_cstr(e->key), &e->value, 1);
+    header_set_values(e->t, req->trailer, arena_allocator(&req->arena),
+                      str_from_cstr(e->key), &e->value, 1);
     if (err != NULL)
         *err = io_eof;
     return 0;
@@ -986,13 +989,13 @@ static void test_trailers_client_to_server(TestingT *t, TestMode mode, void *env
         testing_t_fatal_v(t, err);
     testing_t_cleanup(t, BURROW_FN(Func, cst_free_request, req));
     *reqp = req;
-    req->trailer = http_header_make(req->a);
+    req->trailer = http_header_make(arena_allocator(&req->arena));
     if (req->trailer == NULL)
         testing_t_fatal_v(t, "out of memory");
-    header_set_values(t, req->trailer, req->a, BURROW_S("Client-Trailer-A"), NULL,
-                      -1); /*  to be set later */
-    header_set_values(t, req->trailer, req->a, BURROW_S("Client-Trailer-B"), NULL,
-                      -1); /*  to be set later */
+    header_set_values(t, req->trailer, arena_allocator(&req->arena),
+                      BURROW_S("Client-Trailer-A"), NULL, -1); /*  to be set later */
+    header_set_values(t, req->trailer, arena_allocator(&req->arena),
+                      BURROW_S("Client-Trailer-B"), NULL, -1); /*  to be set later */
     req->content_length = -1;
     HttpResponse *res = http_client_do(cst->c, req, &err);
     if (res == NULL)
@@ -1373,14 +1376,15 @@ static void test_transport_user_agent(TestingT *t, TestMode mode, void *env) {
                                   BURROW_S("foo/1.2.3"));
             break;
         case 2:
-            header_set_values(t, req->header, req->a, BURROW_S("User-Agent"), multiple,
-                              3);
+            header_set_values(t, req->header, arena_allocator(&req->arena),
+                              BURROW_S("User-Agent"), multiple, 3);
             break;
         case 3:
             (void)http_header_set(req->header, BURROW_S("User-Agent"), BURROW_S(""));
             break;
         case 4:
-            header_set_values(t, req->header, req->a, BURROW_S("User-Agent"), NULL, -1);
+            header_set_values(t, req->header, arena_allocator(&req->arena),
+                              BURROW_S("User-Agent"), NULL, -1);
             break;
         default:
             break;

@@ -123,6 +123,14 @@ BURROW_SENTINEL_ERROR(tp_err_unencrypted_h2,
                       "http: Transport does not support unencrypted HTTP/2");
 BURROW_SENTINEL_ERROR(tp_err_socks5, "net/http: SOCKS5 proxies are not supported yet");
 BURROW_SENTINEL_ERROR(tp_err_stub_round_tripper, "unexpected use of stub RoundTripper");
+BURROW_SENTINEL_ERROR(tp_err_h2_no_client_conn,
+                      "http: HTTP/2 implementation does not support NewClientConn "
+                      "(update golang.org/x/net?)");
+BURROW_SENTINEL_ERROR(
+    tp_err_not_client_conn,
+    "http: NewClientConn returned something that is not a ClientConn");
+BURROW_SENTINEL_ERROR(tp_err_client_conn_closed, "ClientConn closed");
+BURROW_SENTINEL_ERROR(tp_err_conn_unavailable, "connection is unavailable");
 
 /* timeoutError, and errTimeout, which is one. A net.Error that is a timeout
  * and is context_deadline_exceeded to errors_is. */
@@ -553,6 +561,15 @@ struct burrow__HttpPConn {
     HttpRoundTripper alt_rt; /* with alt, from TLSNextProto, or none for t->h2 */
     const TlsConnectionState *tls_state; /* NULL, or &tls_state_v */
     TlsConnectionState tls_state_v;
+
+    /* ClientConn only. */
+    bool is_client_conn; /* whether this is a ClientConn (outside any pool) */
+    Chan *availch;       /* bool, holds a value when the conn is usable */
+    bool reserved;       /* under mu: concurrency slot reserved */
+    bool in_flight;      /* under mu: request is in flight */
+    Func state_hook;     /* ClientConn state hook */
+    Func hook_done;      /* Not in Go: called as pc is freed */
+    void *alt_cc;        /* Not in Go: the Http2ClientConn alt is, for a dial */
 };
 
 /* transportRequest and requestAndChan in one: a single try at sending a request
@@ -804,6 +821,8 @@ void burrow__http_transport_set_post_close_read_time_for_testing(HttpTransport *
     t->post_close_read_time = d;
 }
 
+const Duration burrow__http_max_post_close_read_time = TP_MAX_POST_CLOSE_READ_TIME;
+
 /* Takes b out and frees it once it has no connections or wants left. */
 static void tp_idle_bucket_trim(HttpTransport *t, tp_IdleBucket *b) {
     if (b->n > 0 || tp_queue_len(&b->wait) > 0)
@@ -979,10 +998,14 @@ static void tp_pc_free(tp_PConn *pc) {
     chan_free(pc->write_loop_done);
     chan_free(pc->read_loop_done);
     chan_free(pc->eofc);
+    chan_free(pc->availch);
     time_timer_free(pc->idle_timer);
     arena_free(&pc->arena);
     arena_free(&pc->err_arena);
+    Func done = pc->hook_done;
     mem_free(a, pc, sizeof *pc, _Alignof(tp_PConn));
+    if (!BURROW_FUNC_IS_NIL(done))
+        BURROW_CALLF0(done);
     sync_wait_group_done(&t->live);
 }
 
@@ -1174,8 +1197,10 @@ static bool tp_remove_idle_locked(HttpTransport *t, tp_PConn *pc) {
     return removed;
 }
 
-/* removeIdleConn. */
+/* removeIdleConn marks pconn as dead. */
 static bool tp_remove_idle(HttpTransport *t, tp_PConn *pc) {
+    if (pc->is_client_conn)
+        return true;
     sync_mutex_lock(&t->idle_mu);
     bool removed = tp_remove_idle_locked(t, pc);
     sync_mutex_unlock(&t->idle_mu);
@@ -1260,6 +1285,19 @@ static Error tp_try_put_idle_conn(HttpTransport *t, tp_PConn *pc) {
     if (tp_pc_is_broken(pc))
         return burrow__http_err_conn_broken;
     tp_pc_mark_reused(pc);
+    if (pc->is_client_conn) {
+        /* internalStateHook is always set for conns created by NewClientConn. */
+        sync_mutex_lock(&pc->mu);
+        if (!pc->in_flight)
+            panic_str(BURROW_S("pconn is not in flight"));
+        pc->in_flight = false;
+        bool v = true;
+        if (!chan_try_send(pc->availch, &v))
+            panic_str(BURROW_S("unable to make pconn available"));
+        sync_mutex_unlock(&pc->mu);
+        BURROW_CALLF0(pc->state_hook);
+        return BURROW_NO_ERROR;
+    }
     sync_mutex_lock(&t->idle_mu);
     Error err = tp_try_put_idle_conn_locked(t, pc);
     sync_mutex_unlock(&t->idle_mu);
@@ -1491,8 +1529,15 @@ static void tp_want_detach_trace(tp_Want *w) {
 
 /* ---------------------------------------------------------------- dialing */
 
+/* What dialConn has for a ClientConn: its internalStateHook, and the done
+ * burrow__http_transport_dial_client_conn takes with it. */
+typedef struct tp_ClientConnDial {
+    Func hook;
+    Func done;
+} tp_ClientConnDial;
+
 static tp_PConn *tp_dial_conn(HttpTransport *t, Context ctx, const tp_ConnectMethod *cm,
-                              tp_Want *w, Error *err);
+                              tp_Want *w, const tp_ClientConnDial *cd, Error *err);
 static void tp_dec_conns_per_host_locked(HttpTransport *t, Str key);
 
 /* dialConnFor. Dials for w, which may have been canceled or given an idle
@@ -1507,7 +1552,7 @@ static void tp_dial_conn_for(HttpTransport *t, tp_Want *w) {
         return;
     }
     Error err = BURROW_NO_ERROR;
-    tp_PConn *pc = tp_dial_conn(t, w->ctx, &w->cm, w, &err);
+    tp_PConn *pc = tp_dial_conn(t, w->ctx, &w->cm, w, NULL, &err);
     bool delivered = tp_want_try_deliver(w, pc, err, (Time){0});
     if (pc != NULL) {
         /* Nobody wanted it, or it is HTTP/2 and can be shared, so it goes in
@@ -1938,12 +1983,16 @@ static Http2Transport *tp_h2_transport(HttpTransport *t) {
 
 /* The TLS hooks of the request's trace, while the dial still has one. */
 static void tp_trace_tls_handshake_start(tp_Want *w) {
+    if (w == NULL)
+        return; /* Not in Go: a ClientConn's dial has no trace. */
     sync_mutex_lock(&w->trace_mu);
     httptrace_client_trace_tls_handshake_start(w->trace_to);
     sync_mutex_unlock(&w->trace_mu);
 }
 
 static void tp_trace_tls_handshake_done(tp_Want *w, TlsConnectionState cs, Error err) {
+    if (w == NULL)
+        return;
     sync_mutex_lock(&w->trace_mu);
     httptrace_client_trace_tls_handshake_done(w->trace_to, cs, err);
     sync_mutex_unlock(&w->trace_mu);
@@ -2120,21 +2169,36 @@ static Error tp_add_tls(tp_PConn *pc, Context ctx, Str name, bool only_h1, tp_Wa
 
 /* dialConn. A connection for cm with its loops going, and a reference for the
  * caller, or one that is another round tripper's, with alt set. w is the want
- * it is for, whose trace gets the TLS events. */
+ * it is for, whose trace gets the TLS events, and NULL for a ClientConn, which
+ * has cd. Its done is called once whatever happens: by the connection as it
+ * is freed, or here when there is none. An HTTP/2 ClientConn is alt_cc, and
+ * pc no more than what it came in. */
 static tp_PConn *tp_dial_conn(HttpTransport *t, Context ctx, const tp_ConnectMethod *cm,
-                              tp_Want *w, Error *err) {
+                              tp_Want *w, const tp_ClientConnDial *cd, Error *err) {
     Alloc *a = tp_alloc(t);
     if (cm->proxy_url != NULL && (str_eq(cm->proxy_url->scheme, BURROW_S("socks5")) ||
                                   str_eq(cm->proxy_url->scheme, BURROW_S("socks5h")))) {
+        if (cd != NULL)
+            BURROW_CALLF0(cd->done);
         BURROW_OUT(err, tp_err_socks5);
         return NULL;
     }
     tp_PConn *pc = (tp_PConn *)mem_alloc(a, sizeof *pc, _Alignof(tp_PConn));
     if (pc == NULL) {
+        if (cd != NULL)
+            BURROW_CALLF0(cd->done);
         BURROW_OUT(err, burrow_err_out_of_memory);
         return NULL;
     }
     pc->t = t;
+    if (cd != NULL) {
+        /* A ClientConn's is not counted against MaxConnsPerHost. */
+        pc->is_client_conn = true;
+        pc->uncounted = true;
+        pc->state_hook = cd->hook;
+        pc->hook_done = cd->done;
+        pc->availch = chan_make(a, TYPE_BOOL, 1);
+    }
     arena_init(&pc->arena, a, 0);
     arena_init(&pc->err_arena, a, 0);
     sync_atomic_int64_store(&pc->refs, 1);
@@ -2152,7 +2216,8 @@ static tp_PConn *tp_dial_conn(HttpTransport *t, Context ctx, const tp_ConnectMet
     Str addr = tp_cm_addr(pa, cm);
     if (pc->key.len == 0 || addr.len == 0 || pc->reqch == NULL || pc->writech == NULL ||
         pc->closech == NULL || pc->write_err_ch == NULL ||
-        pc->write_loop_done == NULL || pc->read_loop_done == NULL || pc->eofc == NULL) {
+        pc->write_loop_done == NULL || pc->read_loop_done == NULL || pc->eofc == NULL ||
+        (cd != NULL && pc->availch == NULL)) {
         e = burrow_err_out_of_memory;
         goto fail;
     }
@@ -2227,6 +2292,24 @@ static tp_PConn *tp_dial_conn(HttpTransport *t, Context ctx, const tp_ConnectMet
                  (pc->tls_state != NULL &&
                   str_eq(pc->tls_state->negotiated_protocol, BURROW_S("h2")));
     Http2Transport *t2 = http2 ? tp_h2_transport(t) : NULL;
+    if (t2 != NULL && cd != NULL) {
+        /* The connection, and the done, go to the HTTP/2 transport. */
+        NetConn c = pc->conn;
+        memset(&pc->conn, 0, sizeof pc->conn);
+        pc->hook_done = (Func){0};
+        Http2ClientConn *cc = burrow__http2_transport_new_client_conn(
+            t2, c, cm->target_addr, cd->hook, cd->done, &e);
+        if (cc == NULL)
+            goto fail;
+        pc->alt = true;
+        pc->alt_cc = cc;
+        BURROW_OUT(err, BURROW_NO_ERROR);
+        return pc;
+    }
+    if (cd != NULL && http2) {
+        e = tp_err_h2_no_client_conn;
+        goto fail;
+    }
     if (t2 != NULL) {
         /* The connection goes to the HTTP/2 transport, and pc is no more than
          * its place in the pool. */
@@ -3089,6 +3172,8 @@ static void tp_read_loop(void *env) {
     chan_close(pc->eofc);
     tp_pc_close(pc, close_err);
     (void)tp_remove_idle(t, pc);
+    if (!BURROW_FUNC_IS_NIL(pc->state_hook))
+        BURROW_CALLF0(pc->state_hook);
     sync_mutex_lock(&pc->mu);
     pc->rl_exited = true;
     sync_mutex_unlock(&pc->mu);
@@ -3240,11 +3325,46 @@ static void tp_pc_take_back(tp_PConn *pc, tp_Trip *tr) {
         tp_trip_wl_release(tr);
 }
 
+/* waitForAvailability. The error is pc's, or the context's. */
+static Error tp_pc_wait_for_availability(tp_PConn *pc, Context ctx) {
+    SelectCase sc[] = {
+        BURROW_RECV(pc->availch, NULL),
+        BURROW_RECV(pc->closech, NULL),
+        BURROW_RECV(context_done(ctx), NULL),
+    };
+    switch (chan_select(sc, 3)) {
+    case 0:
+        return BURROW_NO_ERROR;
+    case 1:
+        return pc->closed;
+    default:
+        return context_err(ctx);
+    }
+}
+
 static HttpResponse *tp_pc_round_trip(tp_PConn *pc, tp_Trip *tr, Error *err) {
     HttpTransport *t = pc->t;
     HttpRequest *req = tr->req;
     Alloc *ta = arena_allocator(&tr->arena);
     bool ok = true;
+
+    if (pc->is_client_conn) {
+        sync_mutex_lock(&pc->mu);
+        if (!pc->reserved) {
+            sync_mutex_unlock(&pc->mu);
+            Error e = tp_pc_wait_for_availability(pc, tr->ctx);
+            if (BURROW_FAILED(e)) {
+                chan_close(tr->rl_done);
+                chan_close(tr->wl_done);
+                BURROW_OUT(err, e);
+                return NULL;
+            }
+            sync_mutex_lock(&pc->mu);
+        }
+        pc->reserved = false;
+        pc->in_flight = true;
+        sync_mutex_unlock(&pc->mu);
+    }
 
     /* The headers and channels the trip needs are made before the read loop
      * is told to expect a response, so that there is nothing left to fail
@@ -3953,6 +4073,179 @@ bool burrow__http_transport_alternate(HttpTransport *t, const HttpRequest *req,
 HttpRoundTripper http_transport_as_round_tripper(HttpTransport *t) {
     HttpRoundTripper rt = {&tp_rt_vt, t};
     return rt;
+}
+
+/* ------------------------------------------------------------ ClientConn */
+
+/* http1ClientConn.RoundTrip. As with Transport.RoundTrip, the response's
+ * on_free waits for both loops to be done with req. */
+static HttpResponse *tp_cc_round_trip(void *self, HttpRequest *req, Error *err) {
+    tp_PConn *pc = (tp_PConn *)self;
+    HttpTransport *t = pc->t;
+    Alloc *a = tp_alloc(t);
+    tp_Call *call = tp_call_new(t, req);
+    if (call == NULL ||
+        (!tp_is_no_body(req->body) && !tp_call_track(call, req->body))) {
+        if (call != NULL)
+            tp_call_free(call);
+        tp_close_body(req);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+
+    /* Convert Request.Cancel into context cancellation. */
+    call->ctx = context_with_cancel_cause(a, http_request_context(req), &call->cancel);
+    if (BURROW_CONTEXT_IS_NIL(call->ctx)) {
+        tp_close_body(&call->req);
+        tp_call_free(call);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    if (req->cancel != NULL) {
+        call->legacy_done = chan_make(a, TYPE_BOOL, 0);
+        if (call->legacy_done == NULL ||
+            !go(BURROW_FN(Func, tp_await_legacy_cancel, call))) {
+            chan_free(call->legacy_done);
+            call->legacy_done = NULL;
+            tp_close_body(&call->req);
+            tp_call_free(call);
+            BURROW_OUT(err, burrow_err_out_of_memory);
+            return NULL;
+        }
+    }
+
+    tp_Trip *tr = tp_trip_new(t, call, pc);
+    if (tr == NULL) {
+        tp_close_body(&call->req);
+        tp_call_free(call);
+        BURROW_OUT(err, burrow_err_out_of_memory);
+        return NULL;
+    }
+    Error e = BURROW_NO_ERROR;
+    HttpResponse *res = tp_pc_round_trip(pc, tr, &e);
+    chan_close(tr->gone);
+    if (res != NULL) {
+        call->trip = tr;
+        res->request = req;
+        res->on_free = BURROW_FN(Func, tp_call_on_free, call);
+        BURROW_OUT(err, BURROW_NO_ERROR);
+        return res;
+    }
+
+    /* Not in Go: neither loop looks at the request after this, and the body
+     * is closed if nothing has closed it yet. */
+    tp_wait(tr->rl_done);
+    tp_wait(tr->wl_done);
+    e = error_retain(error_allocator(), e);
+    tp_trip_unref(tr);
+    if (call->req.body.vt == &tp_track_vt &&
+        !sync_atomic_bool_load(&((tp_Track *)call->req.body.data)->did_close))
+        tp_close_body(&call->req);
+    tp_call_cancel(call, e);
+    tp_call_free(call);
+    BURROW_OUT(err, e);
+    return NULL;
+}
+
+static Error tp_cc_close(void *self) {
+    tp_pc_close((tp_PConn *)self, tp_err_client_conn_closed);
+    return BURROW_NO_ERROR;
+}
+
+static Error tp_cc_err(void *self) {
+    tp_PConn *pc = (tp_PConn *)self;
+    if (chan_try_recv(pc->closech, NULL, NULL))
+        return pc->closed;
+    return BURROW_NO_ERROR;
+}
+
+static Int tp_cc_available(void *self) {
+    tp_PConn *pc = (tp_PConn *)self;
+    sync_mutex_lock(&pc->mu);
+    Int n = BURROW_FAILED(pc->closed) || pc->reserved || pc->in_flight ? 0 : 1;
+    sync_mutex_unlock(&pc->mu);
+    return n;
+}
+
+static Int tp_cc_in_flight(void *self) {
+    tp_PConn *pc = (tp_PConn *)self;
+    sync_mutex_lock(&pc->mu);
+    Int n = BURROW_OK(pc->closed) && (pc->reserved || pc->in_flight) ? 1 : 0;
+    sync_mutex_unlock(&pc->mu);
+    return n;
+}
+
+static Error tp_cc_reserve(void *self) {
+    tp_PConn *pc = (tp_PConn *)self;
+    sync_mutex_lock(&pc->mu);
+    Error e = pc->closed;
+    if (BURROW_OK(e)) {
+        if (chan_try_recv(pc->availch, NULL, NULL))
+            pc->reserved = true;
+        else
+            e = tp_err_conn_unavailable;
+    }
+    sync_mutex_unlock(&pc->mu);
+    return e;
+}
+
+static void tp_cc_release(void *self) {
+    tp_PConn *pc = (tp_PConn *)self;
+    sync_mutex_lock(&pc->mu);
+    if (pc->reserved) {
+        bool v = true;
+        if (!chan_try_send(pc->availch, &v))
+            panic_str(BURROW_S("cannot release reservation"));
+        pc->reserved = false;
+    }
+    sync_mutex_unlock(&pc->mu);
+}
+
+/* Not in Go: closes pc and lets go of it. Its loops have the rest. */
+static void tp_cc_free(void *self) {
+    tp_PConn *pc = (tp_PConn *)self;
+    tp_pc_close(pc, tp_err_client_conn_closed);
+    tp_pc_unref(pc);
+}
+
+static const burrow__HttpGenericClientConnVT tp_cc_vt = {
+    tp_cc_close,     tp_cc_err,     tp_cc_round_trip,
+    tp_cc_reserve,   tp_cc_release, tp_cc_available,
+    tp_cc_in_flight, NULL,          tp_cc_free,
+};
+
+Error burrow__http_transport_dial_client_conn(HttpTransport *t, Context ctx,
+                                              Str target_scheme, Str target_addr,
+                                              Url *proxy_url, Func hook, Func done,
+                                              burrow__HttpGenericClientConn *gc) {
+    tp_next_proto_defaults(t);
+    tp_ConnectMethod cm;
+    memset(&cm, 0, sizeof cm);
+    cm.target_scheme = target_scheme;
+    cm.target_addr = target_addr;
+    cm.proxy_url = proxy_url;
+    tp_ClientConnDial cd = {hook, done};
+    Error e = BURROW_NO_ERROR;
+    tp_PConn *pc = tp_dial_conn(t, ctx, &cm, NULL, &cd, &e);
+    if (pc == NULL)
+        return e;
+    if (pc->alt) {
+        /* If pconn.alt is set, this is a connection implemented in another
+         * package. */
+        void *cc = pc->alt_cc;
+        tp_pc_unref(pc);
+        if (cc == NULL)
+            return tp_err_not_client_conn;
+        gc->vt = &burrow__http2_client_conn_vt;
+        gc->self = cc;
+        return BURROW_NO_ERROR;
+    }
+    /* This is an HTTP/1 connection. */
+    bool v = true;
+    (void)chan_try_send(pc->availch, &v);
+    gc->vt = &tp_cc_vt;
+    gc->self = pc;
+    return BURROW_NO_ERROR;
 }
 
 /* ---------------------------------------------------- the rest of Transport */

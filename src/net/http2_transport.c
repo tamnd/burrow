@@ -813,6 +813,15 @@ struct burrow__Http2ClientConn {
     bool extended_connect_allowed;
     bool strict_max_concurrent_streams;
     bool rst_stream_pings_blocked;
+
+    /* internalStateHook reports state changes back to the net/http.ClientConn.
+     * Note that this is different from the user state hook registered by
+     * net/http.ClientConn.SetStateHook: The internal hook calls ClientConn,
+     * which calls the user hook. */
+    Func state_hook;
+    /* Not in Go: called once as the connection is freed, when it calls
+     * state_hook no more. */
+    Func hook_done;
 };
 
 /* clientStream. The flags are at the end. */
@@ -968,12 +977,19 @@ static void h2c_timer_stop(h2c_Conn *cc, TimeTimer *t) {
         h2c_unref(cc);
 }
 
+/* maybeCallStateHook. */
+static void h2c_maybe_call_state_hook(h2c_Conn *cc) {
+    if (!BURROW_FUNC_IS_NIL(cc->state_hook))
+        BURROW_CALLF0(cc->state_hook);
+}
+
 /* closeConn. Go also arms a timer to close the conn under a TLS conn, which
  * a plain conn does not have. */
 static void h2c_close_conn(h2c_Conn *cc) {
     ArenaMark m = error_mark();
     (void)cc->tconn.vt->closer.close(cc->tconn.data);
     error_release(m);
+    h2c_maybe_call_state_hook(cc);
 }
 
 /* stickyErrWriter.Write, with writeWithByteTimeout. */
@@ -1313,6 +1329,8 @@ static void h2c_read_loop(void *env);
 static void h2c_conn_free(h2c_Conn *cc) {
     Http2Transport *t = cc->t;
     Alloc *a = cc->a;
+    if (!BURROW_FUNC_IS_NIL(cc->hook_done))
+        BURROW_CALLF0(cc->hook_done);
     time_timer_free(cc->idle_t);
     time_timer_free(cc->dead_t);
     time_timer_free(cc->read_idle_t);
@@ -1351,18 +1369,24 @@ static void h2c_conn_free(h2c_Conn *cc) {
 
 /* newClientConn. Takes c whatever happens: when there is an error, c has
  * been closed and given back. The connection comes with one reference, the
- * caller's. */
+ * caller's. Not in Go: hook_done is called once whatever happens, when the
+ * connection is gone. */
 static h2c_Conn *h2c_new_client_conn(Http2Transport *t, NetConn c, bool single_use,
-                                     Str key, Error *err) {
+                                     Str key, Func state_hook, Func hook_done,
+                                     Error *err) {
     Alloc *a = t->a;
     h2c_Conn *cc = (h2c_Conn *)mem_alloc(a, sizeof *cc, _Alignof(h2c_Conn));
     if (cc == NULL) {
         burrow__http_transport_free_conn(t->t1, c);
+        if (!BURROW_FUNC_IS_NIL(hook_done))
+            BURROW_CALLF0(hook_done);
         *err = burrow_err_out_of_memory;
         return NULL;
     }
     cc->t = t;
     cc->a = a;
+    cc->state_hook = state_hook;
+    cc->hook_done = hook_done;
     cc->refs.v = 1;
     cc->tconn = c;
     cc->conf = h2c_config_from_transport(t->t1);
@@ -1603,7 +1627,8 @@ Error burrow__http2_transport_add_conn(Http2Transport *t, Str scheme, Str author
         ArenaMark m = error_mark();
         Error e = BURROW_NO_ERROR;
         bool single_use = t->t1 != NULL && t->t1->disable_keep_alives;
-        h2c_Conn *cc = h2c_new_client_conn(t, c, single_use, addr, &e);
+        h2c_Conn *cc = h2c_new_client_conn(t, c, single_use, addr, (Func){NULL, NULL},
+                                           (Func){NULL, NULL}, &e);
         bool added = false;
         sync_mutex_lock(&t->mu);
         if (cc == NULL) {
@@ -2396,6 +2421,8 @@ static Error h2c_process_settings_no_write(h2c_Conn *cc, const Http2Frame *f) {
 static Error h2c_process_settings(h2c_Conn *cc, const Http2Frame *f) {
     sync_mutex_lock(&cc->wmu);
     Error err = h2c_process_settings_no_write(cc, f);
+    /* processSettingsNoWrite's deferred maybeCallStateHook. */
+    h2c_maybe_call_state_hook(cc);
     if (BURROW_OK(err) && !burrow__http2_settings_frame_is_ack(f)) {
         ArenaMark m = error_mark();
         (void)burrow__http2_framer_write_settings_ack(cc->fr);
@@ -2626,6 +2653,7 @@ static Error h2c_process_ping(h2c_Conn *cc, const Http2Frame *f) {
             sync_cond_broadcast(&cc->cond);
         }
         sync_mutex_unlock(&cc->mu);
+        h2c_maybe_call_state_hook(cc);
         return BURROW_NO_ERROR;
     }
     sync_mutex_lock(&cc->wmu);
@@ -3772,6 +3800,7 @@ static void h2c_cleanup_write_request(h2c_Stream *cs, Error err) {
     cs->trace = NULL;
     sync_mutex_unlock(&cs->tmu);
     chan_close(cs->donec);
+    h2c_maybe_call_state_hook(cc);
 }
 
 /* doRequest runs for the duration of the request lifetime. It sends the
@@ -4469,6 +4498,131 @@ Int burrow__http2_client_conn_streams_active(Http2ClientConn *cc) {
 void burrow__http2_client_conn_release(Http2ClientConn *cc) {
     if (cc != NULL)
         h2c_unref(cc);
+}
+
+/* ------------------------------------------------------ NetHTTPClientConn */
+
+BURROW_SENTINEL_ERROR(h2c_err_connection_closed, "connection closed");
+BURROW_SENTINEL_ERROR(h2c_err_connection_unavailable, "connection is unavailable");
+
+/* canReserveLocked reports whether a net/http.ClientConn can reserve a slot on
+ * this conn.
+ *
+ * This follows slightly different rules than
+ * clientConnIdleState.canTakeNewRequest. We only permit reservations up to
+ * the conn's concurrency limit. This differs from ClientConn.ReserveNewRequest,
+ * which permits reservations past the limit when StrictMaxConcurrentStreams is
+ * set. */
+static bool h2c_can_reserve_locked(h2c_Conn *cc) {
+    if (h2c_current_request_count_locked(cc) >= (Int)cc->max_concurrent_streams)
+        return false;
+    if (!h2c_is_usable_locked(cc))
+        return false;
+    return true;
+}
+
+/* availableLocked reports the number of concurrency slots available. */
+static Int h2c_available_locked(h2c_Conn *cc) {
+    if (!h2c_can_take_new_request_locked(cc))
+        return 0;
+    Int n = (Int)cc->max_concurrent_streams - h2c_current_request_count_locked(cc);
+    return n > 0 ? n : 0;
+}
+
+static HttpResponse *h2c_nhcc_round_trip(void *self, HttpRequest *req, Error *err) {
+    return burrow__http2_client_conn_round_trip((h2c_Conn *)self, req, err);
+}
+
+static Error h2c_nhcc_close(void *self) {
+    h2c_close_for_error((h2c_Conn *)self, burrow__http2_err_client_conn_force_closed);
+    return BURROW_NO_ERROR;
+}
+
+static Error h2c_nhcc_err(void *self) {
+    h2c_Conn *cc = (h2c_Conn *)self;
+    sync_mutex_lock(&cc->mu);
+    bool closed = cc->closed;
+    sync_mutex_unlock(&cc->mu);
+    if (closed)
+        return h2c_err_connection_closed;
+    return BURROW_NO_ERROR;
+}
+
+static Error h2c_nhcc_reserve(void *self) {
+    h2c_Conn *cc = (h2c_Conn *)self;
+    Error err = BURROW_NO_ERROR;
+    sync_mutex_lock(&cc->mu);
+    if (!h2c_can_reserve_locked(cc))
+        err = h2c_err_connection_unavailable;
+    else
+        cc->streams_reserved++;
+    sync_mutex_unlock(&cc->mu);
+    h2c_maybe_call_state_hook(cc);
+    return err;
+}
+
+static void h2c_nhcc_release(void *self) {
+    h2c_Conn *cc = (h2c_Conn *)self;
+    sync_mutex_lock(&cc->mu);
+    /* We don't complain if streamsReserved is 0.
+     *
+     * This is consistent with RoundTrip: both Release and RoundTrip will
+     * consume a reservation iff one exists. */
+    if (cc->streams_reserved > 0)
+        cc->streams_reserved--;
+    sync_mutex_unlock(&cc->mu);
+    h2c_maybe_call_state_hook(cc);
+}
+
+static Int h2c_nhcc_available(void *self) {
+    h2c_Conn *cc = (h2c_Conn *)self;
+    sync_mutex_lock(&cc->mu);
+    Int n = h2c_available_locked(cc);
+    sync_mutex_unlock(&cc->mu);
+    return n;
+}
+
+static Int h2c_nhcc_in_flight(void *self) {
+    h2c_Conn *cc = (h2c_Conn *)self;
+    sync_mutex_lock(&cc->mu);
+    Int n = h2c_current_request_count_locked(cc);
+    sync_mutex_unlock(&cc->mu);
+    return n;
+}
+
+static Error h2c_nhcc_ping(void *self, Context ctx) {
+    return h2c_ping((h2c_Conn *)self, ctx);
+}
+
+/* Not in Go: closes the connection and lets go of the caller's reference. */
+static void h2c_nhcc_free(void *self) {
+    h2c_Conn *cc = (h2c_Conn *)self;
+    h2c_close_for_error(cc, burrow__http2_err_client_conn_force_closed);
+    h2c_unref(cc);
+}
+
+const burrow__HttpGenericClientConnVT burrow__http2_client_conn_vt = {
+    h2c_nhcc_close,     h2c_nhcc_err,     h2c_nhcc_round_trip,
+    h2c_nhcc_reserve,   h2c_nhcc_release, h2c_nhcc_available,
+    h2c_nhcc_in_flight, h2c_nhcc_ping,    h2c_nhcc_free,
+};
+
+/* NewClientConn. */
+Http2ClientConn *burrow__http2_transport_new_client_conn(Http2Transport *t, NetConn c,
+                                                         Str key, Func hook, Func done,
+                                                         Error *err) {
+    bool single_use = t->t1 != NULL && t->t1->disable_keep_alives;
+    h2c_Conn *cc = h2c_new_client_conn(t, c, single_use, key, hook, done, err);
+    if (cc == NULL)
+        return NULL;
+    /* RoundTrip should block when the conn is at its concurrency limit, not
+     * return an error. Setting strictMaxConcurrentStreams enables this. */
+    sync_mutex_lock(&cc->wmu);
+    sync_mutex_lock(&cc->mu);
+    cc->strict_max_concurrent_streams = true;
+    sync_mutex_unlock(&cc->mu);
+    sync_mutex_unlock(&cc->wmu);
+    return cc;
 }
 
 /* IdleConnStrsForTesting. */

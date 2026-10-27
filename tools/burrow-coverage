@@ -138,6 +138,11 @@ RENAMED = {
     ("os", "type LinkError struct, New"): "OsLinkError.new_",
     # struct is a keyword in C.
     ("encoding/xml", "type TagPathError struct, Struct"): "XmlTagPathError.struct_type",
+    ("encoding/json", "type UnmarshalTypeError struct, Struct"): "JsonUnmarshalTypeError.struct_name",
+    # include/burrow/encoding/json.h: Go's Field is a reflect.StructField, of
+    # which the error's message only uses the name, and Go never returns this
+    # error, so only the name is kept.
+    ("encoding/json", "type UnmarshalFieldError struct, Field"): "JsonUnmarshalFieldError.field_name",
     # class is a keyword in C++, and burrow.h has to compile there.
     ("encoding/asn1", "type RawValue struct, Class"): "Asn1RawValue.cls",
     ("debug/dwarf", "type Field struct, Class"): "DwarfField.cls",

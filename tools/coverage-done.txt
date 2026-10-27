@@ -150,3 +150,5 @@ log/syslog
 net/textproto
 time
 testing/synctest
+encoding/json/v2
+encoding/json

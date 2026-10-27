@@ -1010,9 +1010,12 @@ static Error jx_number_semantic(JsontextKind k, JsontextValue value, Error err) 
     return burrow__jsonv2_semantic_new(&s);
 }
 
+Error json_number_marshal_json_to(JsonNumber n, JsontextEncoder *enc) {
+    return jx_number_marshal_json_to(&n, enc);
+}
+
 /* Number.UnmarshalJSONFrom. */
-static Error jx_number_unmarshal_json_from(JsonNumber *np, Alloc *a,
-                                           Jsonv2DecoderArg dec) {
+Error json_number_unmarshal_json_from(JsonNumber *np, Alloc *a, JsontextDecoder *dec) {
     bool stringify = false;
     (void)jsonv2_get_option(dec->opts, jsonv2_stringify_numbers, &stringify);
     int64_t len = 0;
@@ -1067,7 +1070,7 @@ static Error jx_number_unmarshal_json_from(JsonNumber *np, Alloc *a,
 
 #define JX_NUMBER_METHODS(M, T)                                                        \
     M(T, MarshalJSONTo, jx_number_marshal_json_to, JSONV2_SIG_MARSHAL_JSON_TO)         \
-    M(T, UnmarshalJSONFrom, jx_number_unmarshal_json_from,                             \
+    M(T, UnmarshalJSONFrom, json_number_unmarshal_json_from,                           \
       JSONV2_SIG_UNMARSHAL_JSON_FROM)
 BURROW_METHODS_DEFINE(JsonNumber, JX_NUMBER_METHODS);
 

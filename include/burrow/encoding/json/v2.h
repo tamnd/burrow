@@ -64,6 +64,9 @@ extern "C" {
 
 /* ------------------------------------------------------------------ options */
 
+/* json.Options, which is jsontext's Options under another name. */
+typedef JsontextOptions Jsonv2Options;
+
 /* json.StringifyNumbers. Writes numbers as JSON strings holding the number,
  * and reads them back only from strings. */
 JsontextOptions jsonv2_stringify_numbers(bool v);

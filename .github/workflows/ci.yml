@@ -514,10 +514,21 @@ jobs:
           tools/burrow-gen amalgamate --out dist --source-id ci
           cosmocc -std=c11 -O2 -Wall -Wextra -Werror -Idist -o hello.com dist/burrow.c tests/amalgamation/hello.c
           ./hello.com
+      # The HTTPS server from building.md, which serves itself one page over
+      # TLS 1.3 and checks what it got.
+      - name: an HTTPS server, from the same build
+        run: |
+          mkdir -p dist/include/burrow
+          echo '#include "../../burrow.h"' > dist/include/burrow/burrow.h
+          cosmocc -std=c11 -O2 -Wall -Wextra -Werror -Idist/include -Idist -o https.com dist/burrow.c docs/examples/deploy/https.c
+          ./https.com | tee https.out
+          grep -q 'hello over HTTP/1.1 and TLS 1.3' https.out
       - uses: actions/upload-artifact@v7
         with:
           name: hello-cosmo
-          path: hello.com
+          path: |
+            hello.com
+            https.com
 
   cosmopolitan-run:
     name: cosmopolitan (${{ matrix.os }})
@@ -532,11 +543,13 @@ jobs:
       - uses: actions/download-artifact@v8
         with:
           name: hello-cosmo
-      - name: the same file, unchanged
+      - name: the same files, unchanged
         shell: bash
         run: |
-          chmod +x hello.com
+          chmod +x hello.com https.com
           ./hello.com
+          ./https.com | tee https.out
+          grep -q 'hello over HTTP/1.1 and TLS 1.3' https.out
 
   # GOOS=wasip1 GOARCH=wasm. wasi-sdk builds it, wasm-opt from Binaryen adds
   # the Asyncify rewrite the goroutine switch needs to every test binary, and

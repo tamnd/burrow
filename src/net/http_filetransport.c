@@ -6,6 +6,8 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#include "burrow/net/http.h"
+
 #include "burrow/chan.h"
 #include "burrow/core.h"
 #include "burrow/error.h"
@@ -15,7 +17,6 @@
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
 #include "burrow/mem/heap.h"
-#include "burrow/net/http.h"
 #include "burrow/proc.h"
 #include "burrow/type.h"
 

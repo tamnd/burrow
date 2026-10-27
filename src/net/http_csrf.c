@@ -6,13 +6,14 @@
  * Use of this source code is governed by a BSD-style licence that can be found
  * in the LICENSE file. */
 
+#include "burrow/net/http.h"
+
 #include "burrow/core.h"
 #include "burrow/error.h"
 #include "burrow/fmt.h"
 #include "burrow/map.h"
 #include "burrow/mem.h"
 #include "burrow/mem/arena.h"
-#include "burrow/net/http.h"
 #include "burrow/net/url.h"
 #include "burrow/sync.h"
 #include "burrow/type.h"
@@ -20,8 +21,6 @@
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
-
-#define S(lit) BURROW_S(lit)
 
 HttpCrossOriginProtection *http_new_cross_origin_protection(Alloc *a) {
     HttpCrossOriginProtection *c = (HttpCrossOriginProtection *)mem_alloc(
@@ -154,17 +153,18 @@ static bool coh_is_request_exempt(HttpCrossOriginProtection *c, const HttpReques
 
 Error http_cross_origin_protection_check(HttpCrossOriginProtection *c,
                                          const HttpRequest *req) {
-    if (str_eq(req->method, S("GET")) || str_eq(req->method, S("HEAD")) ||
-        str_eq(req->method, S("OPTIONS"))) {
+    if (str_eq(req->method, BURROW_S("GET")) || str_eq(req->method, BURROW_S("HEAD")) ||
+        str_eq(req->method, BURROW_S("OPTIONS"))) {
         /* Safe methods are always allowed. */
         return BURROW_NO_ERROR;
     }
 
-    Str site = http_header_get(req->header, S("Sec-Fetch-Site"));
+    Str site = http_header_get(req->header, BURROW_S("Sec-Fetch-Site"));
     if (site.len == 0) {
         /* No Sec-Fetch-Site header is present.
          * Fallthrough to check the Origin header. */
-    } else if (str_eq(site, S("same-origin")) || str_eq(site, S("none"))) {
+    } else if (str_eq(site, BURROW_S("same-origin")) ||
+               str_eq(site, BURROW_S("none"))) {
         return BURROW_NO_ERROR;
     } else {
         if (coh_is_request_exempt(c, req))
@@ -172,7 +172,7 @@ Error http_cross_origin_protection_check(HttpCrossOriginProtection *c,
         return coh_err_cross_origin_request;
     }
 
-    Str origin = http_header_get(req->header, S("Origin"));
+    Str origin = http_header_get(req->header, BURROW_S("Origin"));
     if (origin.len == 0) {
         /* Neither Sec-Fetch-Site nor Origin headers are present.
          * Either the request is same-origin or not a browser request. */
@@ -221,7 +221,7 @@ static bool coh_is_request_exempt(HttpCrossOriginProtection *c,
     }
 
     sync_rw_mutex_r_lock(&c->mu);
-    Str origin = http_header_get(req->header, S("Origin"));
+    Str origin = http_header_get(req->header, BURROW_S("Origin"));
     /* The request matches a trusted origin. */
     bool *trusted = NULL;
     if (origin.len != 0 && c->trusted != NULL)

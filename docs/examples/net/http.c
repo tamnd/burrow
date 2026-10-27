@@ -171,6 +171,7 @@ static const HttpResponseWriterVT printer_vt = {
     NULL,
     NULL,
     NULL,
+    NULL,
 };
 
 static void show_note(void *env, HttpResponseWriter w, HttpRequest *r) {

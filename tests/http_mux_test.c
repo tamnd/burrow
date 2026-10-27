@@ -93,6 +93,7 @@ static const HttpResponseWriterVT rec_vt = {
     NULL,
     NULL,
     NULL,
+    NULL,
 };
 
 /* httptest.NewRecorder, with 200 for the code until something writes one. */

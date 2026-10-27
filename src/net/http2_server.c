@@ -13,8 +13,9 @@
  * before it frees anything. Errors that go from one goroutine to another are
  * copied into an arena the connection keeps until it is done.
  *
- * Server push is not here, since net/http's ResponseWriter has no Push in C,
- * but the server still keeps track of whether the client allows it.
+ * A push is one record that the handler pushing it and the serve goroutine
+ * both hold, since the handler may stop waiting for its answer while the
+ * PUSH_PROMISE is still to be written.
  *
  * Copyright 2014 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -23,6 +24,7 @@
 
 #include "http2.h"
 #include "http2_ciphers.h"
+#include "http_ascii.h"
 #include "http_internal.h"
 
 #include "../xnet/hpack.h"
@@ -97,6 +99,12 @@ BURROW_SENTINEL_ERROR(burrow__http2_err_preface_timeout,
 BURROW_SENTINEL_ERROR(burrow__http2_err_handler_panicked, "http2: handler panicked");
 BURROW_SENTINEL_ERROR(burrow__http2_err_handler_wrote_too_much,
                       "http2: handler wrote more than declared Content-Length");
+/* Push errors. */
+BURROW_SENTINEL_ERROR(burrow__http2_err_recursive_push,
+                      "http2: recursive push not allowed");
+BURROW_SENTINEL_ERROR(
+    burrow__http2_err_push_limit_reached,
+    "http2: push would exceed peer's SETTINGS_MAX_CONCURRENT_STREAMS");
 BURROW_SENTINEL_ERROR(
     burrow__http2_err_missing_required_cipher,
     "http2: TLSConfig.CipherSuites is missing an HTTP/2-required AES_128_GCM_SHA256 "
@@ -307,12 +315,16 @@ typedef enum h2s_MsgKind {
     H2S_MSG_HANDLER_DONE,
     H2S_MSG_READ_DEADLINE,
     H2S_MSG_WRITE_DEADLINE,
+    H2S_MSG_START_PUSH,
 } h2s_MsgKind;
+
+typedef struct h2s_Push h2s_Push;
 
 typedef struct h2s_Msg {
     h2s_MsgKind kind;
     h2s_Stream *st;
     Time deadline;
+    h2s_Push *push; /* startPushRequest's, with st its parent */
 } h2s_Msg;
 
 /* unstartedHandler. */
@@ -334,6 +346,20 @@ typedef struct h2s_ResHeaders {
     Http2WriteResHeaders rh;
     Arena arena;
 } h2s_ResHeaders;
+
+/* startPushRequest, and the writePushPromise made from it, which point at
+ * the same method, url and header. pp.stream_id is the parent's. The handler
+ * that pushed holds one ref until it has its answer or gives up, and the
+ * message, and then the write request, hold the other. done is a Chan of
+ * Error with room for one. */
+struct h2s_Push {
+    Http2WritePushPromise pp; /* first, for the write request */
+    SyncAtomicInt32 refs;
+    h2s_Conn *sc;
+    h2s_Stream *parent;
+    Chan *done;
+    Arena arena;
+};
 
 /* serverConn. */
 struct burrow__Http2ServeConn {
@@ -745,19 +771,41 @@ static Http2FrameWriteRequest h2s_wr_make(Http2WriteFramer w, h2s_Stream *st,
     return wr;
 }
 
-/* Frees the copy of the res headers a request carries, if it has one. */
+static void h2s_push_unref(h2s_Push *p) {
+    if (sync_atomic_int32_add(&p->refs, -1) != 0)
+        return;
+    Alloc *a = p->sc->a;
+    chan_free(p->done);
+    arena_free(&p->arena);
+    mem_free(a, p, sizeof *p, _Alignof(h2s_Push));
+}
+
+/* Frees the copy of the res headers a request carries, if it has one, and
+ * lets go of a push. */
 static void h2s_wr_free_headers(h2s_Conn *sc, Http2FrameWriteRequest *wr) {
     if (wr->write.kind == HTTP2_WRITE_RES_HEADERS && wr->write.u.res_headers != NULL) {
         h2s_res_headers_free(sc->a, wr->write.u.res_headers);
         wr->write.u.res_headers = NULL;
+    } else if (wr->write.kind == HTTP2_WRITE_PUSH_PROMISE &&
+               wr->write.u.push_promise != NULL) {
+        h2s_push_unref((h2s_Push *)(void *)wr->write.u.push_promise);
+        wr->write.u.push_promise = NULL;
     }
 }
 
-/* replyToWriter, which clears wr->write, so the headers go first. */
+/* replyToWriter, which clears wr->write, so the headers go first. A push
+ * goes after, since done is the push's. */
 static void h2s_wr_reply(h2s_Conn *sc, Http2FrameWriteRequest *wr, Error err) {
-    if (wr->done != NULL)
-        h2s_wr_free_headers(sc, wr);
+    h2s_Push *push = NULL;
+    if (wr->done != NULL) {
+        if (wr->write.kind == HTTP2_WRITE_PUSH_PROMISE)
+            push = (h2s_Push *)(void *)wr->write.u.push_promise;
+        else
+            h2s_wr_free_headers(sc, wr);
+    }
     burrow__http2_frame_write_request_reply_to_writer(wr, err);
+    if (push != NULL)
+        h2s_push_unref(push);
 }
 
 /* Lets go of what a request holds, once it is written or thrown away. */
@@ -1194,6 +1242,17 @@ static void h2s_start_frame_write(h2s_Conn *sc, Http2FrameWriteRequest wr) {
         case H2S_STATE_HALF_CLOSED_REMOTE:
         default:
             break;
+        }
+    }
+    if (wr.write.kind == HTTP2_WRITE_PUSH_PROMISE) {
+        Http2WritePushPromise *wpp = wr.write.u.push_promise;
+        Error err = BURROW_NO_ERROR;
+        wpp->promised_id = BURROW_CALLF(wpp->allocate_promised_id, &err);
+        if (BURROW_FAILED(err)) {
+            sc->writing_frame_async = false;
+            h2s_wr_reply(sc, &wr, err);
+            h2s_wr_release(sc, &wr);
+            return;
         }
     }
 
@@ -2048,79 +2107,44 @@ static HttpHeader h2s_declared_trailers(Alloc *a, HttpHeader header) {
     return trailer;
 }
 
-/* newWriterAndRequest. NULL and an error, or the request. */
-static HttpRequest *h2s_new_writer_and_request(h2s_Conn *sc, h2s_Stream *st,
-                                               Http2Frame *f, Error *err) {
-    *err = BURROW_NO_ERROR;
-    uint32_t id = f->header.stream_id;
-    Str method = burrow__http2_meta_headers_frame_pseudo_value(f, BURROW_S("method"));
-    Str scheme = burrow__http2_meta_headers_frame_pseudo_value(f, BURROW_S("scheme"));
-    Str authority =
-        burrow__http2_meta_headers_frame_pseudo_value(f, BURROW_S("authority"));
-    Str path = burrow__http2_meta_headers_frame_pseudo_value(f, BURROW_S("path"));
-    Str protocol =
-        burrow__http2_meta_headers_frame_pseudo_value(f, BURROW_S("protocol"));
+/* httpcommon.ServerRequestParam. The strings and header are in the
+ * request's arena. */
+typedef struct h2s_ReqParam {
+    Str method;
+    Str scheme;
+    Str authority;
+    Str path;
+    Str protocol;
+    HttpHeader header;
+} h2s_ReqParam;
 
-    if (burrow__http2_extended_connect_disabled() && protocol.len != 0) {
-        *err = h2s_stream_err(sc, "bad_connect", id, HTTP2_ERR_CODE_PROTOCOL);
-        return NULL;
-    }
-
-    bool is_connect = str_eq(method, BURROW_S("CONNECT"));
-    if (is_connect) {
-        if (protocol.len == 0 &&
-            (path.len != 0 || scheme.len != 0 || authority.len == 0)) {
-            *err = h2s_stream_err(sc, "bad_connect", id, HTTP2_ERR_CODE_PROTOCOL);
-            return NULL;
-        }
-    } else if (method.len == 0 || path.len == 0 ||
-               (!str_eq(scheme, BURROW_S("https")) &&
-                !str_eq(scheme, BURROW_S("http")))) {
-        /* See 8.1.2.6 Malformed Requests and Responses:
-
-           Malformed requests or responses that are detected MUST be treated
-           as a stream error (Section 5.4.2) of type PROTOCOL_ERROR.
-
-           8.1.2.3 Request Pseudo-Header Fields "All HTTP/2 requests MUST
-           include exactly one valid value for the :method, :scheme, and
-           :path pseudo-header fields" */
-        *err = h2s_stream_err(sc, "bad_path_method", id, HTTP2_ERR_CODE_PROTOCOL);
-        return NULL;
-    }
-
+/* The request a stream frees, empty. NULL when memory runs out. */
+static HttpRequest *h2s_new_request(h2s_Conn *sc, h2s_Stream *st) {
     HttpRequest *req =
         (HttpRequest *)mem_alloc(sc->a, sizeof *req, _Alignof(HttpRequest));
-    if (req == NULL) {
-        *err = burrow_err_out_of_memory;
+    if (req == NULL)
         return NULL;
-    }
     memset(req, 0, sizeof *req);
     req->a = sc->a;
     arena_init(&req->arena, sc->a, 0);
     st->req = req; /* the stream frees it */
+    return req;
+}
+
+/* newWriterAndRequestNoBody, with httpcommon.NewServerRequest, which fills in
+ * req. NULL and an error, or req. */
+static HttpRequest *h2s_new_writer_and_request_no_body(h2s_Conn *sc, h2s_Stream *st,
+                                                       HttpRequest *req,
+                                                       h2s_ReqParam rp, Error *err) {
+    *err = BURROW_NO_ERROR;
     Alloc *ra = arena_allocator(&req->arena);
-    method = str_clone(ra, method);
-    scheme = str_clone(ra, scheme);
-    authority = str_clone(ra, authority);
-    path = str_clone(ra, path);
-    protocol = str_clone(ra, protocol);
-
-    HttpHeader header = http_header_make(ra);
-    if (header == NULL) {
-        *err = burrow_err_out_of_memory;
-        return NULL;
-    }
-    HpackHeaderFields fs = burrow__http2_meta_headers_frame_regular_fields(f);
-    for (Int i = 0; i < fs.len; i++) {
-        Str key = http_canonical_header_key(ra, str_clone(ra, fs.p[i].name));
-        (void)http_header_add(header, key, str_clone(ra, fs.p[i].value));
-    }
-    if (authority.len == 0)
-        authority = http_header_get(header, BURROW_S("Host"));
-    if (protocol.len != 0)
-        (void)http_header_set(header, BURROW_S(":protocol"), protocol);
-
-    /* newWriterAndRequestNoBody, with httpcommon.NewServerRequest. */
+    Str method = rp.method;
+    Str scheme = rp.scheme;
+    Str authority = rp.authority;
+    Str path = rp.path;
+    HttpHeader header = rp.header;
+    bool is_connect = str_eq(method, BURROW_S("CONNECT"));
+    Str protocol = rp.protocol;
     Slice expect = http_header_values(header, BURROW_S("Expect"));
     bool needs_continue = burrow__httpguts_header_values_contains_token(
         (const Str *)expect.p, expect.len, BURROW_S("100-continue"));
@@ -2197,6 +2221,85 @@ static HttpRequest *h2s_new_writer_and_request(h2s_Conn *sc, h2s_Stream *st,
     req->body.vt = &h2s_rb_vt;
     req->body.data = &st->body;
     req->trailer = trailer;
+    return req;
+}
+
+/* newWriterAndRequest. NULL and an error, or the request. */
+static HttpRequest *h2s_new_writer_and_request(h2s_Conn *sc, h2s_Stream *st,
+                                               Http2Frame *f, Error *err) {
+    *err = BURROW_NO_ERROR;
+    uint32_t id = f->header.stream_id;
+    Str method = burrow__http2_meta_headers_frame_pseudo_value(f, BURROW_S("method"));
+    Str scheme = burrow__http2_meta_headers_frame_pseudo_value(f, BURROW_S("scheme"));
+    Str authority =
+        burrow__http2_meta_headers_frame_pseudo_value(f, BURROW_S("authority"));
+    Str path = burrow__http2_meta_headers_frame_pseudo_value(f, BURROW_S("path"));
+    Str protocol =
+        burrow__http2_meta_headers_frame_pseudo_value(f, BURROW_S("protocol"));
+
+    if (burrow__http2_extended_connect_disabled() && protocol.len != 0) {
+        *err = h2s_stream_err(sc, "bad_connect", id, HTTP2_ERR_CODE_PROTOCOL);
+        return NULL;
+    }
+
+    bool is_connect = str_eq(method, BURROW_S("CONNECT"));
+    if (is_connect) {
+        if (protocol.len == 0 &&
+            (path.len != 0 || scheme.len != 0 || authority.len == 0)) {
+            *err = h2s_stream_err(sc, "bad_connect", id, HTTP2_ERR_CODE_PROTOCOL);
+            return NULL;
+        }
+    } else if (method.len == 0 || path.len == 0 ||
+               (!str_eq(scheme, BURROW_S("https")) &&
+                !str_eq(scheme, BURROW_S("http")))) {
+        /* See 8.1.2.6 Malformed Requests and Responses:
+
+           Malformed requests or responses that are detected MUST be treated
+           as a stream error (Section 5.4.2) of type PROTOCOL_ERROR.
+
+           8.1.2.3 Request Pseudo-Header Fields "All HTTP/2 requests MUST
+           include exactly one valid value for the :method, :scheme, and
+           :path pseudo-header fields" */
+        *err = h2s_stream_err(sc, "bad_path_method", id, HTTP2_ERR_CODE_PROTOCOL);
+        return NULL;
+    }
+
+    HttpRequest *req = h2s_new_request(sc, st);
+    if (req == NULL) {
+        *err = burrow_err_out_of_memory;
+        return NULL;
+    }
+    Alloc *ra = arena_allocator(&req->arena);
+    method = str_clone(ra, method);
+    scheme = str_clone(ra, scheme);
+    authority = str_clone(ra, authority);
+    path = str_clone(ra, path);
+    protocol = str_clone(ra, protocol);
+
+    HttpHeader header = http_header_make(ra);
+    if (header == NULL) {
+        *err = burrow_err_out_of_memory;
+        return NULL;
+    }
+    HpackHeaderFields fs = burrow__http2_meta_headers_frame_regular_fields(f);
+    for (Int i = 0; i < fs.len; i++) {
+        Str key = http_canonical_header_key(ra, str_clone(ra, fs.p[i].name));
+        (void)http_header_add(header, key, str_clone(ra, fs.p[i].value));
+    }
+    if (authority.len == 0)
+        authority = http_header_get(header, BURROW_S("Host"));
+    if (protocol.len != 0)
+        (void)http_header_set(header, BURROW_S(":protocol"), protocol);
+
+    h2s_ReqParam rp;
+    rp.method = method;
+    rp.scheme = scheme;
+    rp.authority = authority;
+    rp.path = path;
+    rp.protocol = protocol;
+    rp.header = header;
+    if (h2s_new_writer_and_request_no_body(sc, st, req, rp, err) == NULL)
+        return NULL;
 
     bool body_open = !burrow__http2_headers_frame_stream_ended(f);
     Slice clens = http_header_values(header, BURROW_S("Content-Length"));
@@ -3158,7 +3261,161 @@ static const Type h2s_rw_desc = {{(const Byte *)"responseWriter", 14},
                                  0x5b17e2c9U,
                                  NULL};
 
-/* No Hijack, which HTTP/2 can't do, and no Unwrap. */
+/* responseWriter.Push, with net/http's http2ResponseWriter.Push, which takes
+ * the method and header from opts. */
+static Error h2s_rw_push(void *self, Str target, const HttpPushOptions *opts) {
+    h2s_Rws *rws = h2s_rw_state(self, "Push");
+    h2s_Stream *st = rws->stream;
+    h2s_Conn *sc = st->sc;
+
+    /* No recursive pushes: "PUSH_PROMISE frames MUST only be sent on a
+     * peer-initiated stream."
+     * http://tools.ietf.org/html/rfc7540#section-6.6 */
+    if (st->base.id % 2 == 0)
+        return burrow__http2_err_recursive_push;
+
+    /* Default options. */
+    Str method = opts != NULL ? opts->method : BURROW_S("");
+    HttpHeader header = opts != NULL ? opts->header : NULL;
+    if (method.len == 0)
+        method = BURROW_S("GET");
+    Str want_scheme = BURROW_S("http");
+    if (rws->req->tls != NULL)
+        want_scheme = BURROW_S("https");
+
+    h2s_Push *push = (h2s_Push *)mem_alloc(sc->a, sizeof *push, _Alignof(h2s_Push));
+    if (push == NULL)
+        return burrow_err_out_of_memory;
+    memset(push, 0, sizeof *push);
+    push->sc = sc;
+    push->parent = st;
+    arena_init(&push->arena, sc->a, 0);
+    sync_atomic_int32_store(&push->refs, 1);
+    Alloc *pa = arena_allocator(&push->arena);
+
+    /* Validate the request. */
+    Error err = BURROW_NO_ERROR;
+    Url *u = url_parse(pa, target, &err);
+    if (u == NULL)
+        goto fail;
+    if (u->scheme.len == 0) {
+        if (!strings_has_prefix(target, BURROW_S("/"))) {
+            err = fmt_errorf_v("target must be an absolute URL or an absolute path: %q",
+                               target);
+            goto fail;
+        }
+        u->scheme = want_scheme;
+        u->host = str_clone(pa, rws->req->host);
+    } else {
+        if (!str_eq(u->scheme, want_scheme)) {
+            err = fmt_errorf_v("cannot push URL with scheme %q from request with "
+                               "scheme %q",
+                               u->scheme, want_scheme);
+            goto fail;
+        }
+        if (u->host.len == 0) {
+            err = fmt_errorf_v("URL must have a host");
+            goto fail;
+        }
+    }
+    if (header != NULL) {
+        MapIter it = map_iter(header);
+        const void *kp;
+        void *v;
+        while (map_next(&it, &kp, &v)) {
+            Str k = *(const Str *)kp;
+            if (strings_has_prefix(k, BURROW_S(":"))) {
+                err = fmt_errorf_v(
+                    "promised request headers cannot include pseudo header %q", k);
+                goto fail;
+            }
+            /* These headers are meaningful only if the request has a body,
+             * but PUSH_PROMISE requests cannot have a body.
+             * http://tools.ietf.org/html/rfc7540#section-8.2
+             * Also disallow Host, since the promised URL must be absolute. */
+            if (burrow__http_ascii_equal_fold(k, BURROW_S("content-length")) ||
+                burrow__http_ascii_equal_fold(k, BURROW_S("content-encoding")) ||
+                burrow__http_ascii_equal_fold(k, BURROW_S("trailer")) ||
+                burrow__http_ascii_equal_fold(k, BURROW_S("te")) ||
+                burrow__http_ascii_equal_fold(k, BURROW_S("expect")) ||
+                burrow__http_ascii_equal_fold(k, BURROW_S("host"))) {
+                err = fmt_errorf_v("promised request headers cannot include %q", k);
+                goto fail;
+            }
+        }
+        err = h2s_check_valid_request_headers(header);
+        if (BURROW_FAILED(err))
+            goto fail;
+    }
+
+    /* The RFC effectively limits promised requests to GET and HEAD:
+     * "Promised requests MUST be cacheable [GET, HEAD, or POST], and MUST be
+     * safe [GET or HEAD]"
+     * http://tools.ietf.org/html/rfc7540#section-8.2 */
+    if (!str_eq(method, BURROW_S("GET")) && !str_eq(method, BURROW_S("HEAD"))) {
+        err = fmt_errorf_v("method %q must be GET or HEAD", method);
+        goto fail;
+    }
+
+    push->pp.stream_id = st->base.id;
+    push->pp.method = str_clone(pa, method);
+    push->pp.url = u;
+    push->pp.h = header != NULL ? http_header_clone(header, pa) : http_header_make(pa);
+    push->done = chan_make(sc->a, TYPE_ERROR, 1);
+    if (push->pp.h == NULL || push->done == NULL ||
+        (method.len != 0 && push->pp.method.len == 0)) {
+        err = burrow_err_out_of_memory;
+        goto fail;
+    }
+
+    /* The message's hold on the push, and on st. */
+    sync_atomic_int32_store(&push->refs, 2);
+    h2s_Msg m = h2s_msg(H2S_MSG_START_PUSH);
+    m.st = st;
+    m.push = push;
+    h2s_stream_ref(st);
+    SelectCase send[] = {
+        BURROW_RECV(sc->done_serving, NULL),
+        BURROW_RECV(st->cw, NULL),
+        BURROW_SEND(sc->serve_msg_ch, &m),
+    };
+    switch (chan_select(send, 3)) {
+    case 0:
+        err = burrow__http2_err_client_disconnected;
+        break;
+    case 1:
+        err = burrow__http2_err_stream_closed;
+        break;
+    default:
+        break;
+    }
+    if (BURROW_FAILED(err)) {
+        h2s_stream_unref(st);
+        h2s_push_unref(push);
+        goto fail;
+    }
+
+    SelectCase wait[] = {
+        BURROW_RECV(sc->done_serving, NULL),
+        BURROW_RECV(st->cw, NULL),
+        BURROW_RECV(push->done, &err),
+    };
+    switch (chan_select(wait, 3)) {
+    case 0:
+        err = burrow__http2_err_client_disconnected;
+        break;
+    case 1:
+        err = burrow__http2_err_stream_closed;
+        break;
+    default:
+        break;
+    }
+fail:
+    h2s_push_unref(push);
+    return err;
+}
+
+/* No Hijack, which HTTP/2 can't do, and no Unwrap, but Push. */
 static const HttpResponseWriterVT h2s_rw_vt = {
     {&h2s_rw_desc, h2s_rw_write},
     h2s_rw_header,
@@ -3170,6 +3427,7 @@ static const HttpResponseWriterVT h2s_rw_vt = {
     h2s_rw_enable_full_duplex,
     h2s_rw_close_notify,
     NULL,
+    h2s_rw_push,
 };
 
 /* responseWriter.handlerDone. */
@@ -3393,6 +3651,122 @@ static void h2s_run_handler(void *env) {
     sync_wait_group_done(&sc->wg);
 }
 
+/* ------------------------------------------------------------------- push */
+
+/* startPush's allocatePromisedID. PUSH_PROMISE frames must be sent in
+ * increasing order by stream ID, so we allocate an ID for the promised stream
+ * lazily, when the PUSH_PROMISE is written. Once the ID is allocated, we
+ * start the request handler. */
+static uint32_t h2s_allocate_promised_id(void *env, Error *err) {
+    h2s_Push *push = (h2s_Push *)env;
+    h2s_Conn *sc = push->sc;
+    *err = BURROW_NO_ERROR;
+
+    /* Check this again, just in case. Technically, we might have received an
+     * updated SETTINGS by the time we got around to writing this frame. */
+    if (!sc->push_enabled) {
+        *err = http_err_not_supported;
+        return 0;
+    }
+    /* http://tools.ietf.org/html/rfc7540#section-6.5.2. */
+    if (sc->cur_pushed_streams + 1 > sc->client_max_streams) {
+        *err = burrow__http2_err_push_limit_reached;
+        return 0;
+    }
+
+    /* http://tools.ietf.org/html/rfc7540#section-5.1.1. Streams initiated by
+     * the server MUST use even-numbered identifiers. A server that is unable
+     * to establish a new stream identifier can send a GOAWAY frame so that
+     * the client is forced to open a new connection for new streams. */
+    if ((uint64_t)sc->max_pushed_stream_id + 2 >= (uint64_t)0x80000000U) {
+        /* startGracefulShutdownInternal */
+        h2s_go_away(sc, HTTP2_ERR_CODE_NO);
+        *err = burrow__http2_err_push_limit_reached;
+        return 0;
+    }
+    sc->max_pushed_stream_id += 2;
+    uint32_t promised_id = sc->max_pushed_stream_id;
+
+    /* http://tools.ietf.org/html/rfc7540#section-8.2. Strictly speaking, the
+     * new stream should start in "reserved (local)", then transition to "half
+     * closed (remote)" after sending the initial HEADERS, but we start in
+     * "half closed (remote)" for simplicity. See further comments at the
+     * definition of stateHalfClosedRemote. */
+    h2s_Stream *promised = h2s_new_stream(
+        sc, promised_id, push->parent->base.id, H2S_STATE_HALF_CLOSED_REMOTE,
+        burrow__http2_default_rfc9218_priority(sc->priority_aware &&
+                                               !sc->has_intermediary));
+    if (promised == NULL) {
+        *err = burrow_err_out_of_memory;
+        return 0;
+    }
+    /* Not in Go, where allocation can't fail: running out of memory from here
+     * on closes the promised stream before its PUSH_PROMISE goes out. */
+    HttpRequest *req = h2s_new_request(sc, promised);
+    if (req == NULL) {
+        *err = burrow_err_out_of_memory;
+        h2s_close_stream(sc, promised, *err);
+        return 0;
+    }
+    Alloc *ra = arena_allocator(&req->arena);
+    const Url *u = push->pp.url;
+    h2s_ReqParam rp;
+    memset(&rp, 0, sizeof rp);
+    rp.method = str_clone(ra, push->pp.method);
+    rp.scheme = str_clone(ra, u->scheme);
+    rp.authority = str_clone(ra, u->host);
+    rp.path = url_request_uri(u, ra);
+    /* clone since handler runs concurrently with writing the PUSH_PROMISE */
+    rp.header = http_header_clone(push->pp.h, ra);
+    if (rp.header == NULL ||
+        h2s_new_writer_and_request_no_body(sc, promised, req, rp, err) == NULL) {
+        if (BURROW_OK(*err))
+            *err = burrow_err_out_of_memory;
+        /* Should not happen, since we've already validated msg.url, unless
+         * memory ran out. */
+        h2s_close_stream(sc, promised, *err);
+        return 0;
+    }
+    promised->handler_kind = H2S_HANDLER_SERVER;
+
+    sc->cur_handlers++;
+    h2s_stream_ref(promised);
+    if (!h2s_go_handler(sc, promised)) {
+        sc->cur_handlers--;
+        h2s_stream_unref(promised);
+        *err = burrow_err_out_of_memory;
+        h2s_close_stream(sc, promised, *err);
+        return 0;
+    }
+    return promised_id;
+}
+
+/* startPush. Lets go of the message's hold on push. */
+static void h2s_start_push(h2s_Conn *sc, h2s_Push *push) {
+    h2s_Stream *parent = push->parent;
+    Error err = BURROW_NO_ERROR;
+    /* http://tools.ietf.org/html/rfc7540#section-6.6. PUSH_PROMISE frames
+     * MUST only be sent on a peer-initiated stream that is in either the
+     * "open" or "half-closed (remote)" state. */
+    if (parent->state != H2S_STATE_OPEN &&
+        parent->state != H2S_STATE_HALF_CLOSED_REMOTE) {
+        /* responseWriter.Push checks that the stream is peer-initiated. */
+        err = burrow__http2_err_stream_closed;
+    } else if (!sc->push_enabled) {
+        /* http://tools.ietf.org/html/rfc7540#section-6.6. */
+        err = http_err_not_supported;
+    }
+    if (BURROW_FAILED(err)) {
+        (void)chan_try_send(push->done, &err);
+        h2s_push_unref(push);
+        return;
+    }
+    push->pp.allocate_promised_id.f = h2s_allocate_promised_id;
+    push->pp.allocate_promised_id.env = push;
+    h2s_write_frame(sc, h2s_wr_make(burrow__http2_write_push_promise(&push->pp), parent,
+                                    push->done));
+}
+
 /* ------------------------------------------------------------- the serve loop */
 
 /* handlePingTimer. */
@@ -3470,6 +3844,9 @@ static void h2s_serve_msg(h2s_Conn *sc, h2s_Msg m, bool *stop) {
         h2s_stream_apply_deadline(m.st, &m.st->write_deadline,
                                   &m.st->write_deadline_live, m.deadline,
                                   h2s_write_deadline_fire);
+        break;
+    case H2S_MSG_START_PUSH:
+        h2s_start_push(sc, m.push);
         break;
     default:
         panic_str(BURROW_S("unknown timer"));
@@ -3688,6 +4065,8 @@ static void h2s_drain(h2s_Conn *sc) {
         h2s_wr_release(sc, &wres.wr);
     h2s_Msg m;
     while (chan_try_recv(sc->serve_msg_ch, &m, NULL)) {
+        if (m.push != NULL)
+            h2s_push_unref(m.push);
         if (m.st != NULL)
             h2s_stream_unref(m.st);
     }

@@ -740,8 +740,21 @@ BURROW_OWNS(ret) Slice http_response_cookies(const HttpResponse *r, Alloc *a);
  * set_write_deadline, enable_full_duplex and close_notify are the methods of
  * the same names, and unwrap gives the writer this one wraps, for a
  * middleware writer that wants the controller to reach the methods of the one
- * under it. */
+ * under it. push is Pusher's Push, which only an HTTP/2 writer has, and which
+ * the controller does not reach, as in Go. */
 struct HttpResponseWriter;
+
+/* PushOptions describes options for [Pusher.Push]. */
+typedef struct HttpPushOptions {
+    /* Method specifies the HTTP method for the promised request.
+     * If set, it must be "GET" or "HEAD". Empty means "GET". */
+    Str method;
+
+    /* Header specifies additional promised request headers. This cannot
+     * include HTTP/2 pseudo header fields like ":path" and ":scheme",
+     * which will be added automatically. */
+    HttpHeader header;
+} HttpPushOptions;
 
 typedef struct HttpResponseWriterVT {
     IoWriterVT writer;
@@ -754,12 +767,26 @@ typedef struct HttpResponseWriterVT {
     Error (*enable_full_duplex)(void *self);
     Chan *(*close_notify)(void *self);
     struct HttpResponseWriter (*unwrap)(void *self);
+    Error (*push)(void *self, Str target, const HttpPushOptions *opts);
 } HttpResponseWriterVT;
 
 typedef struct HttpResponseWriter {
     const HttpResponseWriterVT *vt;
     void *data;
 } HttpResponseWriter;
+
+/* The Flusher, Hijacker, CloseNotifier and Pusher interfaces, which are a
+ * ResponseWriter with the matching slot set. Go finds them with a type
+ * assertion, and here the slot is NULL in a writer that does not have the
+ * method. */
+typedef HttpResponseWriterVT HttpFlusherVT;
+typedef HttpResponseWriter HttpFlusher;
+typedef HttpResponseWriterVT HttpHijackerVT;
+typedef HttpResponseWriter HttpHijacker;
+typedef HttpResponseWriterVT HttpCloseNotifierVT;
+typedef HttpResponseWriter HttpCloseNotifier;
+typedef HttpResponseWriterVT HttpPusherVT;
+typedef HttpResponseWriter HttpPusher;
 
 /* The writer as the IoWriter it embeds. */
 IoWriter http_response_writer_as_io_writer(HttpResponseWriter w);

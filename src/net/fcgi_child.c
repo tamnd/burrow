@@ -245,6 +245,7 @@ static const HttpResponseWriterVT fch_response_vt = {
     NULL,
     NULL,
     NULL,
+    NULL,
 };
 
 /* ------------------------------------------------------------- the child */

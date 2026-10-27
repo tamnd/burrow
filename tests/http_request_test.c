@@ -1214,6 +1214,7 @@ static const HttpResponseWriterVT just_writer_vt = {
     NULL,
     NULL,
     NULL,
+    NULL,
 };
 
 /* delayedEOFReader never returns (n > 0, io.EOF), instead putting off the

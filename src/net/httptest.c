@@ -189,6 +189,7 @@ static const HttpResponseWriterVT hh_writer_vt = {
     NULL,
     NULL,
     NULL,
+    NULL,
 };
 
 HttpResponseWriter

@@ -723,6 +723,7 @@ static const HttpResponseWriterVT sv_response_vt = {
     sv_response_enable_full_duplex,
     sv_response_close_notify,
     NULL,
+    NULL,
 };
 
 static HttpResponseWriter sv_as_writer(sv_Response *w) {
@@ -3106,6 +3107,14 @@ typedef struct sv_TimeoutWriter {
     Arena arena;
 } sv_TimeoutWriter;
 
+/* Push implements the [Pusher] interface. */
+static Error sv_tw_push(void *self, Str target, const HttpPushOptions *opts) {
+    sv_TimeoutWriter *tw = (sv_TimeoutWriter *)self;
+    if (tw->w.vt->push != NULL)
+        return tw->w.vt->push(tw->w.data, target, opts);
+    return http_err_not_supported;
+}
+
 static HttpHeader sv_tw_header(void *self) {
     return ((sv_TimeoutWriter *)self)->h;
 }
@@ -3181,6 +3190,7 @@ static const HttpResponseWriterVT sv_timeout_writer_vt = {
     NULL,
     NULL,
     NULL,
+    sv_tw_push,
 };
 
 static bool sv_tw_call(sv_TimeoutWriter *tw) {

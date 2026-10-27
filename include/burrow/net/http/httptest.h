@@ -14,14 +14,19 @@
  *     httptest_response_recorder_free(rec);
  *     http_request_free(r);
  *
- * And with one, an HttptestServer serves a handler on a port of the loopback
- * address and has a client to talk to it with:
+ * And with one, an HttptestServer serves a handler and has a client to talk
+ * to it with. Most tests should make it with httptest_new_test_server, which
+ * serves on a network in memory and is shut down and given back at the end of
+ * the test:
  *
- *     HttptestServer *ts = httptest_new_server(NULL, h);
- *     HttpResponse *res = http_client_get(httptest_server_client(ts), ts->url, &err);
+ *     HttptestServer *ts = httptest_new_test_server(NULL, testing_t_as_testing_tb(t), h);
+ *     HttpResponse *res = http_client_get(httptest_server_client(ts),
+ *                                         BURROW_S("http://www.example.com/"), &err);
  *     // ...
  *     http_response_free(res);
- *     httptest_server_free(ts);
+ *
+ * httptest_new_server serves on a port of the loopback address instead, and
+ * the test gives it back with httptest_server_free.
  *
  * Copyright 2016 The Go Authors. All rights reserved.
  * Copyright 2026 The burrow Authors. All rights reserved.
@@ -46,6 +51,7 @@
 #include "burrow/net/http.h"
 #include "burrow/own.h"
 #include "burrow/sync.h"
+#include "burrow/testing.h"
 #include "burrow/type.h"
 
 #include <stdbool.h>
@@ -196,8 +202,15 @@ httptest_response_recorder_result(HttptestResponseRecorder *rw);
  * httptest_server_start_tls is called, existing fields are copied into the new
  * config, which is made in the server's arena and goes with the server.
  *
- * NewTestServer, which serves on a network in memory, is not here, and
- * neither is the -httptest.serve flag.
+ * A server from httptest_new_test_server uses a network in memory until
+ * httptest_server_start or httptest_server_start_tls is called. Then it has
+ * no listener, url is "http://example.com" from the first
+ * httptest_server_client on, and the client sends every request to the
+ * server, whatever its address, over TLS for an "https" one. The memory the
+ * server's connections live in goes when the server does, so a connection a
+ * handler hijacked has to be done with by then.
+ *
+ * The -httptest.serve flag is not here.
  *
  * The rest is the server's own. */
 typedef struct HttptestServer {
@@ -220,11 +233,14 @@ typedef struct HttptestServer {
     HttpConnStateFunc old_hook;
     SyncWaitGroup wg;
     bool use_tls;
-    NetListener inner;            /* the listener under the TLS one */
-    X509Certificate *certificate; /* parsed from tls's first certificate */
-    X509CertPool *certpool;       /* the client's roots */
-    TlsConfig *own_tls;           /* the clone or new config tls points to */
-    TlsConfig *client_tls;        /* the client's */
+    NetListener inner;                 /* the listener under the TLS one */
+    X509Certificate *certificate;      /* parsed from tls's first certificate */
+    TestingTB t;                       /* the test, for httptest_new_test_server's */
+    SyncOnce start_once;               /* starts the network in memory */
+    struct burrow__HttptestFake *fake; /* the network in memory and its handler */
+    X509CertPool *certpool;            /* the client's roots */
+    TlsConfig *own_tls;                /* the clone or new config tls points to */
+    TlsConfig *client_tls;             /* the client's */
 } HttptestServer;
 
 /* httptest.NewServer. A server for handler, started, which is
@@ -245,9 +261,24 @@ BURROW_OWNS(ret) HttptestServer *httptest_new_server(Alloc *a, HttpHandler handl
 BURROW_OWNS(ret) HttptestServer *httptest_new_unstarted_server(Alloc *a,
                                                                HttpHandler handler);
 
+/* httptest.NewTestServer. Returns a new server for a test, using a network in
+ * memory unless httptest_server_start or httptest_server_start_tls is called.
+ *
+ * If the handler is nil, the server will serve 500 responses to all requests.
+ * It will not use http_default_serve_mux. A handler that panics with anything
+ * but http_err_abort_handler fails the test.
+ *
+ * Not in Go: a is as for httptest_new_unstarted_server. A cleanup registered
+ * with t closes the server and gives it back, so the test does not call
+ * httptest_server_free on it, and t has to be one that runs cleanups. */
+BURROW_OWNS(ret) HttptestServer *httptest_new_test_server(Alloc *a, TestingTB t,
+                                                          HttpHandler handler);
+
 /* Server.Start. Starts serving on its own goroutine. Panics with "Server
  * already started" the second time, and with "Start of closed Server" after
- * httptest_server_close. */
+ * httptest_server_close. A server from httptest_new_test_server gets its
+ * port of the loopback address here, and the first httptest_server_client
+ * counts as a start. */
 void httptest_server_start(HttptestServer *s);
 
 /* Server.StartTLS. Starts TLS on a server on a local loopback network
@@ -280,11 +311,14 @@ void httptest_server_close_client_connections(HttptestServer *s);
 
 /* Server.Client. A client set up to talk to the server, which can be changed,
  * and whose idle connections httptest_server_close closes. It goes with the
- * server. */
+ * server. The first call starts a server from httptest_new_test_server on the
+ * network in memory, unless it has been started already. */
 BURROW_BORROWS(ret, s) HttpClient *httptest_server_client(HttptestServer *s);
 
 /* httptest_server_close, then gives back everything the server has. The
- * responses its client gave have to be freed first. NULL is fine. */
+ * responses its client gave have to be freed first. NULL is fine, and so is a
+ * server from httptest_new_test_server, which this only closes, since its
+ * cleanup gives it back. */
 void httptest_server_free(HttptestServer *s);
 
 /* httptest's parseContentLength, which Result uses: s without the spaces at

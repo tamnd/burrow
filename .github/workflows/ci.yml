@@ -116,8 +116,9 @@ jobs:
             cc: clang
             # The Intel runners are the slowest in the matrix. The full suite
             # took about 18 minutes there in early October and started running
-            # into the 20 minute limit as packages landed.
-            timeout: 35
+            # into the 20 minute limit as packages landed. On 26 October the
+            # passing runs took 20 to 34.5 minutes and one was cancelled at 35.
+            timeout: 50
           - name: windows-msvc
             os: windows-latest
             cmake: true
